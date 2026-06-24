@@ -1,0 +1,100 @@
+{
+  "phase": "7",
+  "closure_phase": "7.8",
+  "date": "2026-06-21",
+  "status": "ready_with_environment_warning",
+  "endpoint_groups": [
+    "contracts/phase7",
+    "autopilot/policies",
+    "autopilot/policy_evaluations",
+    "autopilot/capabilities",
+    "autopilot/execution_intents",
+    "autopilot/execution_approvals",
+    "autopilot/approval_policies",
+    "autopilot/approval_votes_quorum",
+    "autopilot/runner_interface",
+    "autopilot/runner_simulations",
+    "autopilot/runner_admissions",
+    "autopilot/runner_sessions",
+    "autopilot/runner_handshakes"
+  ],
+  "route_inventory": {
+    "static_before_dynamic_checks": "passed",
+    "conflicts_found": 0
+  },
+  "contracts": {
+    "phase7_groups_verified": [
+      "governance_autopilot_policies",
+      "governance_autopilot_policy_evaluations",
+      "governance_autopilot_capabilities",
+      "governance_autopilot_execution_intents",
+      "governance_autopilot_execution_approvals",
+      "governance_autopilot_approval_policies",
+      "governance_autopilot_approval_votes",
+      "governance_autopilot_approval_quorum",
+      "governance_autopilot_runner_interface",
+      "governance_autopilot_runner_simulations",
+      "governance_autopilot_runner_admissions",
+      "governance_autopilot_runner_sessions",
+      "governance_autopilot_runner_handshakes"
+    ],
+    "contract_completeness": {
+      "endpoints": true,
+      "protected_fields": true,
+      "read_write_semantics": true,
+      "caveats": true,
+      "non_execution_guarantee": true,
+      "no_legal_regulatory_determination": true
+    }
+  },
+  "boundary": {
+    "non_executing": true,
+    "no_real_runner": true,
+    "no_job_queue": true,
+    "no_task_creation": true,
+    "no_review_creation": true,
+    "no_source_mutation": true,
+    "no_external_ai_or_llm": true,
+    "no_external_services": true,
+    "no_notifications": true,
+    "no_legal_regulatory_auto_determination": true
+  },
+  "security": {
+    "admission_token_plaintext_once": true,
+    "admission_token_hash_fingerprint_only": true,
+    "session_token_plaintext_once": true,
+    "session_token_hash_fingerprint_only": true,
+    "handshake_exposes_no_plaintext_tokens": true,
+    "hash_based_token_verification": true,
+    "attempt_increments_on_invalid": true,
+    "max_attempt_lock": true,
+    "expired_revoked_archived_session_invalid": true,
+    "dry_run_enforced": true,
+    "execution_allowed_false_enforced": true,
+    "idempotency_no_duplicate_active_records": true
+  },
+  "audit_boundaries": {
+    "read_only_no_audit": true,
+    "persisted_writes_audited": true
+  },
+  "migration": {
+    "head": "0080_governance_autopilot_runner_handshakes",
+    "history": "intact",
+    "import_smoke": "passed",
+    "alembic_current": "failed_environment_db_auth"
+  },
+  "tests": {
+    "phase7_plus_affected_phase6_files": 14,
+    "phase7_plus_affected_phase6_collected": 62,
+    "phase7_plus_affected_phase6_passed": 62,
+    "phase78_regression_tests_added": 1,
+    "tests_unit_collected": 455,
+    "tests_unit_passed": 455
+  },
+  "warnings": [
+    "StarletteDeprecationWarning in fastapi.testclient/httpx compatibility path",
+    "Python 3.12 crypt deprecation warning from passlib",
+    "Local DB authentication unavailable for alembic current"
+  ],
+  "recommended_next_phase": "Phase 7.9 future-runner design decision gate (still non-executing)"
+}

@@ -1,0 +1,153 @@
+{
+  "phase": "8.6",
+  "date": "2026-06-21",
+  "status": "pass",
+  "endpoint_inventory": {
+    "status": "pass",
+    "families": [
+      "phase8_contract",
+      "noop_runner_events",
+      "noop_runner_observability",
+      "noop_runner_diagnostics",
+      "noop_runner_compatibility_client_metadata"
+    ]
+  },
+  "route_ordering": {
+    "status": "pass",
+    "checks": [
+      "/autopilot/noop-runner/events/summary before /autopilot/noop-runner/events/{event_id}",
+      "/autopilot/noop-runner/reports/* static paths before /autopilot/noop-runner/events/{event_id}"
+    ]
+  },
+  "phase8_contract_audit": {
+    "status": "pass",
+    "hard_flags": {
+      "execution_allowed": false,
+      "real_runner_present": false,
+      "job_queue_present": false,
+      "noop_runner_only": true
+    },
+    "required_groups_present": [
+      "governance_noop_runner_events",
+      "governance_noop_runner_observability",
+      "governance_noop_runner_operator_diagnostics",
+      "governance_noop_runner_diagnostics_compatibility",
+      "governance_noop_runner_client_integration",
+      "governance_noop_runner_client_field_docs"
+    ]
+  },
+  "response_shape_lint": {
+    "status": "pass",
+    "surfaces_checked": [
+      "noop_runner_contract",
+      "event_summary",
+      "ledger",
+      "timeline",
+      "blockers",
+      "readiness",
+      "idempotency",
+      "control_plane_health",
+      "reports_contract",
+      "diagnostics_manifest",
+      "bounded_export",
+      "checksum",
+      "compatibility_policy",
+      "client_contract",
+      "filter_options",
+      "pagination_contract",
+      "field_docs",
+      "display_metadata",
+      "localization_map",
+      "client_hints",
+      "phase8_contract"
+    ]
+  },
+  "backward_compatibility": {
+    "status": "pass",
+    "bounded_export_top_level_pagination_fields_retained": true,
+    "bounded_export_nested_pagination_present": true,
+    "schema_versions": {
+      "report_schema_version": "noop_runner_reports.v1",
+      "client_contract_version": "noop_runner_client_contract.v1",
+      "pagination_contract_version": "noop_runner_pagination.v1",
+      "field_docs_version": "noop_runner_field_docs.v1",
+      "display_metadata_version": "noop_runner_display_metadata.v1",
+      "localization_map_version": "noop_runner_localization_map.v1",
+      "client_hints_version": "noop_runner_client_hints.v1"
+    },
+    "compatibility_policy": {
+      "additive_fields_allowed": true,
+      "breaking_changes_require_new_schema_version": true
+    }
+  },
+  "documentation_consistency": {
+    "status": "pass",
+    "readme_phase8_sections": [
+      "8.0",
+      "8.1",
+      "8.2",
+      "8.3",
+      "8.4",
+      "8.5",
+      "8.6"
+    ],
+    "development_log_phase8_sections": [
+      "8.0",
+      "8.1",
+      "8.2",
+      "8.3",
+      "8.4",
+      "8.5",
+      "8.6"
+    ]
+  },
+  "safety_boundary": {
+    "status": "pass",
+    "execution_allowed": false,
+    "real_runner_present": false,
+    "job_queue_present": false,
+    "task_creation_from_phase8": false,
+    "review_creation_from_phase8": false,
+    "source_governance_mutation_from_phase8": false,
+    "external_ai_llm_calls": false,
+    "external_service_calls": false,
+    "emails_notifications": false,
+    "api_file_export_creation": false,
+    "legal_regulatory_auto_determination": false
+  },
+  "read_only_no_audit_no_file": {
+    "status": "pass",
+    "read_only_db_row_writes": false,
+    "read_only_audit_writes": false,
+    "read_only_report_file_creation": false,
+    "read_only_mutates_noop_events": false,
+    "read_only_creates_tasks_reviews_jobs": false,
+    "write_endpoints_expected": [
+      "POST /autopilot/runner-handshakes/{handshake_id}/noop-runner/events",
+      "POST /autopilot/noop-runner/events/{event_id}/archive"
+    ]
+  },
+  "tests": {
+    "status": "pass",
+    "count_passed": 20,
+    "count_failed": 0,
+    "executed": [
+      "tests/unit/test_ai_system_autopilot_noop_runner_integration_readiness_phase86.py",
+      "tests/unit/test_ai_system_autopilot_noop_runner_client_field_docs_phase85.py",
+      "tests/unit/test_ai_system_autopilot_noop_runner_client_integration_phase84.py",
+      "tests/unit/test_ai_system_autopilot_noop_runner_diagnostics_compatibility_phase83.py",
+      "tests/unit/test_ai_system_autopilot_noop_runner_observability_phase81.py",
+      "tests/unit/test_ai_system_autopilot_noop_runner_events_phase80.py",
+      "tests/unit/test_ai_system_autopilot_execution_safety_phase79.py",
+      "tests/unit/test_ai_system_autopilot_regression_gate_phase78.py",
+      "tests/unit/test_ai_system_governance_contracts_phase60.py"
+    ],
+    "import_smoke": "pass",
+    "alembic_heads": "0081_governance_autopilot_noop_runner_events (head)"
+  },
+  "warnings": [
+    "Existing StarletteDeprecationWarning from test-client stack",
+    "Existing Python crypt deprecation warning via passlib"
+  ],
+  "final_recommendation": "Phase 8 diagnostics APIs are integration-ready for read-only client consumption. Continue only with read-only contract ergonomics; do not introduce runner or execution behavior without a separate architecture gate."
+}

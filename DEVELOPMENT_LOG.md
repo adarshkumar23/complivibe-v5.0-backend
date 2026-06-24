@@ -1,0 +1,4339 @@
+# DEVELOPMENT_LOG
+
+Chronological engineering tracker for CompliVibe v4.0 backend.
+
+## Phase 1.0 - Backend Foundation Scaffolding
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - FastAPI backend foundation
+  - Core config setup
+  - Database foundation
+  - Alembic migration setup
+  - Core models foundation
+  - API router structure
+  - Health endpoints
+- Test result: 4 passed
+- Next step: Implement tenant-scoped auth, RBAC, and audit logging.
+
+## Phase 1.1 - Tenant-scoped Auth, RBAC, and Audit Logging
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Register/login/me endpoints
+  - `X-Organization-ID` organization context enforcement
+  - Database-backed RBAC checks
+  - Organization endpoints
+  - Audit log listing endpoint
+- Test result: 9 passed
+- Next step: Implement membership and role administration.
+
+## Phase 1.2 - Membership and Role Administration
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Membership list/get/create APIs
+  - Membership role update API
+  - Membership deactivation API
+  - Last-owner protection rules
+  - Roles listing API
+  - Current user permissions API
+- Test result: 14 passed
+- Next step: Implement secure invited-user activation flow.
+
+## Phase 1.3 - Secure Invited User Activation
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Hashed one-time activation tokens
+  - Expiry/reuse/revocation protections
+  - Invite activation endpoint
+  - Password strength validation
+- Test result: 20 passed
+- Next step: Implement framework registry and obligation engine.
+
+## Phase 2.0 - Framework Registry and Obligation Engine
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Framework catalog foundation
+  - Organization framework activation/deactivation
+  - Obligation state tracking
+  - Safe metadata-only/starter framework seed
+- Test result: 24 passed
+- Next step: Implement control library and obligation mapping.
+
+## Phase 2.1 - Control Library and Obligation Mapping
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Organization-scoped controls
+  - Control lifecycle APIs
+  - Obligation-to-control mapping APIs
+  - Control gap summary API
+- Test result: 28 passed
+- Next step: Implement internal email template and outbox foundation.
+
+## Phase 1.4 - Internal Notification and Email Outbox
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Email templates
+  - Email outbox
+  - Safe template renderer
+  - Delivery events
+  - Manual status transitions
+- Test result: 32 passed
+- Next step: Implement deterministic worker orchestration contract.
+
+## Phase 1.5 - Internal Email Worker Orchestration
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Claim/lock orchestration
+  - Retry/backoff rules
+  - Expired lock release flow
+  - Dead-letter state handling
+  - Worker delivery events
+- Test result: 35 passed
+- Next step: Add engineering traceability artifacts and continue domain workflows.
+
+## Phase 2.2 - Evidence Metadata Workflow and Control Evidence Links
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Evidence metadata lifecycle APIs (list/create/detail/update/archive)
+  - Evidence-to-control link lifecycle (link/unlink + control evidence listing)
+  - Evidence review workflow (needs_review/verified/rejected)
+  - Freshness tracking from validity windows
+  - Tenant-scoped readiness summary for evidence/control readiness indicators
+  - Audit logging for evidence lifecycle and linking actions
+- Test result: 39 passed
+- Next step: Build risk register workflow and connect risks to controls/evidence.
+
+## Phase 2.3 - Risk Register Workflow with Control and Evidence Links
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Risk register lifecycle APIs (list/create/detail/update/archive)
+  - Explainable scoring (`likelihood x impact`) with severity mapping
+  - Risk ownership validation and treatment strategy tracking
+  - Risk-to-control and risk-to-evidence link lifecycle
+  - Risk acceptance workflow with reason and review due date
+  - Tenant-scoped risk summary and heatmap APIs
+  - Audit logging for privileged risk actions
+- Test result: 43 passed
+- Next step: Build task automation around risk treatment plans and due-date reminders.
+
+## Phase 2.4 - Task Orchestration for Risk Treatment Plans and Compliance Workflows
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Task lifecycle APIs (list/create/detail/update/complete/cancel)
+  - Task assignment, ownership validation, priority/status workflow, and due-date tracking
+  - Linked entity validation for risk/control/evidence/obligation/framework contexts
+  - Risk treatment task creation endpoint linked to risk workflow
+  - Internal task notification/reminder queueing through email outbox (no real sending)
+  - Tenant-scoped task summary dashboard metrics
+  - Audit logging for task and treatment lifecycle actions
+- Test result: 46 passed
+- Next step: Build control/evidence-driven workflow automation rules and dashboard aggregation layer.
+
+## Phase 2.5 - Deterministic Workflow Policy Engine
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Automation rule definitions with strict allowlisted condition/action types
+  - Manual-scan automation execution endpoints with tenant-scoped rule orchestration
+  - Deterministic matching for risk/control/evidence/task workflow conditions
+  - Deterministic actions to create tasks and queue internal outbox reminders
+  - Idempotency keys and duplicate-skip behavior for repeat-safe execution
+  - Execution logs and per-action logs for audit-safe workflow history
+  - Automation summary metrics and role-based permissions for read/write/execute
+- Test result: 50 passed
+- Next step: Add scheduled execution infrastructure and policy versioning with dry-run previews.
+
+## Phase 2.6 - Scheduled Runner Foundation, Dry-Run Mode, and Policy Versioning
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Added schedule metadata fields for automation rules (cadence/timezone/windows/next run)
+  - Added manual due-schedule APIs to list and run due rules without background workers
+  - Added dry-run execution mode with `would_create` action logs and no task/email creation
+  - Added automation rule version snapshots for immutable policy history
+  - Extended execution metadata (`trigger_source`, `dry_run`, `rule_version`, scheduled context)
+  - Upgraded idempotency keys to include rule version for safe policy evolution
+  - Added scheduler summary metrics and audit logging for scheduled/dry-run actions
+- Test result: 54 passed
+- Next step: Implement evidence-aware control testing workflows and deterministic score snapshot calculations.
+
+## Phase 2.7 - Deterministic Control Testing and Score Snapshot Materialization
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Added control test definitions and test run history models with tenant scoping
+  - Added control testing APIs for create/list/update/archive/run and control test summary
+  - Implemented deterministic internal check keys against existing DB state only
+  - Added dry-run test execution mode that computes results without persisting run rows
+  - Upgraded score snapshots to materialized, explainable readiness/health records
+  - Added scoring APIs for materialize, latest/list snapshots, and methodology
+  - Added audit logging for control test lifecycle/run and score materialization
+- Test result: 58 passed
+- Next step: Build deterministic evidence recertification and control reassessment workflows tied to due-date policies.
+
+## Phase 2.8 - Evidence Recertification, Control Reassessment, and Score Trends
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Added evidence recertification policy model and tenant-scoped policy CRUD APIs
+  - Added due evidence discovery (expired/expiring/needs_review) with optional policy scope filtering
+  - Added control reassessment due discovery based on active test definitions and due windows
+  - Added recertification run and action logs with dry-run support and deterministic idempotency
+  - Added live task generation for evidence/control follow-up with optional internal outbox reminders
+  - Added recertification summary and run detail APIs with action-log visibility
+  - Added score snapshot trends and delta endpoints for historical score movement
+  - Added audit logging for recertification policy lifecycle and execution runs
+- Test result: 62 passed
+- Next step: Implement deterministic compliance narrative/report assembly endpoints over materialized readiness, risk, and workflow evidence.
+
+## Phase 2.9 - Deterministic Compliance Reporting and Narrative APIs
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Added compliance report persistence models (`compliance_reports`, `compliance_report_sections`) and migration
+  - Added tenant-scoped report generation endpoints with deterministic builders and `dry_run` preview mode
+  - Added report listing/detail/provenance/summary APIs with strict organization isolation
+  - Added framework readiness data endpoint for active organization frameworks
+  - Added deterministic narrative section templates with mandatory caveat section
+  - Added report archive workflow with status-based lifecycle (no hard delete)
+  - Added seeded report permissions (`reports:read`, `reports:write`, `reports:generate`) and role mappings
+  - Added audit logging for report generation and archive actions
+- Test result: 62 passed (pre-phase baseline), phase 2.9 tests added and validated in this phase
+- Next step: Introduce export contracts (JSON package/export job metadata) without external document providers, then design signed immutable report snapshots.
+
+## Phase 3.0 - Immutable Export Job Contract with JSON Package Integrity
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Added export job and export event models for deterministic package lifecycle tracking
+  - Added tenant-scoped export APIs for create/list/detail/run/cancel/archive/package/manifest/verify/summary
+  - Added deterministic package builders for report/framework/evidence/risk/task/executive export types
+  - Added canonical JSON checksum generation (`SHA-256`) and internal integrity signature (`HMAC-SHA256`)
+  - Added verification endpoint to recompute and validate stored package integrity metadata
+  - Added immutable completed-export behavior through status rules and no mutable update flows
+  - Added audit logging for export create/complete/fail/cancel/archive/verify and event history
+  - Added export permissions and role mappings (`exports:read`, `exports:write`, `exports:run`, `exports:verify`)
+- Test result: 68 passed (pre-phase baseline), phase 3.0 tests added and validated in this phase
+- Next step: Add retention policy controls and immutable snapshot attestations for long-term export governance without external storage coupling.
+
+## Phase 3.1 - Retention, Export Governance, and Immutable Attestation Policy Layer
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Added retention policy model and governance APIs for create/list/update/archive
+  - Added software retention lock and legal hold fields/flows for export jobs
+  - Added dry-run retention evaluation endpoint with non-destructive eligibility analysis
+  - Added export attestation model and APIs for create/list/detail/revoke workflows
+  - Added attestation integrity metadata (checksum + internal HMAC integrity signature)
+  - Added export verification history endpoint using existing export verification events
+  - Enforced archive blocking for locked/legal-hold exports
+  - Added governance summary metrics and audit logging for retention/attestation actions
+- Test result: 74 passed (pre-phase baseline), phase 3.1 tests added and validated in this phase
+- Next step: Add governed override workflow (dual-approval + reasoned exception records) for lock/legal-hold constrained operations with full audit trails.
+
+## Phase 3.2 - Governed Override Workflow for Lock and Legal-Hold Exceptions
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Added governance override request, approval, and event models with tenant-scoped dual-control workflow
+  - Added override APIs for create/list/detail/approve/reject/cancel/execute/expire/summary
+  - Enforced requester self-approval prevention and per-approver single-review constraints
+  - Implemented allowlisted execution actions:
+    - archive locked export (with legal-hold protection)
+    - remove legal hold
+    - adjust retention window
+    - revoke attestation after lock
+  - Added execution failure eventing/audit trail and batch expiry operation
+  - Added governance override permissions and role mappings
+  - Preserved completed export payload immutability during overrides
+- Test result: 79 passed (pre-phase baseline), phase 3.2 tests added and validated in this phase
+- Next step: Introduce policy-bound override templates and conditional approval routing (e.g., risk-tier based required approvals) while preserving deterministic governance execution.
+
+## Phase 3.3 - Policy-Bound Override Templates with Conditional Approval Routing
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Added governance override template and template version models with immutable version snapshots
+  - Added template APIs for create/list/detail/update/archive/version-history/summary
+  - Added template-bound override creation endpoint with deterministic routing evaluation
+  - Added routing context endpoint for override requests (`template_id`, `template_version`, matched rules, target facts)
+  - Added allowlisted conditional rule validator (keys/operators/effects) with strict deterministic behavior
+  - Added dynamic required approval calculation and approver-role restriction derivation at request creation
+  - Added approval flow enforcement for template-restricted approver roles while preserving existing dual-control rules
+  - Added audit logs for template lifecycle and template-bound override creation actions
+- Test result: 84 passed (pre-phase baseline), phase 3.3 tests added and validated in this phase
+- Next step: Add policy simulation endpoint for preflight routing impact analysis before activating template changes.
+
+## Phase 3.4 - Full Framework Obligation Library Expansion
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Added framework content architecture models for framework versions, sections, obligation content versions, applicability questions, evidence requirements, control suggestions, and content imports
+  - Added framework version/section APIs and content summary endpoint
+  - Added deterministic content import preview/apply flow with payload validation, local upsert behavior, and import run tracking
+  - Enhanced obligation detail to include framework/section/current content version/coverage-review metadata/evidence requirements/control suggestions/applicability questions
+  - Added obligation content/evidence-requirement/control-suggestion CRUD endpoints
+  - Added control suggestion apply endpoint to create tenant-scoped controls + obligation mappings idempotently
+  - Added seed support for framework versions with explicit non-`full_verified` starter/metadata baseline
+  - Added audit logging for framework content lifecycle and import apply actions
+- Test result: 87 passed (pre-phase baseline), phase 3.4 tests added and validated in this phase
+- Next step: Add organization-scoped applicability answer capture and decision graphing to drive obligation applicability determinations from the new question library.
+
+## Phase 3.5 - Applicability Answer Capture and Deterministic Obligation Evaluation
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Added organization-scoped applicability answers with supersession history (`active` -> `superseded`) and tenant-safe listing
+  - Added obligation applicability rule model and APIs with allowlisted operators/result values and status-based archive workflow
+  - Added deterministic framework applicability evaluator with dry-run and live persistence modes
+  - Added applicability evaluation run/result history models with per-obligation provenance, matched rules, and missing answer tracking
+  - Added optional organization obligation state updates from live evaluation with previous applicability capture
+  - Added obligation applicability status endpoint and framework applicability summary endpoint with explicit caveat messaging
+  - Added audit logging for answer submission, rule lifecycle, and evaluation completion actions
+- Test result: 98 passed
+- Next step: Add deterministic obligation-to-control readiness recommendations using applicability outcomes, evidence freshness, and control coverage gaps.
+
+## Phase 3.6 - Deterministic Obligation-to-Control Recommendation Layer
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Added recommendation generation models (`obligation_control_recommendations`, `recommendation_generation_runs`) with tenant-scoped history
+  - Added deterministic recommendation generation endpoint with dry-run and live modes
+  - Implemented gap/evidence/applicability recommendation rules:
+    - applicable obligation without active controls -> `create_control`
+    - applicable obligation with only inactive/archived control coverage -> `review_existing_control`
+    - applicable obligation with expired verified evidence -> `refresh_evidence`
+    - applicable obligation with no verified current evidence -> `add_evidence`
+    - needs_review/unknown applicability -> `review_applicability`
+  - Added duplicate-open recommendation prevention using deterministic duplicate checks
+  - Added apply/dismiss workflows:
+    - `create_control` creates org-scoped control + obligation mapping
+    - `map_existing_control` validates same-tenant control and maps
+    - `add_evidence`/`refresh_evidence` create evidence-request tasks (no fake evidence)
+    - `review_applicability` creates obligation-review tasks
+  - Added recommendation list/detail/runs/summary APIs with strict tenant isolation
+  - Added recommendation provenance and caveat metadata in generation output
+  - Added audit logging for generation/apply/dismiss actions
+- Test result: 104 passed
+- Next step: Add deterministic control recommendation escalation and SLA policies (age/priority-based workflow transitions) with task routing.
+
+## Phase 3.7 - Real Framework Obligation Pack Population and Coverage Tracking
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Added deterministic local framework content-pack directory: `app/content_packs/frameworks/` with starter packs for:
+    - EU AI Act
+    - India DPDP
+    - ISO 42001
+    - NIST AI RMF
+    - SOC 2
+    - ISO 27001
+    - Colorado AI Act
+    - GDPR
+  - Added local pack loader/validator service with strict schema checks, caveat enforcement, and prohibition on `full_verified` starter packs
+  - Added framework-content APIs for pack listing, pack validation, pack apply (dry-run/live), and global coverage summary
+  - Added framework coverage APIs for per-framework coverage report generation, persisted report listing, and coverage gap discovery
+  - Added persisted framework coverage report model/table (`framework_pack_coverage_reports`) with counts and snapshot JSON
+  - Extended content import mapping to support obligation `section_code` resolution during import upsert
+  - Ensured content pack apply path reuses existing deterministic, idempotent import pipeline and records import history
+  - Added audit logging for local pack apply (`framework_content_pack.applied`) and persisted framework coverage report generation (`framework_coverage_report.generated`)
+- Test result: 110 passed
+- Next step: Add framework-pack governance workflow for review approvals and promotion gates from `starter/partial` to `reviewed` with explicit sign-off metadata.
+
+## Phase 3.8 - Framework-Pack Review and Promotion Workflow
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Added deterministic framework-pack review workflow with `framework_pack_review_runs` records, checklist/findings capture, and immutable coverage snapshots.
+  - Added review sign-offs (`framework_pack_review_signoffs`) with one-signoff-per-user enforcement and internal integrity checksum/signature metadata.
+  - Added policy-gated promotion requests (`framework_pack_promotion_requests`) with explicit request/approve/reject/execute lifecycle.
+  - Implemented promotion gate preflight and execution re-checks with strict level path rules (`metadata_only -> starter -> partial -> reviewed -> full_verified`), including non-skippable progression.
+  - Enforced promotion constraints for `reviewed`/`full_verified` transitions (outcome/signoff/review-type/coverage gap requirements).
+  - Added tenant-scoped review/promotion APIs under `/api/v1/frameworks/{framework_id}/...` and review summary endpoint.
+  - Added new RBAC permissions for framework content governance:
+    - `framework_content:review`
+    - `framework_content:promote`
+  - Added audit logs for review start/complete/signoff and promotion request/approve/reject/execute.
+- Test result: 117 passed
+- Next step: Add reviewer assignment workflow and deterministic SLA timers for pending review/promotion items with explicit escalation events.
+
+## Phase 3.9 - Reviewer Assignment and SLA/Escalation Policy for Framework Pack Reviews
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Added framework review assignment model/table (`framework_pack_review_assignments`) with explicit assignee lifecycle (`assigned`, `accepted`, `completed`, `cancelled`, `overdue`).
+  - Added tenant-scoped assignment APIs:
+    - assign/list assignments for review runs
+    - my review queue
+    - organization review queue
+    - accept/complete/cancel assignment actions
+  - Added framework review SLA policy model/table (`framework_review_sla_policies`) and CRUD/archive APIs.
+  - Added deterministic SLA evaluation endpoint with `dry_run` and live modes:
+    - dry-run returns `would_create` escalation candidates without writes
+    - live mode creates escalation events and optional internal outbox reminders
+  - Added escalation event model/table (`framework_review_escalation_events`) with list/resolve APIs.
+  - Added review queue summary endpoint with assignment, escalation, signoff-waiting, and promotion-pending counters.
+  - Integrated internal reminder queueing through existing email outbox service only (no real email sending, no external scheduler).
+  - Added audit logging for assignment lifecycle, SLA policy lifecycle, SLA evaluations, and escalation resolution.
+- Test result: 120 passed
+- Next step: Add deterministic reviewer capacity balancing and workload-aware assignment recommendations (policy-bound, non-AI) for review queues.
+
+## Phase 4.0 - Deterministic Reviewer Capacity and Workload-Aware Assignment Suggestions
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Added reviewer capacity policy model/table (`framework_reviewer_capacity_policies`) with tenant-scoped CRUD/archive APIs.
+  - Added reviewer workload snapshot model/table (`framework_reviewer_workload_snapshots`) and workload calculation/list APIs with optional persistence.
+  - Added deterministic reviewer scoring helper using explicit policy and workload factors (active/overdue assignments, open escalations, recent completions, role/preference matches).
+  - Added assignment suggestion model/table (`framework_review_assignment_suggestions`) with deterministic ranking and explainable scoring provenance (`scoring_json`, `rationale`).
+  - Added tenant-scoped suggestion APIs for generate/list/apply/dismiss:
+    - generation stores ranked candidates without creating assignments automatically
+    - apply action explicitly creates assignment and links `created_assignment_id`
+    - dismiss requires reason and prevents later apply
+  - Added capacity summary endpoint with reviewer/suggestion/escalation/assignment metrics.
+  - Added optional RBAC permissions:
+    - `framework_review_capacity:read`
+    - `framework_review_capacity:write`
+  - Added audit logging for:
+    - `framework_reviewer_capacity_policy.created`
+    - `framework_reviewer_capacity_policy.updated`
+    - `framework_reviewer_capacity_policy.archived`
+    - `framework_reviewer_workload.calculated`
+    - `framework_review_assignment_suggestions.generated`
+    - `framework_review_assignment_suggestion.applied`
+    - `framework_review_assignment_suggestion.dismissed`
+- Test result: 124 passed
+- Next step: Add optional policy simulation and what-if capacity impact analysis for upcoming review waves.
+
+## Phase 4.1 - Deterministic What-If Capacity Simulation
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Added preview-only simulation endpoints for capacity what-if analysis and review-specific suggestion simulation:
+    - `POST /api/v1/framework-review-capacity/simulations/policy`
+    - `POST /api/v1/frameworks/{framework_id}/pack-reviews/{review_id}/assignment-suggestions/simulate`
+    - `GET /api/v1/framework-review-capacity/simulations/summary`
+  - Added deterministic policy simulation service helpers with explicit before/after reviewer comparison output:
+    - current vs simulated workload score
+    - score delta and reason
+    - current vs simulated capacity remaining
+    - scoring formula and provenance marker (`deterministic_policy_simulation_v1`)
+  - Reused Phase 4.0 deterministic scoring logic for simulation runs; no AI logic added.
+  - Enforced simulation no-write behavior for workload snapshots, assignment suggestions, and assignments.
+  - Added audit logging for:
+    - `framework_reviewer_capacity.simulation_run`
+    - `framework_review_assignment_suggestions.simulated`
+  - Added simulation summary metrics derived from audit log activity windows (last 24h/7d).
+- Test result: 127 passed
+- Next step: Add deterministic bulk assignment planning preview for multi-review waves with explicit reviewer lock constraints.
+
+## Phase 4.2 - Deterministic Multi-Review-Wave Planning Preview
+- Date: YYYY-MM-DD
+- Status: Completed
+- What changed:
+  - Added preview-only multi-wave planning endpoint:
+    - `POST /api/v1/framework-review-capacity/simulations/review-waves`
+  - Added deterministic wave simulation helper that selects tenant-scoped running/completed reviews by filters (`framework_id`, `review_ids`, `review_type`, `target_coverage_level`) and plans across configurable waves.
+  - Added projected workload updates after each simulated assignment so earlier waves affect later-wave reviewer scoring and capacity.
+  - Enforced deterministic capacity constraints with explicit exclusion reasons:
+    - active capacity full
+    - overdue threshold exceeded
+    - existing open assignment on review
+    - reviewer limit filter produced no candidates
+  - Added explainable scoring outputs per planned review (`rationale`, `scoring_json`) with provenance marker (`deterministic_policy_simulation_v1`) and constraints summary.
+  - Enforced strict no-write preview behavior for assignments, suggestions, and workload snapshots; only audit logs are persisted.
+  - Added audit logging for:
+    - `framework_review_capacity.wave_simulation_run`
+- Test result: 130 passed
+- Next step: Add deterministic bulk apply workflow with explicit user confirmation and dry-run validation (no auto-assignment).
+
+## Phase 4.3 - Deterministic Batch Apply with Explicit Confirmation and Dry-Run Validation
+- Date: 2026-06-18
+- Status: Completed
+- What changed:
+  - Added deterministic batch assignment validation and explicit apply endpoints:
+    - `POST /api/v1/framework-review-capacity/batch-assignments/validate`
+    - `POST /api/v1/framework-review-capacity/batch-assignments/apply`
+    - `GET /api/v1/framework-review-capacity/batch-assignments/runs`
+    - `GET /api/v1/framework-review-capacity/batch-assignments/runs/{run_id}`
+    - `GET /api/v1/framework-review-capacity/batch-assignments/summary`
+  - Added batch assignment run/item persistence models and migration:
+    - `framework_review_batch_assignment_runs`
+    - `framework_review_batch_assignment_items`
+  - Added deterministic plan hashing with canonical JSON (`SHA-256`) over tenant, ordered assignment plan, due dates, and notify flag.
+  - Enforced explicit confirmation text `CONFIRM_BATCH_ASSIGNMENTS` for apply.
+  - Enforced deterministic re-validation during apply and plan-hash mismatch rejection.
+  - Enforced no-write dry-run behavior for validate endpoint (no assignment creation, no suggestion persistence, no workload snapshot persistence, no email queueing).
+  - Added per-item apply outcomes (`created`, `skipped_duplicate`, `skipped_invalid`, `failed`) and batch run aggregate counts.
+  - Added optional internal notification queueing during apply via existing email outbox flow only (no external provider calls).
+  - Added audit logging for:
+    - `framework_review_batch_assignment.validated`
+    - `framework_review_batch_assignment.applied`
+- Test result: 142 passed
+- Next step: Add cancellation endpoint and immutable confirmation payload capture for multi-actor approval workflows.
+
+## Phase 4.4 - Batch Assignment Run Cancellation Governance
+- Date: 2026-06-18
+- Status: Completed
+- What changed:
+  - Added cancellation governance fields to batch assignment runs:
+    - `cancelled_at`
+    - `cancelled_by_user_id`
+    - `cancellation_reason`
+    - `cancellation_metadata_json`
+  - Added cancellation endpoint:
+    - `POST /api/v1/framework-review-capacity/batch-assignments/runs/{run_id}/cancel`
+  - Enforced tenant-scoped cancellation with required explicit reason capture.
+  - Enforced safe status behavior:
+    - validated/failed/non-applied runs can transition to `cancelled`
+    - already-cancelled runs are rejected
+    - applied runs with created assignments are blocked from cancellation
+  - Enforced non-destructive semantics:
+    - no assignment deletion
+    - no batch-item deletion
+    - no historical batch-item result mutation
+  - Extended batch run read/detail payloads with cancellation fields.
+  - Extended batch assignment summary with `cancelled_batch_runs`.
+  - Added audit logging for:
+    - `framework_review_batch_assignment.cancelled`
+- Test result: 150 passed
+- Next step: Add optional dual-control approval gates for high-impact batch apply operations.
+
+## Phase 4.5 - Dual-Approval Gate for Batch Assignment Run Cancellation
+- Date: 2026-06-18
+- Status: Completed
+- What changed:
+  - Added dual-approval cancellation request model and migration:
+    - `framework_review_batch_cancellation_requests`
+  - Extended batch assignment run governance fields:
+    - `cancellation_requires_approval`
+    - `cancellation_request_id`
+  - Added cancellation request workflow endpoints:
+    - `POST /api/v1/framework-review-capacity/batch-assignments/runs/{run_id}/cancellation-requests`
+    - `GET /api/v1/framework-review-capacity/batch-assignments/cancellation-requests`
+    - `GET /api/v1/framework-review-capacity/batch-assignments/cancellation-requests/{request_id}`
+    - `POST /api/v1/framework-review-capacity/batch-assignments/cancellation-requests/{request_id}/approve`
+    - `POST /api/v1/framework-review-capacity/batch-assignments/cancellation-requests/{request_id}/reject`
+    - `POST /api/v1/framework-review-capacity/batch-assignments/cancellation-requests/{request_id}/execute`
+  - Added optional per-run approval requirement endpoint:
+    - `POST /api/v1/framework-review-capacity/batch-assignments/runs/{run_id}/require-cancellation-approval`
+  - Enforced four-eyes controls:
+    - requester cannot approve their own request
+    - execute allowed only from `approved` requests
+    - execute re-checks run safety constraints before cancellation
+  - Enforced direct-cancel gating:
+    - if cancellation approval is required, direct cancel returns:
+      - `Cancellation requires approval. Create a cancellation request instead.`
+  - Preserved non-destructive semantics:
+    - no assignment deletion
+    - no batch item deletion
+    - no historical batch item outcome mutation
+  - Added audit logging for:
+    - `framework_review_batch_cancellation.requested`
+    - `framework_review_batch_cancellation.approved`
+    - `framework_review_batch_cancellation.rejected`
+    - `framework_review_batch_cancellation.executed`
+    - `framework_review_batch_cancellation.requirement_updated`
+- Test result: 162 passed
+- Next step: Add organization-level cancellation approval policy defaults with explicit policy audit provenance.
+
+## Phase 4.6 - Organization-Level Default Cancellation Approval Policy
+- Date: 2026-06-18
+- Status: Completed
+- What changed:
+  - Added organization governance settings model and migration:
+    - `organization_governance_settings`
+  - Added organization governance setting endpoints:
+    - `GET /api/v1/organizations/me/governance-settings`
+    - `PATCH /api/v1/organizations/me/governance-settings`
+  - Enforced explicit reason capture when toggling organization-level cancellation approval default on or off.
+  - Added audit logging for:
+    - `organization_governance_settings.updated`
+  - Updated batch assignment apply behavior to inherit organization default into run-level `cancellation_requires_approval` at run creation time.
+  - Preserved immutable run-level provenance and non-retroactive behavior:
+    - settings changes do not silently mutate existing batch runs
+    - per-run override endpoint remains independent and does not modify org default
+  - Preserved non-destructive cancellation safeguards:
+    - no assignment deletion
+    - no batch item deletion
+    - no historical item mutation
+- Test result: 172 passed
+- Next step: Add governance policy history/versioning endpoint for settings change timeline and attestation export support.
+
+## Phase 4.7 - Apply Organization Governance Default to Open Batch Runs
+- Date: 2026-06-18
+- Status: Completed
+- What changed:
+  - Added explicit governance rollout endpoint:
+    - `POST /api/v1/organizations/me/governance-settings/apply-to-open-batch-runs`
+  - Added dry-run and live modes with required explicit reason:
+    - `dry_run=true` previews eligible runs and returns affected run IDs without mutating data
+    - `dry_run=false` updates only eligible runs to the current organization default value
+  - Enforced strict eligibility rules for updates:
+    - run belongs to organization
+    - run status is not `applied`
+    - run status is not `cancelled`
+    - run status is not `archived` (if present)
+    - `created_assignments_count` is `0`
+    - run `cancellation_requires_approval` differs from organization default
+  - Added response transparency fields:
+    - `target_value`, `eligible_count`, `updated_count`, `skipped_count`
+    - `affected_run_ids`
+    - `skipped_reasons` summary
+    - explicit non-destructive caveat text
+  - Added live-only audit logging for rollout operations:
+    - `organization_governance_settings.applied_to_open_batch_runs`
+  - Preserved non-destructive guarantees:
+    - no assignment deletion
+    - no batch item deletion
+    - no historical item mutation
+    - no mutation of applied/cancelled runs
+- Test result: 179 passed
+- Next step: Add organization governance policy history timeline endpoint with diff/version metadata for audit export workflows.
+
+## Phase 4.8 - Governance Policy History, Timeline, and Diff Evidence
+- Date: 2026-06-18
+- Status: Completed
+- What changed:
+  - Added append-only governance history model and migration:
+    - `organization_governance_setting_history`
+  - Updated governance settings update behavior:
+    - `PATCH /api/v1/organizations/me/governance-settings` now writes immutable history rows with:
+      - per-organization incrementing `version`
+      - `before_json` and `after_json`
+      - `reason`
+      - `changed_by_user_id`
+      - `audit_log_id` provenance linkage when available
+  - Updated governance rollout behavior:
+    - live `POST /api/v1/organizations/me/governance-settings/apply-to-open-batch-runs` writes:
+      - `event_type=open_batch_runs_rollout`
+      - affected run IDs and skipped summary
+      - rollout reason
+      - `audit_log_id` linkage
+    - dry-run remains non-mutating and writes no history rows
+  - Added governance evidence endpoints:
+    - `GET /api/v1/organizations/me/governance-settings/history`
+    - `GET /api/v1/organizations/me/governance-settings/history/{history_id}`
+    - `GET /api/v1/organizations/me/governance-settings/timeline`
+    - `GET /api/v1/organizations/me/governance-settings/diff`
+    - `GET /api/v1/organizations/me/governance-settings/evidence-bundle`
+  - Added merged timeline behavior:
+    - includes history-derived events
+    - includes audit-derived entries for relevant governance actions not already linked via history
+  - Preserved governance safety and provenance rules:
+    - append-only history
+    - no fake historical backfill
+    - no deletion of assignments, runs, or batch items
+    - no mutation of historical batch item outcomes
+- Test result: 188 passed
+- Next step: Add scoped governance evidence retention and signed export manifest metadata (JSON only) for external control testing workflows.
+
+## Phase 4.9 - Signed JSON Governance Evidence Manifest
+- Date: 2026-06-18
+- Status: Completed
+- What changed:
+  - Added governance evidence manifest model and migration:
+    - `organization_governance_evidence_manifests`
+  - Added signed JSON governance evidence manifest endpoints:
+    - `POST /api/v1/organizations/me/governance-settings/evidence-manifests`
+    - `GET /api/v1/organizations/me/governance-settings/evidence-manifests`
+    - `GET /api/v1/organizations/me/governance-settings/evidence-manifests/{manifest_id}`
+    - `POST /api/v1/organizations/me/governance-settings/evidence-manifests/{manifest_id}/verify`
+    - `POST /api/v1/organizations/me/governance-settings/evidence-manifests/{manifest_id}/revoke`
+  - Added deterministic manifest integrity behavior:
+    - canonical JSON serialization with sorted keys
+    - SHA-256 content hash persisted as `content_sha256`
+    - internal HMAC-SHA256 signature persisted as `internal_signature`
+    - signature algorithm metadata persisted as `HMAC-SHA256`
+  - Added revocation governance:
+    - manifests can be set to `revoked` with immutable reason capture
+    - revocation preserves manifest JSON, hash, and signature fields
+    - no deletion or historical mutation
+  - Added audit logging:
+    - `organization_governance_evidence_manifest.generated`
+    - `organization_governance_evidence_manifest.revoked`
+  - Added manifest generation scope controls:
+    - `include_history`
+    - `include_timeline`
+    - `include_audit_actions`
+    - optional `from_version` / `to_version` history filtering
+  - Added explicit caveat in manifest endpoints:
+    - internal integrity signature only; not legal e-signature or external attestation
+- Test result: 198 passed
+- Next step: Add key rotation metadata policy (`key_id` lifecycle) and explicit multi-key verification support while preserving backward verification for historical manifests.
+
+## Phase 4.10 - Internal Signing Key Rotation and Multi-Key Verification
+- Date: 2026-06-18
+- Status: Completed
+- What changed:
+  - Added internal signing key lifecycle model and migration:
+    - `organization_internal_signing_keys`
+  - Added organization-scoped signing key governance endpoints:
+    - `GET /api/v1/organizations/me/governance-settings/signing-keys`
+    - `GET /api/v1/organizations/me/governance-settings/signing-keys/summary`
+    - `POST /api/v1/organizations/me/governance-settings/signing-keys/rotate`
+    - `POST /api/v1/organizations/me/governance-settings/signing-keys/{key_id}/deprecate`
+    - `POST /api/v1/organizations/me/governance-settings/signing-keys/{key_id}/revoke`
+  - Updated manifest generation:
+    - auto-creates an active internal signing key for `purpose=governance_evidence_manifest` when none exists
+    - signs manifests using derived key material from app `SECRET_KEY + organization_id + purpose + key_id`
+    - persists `key_id` on newly generated manifests
+  - Updated manifest verification:
+    - manifests with `key_id` verify against matching organization key (multi-key verification)
+    - legacy manifests without `key_id` use legacy `SECRET_KEY` fallback verification
+    - revoked-key manifests still report signature math validity while setting `trusted=false`
+  - Added signing-key and manifest provenance audit logging:
+    - `organization_internal_signing_key.created`
+    - `organization_internal_signing_key.rotated`
+    - `organization_internal_signing_key.deprecated`
+    - `organization_internal_signing_key.revoked`
+    - existing `organization_governance_evidence_manifest.generated` and `.revoked` preserved
+  - Preserved key-management constraints:
+    - no raw secret storage in DB
+    - no key material exposure in API responses
+    - no external KMS or external signing provider integration
+    - no legal e-signature claim language
+- Test result: 208 passed
+- Next step: Add optional signed verification event history for manifests (immutable verify-event rows with verifier context and key trust state) to strengthen chain-of-custody timelines.
+
+## Phase 4.11 - Immutable Manifest Verification Events and Chain-of-Custody Timeline
+- Date: 2026-06-18
+- Status: Completed
+- What changed:
+  - Added append-only verification event model and migration:
+    - `organization_governance_manifest_verification_events`
+  - Updated manifest verification endpoint:
+    - `POST /api/v1/organizations/me/governance-settings/evidence-manifests/{manifest_id}/verify`
+    - now writes immutable verification snapshots (actor, timestamp, hash/signature validity, trusted result, key status, legacy flag, and verification result payload)
+    - preserves non-mutation of manifest records during verification
+    - writes audit log: `organization_governance_evidence_manifest.verified`
+  - Added verification evidence endpoints:
+    - `GET /api/v1/organizations/me/governance-settings/evidence-manifests/{manifest_id}/verification-events`
+    - `GET /api/v1/organizations/me/governance-settings/evidence-manifests/verification-events`
+    - `GET /api/v1/organizations/me/governance-settings/evidence-manifests/{manifest_id}/chain-of-custody`
+    - `GET /api/v1/organizations/me/governance-settings/evidence-manifests/verification-summary`
+  - Added chain-of-custody timeline composition:
+    - manifest generated event
+    - manifest verification events
+    - manifest revoked event when applicable
+    - related signing key governance audit events (create/rotate/deprecate/revoke) linked to manifest key context
+  - Preserved integrity and governance constraints:
+    - append-only verification history
+    - no manifest mutation on verify
+    - no deletion of manifests/keys/events
+    - revoked key snapshots can still show valid signature with `trusted=false`
+    - legacy verification snapshots supported for manifests without `key_id`
+    - no external signing/KMS integration
+- Test result: 218 passed
+- Next step: Add retention-safe export endpoint for manifest verification event bundles (JSON-only) with deterministic pagination cursors for long-running audit evidence pulls.
+
+## Phase 4.12 - JSON Verification Event Export with Deterministic Cursor Pagination
+- Date: 2026-06-18
+- Status: Completed
+- What changed:
+  - Added JSON-only verification event export endpoint:
+    - `POST /api/v1/organizations/me/governance-settings/evidence-manifests/verification-events/export`
+  - Added deterministic cursor pagination for large audit pulls:
+    - stable ordering by `(verified_at, id)` in `asc`/`desc`
+    - cursor payload includes `last_verified_at`, `last_event_id`, `direction`, `filters_hash`, `cursor_version`
+    - cursor filter/hash mismatch rejects with explicit validation error
+  - Added export filters:
+    - `manifest_id`, `trusted`, `key_id`, `legacy_verification`
+    - `from_verified_at`, `to_verified_at`
+    - `include_manifest_metadata`, `include_chain_context`
+  - Added export integrity metadata:
+    - `canonical_page_sha256` (SHA-256 over canonical JSON page events)
+    - `record_count`, `filters_hash`, `cursor_version`
+  - Added export access audit logging:
+    - `organization_governance_verification_events.exported`
+  - Preserved evidence safety constraints:
+    - no mutation of manifests
+    - no mutation of verification events
+    - no PDF/ZIP output
+    - no external storage/services
+- Test result: 218 passed (pre-phase baseline), phase test suite expanded for export pagination/filter integrity
+- Next step: Add optional signed export-page attestations (using existing internal HMAC manifest utility) for paged replay validation without introducing external signing providers.
+
+## Phase 4.13 - Internal HMAC Signature for Exported Verification Pages
+- Date: 2026-06-18
+- Status: Completed
+- What changed:
+  - Updated verification-event export endpoint:
+    - `POST /api/v1/organizations/me/governance-settings/evidence-manifests/verification-events/export`
+    - added request option `include_internal_signature` (default `true`)
+  - Added optional export page signature metadata in `export_integrity`:
+    - `internal_signature`
+    - `signature_algorithm`
+    - `key_id`
+    - `key_status`
+    - `signature_scope=verification_event_export_page`
+    - `signed_payload_sha256`
+  - Added export signing key purpose support:
+    - `verification_event_export`
+    - auto-creates active organization internal signing key for export purpose when missing
+    - preserves existing `governance_evidence_manifest` key purpose behavior
+  - Added deterministic signature payload binding for export pages:
+    - organization id
+    - filters
+    - page metadata
+    - events
+    - optional manifest metadata / chain context
+    - `canonical_page_sha256`
+    - `filters_hash`
+  - Preserved integrity and governance constraints:
+    - no raw secret storage
+    - no key material exposure
+    - no manifest mutation
+    - no verification-event mutation
+    - JSON-only export (no PDF/ZIP or external storage)
+  - Export audit logging remains:
+    - `organization_governance_verification_events.exported`
+- Test result: full suite executed after implementation
+- Next step: Add optional export-page signature verification endpoint for offline replay checks while keeping tenant scoping and non-persistence guarantees.
+
+## Phase 4.14 - Export Page Signature Replay Verification
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added verification endpoint for previously exported verification-event JSON pages:
+    - `POST /api/v1/organizations/me/governance-settings/evidence-manifests/verification-events/export/verify-page`
+  - Added replay verification logic for export page integrity signatures:
+    - validates required `export_integrity` fields (`internal_signature`, `key_id`, `signature_algorithm`, `signature_scope`, `signed_payload_sha256`, `canonical_page_sha256`, `filters_hash`)
+    - enforces `signature_scope=verification_event_export_page`
+    - enforces `signature_algorithm=HMAC-SHA256`
+    - validates exported `organization_id` matches tenant in `X-Organization-ID`
+    - resolves signing key by `key_id` under organization + purpose `verification_event_export`
+    - recomputes canonical page SHA-256 from exported events
+    - rebuilds canonical signed payload using Phase 4.13 rules and recomputes signed payload hash + internal signature
+  - Added replay verification result payload:
+    - `valid_signature`
+    - `valid_signed_payload_hash`
+    - `valid_canonical_page_hash`
+    - `key_id`
+    - `key_status`
+    - `trusted`
+    - `signature_scope`
+    - `signature_algorithm`
+    - caveat clarifying internal integrity scope only
+  - Added trust-state behavior:
+    - revoked keys can still return `valid_signature=true` but always `trusted=false`
+    - active/deprecated keys return `trusted=true` only when all integrity checks pass
+    - unknown `key_id` returns invalid/untrusted (`key_status=missing`)
+  - Added replay verification audit logging:
+    - `organization_governance_verification_events.export_page_signature_verified`
+  - Preserved evidence and governance constraints:
+    - no persistence of uploaded export payload
+    - no mutation of manifests
+    - no mutation of verification events
+    - no raw secret/key material exposure
+    - no external signing/KMS provider usage
+- Test result: full suite executed after implementation
+- Next step: Add optional lightweight SDK helper examples for deterministic client-side canonicalization and replay-verification request construction.
+
+## Phase 4.15 - Signed Export Test Fixture Helper
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added shared backend test helper module:
+    - `tests/helpers/signed_export_pages.py`
+  - Added deterministic helper functions for signed export test setup and tampering:
+    - `generate_signed_verification_export_page(client, org_headers, payload=None)`
+    - `generate_unsigned_verification_export_page(client, org_headers, payload=None)`
+    - `tamper_export_page_event(export_page)`
+    - `tamper_export_page_filters(export_page)`
+    - `remove_export_signature_field(export_page, field_name)`
+    - `replace_export_key_id(export_page, key_id)`
+  - Refactored Phase 4.12/4.13/4.14 test suites to use helper utilities where signed-export setup/tamper duplication existed.
+  - Added dedicated helper-focused tests:
+    - `tests/unit/test_signed_export_pages_helper.py`
+    - validates signed vs unsigned generation behavior
+    - validates deterministic/non-mutating tamper helper behavior
+  - Preserved product and API behavior constraints:
+    - no production endpoint behavior changes
+    - no migrations
+    - no new models
+    - backend test-hardening only
+- Test result: full suite executed after implementation
+- Next step: Consider a shared auth/org test helper to reduce repeated register/header/org-id boilerplate across governance phase tests while preserving readability.
+
+## Phase 4.16 - Shared Auth/Org Governance Test Helper
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added shared backend auth/org test helper module:
+    - `tests/helpers/auth_org.py`
+  - Added helper utilities:
+    - `bootstrap_org_user(client, email_prefix="test", password="Pass1234!@", organization_name=None)`
+    - `auth_headers(token)`
+    - `org_headers(token, organization_id)`
+    - `bootstrap_admin_org(client, email_prefix="admin", ...)`
+    - `bootstrap_governance_manifest(client, organization_headers)`
+  - Exported helper functions via:
+    - `tests/helpers/__init__.py`
+  - Refactored selected governance/export/signature tests to reduce duplicated register/login/org-header setup while keeping assertions local:
+    - `tests/unit/test_framework_review_capacity_phase412.py`
+    - `tests/unit/test_framework_review_capacity_phase413.py`
+    - `tests/unit/test_framework_review_capacity_phase414.py`
+    - `tests/unit/test_signed_export_pages_helper.py`
+  - Added dedicated helper coverage:
+    - `tests/unit/test_auth_org_helper.py`
+  - Preserved scope and product constraints:
+    - backend test infrastructure only
+    - no production endpoint behavior changes
+    - no migrations
+    - no new models
+- Test result: full suite executed after implementation
+- Next step: Optionally expand helper adoption to other highly duplicated governance test files (for example Phase 40-49) in small, targeted passes.
+
+## Phase 4.17 - Incremental Governance Test Helper Refactor
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Incrementally refactored high-duplication Phase 4.x governance tests to use shared auth/org helper utilities.
+  - Selected files:
+    - `tests/unit/test_framework_review_capacity_phase40.py`
+    - `tests/unit/test_framework_review_capacity_phase41.py`
+    - `tests/unit/test_framework_review_capacity_phase45.py`
+    - `tests/unit/test_framework_review_capacity_phase46.py`
+    - `tests/unit/test_framework_review_capacity_phase49.py`
+  - Replaced repeated register/login/org-header setup patterns with:
+    - `bootstrap_org_user(...)`
+    - `auth_headers(...)`
+    - `org_headers(...)`
+    - `login_user(...)` (where role-specific login was required)
+  - Added small shared helper improvement:
+    - `login_user(client, email, password="Pass1234!@")` in `tests/helpers/auth_org.py`
+  - Kept assertions and scenario-specific arrange/assert logic local inside each test.
+  - Preserved behavior scope:
+    - no production endpoint/model changes
+    - no migrations
+    - backend test-hardening only
+- Test result: targeted Phase 4.x refactor files passed, full suite executed after implementation
+- Next step: Continue incremental helper adoption for remaining Phase 4.2-4.4 and 4.7-4.8 files in similarly small reviewable passes.
+
+## Phase 4.18 - Final Incremental Governance Test Helper Refactor
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Refactored remaining high-duplication Phase 4.x governance tests to use shared auth/org helper utilities:
+    - `tests/unit/test_framework_review_capacity_phase42.py`
+    - `tests/unit/test_framework_review_capacity_phase43.py`
+    - `tests/unit/test_framework_review_capacity_phase44.py`
+    - `tests/unit/test_framework_review_capacity_phase47.py`
+    - `tests/unit/test_framework_review_capacity_phase48.py`
+  - Replaced repeated register/org-header setup with:
+    - `bootstrap_org_user(...)`
+    - `auth_headers(...)`
+    - `org_headers(...)`
+  - Preserved test intent by keeping scenario setup and assertions local to each test.
+  - No production behavior changes, migrations, models, or frontend changes.
+- Test result: targeted refactor files passed, full suite executed after implementation
+- Next step: governance Phase 4.x auth/org helper adoption is now complete; keep helper usage as the default pattern for new governance tests.
+
+## Phase 5.0 - AI System Inventory Foundation
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added organization-scoped AI system inventory model and migration:
+    - `ai_systems`
+    - fields include system metadata, owner assignments, lifecycle status, and archive provenance
+  - Added AI system inventory endpoints:
+    - `POST /api/v1/ai-systems`
+    - `GET /api/v1/ai-systems`
+    - `GET /api/v1/ai-systems/{ai_system_id}`
+    - `PATCH /api/v1/ai-systems/{ai_system_id}`
+    - `POST /api/v1/ai-systems/{ai_system_id}/archive`
+    - `GET /api/v1/ai-systems/summary`
+  - Added strict tenant and ownership validation:
+    - all endpoints are organization-scoped via `X-Organization-ID`
+    - owner fields (`business_owner_user_id`, `technical_owner_user_id`) must resolve to active memberships in the same organization
+  - Added archive behavior and update controls:
+    - archive is soft-delete only (`lifecycle_status=archived`, `archived_at`, `archived_by_user_id`)
+    - archived systems are excluded from list results by default unless `include_archived=true`
+    - archived systems allow only `notes` and `tags_json` updates
+  - Added summary metrics endpoint output:
+    - `total_systems`, `active_systems`, `archived_systems`
+    - `by_lifecycle_status`, `by_system_type`
+    - `with_business_owner`, `with_technical_owner`, `missing_owner_count`
+  - Added RBAC permissions and role mappings:
+    - `ai_systems:read`
+    - `ai_systems:write`
+    - `ai_systems:admin`
+    - mapped to default roles consistent with existing patterns
+  - Added audit logging:
+    - `ai_system.created`
+    - `ai_system.updated`
+    - `ai_system.archived`
+  - Added unit tests for permissions, CRUD flows, owner validation, tenant scoping, archive/list behavior, summary metrics, and audit events.
+  - Scope constraints preserved:
+    - inventory foundation only
+    - no AI discovery/scanning
+    - no automated classification/scoring
+    - no external integrations
+    - no frontend changes
+- Test result: full suite executed after implementation
+- Next step: Add AI system evidence/control/risk linkage endpoints with explicit manual mappings and no automated compliance inference.
+
+## Phase 5.1 - Manual AI System Links to Controls, Evidence, and Risks
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added manual AI system link models and migration:
+    - `ai_system_control_links`
+    - `ai_system_evidence_links`
+    - `ai_system_risk_links`
+  - Added AI system link endpoints:
+    - `POST /api/v1/ai-systems/{ai_system_id}/links/controls`
+    - `GET /api/v1/ai-systems/{ai_system_id}/links/controls`
+    - `POST /api/v1/ai-systems/{ai_system_id}/links/controls/{link_id}/unlink`
+    - `POST /api/v1/ai-systems/{ai_system_id}/links/evidence`
+    - `GET /api/v1/ai-systems/{ai_system_id}/links/evidence`
+    - `POST /api/v1/ai-systems/{ai_system_id}/links/evidence/{link_id}/unlink`
+    - `POST /api/v1/ai-systems/{ai_system_id}/links/risks`
+    - `GET /api/v1/ai-systems/{ai_system_id}/links/risks`
+    - `POST /api/v1/ai-systems/{ai_system_id}/links/risks/{link_id}/unlink`
+    - `GET /api/v1/ai-systems/{ai_system_id}/links/summary`
+  - Implemented link rules:
+    - strict tenant-scoped target validation (AI system + control/evidence/risk must belong to same organization)
+    - archived AI systems cannot accept new links
+    - duplicate active links are rejected per link type
+    - unlink requires reason and is non-destructive (`status=unlinked`, `unlinked_at`, `unlinked_by_user_id`, `unlink_reason`)
+    - `include_unlinked` supported on list endpoints
+  - Added tenant-scoped link summary counts:
+    - active/unlinked by controls, evidence, risks
+    - total active and total unlinked
+  - Added audit logging:
+    - `ai_system.control_linked`
+    - `ai_system.control_unlinked`
+    - `ai_system.evidence_linked`
+    - `ai_system.evidence_unlinked`
+    - `ai_system.risk_linked`
+    - `ai_system.risk_unlinked`
+  - Added Phase 5.1 tests covering link creation, duplicate blocking, tenant boundaries, archived-system blocking, unlink requirements, non-destructive behavior, include_unlinked, summary counts, and audit logs.
+  - Preserved scope constraints:
+    - manual linking only
+    - no automatic classification/inference/recommendations
+    - no external integrations
+    - backend-only changes
+- Test result: full suite executed after implementation
+- Next step: Add AI system-level governance review workflow (manual attest/review checkpoints) while keeping inventory and link provenance immutable.
+
+## Phase 5.2 - AI System Governance Review and Attestation Workflow
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added AI system governance review and attestation models with migration:
+    - `ai_system_governance_reviews`
+    - `ai_system_governance_attestations`
+  - Added AI system governance review endpoints:
+    - `POST /api/v1/ai-systems/{ai_system_id}/governance-reviews`
+    - `GET /api/v1/ai-systems/{ai_system_id}/governance-reviews`
+    - `GET /api/v1/ai-systems/{ai_system_id}/governance-reviews/{review_id}`
+    - `POST /api/v1/ai-systems/{ai_system_id}/governance-reviews/{review_id}/start`
+    - `POST /api/v1/ai-systems/{ai_system_id}/governance-reviews/{review_id}/complete`
+    - `POST /api/v1/ai-systems/{ai_system_id}/governance-reviews/{review_id}/cancel`
+  - Added AI system governance attestation endpoints:
+    - `POST /api/v1/ai-systems/{ai_system_id}/governance-reviews/{review_id}/attestations`
+    - `GET /api/v1/ai-systems/{ai_system_id}/governance-reviews/{review_id}/attestations`
+    - `POST /api/v1/ai-systems/{ai_system_id}/governance-reviews/{review_id}/attestations/{attestation_id}/verify`
+  - Added AI system governance summary endpoint:
+    - `GET /api/v1/ai-systems/{ai_system_id}/governance-summary`
+  - Implemented governance review rules:
+    - tenant-scoped review lifecycle with manual start/complete/cancel transitions
+    - assigned reviewer must be an active member of the same organization
+    - archived AI systems only allow new `retirement_review` checkpoints
+    - cancellation requires explicit reason
+  - Implemented attestation integrity rules:
+    - attestations only allowed for completed reviews
+    - duplicate signer attestations for the same review are blocked
+    - immutable integrity metadata stored: `content_sha256`, `signature_algorithm`, `internal_signature`, `signed_at`
+    - verification endpoint recomputes hash/signature and does not mutate attestation records
+    - caveat recorded: internal signature only, not legal e-signature/external attestation/certification
+  - Added audit logging:
+    - `ai_system_governance_review.created`
+    - `ai_system_governance_review.started`
+    - `ai_system_governance_review.completed`
+    - `ai_system_governance_review.cancelled`
+    - `ai_system_governance_attestation.created`
+  - Added Phase 5.2 tests for lifecycle, tenant boundaries, assignee validation, archived constraints, attestation constraints, replay verification, non-mutation checks, summaries, and audit logs.
+  - Scope constraints preserved:
+    - manual governance only
+    - no AI inference/classification
+    - no automatic production approval
+    - no legal e-signature/compliance claims
+    - no external integrations
+    - backend-only changes
+- Test result: full suite executed after implementation
+- Next step: Add manual AI system governance review scheduling/reminder policies (without auto-approval) and keep all decisions explicitly user-driven.
+
+## Phase 5.3 - AI Governance Review Scheduling, Reminder, and Escalation Policies
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added governance review scheduling fields to `ai_system_governance_reviews` with migration:
+    - `due_at`
+    - `reminder_policy_id`
+    - `last_reminder_at`
+    - `escalated_at`
+  - Added reminder policy and event models with migration:
+    - `ai_system_governance_review_reminder_policies`
+    - `ai_system_governance_review_events`
+  - Added governance review schedule endpoint:
+    - `POST /api/v1/ai-systems/{ai_system_id}/governance-reviews/{review_id}/schedule`
+  - Added AI governance reminder policy endpoints:
+    - `POST /api/v1/ai-governance/review-reminder-policies`
+    - `GET /api/v1/ai-governance/review-reminder-policies`
+    - `PATCH /api/v1/ai-governance/review-reminder-policies/{policy_id}`
+    - `POST /api/v1/ai-governance/review-reminder-policies/{policy_id}/archive`
+  - Added AI governance queue/event endpoints:
+    - `GET /api/v1/ai-governance/review-queue`
+    - `POST /api/v1/ai-governance/review-queue/evaluate-schedules`
+    - `GET /api/v1/ai-governance/review-events`
+    - `POST /api/v1/ai-governance/review-events/{event_id}/resolve`
+    - `GET /api/v1/ai-governance/review-schedule-summary`
+  - Implemented deterministic schedule evaluation behavior:
+    - evaluates only `pending`/`in_progress` reviews with `due_at`
+    - computes `reminder_due`, `review_overdue`, and `escalation_due` from policy day offsets
+    - supports `dry_run=true` with no persisted events or queued outbox records
+    - supports live mode with idempotent open-event creation and optional internal outbox queueing
+  - Implemented reminder policy controls:
+    - tenant-scoped policy CRUD with `active`/`inactive`/`archived` status
+    - non-negative day-value validation
+    - active-policy enforcement when attaching policy during schedule updates
+  - Implemented event lifecycle controls:
+    - tenant-scoped event listing with filters
+    - explicit resolve flow (`open` -> `resolved`) with resolver provenance
+    - non-destructive event history (no hard deletes)
+  - Added audit logging:
+    - `ai_system_governance_review.scheduled`
+    - `ai_system_governance_review_reminder_policy.created`
+    - `ai_system_governance_review_reminder_policy.updated`
+    - `ai_system_governance_review_reminder_policy.archived`
+    - `ai_system_governance_review_schedule.evaluated`
+    - `ai_system_governance_review_event.resolved`
+  - Added Phase 5.3 tests for schedule rules, policy lifecycle/validation, tenant-scoped queue behavior, dry-run/live evaluation, idempotency, optional outbox queueing, event resolve, summary counts, and audit actions.
+  - Scope constraints preserved:
+    - scheduling metadata and deterministic evaluation only
+    - no autonomous scheduler
+    - no automatic approval/rejection
+    - no AI inference/classification
+    - no external integrations
+    - no real email sending
+    - backend-only changes
+- Test result: full suite executed after implementation
+- Next step: Add manual governance review recurrence templates and dependency-aware review planning while preserving explicit human control.
+
+## Phase 5.4 - Manual Recurrence Templates and Review-Plan Generation
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added recurrence template and plan-run models with migration:
+    - `ai_system_governance_review_recurrence_templates`
+    - `ai_system_governance_review_plan_runs`
+  - Added recurrence template endpoints:
+    - `POST /api/v1/ai-governance/review-recurrence-templates`
+    - `GET /api/v1/ai-governance/review-recurrence-templates`
+    - `PATCH /api/v1/ai-governance/review-recurrence-templates/{template_id}`
+    - `POST /api/v1/ai-governance/review-recurrence-templates/{template_id}/archive`
+  - Added manual review-plan generation endpoint:
+    - `POST /api/v1/ai-governance/review-recurrence-templates/{template_id}/generate-plan`
+  - Added plan-run history endpoints:
+    - `GET /api/v1/ai-governance/review-plan-runs`
+    - `GET /api/v1/ai-governance/review-plan-runs/{run_id}`
+  - Added recurrence summary endpoint:
+    - `GET /api/v1/ai-governance/review-recurrence-summary`
+  - Implemented deterministic plan generation rules:
+    - allowlisted cadence (`days`, `weeks`, `months`, `quarters`, `years`) with positive `interval_value`
+    - deterministic due-date expansion from `start_from` over bounded `horizon_days`
+    - active/non-archived AI system targeting by default, optional explicit target validation
+    - duplicate prevention for same `ai_system_id + review_type + due_at` where existing review is not cancelled
+  - Implemented dry-run/live behavior:
+    - `dry_run=true` previews plan and persists run history only (no governance review creation)
+    - `dry_run=false` creates pending governance reviews with template defaults (`due_at`, checklist, description, assignee, reminder policy)
+    - no auto-start, no auto-approval, no background execution, no autonomous scheduler
+  - Added default-field validation:
+    - default reminder policy must be same-org and active
+    - default assignee must be an active org member
+  - Added plan-generation caveat in response payloads:
+    - review-plan generation is manually triggered; CompliVibe does not autonomously create, approve, or complete AI governance reviews
+  - Added audit logging:
+    - `ai_system_governance_recurrence_template.created`
+    - `ai_system_governance_recurrence_template.updated`
+    - `ai_system_governance_recurrence_template.archived`
+    - `ai_system_governance_review_plan.previewed`
+    - `ai_system_governance_review_plan.applied`
+  - Added Phase 5.4 tests for template validation/tenant-scope/update/archive, deterministic preview/no-create behavior, live apply creation and duplicate skipping, archived AI exclusion, run history, summary metrics, and audit events.
+  - Scope constraints preserved:
+    - human-triggered only
+    - no autonomous scheduler or background jobs
+    - no automatic decisions
+    - no AI inference
+    - no real email sending
+    - backend-only changes
+- Test result: full suite executed after implementation
+- Next step: Add optional manual dependency windows/prerequisites for generated review plans (still explicit human apply) to coordinate multi-system governance cycles.
+
+## Phase 5.5 - Manual Dependency-Aware Review Plan Constraints
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added review-plan constraint model and migration:
+    - `ai_system_governance_review_plan_constraints`
+  - Added review-plan constraint endpoints:
+    - `POST /api/v1/ai-governance/review-plan-constraints`
+    - `GET /api/v1/ai-governance/review-plan-constraints`
+    - `PATCH /api/v1/ai-governance/review-plan-constraints/{constraint_id}`
+    - `POST /api/v1/ai-governance/review-plan-constraints/{constraint_id}/archive`
+    - `GET /api/v1/ai-governance/review-plan-constraints/summary`
+  - Extended manual plan generation payload:
+    - `apply_constraints` (default `true`)
+    - `constraint_ids` (optional explicit subset)
+  - Implemented deterministic constraint evaluation for generated plan items:
+    - active org constraints loaded by `target_review_type` (or explicit validated `constraint_ids`)
+    - `prerequisite_completed`: requires completed prerequisite review before planned due date
+    - `prerequisite_window`: requires completed prerequisite and optional min/max gap-day window compliance
+  - Implemented enforcement semantics:
+    - `block` failures skip item as `constraint_blocked`
+    - `warn` failures keep item planned with warning metadata
+    - `apply_constraints=false` reverts to unconstrained Phase 5.4 behavior
+  - Added constraint result reporting:
+    - `constraint_results` included for planned/skipped items
+    - plan run `result_json` now stores applied constraints and per-item constraint outcomes
+  - Added constraint caveat text in constrained plan responses:
+    - deterministic planning rules only; no autonomous review creation/approval/completion
+  - Added audit logging:
+    - `ai_system_governance_review_plan_constraint.created`
+    - `ai_system_governance_review_plan_constraint.updated`
+    - `ai_system_governance_review_plan_constraint.archived`
+    - existing plan generation audits retained:
+      - `ai_system_governance_review_plan.previewed`
+      - `ai_system_governance_review_plan.applied`
+  - Added Phase 5.5 tests for constraint CRUD validation, tenant scoping, archive semantics, constrained preview/apply behavior, warn/block handling, `apply_constraints` bypass, `constraint_ids` tenant validation, plan run constraint result persistence, summary counts, and audit logs.
+  - Scope constraints preserved:
+    - human-triggered plan generation only
+    - no autonomous scheduler/background execution
+    - no automatic prerequisite creation
+    - no AI inference
+    - no automatic decisions
+    - backend-only changes
+- Test result: full suite executed after implementation
+- Next step: Add optional manual “review sequence packs” to coordinate cross-review-type rollout waves while preserving explicit operator-triggered apply.
+
+## Phase 5.6 - Manual Sequence-Pack Orchestration for Multi-Review-Type Rollouts
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added sequence-pack orchestration models with migration:
+    - `ai_system_governance_review_sequence_packs`
+    - `ai_system_governance_review_sequence_steps`
+    - `ai_system_governance_review_sequence_runs`
+  - Added sequence pack endpoints:
+    - `POST /api/v1/ai-governance/review-sequence-packs`
+    - `GET /api/v1/ai-governance/review-sequence-packs`
+    - `PATCH /api/v1/ai-governance/review-sequence-packs/{pack_id}`
+    - `POST /api/v1/ai-governance/review-sequence-packs/{pack_id}/archive`
+  - Added sequence step endpoints:
+    - `POST /api/v1/ai-governance/review-sequence-packs/{pack_id}/steps`
+    - `GET /api/v1/ai-governance/review-sequence-packs/{pack_id}/steps`
+    - `PATCH /api/v1/ai-governance/review-sequence-packs/{pack_id}/steps/{step_id}`
+    - `POST /api/v1/ai-governance/review-sequence-packs/{pack_id}/steps/{step_id}/archive`
+  - Added sequence generation/run endpoints:
+    - `POST /api/v1/ai-governance/review-sequence-packs/{pack_id}/generate-sequence`
+    - `GET /api/v1/ai-governance/review-sequence-runs`
+    - `GET /api/v1/ai-governance/review-sequence-runs/{run_id}`
+    - `GET /api/v1/ai-governance/review-sequence-summary`
+  - Implemented deterministic sequence planning rules:
+    - active steps evaluated in `step_order`
+    - due date staging as `start_from + offset_days_from_start`
+    - optional `require_previous_step_planned` gate per step
+    - duplicate prevention by non-cancelled `ai_system_id + review_type + due_at`
+  - Implemented sequence validation rules:
+    - pack must be active for new steps and generation
+    - `step_order` positive and unique among active steps in the same pack
+    - `offset_days_from_start` non-negative
+    - default reminder policy must be same-org active
+    - default assignee must be active org member
+    - archived pack/step blocks normal updates; archive is status-only (no hard delete)
+  - Implemented dry-run/live behavior:
+    - dry-run returns planned/skipped results and persists sequence run history with no review creation
+    - live apply creates only pending governance reviews (no start/approve/complete automation)
+    - no background scheduler, no autonomous execution, no automatic decisioning
+  - Integrated Phase 5.5 constraints into sequence generation:
+    - `apply_constraints=true` evaluates active constraints per step `review_type`
+    - block failures skip items as `constraint_blocked`
+    - warn failures keep planned items with warning metadata
+    - `apply_constraints=false` bypasses constraint checks
+    - per-item `constraint_results` persisted in run `result_json`
+  - Added sequence caveat response text:
+    - sequence-pack generation is manually triggered and not autonomous review lifecycle execution
+  - Added audit logging:
+    - `ai_system_governance_review_sequence_pack.created`
+    - `ai_system_governance_review_sequence_pack.updated`
+    - `ai_system_governance_review_sequence_pack.archived`
+    - `ai_system_governance_review_sequence_step.created`
+    - `ai_system_governance_review_sequence_step.updated`
+    - `ai_system_governance_review_sequence_step.archived`
+    - `ai_system_governance_review_sequence.previewed`
+    - `ai_system_governance_review_sequence.applied`
+  - Added Phase 5.6 tests for pack/step CRUD, duplicate step-order protection, default-field validation, dry-run/live generation behavior, duplicate skipping, archived AI exclusion, constraint integration, run history, summary, and audit logs.
+  - Scope constraints preserved:
+    - backend-only changes
+    - no frontend changes
+    - no autonomous scheduler/background jobs
+    - no auto-run/auto-start/auto-approve/auto-complete
+    - no AI inference
+- Test result: full suite executed after implementation
+- Next step: Add optional manual cross-pack rollout guardrails (e.g., pack-level freeze windows and explicit operator acknowledgements) while keeping orchestration strictly user-triggered.
+
+## Phase 5.7 - Cross-Pack Governance Guardrails - Freeze Windows and Operator Acknowledgements
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added governance guardrail models with migration:
+    - `ai_system_governance_freeze_windows`
+    - `ai_system_governance_operator_acknowledgements`
+  - Added freeze window guardrail endpoints:
+    - `POST /api/v1/ai-governance/guardrails/freeze-windows`
+    - `GET /api/v1/ai-governance/guardrails/freeze-windows`
+    - `PATCH /api/v1/ai-governance/guardrails/freeze-windows/{freeze_window_id}`
+    - `POST /api/v1/ai-governance/guardrails/freeze-windows/{freeze_window_id}/archive`
+  - Added read-side guardrail endpoints:
+    - `POST /api/v1/ai-governance/guardrails/check`
+    - `GET /api/v1/ai-governance/guardrails/operator-acknowledgements`
+    - `GET /api/v1/ai-governance/guardrails/summary`
+  - Implemented deterministic guardrail matching:
+    - active freeze windows matched by overlapping plan window and scope (`all_ai_governance`, `review_type`, `sequence_pack`, `ai_system`)
+    - `guardrails/check` returns `blocked`, matching windows, warnings, required acknowledgement text, and caveat
+    - no mutation on check endpoint
+  - Updated sequence generation (`generate-sequence`) to include guardrail integration:
+    - dry-run includes `guardrail_results` in response/run history and never creates acknowledgements
+    - live apply enforces freeze override requirements when freezes match:
+      - exact `acknowledgement_text=CONFIRM_SEQUENCE_APPLY_DURING_FREEZE`
+      - `override_freeze=true`
+      - non-empty `override_reason`
+    - valid live override creates operator acknowledgement record and still creates pending reviews only
+    - no auto-start/auto-approve/auto-complete behavior added
+  - Added audit logging:
+    - `ai_system_governance_freeze_window.created`
+    - `ai_system_governance_freeze_window.updated`
+    - `ai_system_governance_freeze_window.archived`
+    - `ai_system_governance_operator_acknowledgement.created`
+  - Added Phase 5.7 tests for freeze window CRUD/date/scope validation, guardrail checks, dry-run/live sequence freeze behavior, acknowledgement requirements, tenant-scoped acknowledgement listing, summary counts, and audit logs.
+  - Scope constraints preserved:
+    - backend-only changes
+    - no autonomous scheduler/background execution
+    - no automatic decisions
+    - no AI inference
+    - no external integrations
+- Test result: full suite executed after implementation
+- Next step: Add operator-controlled guardrail precedence controls (e.g., scoped priority ordering and explicit conflict resolution rules) while keeping enforcement deterministic and manual.
+
+## Phase 5.8 - Deterministic Guardrail Conflict Resolution and Precedence Controls
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added freeze-window precedence fields with migration:
+    - `priority` (default `100`)
+    - `enforcement_level` (`info|warn|block`, default `block`)
+    - `override_allowed` (default `true`)
+    - `precedence_notes` (nullable)
+  - Extended freeze window create/update behavior to validate and persist precedence fields with non-negative `priority`.
+  - Implemented deterministic precedence resolution for matching freeze windows:
+    - priority desc
+    - specificity desc (`ai_system` > `sequence_pack` > `review_type` > `all_ai_governance`)
+    - `starts_at` desc
+    - `id` asc
+  - Updated guardrail check output to include structured `resolution` details:
+    - `blocked`
+    - `primary_blocking_window_id`
+    - `override_allowed`
+    - `enforcement_level`
+    - `precedence_order`
+    - `matching_window_count`
+    - `warnings`
+    - `info`
+  - Added conflict-resolution preview endpoint:
+    - `POST /api/v1/ai-governance/guardrails/resolve-conflicts`
+    - returns deterministic precedence trace, primary block window, final decision, explanation, and caveat
+    - read-only, no mutation
+  - Updated sequence generation guardrail integration:
+    - dry-run includes precedence resolution trace in `guardrail_results`
+    - live apply uses resolved decision:
+      - blocked + `override_allowed=false` -> always blocked
+      - blocked + `override_allowed=true` -> existing acknowledgement override path required
+      - warn/info-only -> no override acknowledgement required
+    - sequence run `result_json` now stores resolved guardrail details deterministically
+  - Updated guardrail summary with precedence/enforcement metrics:
+    - `block_freeze_windows`
+    - `warn_freeze_windows`
+    - `info_freeze_windows`
+    - `override_disallowed_windows`
+    - `highest_priority`
+  - Preserved existing audit behavior:
+    - `ai_system_governance_freeze_window.created`
+    - `ai_system_governance_freeze_window.updated`
+    - `ai_system_governance_freeze_window.archived`
+    - `ai_system_governance_operator_acknowledgement.created`
+  - Added Phase 5.8 tests for precedence fields/validation, deterministic ordering, scope-specificity and priority tie-break behavior, enforcement-level outcomes, override-disallowed blocking, override-allowed path, conflict preview trace, summary metrics, and audit coverage.
+  - Scope constraints preserved:
+    - backend-only changes
+    - no autonomous scheduler/background execution
+    - no automatic review decisions
+    - no AI inference
+    - no frontend changes
+- Test result: full suite executed after implementation
+- Next step: Add explicit, operator-managed guardrail policy sets/profiles to version precedence strategies by rollout context while keeping evaluation deterministic.
+
+## Phase 5.9 - Operator-Managed Guardrail Policy Sets / Profiles
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added guardrail policy set models with migration:
+    - `ai_system_governance_guardrail_policy_sets`
+    - `ai_system_governance_guardrail_policy_set_versions`
+  - Added policy set endpoints:
+    - `POST /api/v1/ai-governance/guardrails/policy-sets`
+    - `GET /api/v1/ai-governance/guardrails/policy-sets`
+    - `PATCH /api/v1/ai-governance/guardrails/policy-sets/{policy_set_id}`
+    - `POST /api/v1/ai-governance/guardrails/policy-sets/{policy_set_id}/archive`
+  - Added policy set version endpoints:
+    - `POST /api/v1/ai-governance/guardrails/policy-sets/{policy_set_id}/versions`
+    - `GET /api/v1/ai-governance/guardrails/policy-sets/{policy_set_id}/versions`
+    - `POST /api/v1/ai-governance/guardrails/policy-sets/{policy_set_id}/versions/{version_id}/activate`
+    - `GET /api/v1/ai-governance/guardrails/policy-sets/{policy_set_id}/active-profile`
+  - Added policy set summary endpoint:
+    - `GET /api/v1/ai-governance/guardrails/policy-sets/summary`
+  - Implemented immutable, versioned profile validation rules:
+    - `resolution_strategy` must be `deterministic_precedence_v1`
+    - `acknowledgement_text` required when `allow_operator_override=true`
+    - `scope_precedence_order` must include each known scope exactly once
+    - new versions start `draft`; activation sets selected version `active` and prior active `deprecated`
+  - Extended guardrail check/resolve to support optional policy selection:
+    - request supports `policy_set_id`
+    - when selected, active profile controls acknowledgement text and resolution metadata
+    - response includes `policy_set_id` and `policy_version_id`
+    - deterministic precedence remains unchanged and block safety is preserved
+  - Extended sequence generation to support optional policy selection:
+    - request supports `guardrail_policy_set_id`
+    - live block overrides use selected profile acknowledgement text
+    - missing active profile returns validation error
+    - sequence run result stores policy set/version metadata and resolved guardrail details
+  - Added policy profile caveat response text:
+    - deterministic configuration records only; no autonomous execution/approval/completion
+  - Added audit logging:
+    - `ai_system_governance_guardrail_policy_set.created`
+    - `ai_system_governance_guardrail_policy_set.updated`
+    - `ai_system_governance_guardrail_policy_set.archived`
+    - `ai_system_governance_guardrail_policy_set_version.created`
+    - `ai_system_governance_guardrail_policy_set_version.activated`
+  - Added Phase 5.9 tests for policy set CRUD, profile validation, version incrementing, activation/deprecation behavior, active profile retrieval, policy-aware guardrail check/resolve metadata, policy-aware sequence acknowledgement behavior, block-safety preservation, summary counts, and audit logs.
+  - Scope constraints preserved:
+    - backend-only changes
+    - no autonomous scheduler/background execution
+    - no auto-start/approve/complete
+    - no AI inference
+    - no frontend changes
+- Test result: full suite executed after implementation
+- Next step: Add optional policy-set assignment mappings (e.g., by sequence pack or rollout class) so operators can pre-bind default guardrail profiles while keeping explicit per-run override capability.
+
+## Phase 5.10 - Default Guardrail Policy Assignment Mappings
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added policy-assignment models with migration:
+    - `ai_system_governance_guardrail_policy_assignments`
+    - `ai_system_governance_guardrail_policy_assignment_history`
+  - Added policy-assignment endpoints:
+    - `POST /api/v1/ai-governance/guardrails/policy-assignments`
+    - `GET /api/v1/ai-governance/guardrails/policy-assignments`
+    - `PATCH /api/v1/ai-governance/guardrails/policy-assignments/{assignment_id}`
+    - `POST /api/v1/ai-governance/guardrails/policy-assignments/{assignment_id}/archive`
+    - `GET /api/v1/ai-governance/guardrails/policy-assignments/{assignment_id}/history`
+    - `POST /api/v1/ai-governance/guardrails/policy-assignments/resolve`
+    - `GET /api/v1/ai-governance/guardrails/policy-assignments/summary`
+  - Implemented scope validation for assignment creation/update:
+    - `sequence_pack` requires same-org `scope_id`
+    - `ai_system` requires same-org `scope_id`
+    - `review_type` requires allowlisted `scope_json.review_type`
+    - `rollout_class` requires non-empty `scope_json.rollout_class`
+    - `all_ai_governance` uses no scoped target
+  - Added duplicate-active exact-scope protection for assignments (same scope type + exact scope target).
+  - Added immutable assignment history rows on create/update/archive with reason tracking.
+  - Implemented deterministic policy resolution behavior:
+    - explicit request policy always wins
+    - mapped fallback precedence:
+      - `sequence_pack`
+      - `ai_system`
+      - `review_type`
+      - `rollout_class`
+      - `all_ai_governance`
+    - same-scope tie-breakers:
+      - `priority` desc
+      - `updated_at` desc
+      - `id` asc
+    - resolved mapping must have an active policy version; missing active version returns validation error
+  - Integrated mapped policy fallback into:
+    - `POST /api/v1/ai-governance/guardrails/check`
+    - `POST /api/v1/ai-governance/guardrails/resolve-conflicts`
+    - `POST /api/v1/ai-governance/review-sequence-packs/{pack_id}/generate-sequence`
+  - Added `policy_resolution` metadata in guardrail check/conflict responses and sequence run guardrail result payloads.
+  - Added assignment summary metrics:
+    - active/inactive/archived counts
+    - by-scope totals
+    - assignments without active policy version
+    - highest priority
+    - assignment caveat text
+  - Added audit logging:
+    - `ai_system_governance_guardrail_policy_assignment.created`
+    - `ai_system_governance_guardrail_policy_assignment.updated`
+    - `ai_system_governance_guardrail_policy_assignment.archived`
+  - Added Phase 5.10 tests for assignment CRUD, scope validation, duplicate scope blocking, history tracking, explicit-vs-mapped precedence, check/resolve/sequence integration, mapped-policy active-version validation, summary counts, and audit logging.
+  - Scope constraints preserved:
+    - backend-only changes
+    - no autonomous scheduler/background execution
+    - no auto-start/approve/complete behavior
+    - no AI inference
+    - no frontend changes
+- Test result: full suite passed (`288` collected tests)
+- Next step: Add optional guardrail-policy assignment simulation tooling (what-if traces across multiple candidate contexts) to improve operator change review before activation.
+
+## Phase 5.11 - Policy Resolution Simulation and Report Mode
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added simulation report model with migration:
+    - `ai_system_governance_policy_resolution_simulation_reports`
+  - Added simulation endpoints:
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/simulate`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/simulation-reports`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/simulation-reports/{report_id}`
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/simulation-reports/{report_id}/archive`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/simulation-summary`
+  - Implemented batch simulation behavior:
+    - supports up to `100` candidate contexts per request
+    - each context evaluates deterministic policy resolution (explicit vs mapped fallback) and guardrail resolution
+    - returns per-context policy resolution, precedence trace, and guardrail resolution metadata
+    - computes aggregate counters:
+      - `blocked_contexts_count`
+      - `warning_contexts_count`
+      - `no_policy_contexts_count`
+  - Implemented strict read-only simulation by default (`persist_report=false`):
+    - no reviews created
+    - no sequence runs created
+    - no acknowledgements created
+    - no policy assignment changes
+  - Implemented optional persisted report mode (`persist_report=true`):
+    - stores input contexts and result payload
+    - stores aggregate counters and context count
+    - report status lifecycle: `generated` -> `archived`
+    - no hard delete
+  - Implemented tenant-scoped report listing/detail/archive and simulation summary metrics.
+  - Added simulation caveat response text:
+    - policy resolution simulations are read-only planning reports and do not create reviews, sequence runs, acknowledgements, or policy changes
+  - Added audit logging for persisted actions only:
+    - `ai_system_governance_policy_resolution_simulation.generated`
+    - `ai_system_governance_policy_resolution_simulation.archived`
+  - Added Phase 5.11 tests for:
+    - single and multi-context simulation without persistence
+    - persisted report creation and non-persistent no-write behavior
+    - explicit policy precedence vs mapped fallback
+    - tenant-scope validation for `sequence_pack_id` and `ai_system_ids`
+    - mapped policy missing active version validation error
+    - blocked/warning/no-policy counting
+    - report list/detail tenant isolation
+    - archive behavior and simulation summary counts
+    - persisted-only audit logging behavior
+  - Scope constraints preserved:
+    - backend-only changes
+    - no autonomous scheduler/background execution
+    - no auto-start/approve/complete behavior
+    - no AI inference
+    - no frontend changes
+- Test result: full suite passed (`292` collected tests)
+- Next step: Add optional simulation report diff/comparison view (report-to-report delta over precedence trace and blocked/warn/no-policy shifts) for operator change management.
+
+## Phase 5.12 - Simulation Report Diff Mode
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added simulation diff report model with migration:
+    - `ai_system_governance_policy_resolution_simulation_diff_reports`
+  - Added simulation diff endpoints:
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/simulation-reports/diff`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/simulation-diff-reports`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/simulation-diff-reports/{diff_report_id}`
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/simulation-diff-reports/{diff_report_id}/archive`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/simulation-diff-summary`
+  - Implemented deterministic report-to-report diff behavior:
+    - compares two persisted simulation reports in the same tenant
+    - supports context matching strategies:
+      - `context_key_then_index`
+      - `context_key_only`
+    - computes added/removed/changed/unchanged contexts
+  - Implemented per-context delta detection across:
+    - policy resolution source/set/version/assignment
+    - precedence trace
+    - guardrail blocked state, primary blocking window, override/enforcement, matching window count, warnings/info
+  - Implemented aggregate deltas:
+    - `blocked_delta`
+    - `warning_delta`
+    - `no_policy_delta`
+    - `policy_changed_count`
+    - `guardrail_changed_count`
+    - `precedence_trace_changed_count`
+  - Implemented optional persisted diff reports (`persist_diff=true`) with archive lifecycle (`generated` -> `archived`) and no hard delete.
+  - Added tenant-scoped diff report listing/detail and summary metrics:
+    - total/active/archived diff reports
+    - total changed/added/removed contexts
+    - total policy-changed contexts
+    - total guardrail-changed contexts
+    - latest diff report timestamp
+  - Added simulation diff caveat response text:
+    - deterministic comparison only; no review/sequence/acknowledgement/freeze/policy mutations
+  - Added audit logging for persisted actions only:
+    - `ai_system_governance_policy_resolution_simulation_diff.generated`
+    - `ai_system_governance_policy_resolution_simulation_diff.archived`
+  - Added Phase 5.12 tests for:
+    - non-persistent diff behavior and no-write/no-audit guarantee
+    - persisted diff report create/list/detail/archive flow
+    - tenant isolation for base/compare report IDs
+    - context matching strategy behavior (`context_key_then_index`, `context_key_only`)
+    - aggregate and per-context change detection
+    - diff summary and audit logging expectations
+  - Scope constraints preserved:
+    - backend-only changes
+    - no autonomous scheduler/background execution
+    - no auto-start/approve/complete behavior
+    - no AI inference
+    - no frontend changes
+- Test result: full suite passed (`295` collected tests)
+- Next step: Add optional simulation diff “explain mode” that emits a concise machine-readable reason code set per changed field to improve approval workflows and downstream change-control automation.
+
+## Phase 5.13 - Normalized Diff Reason Code Layer
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added simulation diff reason-code storage fields with migration:
+    - `reason_code_summary_json` (nullable JSON)
+    - `reason_code_count` (integer, default `0`)
+  - Added deterministic reason-code catalog endpoint:
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-reason-codes`
+  - Enhanced simulation diff generation (`POST /api/v1/ai-governance/guardrails/policy-resolution/simulation-reports/diff`) with:
+    - context-level reason codes (`CONTEXT_ADDED`, `CONTEXT_REMOVED`, `CONTEXT_CHANGED`, `CONTEXT_UNCHANGED`)
+    - policy-resolution reason codes (source/set/version/assignment/precedence trace changes)
+    - guardrail-resolution reason codes (blocked/primary window/override/enforcement/matching window/warnings/info changes)
+    - aggregate safety reason codes for blocked/warning/no-policy deltas (increase/decrease)
+    - per-context `field_changes` entries with:
+      - `field_path`
+      - `reason_code`
+      - `before_value`
+      - `after_value`
+    - aggregate response fields:
+      - `reason_code_summary`
+      - `reason_code_count`
+  - Preserved backward compatibility:
+    - existing diff response fields remain unchanged
+    - reason-code fields are additive
+  - Persisted diff behavior (`persist_diff=true`) now stores:
+    - reason-code-enriched `diff_json`
+    - `reason_code_summary_json`
+    - `reason_code_count`
+  - Updated diff detail output to include:
+    - `reason_code_summary_json`
+    - `reason_code_count`
+  - Updated diff summary output to include:
+    - `total_reason_code_occurrences`
+    - `top_reason_codes` (deterministic sort: `count desc`, `reason_code asc`)
+  - Added caveat response text for reason-code catalog output:
+    - deterministic labels only; no automation trigger and no governance mutation
+  - Persisted-action audit behavior unchanged:
+    - `ai_system_governance_policy_resolution_simulation_diff.generated`
+    - `ai_system_governance_policy_resolution_simulation_diff.archived`
+  - Added Phase 5.13 tests for:
+    - deterministic reason-code catalog endpoint behavior
+    - reason-code-enriched diff output (summary/count/context codes/field changes)
+    - persisted diff storing reason-code summary/count
+    - diff detail and summary reason-code fields
+    - non-persisted diff no-audit behavior
+  - Scope constraints preserved:
+    - backend-only changes
+    - no autonomous scheduler/background execution
+    - no review/sequence/acknowledgement creation
+    - no policy mutation from reason codes
+    - no AI inference
+    - no frontend changes
+
+## Phase 5.14 - Policy-Diff Gating Profiles
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added policy diff gating models with migration:
+    - `ai_system_governance_policy_diff_gating_profiles`
+    - `ai_system_governance_policy_diff_gating_reports`
+  - Added gating profile endpoints:
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-profiles`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-profiles`
+    - `PATCH /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-profiles/{profile_id}`
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-profiles/{profile_id}/archive`
+  - Added diff classification endpoint:
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/simulation-diff-reports/{diff_report_id}/classify`
+  - Added gating report endpoints:
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-reports`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-reports/{gating_report_id}`
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-reports/{gating_report_id}/archive`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-summary`
+  - Implemented deterministic reason-code classification behavior:
+    - supports severity bands: `info`, `low`, `medium`, `high`, `critical`
+    - validates profile `default_severity` and `review_required_threshold`
+    - validates `reason_code_rules_json` reason codes against the Phase 5.13 catalog
+    - validates per-rule severity values and optional boolean `review_required`
+    - applies explicit per-code rule severity/review flags when present
+    - falls back to profile default severity for unmapped reason codes
+    - computes deterministic `max_severity` and `severity_summary`
+    - computes `review_required=true` when:
+      - any matched explicit rule has `review_required=true`, or
+      - `max_severity >= review_required_threshold`
+    - handles empty reason-code inputs as:
+      - `max_severity=info`
+      - `review_required=false`
+  - Implemented persisted classification behavior:
+    - `persist_report=false` returns read-only classification only
+    - `persist_report=true` stores gating report record and full result payload
+    - no mutation of source simulation diff reports
+    - no task/review/approval/automation side effects
+  - Added tenant-scoped filtering and retrieval for gating reports:
+    - status/diff_report/profile/review_required/max_severity filters
+  - Added gating summary metrics:
+    - profile counts by status
+    - report counts by status
+    - `review_required_reports`
+    - `by_max_severity`
+    - `latest_gating_report_at`
+  - Added caveat response text:
+    - policy-diff gating is read-only human-review classification and does not approve/reject, create tasks/reviews, or trigger automation
+  - Added audit logging for persisted actions only:
+    - `ai_system_governance_policy_diff_gating_profile.created`
+    - `ai_system_governance_policy_diff_gating_profile.updated`
+    - `ai_system_governance_policy_diff_gating_profile.archived`
+    - `ai_system_governance_policy_diff_gating_report.generated`
+    - `ai_system_governance_policy_diff_gating_report.archived`
+  - Added Phase 5.14 tests for:
+    - gating profile CRUD and validation errors
+    - archived profile update rejection
+    - classification preview no-persist/no-audit behavior
+    - persisted classification report creation and audit behavior
+    - explicit rule severity and default severity fallback
+    - max severity/review-required aggregation logic
+    - empty reason-code classification behavior
+    - tenant-scoped report/profile visibility and detail access
+    - archive lifecycle and summary counts
+  - Scope constraints preserved:
+    - backend-only changes
+    - no autonomous scheduler/background execution
+    - no review/sequence/acknowledgement creation
+    - no automatic approvals/rejections
+    - no AI inference
+    - no frontend changes
+- Test result: full suite passed (`300` collected tests)
+- Next step: Add optional policy-diff gating baseline comparison mode so teams can classify severity drift against a selected prior gating report while keeping outputs read-only by default.
+
+## Phase 5.15 - Gating Baseline Compare Mode
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added gating compare model with migration:
+    - `ai_system_governance_policy_diff_gating_compare_reports`
+  - Added compare endpoints:
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-reports/compare`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-reports`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-reports/{compare_report_id}`
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-reports/{compare_report_id}/archive`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-summary`
+  - Implemented deterministic gating drift comparison behavior:
+    - compares two persisted gating reports from same tenant
+    - supports archived gating reports as immutable historical input
+    - computes max-severity drift direction (`increased`, `decreased`, `unchanged`)
+    - computes review-required drift (`base_review_required`, `compare_review_required`, `review_required_changed`)
+    - computes reason-code deltas by `reason_code`:
+      - `reason_code_added`
+      - `reason_code_removed`
+      - `severity_changed`
+      - `review_required_changed`
+      - `count_changed`
+    - computes aggregate deltas:
+      - `reason_code_count_delta`
+      - `severity_summary_delta`
+  - Implemented optional persisted compare mode:
+    - `persist_compare=false` returns read-only comparison result only
+    - `persist_compare=true` stores compare report row with lifecycle `generated -> archived`
+    - no hard delete
+  - Added compare summary metrics:
+    - total/active/archived compare reports
+    - severity increased/decreased/unchanged counts
+    - review-required changed count
+    - total reason-code changes
+    - latest compare report timestamp
+  - Added compare caveat response text:
+    - compare reports are read-only drift reports and do not approve/reject, create tasks/reviews, or trigger automation
+  - Added audit logging for persisted actions only:
+    - `ai_system_governance_policy_diff_gating_compare.generated`
+    - `ai_system_governance_policy_diff_gating_compare.archived`
+  - Added Phase 5.15 tests for:
+    - non-persistent compare behavior and no-audit/no-write path
+    - persisted compare create/list/detail/archive flow
+    - tenant isolation for base and compare gating report IDs
+    - max-severity increased/decreased/unchanged detection
+    - review-required false->true and true->false detection
+    - reason-code added/removed/severity/review-required/count change detection
+    - compare summary count behavior
+  - Scope constraints preserved:
+    - backend-only changes
+    - no autonomous scheduler/background execution
+    - no task/review/sequence/acknowledgement creation
+    - no automatic approvals/rejections
+    - no AI inference
+    - no frontend changes
+- Test result: full suite passed (`303` collected tests)
+- Next step: Add optional compare-to-baseline profile presets so operators can standardize drift interpretation templates across recurring rollout reviews.
+
+## Phase 5.16 - Baseline-Profile Presets for Gating Compare Mode
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added new preset models with migration:
+    - `ai_system_governance_policy_diff_gating_compare_presets`
+    - `ai_system_governance_policy_diff_gating_compare_preset_reports`
+  - Added preset CRUD endpoints:
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-presets`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-presets`
+    - `PATCH /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-presets/{preset_id}`
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-presets/{preset_id}/archive`
+  - Added preset evaluation/report endpoints:
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-presets/{preset_id}/evaluate`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-reports`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-reports/{preset_report_id}`
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-reports/{preset_report_id}/archive`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-summary`
+  - Implemented deterministic preset interpretation behavior:
+    - reuses Phase 5.15 compare output as the source of truth
+    - supports optional baseline references (`baseline_gating_report_id`, `baseline_gating_profile_id`)
+    - validates watched/ignored reason-code lists against the Phase 5.13 reason-code catalog
+    - applies optional interpretation rules:
+      - `severity_increase_band`
+      - `review_required_flip_band`
+      - `watched_reason_code_band`
+      - `ignored_reason_codes_do_not_affect_band`
+    - computes final interpretation band by deterministic order:
+      - `stable < attention < review_required < critical_review`
+    - computes `review_required=true` when final band is `review_required` or `critical_review`
+    - keeps ignored codes visible in raw compare output while optionally excluding them from band escalation
+  - Implemented persistence behavior:
+    - `persist_report=false` returns interpretation-only response; no preset report row and no preset-report audit
+    - `persist_report=true` stores preset report (`generated`) with interpretation metadata
+    - `persist_compare_report=true` optionally persists underlying compare report using existing compare persistence behavior
+    - no mutation of source gating reports or compare reports
+  - Added tenant-scoped filtering and retrieval:
+    - preset status filters and archived controls
+    - preset report filters (`status`, `preset_id`, `interpretation_band`, `review_required`)
+  - Added preset summary metrics:
+    - preset counts by status
+    - preset report counts by status
+    - `review_required_reports`
+    - `by_interpretation_band`
+    - `latest_preset_report_at`
+  - Added caveat response text:
+    - gating compare presets are deterministic interpretation configurations for human review and do not approve/reject changes, create tasks/reviews, or trigger automation
+  - Added audit logging for persisted actions only:
+    - `ai_system_governance_policy_diff_gating_compare_preset.created`
+    - `ai_system_governance_policy_diff_gating_compare_preset.updated`
+    - `ai_system_governance_policy_diff_gating_compare_preset.archived`
+    - `ai_system_governance_policy_diff_gating_compare_preset_report.generated`
+    - `ai_system_governance_policy_diff_gating_compare_preset_report.archived`
+  - Added Phase 5.16 tests for:
+    - preset CRUD and validation errors
+    - archived preset update rejection
+    - baseline report/profile tenant validation
+    - non-persistent evaluation behavior and no-audit preset-report path
+    - baseline default usage and explicit base override
+    - severity increase/review-required flip/watched escalation behavior
+    - ignored reason-code non-escalation behavior
+    - persisted preset report + optional compare persistence behavior
+    - preset report list/detail/archive tenant scoping
+    - summary count behavior
+  - Scope constraints preserved:
+    - backend-only changes
+    - no autonomous scheduler/background execution
+    - no task/review/sequence/acknowledgement creation
+    - no automatic approvals/rejections
+    - no AI inference
+    - no frontend changes
+
+## Phase 5.17 - Preset Versioning and Immutable Rule Snapshots
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added preset versioning model and migration:
+    - `ai_system_governance_policy_diff_gating_compare_preset_versions`
+    - `ai_system_governance_policy_diff_gating_compare_presets.active_version_id`
+    - `ai_system_governance_policy_diff_gating_compare_preset_reports` version/snapshot fields:
+      - `preset_version_id`
+      - `preset_version_number`
+      - `preset_snapshot_json`
+  - Added preset version endpoints:
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-presets/{preset_id}/versions`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-presets/{preset_id}/versions`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-presets/{preset_id}/versions/{version_id}`
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-presets/{preset_id}/versions/{version_id}/activate`
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-presets/{preset_id}/versions/{version_id}/archive`
+  - Implemented immutable snapshot lifecycle behavior:
+    - version creation snapshots current preset config (baseline refs, watched/ignored codes, interpretation rules, default band, name/description)
+    - `version_number` increments per preset
+    - new versions start as `draft`
+    - activation deprecates previous active version and sets preset `active_version_id`
+    - active version archive is blocked
+  - Updated preset evaluation version selection behavior:
+    - explicit `preset_version_id` takes priority when supplied
+    - otherwise uses preset `active_version_id` when available
+    - otherwise falls back to mutable preset fields for backward compatibility
+    - evaluation response now includes:
+      - `preset_version_id`
+      - `preset_version_number`
+      - `preset_snapshot_used`
+  - Updated persisted preset report behavior:
+    - persisted reports now store exact version linkage and immutable snapshot used for evaluation
+    - preset report list/detail include version and snapshot fields
+  - Updated preset summary:
+    - `total_preset_versions`
+    - `active_preset_versions`
+    - `draft_preset_versions`
+    - `deprecated_preset_versions`
+    - `archived_preset_versions`
+    - `presets_without_active_version`
+  - Added audit logs:
+    - `ai_system_governance_policy_diff_gating_compare_preset_version.created`
+    - `ai_system_governance_policy_diff_gating_compare_preset_version.activated`
+    - `ai_system_governance_policy_diff_gating_compare_preset_version.archived`
+  - Added Phase 5.17 tests for:
+    - version snapshot creation and version incrementing
+    - tenant-scoped version list/detail
+    - activation/deprecation flow and preset active-version pointer updates
+    - active version archive blocking
+    - explicit/active/fallback evaluate version resolution
+    - persisted report snapshot/version storage
+    - summary version counts
+    - version action audit logging
+  - Scope constraints preserved:
+    - backend-only changes
+    - no autonomous scheduler/background execution
+    - no task/review/sequence/acknowledgement creation
+    - no automatic approvals/rejections
+    - no AI inference
+    - no frontend changes
+
+## Phase 5.18 - Preset-Level Version Pinning
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added preset-level version pinning fields on compare presets:
+    - `pinned_version_id`
+    - `version_selection_mode` (`active_then_mutable`, `pinned_preferred`, `pinned_required`)
+    - `allow_explicit_version_override`
+    - pin/unpin metadata (`pinned_at/by/reason`, `unpinned_at/by/reason`)
+  - Added pinning endpoints:
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-presets/{preset_id}/pin-version`
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-presets/{preset_id}/unpin-version`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-presets/{preset_id}/pinning-status`
+  - Updated preset evaluate behavior with deterministic pinning selection:
+    - `active_then_mutable`:
+      - explicit version -> active version -> mutable preset fallback
+    - `pinned_preferred`:
+      - explicit version (if allowed) -> pinned version -> active version -> mutable fallback
+    - `pinned_required`:
+      - pinned version required; no mutable fallback
+      - explicit differing version allowed only when `allow_explicit_version_override=true` and `version_override_reason` is provided
+  - Added evaluate response metadata:
+    - `version_resolution_source`
+    - `pinned_version_id`
+    - `explicit_version_override_used`
+    - `version_override_reason`
+  - Persisted preset report behavior:
+    - persisted report `result_json` now stores version-resolution metadata
+    - persisted report continues to store version linkage and immutable snapshot fields from Phase 5.17
+  - Updated preset summary:
+    - `pinned_presets`
+    - `pinned_required_presets`
+    - `pinned_preferred_presets`
+    - `presets_allowing_explicit_override`
+    - `presets_blocking_explicit_override`
+  - Added audit logs:
+    - `ai_system_governance_policy_diff_gating_compare_preset.version_pinned`
+    - `ai_system_governance_policy_diff_gating_compare_preset.version_unpinned`
+  - Added Phase 5.18 tests for:
+    - pin/unpin success + reason-required validation
+    - archived/cross-preset/cross-tenant pin validation
+    - pinning status metadata
+    - pinned_preferred/pinned_required/active_then_mutable evaluate behavior
+    - explicit override gating and reason enforcement
+    - persisted preset report version-resolution metadata
+    - summary pinning counters
+    - pin/unpin audit actions
+  - Scope constraints preserved:
+    - backend-only changes
+    - no autonomous scheduler/background execution
+    - no task/review/sequence/acknowledgement creation
+    - no automatic approvals/rejections
+    - no AI inference
+    - no frontend changes
+
+## Phase 5.19 - Preset Assignment Integration for Default Gating Interpretation
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added preset-assignment models and migration:
+    - `ai_system_governance_policy_diff_gating_compare_preset_assignments`
+    - `ai_system_governance_policy_diff_gating_compare_preset_assignment_history`
+  - Added preset-assignment endpoints:
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments`
+    - `PATCH /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/{assignment_id}`
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/{assignment_id}/archive`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/{assignment_id}/history`
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/resolve`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/summary`
+  - Added default-evaluation endpoint:
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-presets/evaluate-default`
+  - Implemented deterministic preset assignment behavior:
+    - explicit preset always wins
+    - mapped fallback precedence:
+      - `sequence_pack` -> `ai_system` -> `review_type` -> `rollout_class` -> `all_ai_governance`
+    - tie-breakers within same scope:
+      - `priority` desc -> `updated_at` desc -> `id` asc
+    - inactive/archived mapped presets fail validation (no silent fallback)
+  - Implemented assignment history behavior:
+    - immutable history rows for `created`, `updated`, `archived`
+    - tenant-scoped history retrieval ordered newest first
+  - Integrated default evaluation with existing pinning/version logic:
+    - resolve preset via explicit-or-mapped logic
+    - run Phase 5.18 evaluation semantics unchanged
+    - preserve version resolution metadata (`version_resolution_source`, pinned metadata, override metadata)
+    - persisted preset report `result_json` now includes `preset_resolution` for evaluate-default runs
+  - Added preset-assignment summary metrics:
+    - assignment counts by status/scope
+    - assignments targeting inactive/archived presets
+    - highest configured priority
+  - Added audit logs:
+    - `ai_system_governance_policy_diff_gating_compare_preset_assignment.created`
+    - `ai_system_governance_policy_diff_gating_compare_preset_assignment.updated`
+    - `ai_system_governance_policy_diff_gating_compare_preset_assignment.archived`
+  - Added Phase 5.19 tests for:
+    - assignment CRUD, validation, duplicate active exact-scope blocking
+    - assignment history and tenant scoping
+    - deterministic resolution precedence and explicit-over-mapped behavior
+    - evaluate-default mapped fallback and explicit override behavior
+    - pinned metadata preservation in evaluate-default
+    - persisted preset report `preset_resolution` metadata
+    - inactive/archived mapped preset validation failures
+    - summary metrics and audit event coverage
+  - Scope constraints preserved:
+    - backend-only changes
+    - no autonomous scheduler/background execution
+    - no task/review/sequence/acknowledgement creation
+    - no automatic approvals/rejections
+    - no AI inference
+    - no frontend changes
+
+## Phase 5.20 - Read-Only Bulk Context Coverage Diagnostics for Preset Assignments
+- Date: 2026-06-19
+- Status: Completed
+- What changed:
+  - Added read-only diagnostics endpoints for preset assignments:
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/coverage-diagnostics`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/health-diagnostics`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/coverage-summary`
+  - Implemented bulk coverage diagnostics across up to 500 contexts with deterministic resolution traces and per-context diagnostic codes:
+    - resolved/unresolved detection
+    - explicit preset usage
+    - same-scope conflicts and cross-scope fallback visibility
+    - inactive/archived preset target diagnostics
+    - pinning/version diagnostics (`PINNED_REQUIRED_WITHOUT_PIN`, `PINNED_VERSION_MISSING`, `PINNED_VERSION_ARCHIVED`, missing active version)
+  - Preserved Phase 5.19 assignment precedence logic for active resolution:
+    - `sequence_pack` -> `ai_system` -> `review_type` -> `rollout_class` -> `all_ai_governance`
+    - tie-breakers remain `priority` desc -> `updated_at` desc -> `id` asc
+  - Added health and coverage aggregate metrics:
+    - assignment status counts
+    - duplicate/same-scope conflict indicators
+    - inactive/archived/missing preset targeting
+    - pinned-required-without-pin counts
+    - assignment-to-preset coverage metrics
+  - Added Phase 5.20 tests for:
+    - mapped, explicit, and unresolved diagnostics paths
+    - same-scope conflict and cross-scope fallback diagnostics
+    - inactive/archived assignment inspection without affecting active resolution
+    - inactive/archived preset target and pinning/version diagnostics
+    - health diagnostics + coverage summary outputs
+    - tenant validation for `sequence_pack_id` and `ai_system_ids`
+    - read-only behavior verification (no assignment/history/audit-row creation by diagnostics)
+  - Scope constraints preserved:
+    - backend-only changes
+    - no migrations/new models for this read-only diagnostics phase
+    - no assignment mutation
+    - no report persistence
+    - no task/review/sequence/acknowledgement creation
+    - no automatic approvals/rejections
+    - no AI inference
+    - no frontend changes
+
+## Phase 5.21 - Persisted Diagnostics Reports and Diffability
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added persisted diagnostics report storage models:
+    - `ai_system_governance_preset_assignment_diagnostic_reports`
+    - `ai_system_governance_preset_assignment_diagnostic_diff_reports`
+  - Added Alembic migration:
+    - `0056_preset_assignment_diagnostic_reports.py`
+  - Updated bulk coverage diagnostics endpoint:
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/coverage-diagnostics`
+    - new optional payload fields: `title`, `description`, `persist_report`
+    - `persist_report=false` keeps Phase 5.20 read-only behavior with no DB writes and no audit logs
+    - `persist_report=true` writes immutable snapshot report rows (input + result) and emits:
+      - `ai_system_governance_preset_assignment_diagnostic_report.generated`
+  - Added diagnostic report lifecycle endpoints:
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/diagnostic-reports`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/diagnostic-reports/{report_id}`
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/diagnostic-reports/{report_id}/archive`
+    - archive is status-only and non-destructive, with audit:
+      - `ai_system_governance_preset_assignment_diagnostic_report.archived`
+  - Added deterministic diagnostic report diff endpoint:
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/diagnostic-reports/diff`
+    - supports `context_match_strategy`: `context_key_then_index` | `context_key_only`
+    - detects:
+      - added/removed/changed/unchanged contexts
+      - `resolution_source` changes
+      - `resolved_preset_id` changes
+      - `severity` changes
+      - diagnostic code set changes
+      - precedence trace changes
+    - aggregates:
+      - `resolved_delta`, `unresolved_delta`, `warning_delta`, `critical_delta`
+      - `diagnostic_code_changes_count`
+    - `persist_diff=false`: read-only, no write, no audit
+    - `persist_diff=true`: persists diff report and emits:
+      - `ai_system_governance_preset_assignment_diagnostic_diff.generated`
+  - Added diagnostic diff report lifecycle endpoints:
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/diagnostic-diff-reports`
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/diagnostic-diff-reports/{diff_report_id}`
+    - `POST /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/diagnostic-diff-reports/{diff_report_id}/archive`
+    - archive audit:
+      - `ai_system_governance_preset_assignment_diagnostic_diff.archived`
+  - Added diagnostic report summary endpoint:
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/diagnostic-report-summary`
+    - includes report + diff totals and unresolved/warning/critical + diagnostic-code-change aggregates
+  - Added Phase 5.21 tests for:
+    - read-only default no-persist behavior (no report rows, no audit writes)
+    - persisted report create/list/detail/archive + audit
+    - report snapshot storage (`input_contexts_json` and `result_json`)
+    - diff no-persist behavior (no diff rows, no audit writes)
+    - persisted diff create/list/detail/archive + audit
+    - delta detection for added/removed contexts and resolution/severity/diagnostic-code/precedence changes
+    - tenant-scoped report and diff access
+    - summary aggregation coverage
+    - explicit validation that source reports and assignments are not mutated by diffing/reporting
+  - Scope constraints preserved:
+    - backend-only changes
+    - persistence only when explicitly requested
+    - read-only default diagnostics path preserved
+    - no assignment mutation or assignment-history creation from diagnostics/reporting
+    - no task/review/sequence/acknowledgement creation
+    - no automatic approvals/rejections
+    - no AI inference
+    - no frontend changes
+
+## Phase 5.22 - JSON Export + Integrity Verification for Diagnostic Snapshots
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added JSON-only diagnostic export model and migration:
+    - `ai_system_governance_preset_assignment_diagnostic_exports`
+    - `0057_preset_assignment_diagnostic_exports.py`
+  - Implemented export endpoints:
+    - `POST /.../diagnostic-reports/{report_id}/export`
+    - `POST /.../diagnostic-diff-reports/{diff_report_id}/export`
+  - Implemented export retrieval and lifecycle endpoints:
+    - `GET /.../diagnostic-exports`
+    - `GET /.../diagnostic-exports/{export_id}`
+    - `POST /.../diagnostic-exports/{export_id}/verify`
+    - `POST /.../diagnostic-exports/{export_id}/revoke`
+    - `GET /.../diagnostic-export-summary`
+  - Export payload behavior:
+    - canonical JSON payloads for `diagnostic_report` and `diagnostic_diff_report`
+    - payload includes metadata, source snapshot JSON, counters, generated timestamp, and caveat
+    - exports are persisted in DB JSON only (no files, no external storage)
+  - Integrity behavior:
+    - computes `canonical_payload_sha256` deterministically
+    - signs with internal `HMAC-SHA256`
+    - uses org-scoped internal signing key purpose when active key exists; falls back to internal app-secret HMAC path otherwise (`signing_key_id` nullable)
+  - Verification behavior:
+    - recomputes canonical hash/signature and returns `valid_hash`, `valid_signature`, `trusted`, and metadata
+    - verification is read-only and does not mutate export/source rows
+    - revoked exports can still verify signature/hash while `trusted=false`
+  - Revocation behavior:
+    - status-only revoke (`revoked`) with reason + actor metadata
+    - payload/signature retained; no hard delete
+  - Audit logs added for persisted actions only:
+    - `ai_system_governance_preset_assignment_diagnostic_export.generated`
+    - `ai_system_governance_preset_assignment_diagnostic_export.revoked`
+  - Added Phase 5.22 tests for:
+    - diagnostic report and diff export creation
+    - canonical hash/signature persistence
+    - verify behavior and non-mutation guarantees
+    - revoke reason requirement + retained payload/signature
+    - tenant-scoped list/detail access
+    - summary counters and audit events
+    - no file/external artifact side effects
+  - Scope constraints preserved:
+    - backend-only
+    - JSON-only export
+    - no PDF/ZIP
+    - no external storage/services
+    - no source report/diff mutation on export/verify
+    - no task/review/sequence/acknowledgement creation
+    - no automatic approvals/rejections
+    - no AI inference
+    - no frontend changes
+
+## Phase 5.23 - Deterministic Export Diff for Diagnostic Exports
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added persisted diagnostic export diff report model + migration:
+    - `ai_system_governance_preset_assignment_diagnostic_export_diff_reports`
+    - `0058_preset_assignment_diagnostic_export_diff_reports.py`
+  - Added deterministic export-diff endpoint:
+    - `POST /.../diagnostic-exports/diff`
+    - validates same-org exports and matching `export_type`
+    - compares canonical `export_payload_json` using stable JSON-path flattening
+    - emits path-level deltas (`added`, `removed`, `changed`) with counts
+    - includes recomputed verification metadata for both source exports
+      - `valid_hash`, `valid_signature`, `trusted`, `status`
+    - default read-only (`persist_diff=false`): no write + no audit
+    - optional persistence (`persist_diff=true`): creates diff report + audit
+  - Added diff-report lifecycle endpoints:
+    - `GET /.../diagnostic-export-diff-reports`
+    - `GET /.../diagnostic-export-diff-reports/{export_diff_report_id}`
+    - `POST /.../diagnostic-export-diff-reports/{export_diff_report_id}/archive`
+  - Added diff summary endpoint:
+    - `GET /.../diagnostic-export-diff-summary`
+    - includes:
+      - total/active/archived diff reports
+      - payload-hash-changed report count
+      - total added/removed/changed paths
+      - untrusted-source comparison count
+      - latest diff timestamp
+  - Added persisted-action audits only:
+    - `ai_system_governance_preset_assignment_diagnostic_export_diff.generated`
+    - `ai_system_governance_preset_assignment_diagnostic_export_diff.archived`
+  - Added Phase 5.23 tests for:
+    - report-export and diff-export comparison (non-persisted + persisted)
+    - export-type mismatch rejection
+    - tenant isolation for base/compare export ids
+    - no-persist side effects (no diff row, no audit)
+    - payload hash changed + path-level added/removed/changed detection
+    - deterministic unchanged path counts on repeated compare
+    - revoked source export metadata (`trusted=false`) in diff output
+    - list/detail/archive/summary coverage
+    - source export non-mutation and no file/external artifact behavior
+  - Scope constraints preserved:
+    - backend-only
+    - JSON-only behavior
+    - no source export mutation/revocation/regeneration from diff
+    - no files/PDF/ZIP/external storage
+    - no task/review/sequence/acknowledgement creation
+    - no automatic approvals/rejections
+    - no AI inference
+    - no frontend changes
+
+## Phase 5.24 - Normalized Reason Codes for Diagnostic Export Diffs
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added export-diff reason-code storage fields with migration:
+    - `reason_code_summary_json` (nullable JSON)
+    - `reason_code_count` (integer, default `0`)
+    - migration: `0059_export_diff_reason_code_fields.py`
+  - Added deterministic export-diff reason-code catalog endpoint:
+    - `GET /api/v1/ai-governance/guardrails/policy-resolution/diff-gating-compare-preset-assignments/diagnostic-export-diff-reason-codes`
+    - catalog includes path/hash/signature/trust/source codes with `category`, `description`, `severity_hint`
+    - deterministic response ordering by `code`
+  - Updated diagnostic export diff behavior (`POST /.../diagnostic-exports/diff`):
+    - path-level diffs now include `reason_code` + `severity_hint`
+    - response now includes:
+      - `reason_code_summary`
+      - `reason_code_count`
+    - emits deterministic reason codes for:
+      - path deltas (`EXPORT_PATH_ADDED`, `EXPORT_PATH_REMOVED`, `EXPORT_PATH_CHANGED`, `EXPORT_PATH_UNCHANGED`)
+      - payload hash state (`EXPORT_PAYLOAD_HASH_CHANGED` / `EXPORT_PAYLOAD_HASH_UNCHANGED`)
+      - signature/trust state (`BASE_EXPORT_SIGNATURE_INVALID`, `COMPARE_EXPORT_SIGNATURE_INVALID`, `BASE_EXPORT_UNTRUSTED`, `COMPARE_EXPORT_UNTRUSTED`)
+      - revoked source state (`SOURCE_EXPORT_REVOKED`)
+      - source metadata (`EXPORT_SOURCE_REPORT_CHANGED`, `EXPORT_SOURCE_DIFF_REPORT_CHANGED`, `EXPORT_TYPE_MATCHED`)
+  - Persisted export-diff report behavior updated:
+    - when `persist_diff=true`, stores:
+      - reason-code-enriched `diff_json`
+      - `reason_code_summary_json`
+      - `reason_code_count`
+  - Updated export-diff detail/list/read models to include:
+    - `reason_code_summary_json`
+    - `reason_code_count`
+  - Updated export-diff summary endpoint (`GET /.../diagnostic-export-diff-summary`) to include:
+    - `total_reason_code_occurrences`
+    - `top_reason_codes` (deterministic sort: `count desc`, `reason_code asc`)
+  - Audit behavior unchanged for read-only actions:
+    - no new audit action added
+    - persisted-action audits remain:
+      - `ai_system_governance_preset_assignment_diagnostic_export_diff.generated`
+      - `ai_system_governance_preset_assignment_diagnostic_export_diff.archived`
+  - Added Phase 5.24 tests for:
+    - deterministic reason-code catalog endpoint behavior
+    - reason-code enriched diff response (`reason_code_summary`, `reason_code_count`, per-path reason metadata)
+    - added/removed/changed path reason-code emission
+    - payload-hash change reason-code emission
+    - revoked/invalid-signature reason-code emission
+    - persisted diff storage and detail readback of reason-code fields
+    - summary `top_reason_codes` deterministic ordering
+    - no-persist diff path still writes no audit
+  - Scope constraints preserved:
+    - backend-only
+    - no source export mutation
+    - reason codes are deterministic labels only (no automation)
+    - no review/task/sequence/acknowledgement creation
+    - no AI inference
+    - no external storage and no PDF/ZIP
+    - no frontend changes
+
+## Phase 5.25 - Export-Diff Reason-Code Gating / Classification
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added diagnostic export-diff gating persistence models + migration:
+    - `ai_system_governance_diagnostic_export_diff_gating_profiles`
+    - `ai_system_governance_diagnostic_export_diff_gating_reports`
+    - migration: `0060_diagnostic_export_diff_gating.py`
+  - Implemented export-diff gating profile endpoints:
+    - `POST /.../diagnostic-export-diff-gating-profiles`
+    - `GET /.../diagnostic-export-diff-gating-profiles`
+    - `PATCH /.../diagnostic-export-diff-gating-profiles/{profile_id}`
+    - `POST /.../diagnostic-export-diff-gating-profiles/{profile_id}/archive`
+  - Implemented export-diff classification endpoint:
+    - `POST /.../diagnostic-export-diff-reports/{export_diff_report_id}/classify`
+    - deterministic classification using Phase 5.24 `reason_code_summary_json` with fallback to `diff_json.path_diffs[].reason_code`
+    - supports read-only preview (`persist_report=false`) and optional persisted snapshot (`persist_report=true`)
+  - Implemented export-diff gating report endpoints:
+    - `GET /.../diagnostic-export-diff-gating-reports`
+    - `GET /.../diagnostic-export-diff-gating-reports/{gating_report_id}`
+    - `POST /.../diagnostic-export-diff-gating-reports/{gating_report_id}/archive`
+  - Implemented export-diff gating summary endpoint:
+    - `GET /.../diagnostic-export-diff-gating-summary`
+    - includes profile/report totals, review-required count, max-severity distribution, latest report timestamp
+  - Validation and aggregation behavior:
+    - validates reason-code rules against Phase 5.24 export-diff reason-code catalog
+    - enforces allowlisted severity values (`info`, `low`, `medium`, `high`, `critical`)
+    - computes deterministic `max_severity` + `review_required` from explicit rules + threshold
+    - handles zero-reason-code cases as `max_severity=info`, `review_required=false`
+  - Audit logs added for persisted actions only:
+    - `ai_system_governance_diagnostic_export_diff_gating_profile.created`
+    - `ai_system_governance_diagnostic_export_diff_gating_profile.updated`
+    - `ai_system_governance_diagnostic_export_diff_gating_profile.archived`
+    - `ai_system_governance_diagnostic_export_diff_gating_report.generated`
+    - `ai_system_governance_diagnostic_export_diff_gating_report.archived`
+  - Added Phase 5.25 tests for:
+    - profile CRUD and validation (severity/threshold/unknown reason code)
+    - classification preview vs persisted behavior (no-persist no-write/no-audit)
+    - explicit rule severity + default severity fallback behavior
+    - threshold and explicit review-required behavior
+    - empty reason-code behavior (`info`/`false`)
+    - tenant scoping for classify/report list/detail
+    - report archive and summary counters
+    - non-mutation guarantees for source exports and source export-diff reports
+    - persisted-action audit coverage
+  - Scope constraints preserved:
+    - backend-only
+    - read-only classification unless `persist_report=true`
+    - no automation triggers
+    - no approval/rejection mutation
+    - no task/review/sequence/acknowledgement creation
+    - no source export/export-diff mutation
+    - no external storage and no PDF/ZIP
+    - no frontend changes
+
+## Phase 5.26 - Baseline Compare Mode for Diagnostic Export-Diff Gating Reports
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added baseline compare persistence model + migration:
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_reports`
+    - migration: `0061_diagnostic_export_diff_gating_compare_reports.py`
+  - Implemented baseline compare endpoint:
+    - `POST /.../diagnostic-export-diff-gating-reports/compare`
+    - supports read-only mode (`persist_compare=false`) and optional persisted snapshots (`persist_compare=true`)
+    - deterministic drift outputs:
+      - `max_severity_drift`: `increased` / `decreased` / `unchanged`
+      - `review_required_drift`: `became_required` / `became_not_required` / `unchanged`
+      - reason-code drift:
+        - `added_reason_codes`
+        - `removed_reason_codes`
+        - `changed_reason_codes` (`severity_changed`, `review_required_changed`, `count_changed`)
+      - `reason_code_changes_count`
+      - `severity_changes_count`
+      - `aggregate_delta` (`reason_code_count_delta`, `severity_summary_delta`)
+  - Implemented compare report endpoints:
+    - `GET /.../diagnostic-export-diff-gating-compare-reports`
+    - `GET /.../diagnostic-export-diff-gating-compare-reports/{compare_report_id}`
+    - `POST /.../diagnostic-export-diff-gating-compare-reports/{compare_report_id}/archive`
+  - Implemented compare summary endpoint:
+    - `GET /.../diagnostic-export-diff-gating-compare-summary`
+    - includes compare totals, severity-drift distribution, review-required-drift distribution, reason-code/severity change totals, and latest compare timestamp
+  - Added deterministic ordering guarantees:
+    - `changed_reason_codes` sorted by `reason_code asc`, then `change_type asc`
+  - Audit logs added for persisted actions only:
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_report.generated`
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_report.archived`
+  - Added Phase 5.26 tests for:
+    - compare preview behavior (`persist_compare=false`) with no DB write/no audit
+    - persisted compare snapshot + archive + list/detail + summary
+    - tenant isolation for base/compare report IDs and compare report reads
+    - archived source gating report comparison support
+    - severity drift / review-required drift / reason-code drift detection
+    - source non-mutation checks for gating reports and export-diff reports
+  - Scope constraints preserved:
+    - backend-only
+    - read-only default compare path
+    - persistence only when explicitly requested
+    - no source report mutation
+    - no automation triggers
+    - no approval/rejection mutation
+    - no task/review/sequence/acknowledgement creation
+    - no external storage and no PDF/ZIP
+    - no frontend changes
+
+## Phase 5.27 - Reusable Compare Interpretation Presets for Diagnostic Export-Diff Gating Compare Outputs
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added compare-preset persistence models + migration:
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_presets`
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_preset_reports`
+    - migration: `0062_diagnostic_export_diff_gating_compare_presets.py`
+  - Implemented compare interpretation preset endpoints:
+    - `POST /.../diagnostic-export-diff-gating-compare-presets`
+    - `GET /.../diagnostic-export-diff-gating-compare-presets`
+    - `PATCH /.../diagnostic-export-diff-gating-compare-presets/{preset_id}`
+    - `POST /.../diagnostic-export-diff-gating-compare-presets/{preset_id}/archive`
+  - Implemented deterministic preset evaluation endpoint:
+    - `POST /.../diagnostic-export-diff-gating-compare-reports/{compare_report_id}/evaluate-preset`
+    - supports read-only evaluation (`persist_report=false`) and optional persisted snapshot (`persist_report=true`)
+    - evaluates from compare report fields:
+      - `max_severity_drift`
+      - `review_required_drift`
+      - reason-code drift sets (`added_reason_codes`, `removed_reason_codes`, `changed_reason_codes`)
+      - change counters (effective counts for threshold evaluation)
+  - Added interpretation-rule support for:
+    - `severity_increase_band`
+    - `severity_decrease_band`
+    - `review_required_flip_to_required_band`
+    - `review_required_flip_to_not_required_band`
+    - `watched_reason_code_band`
+    - `ignored_reason_codes_do_not_affect_band`
+    - `watched_reason_codes_override_ignored` (explicit override switch)
+    - `reason_code_changes_thresholds` (sorted/evaluated deterministically by `min_changes asc`)
+    - `severity_changes_thresholds` (sorted/evaluated deterministically by `min_changes asc`)
+  - Implemented compare preset report endpoints:
+    - `GET /.../diagnostic-export-diff-gating-compare-preset-reports`
+    - `GET /.../diagnostic-export-diff-gating-compare-preset-reports/{preset_report_id}`
+    - `POST /.../diagnostic-export-diff-gating-compare-preset-reports/{preset_report_id}/archive`
+  - Implemented compare preset summary endpoint:
+    - `GET /.../diagnostic-export-diff-gating-compare-preset-summary`
+    - includes preset/report totals, interpretation-band distribution, review-required count, and latest report timestamp
+  - Added persisted-action audit logs:
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_preset.created`
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_preset.updated`
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_preset.archived`
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_preset_report.generated`
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_preset_report.archived`
+  - Added Phase 5.27 tests for:
+    - preset CRUD + validation (bands, watched/ignored reason codes, archived update block)
+    - deterministic evaluation behavior (drift rules, watched/ignored suppression, threshold rules, highest-band selection)
+    - no-persist path (no report row, no audit log)
+    - persisted report creation + archive + list/detail + summary
+    - tenant isolation for presets/evaluation/report reads
+    - non-mutation guarantees for source compare reports and source gating reports
+  - Scope constraints preserved:
+    - backend-only
+    - read-only default evaluation path
+    - persistence only when explicitly requested
+    - no source compare report mutation
+    - no source gating report mutation
+    - no automation triggers
+    - no approval/rejection mutation
+    - no task/review/sequence/acknowledgement creation
+    - no external storage and no PDF/ZIP
+    - no frontend changes
+
+## Phase 5.28 - Preset Versioning + Immutable Snapshot Pinning for Diagnostic Export-Diff Compare Presets
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added diagnostic export-diff compare preset versioning persistence:
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_preset_versions`
+    - migration: `0063_diag_export_diff_gating_compare_preset_versions.py`
+  - Extended diagnostic export-diff compare presets with version lifecycle and pinning metadata:
+    - `active_version_id`
+    - `pinned_version_id`
+    - `version_selection_mode` (`active_then_mutable`, `pinned_preferred`, `pinned_required`)
+    - `allow_explicit_version_override`
+    - `pinned_at`, `pinned_by_user_id`, `pin_reason`
+    - `unpinned_at`, `unpinned_by_user_id`, `unpin_reason`
+  - Extended diagnostic export-diff compare preset reports with immutable version resolution metadata:
+    - `preset_version_id`
+    - `preset_version_number`
+    - `preset_snapshot_json`
+    - `version_resolution_source`
+    - `pinned_version_id`
+    - `explicit_version_override_used`
+    - `version_override_reason`
+  - Implemented diagnostic compare preset version endpoints:
+    - `POST /.../diagnostic-export-diff-gating-compare-presets/{preset_id}/versions`
+    - `GET /.../diagnostic-export-diff-gating-compare-presets/{preset_id}/versions`
+    - `GET /.../diagnostic-export-diff-gating-compare-presets/{preset_id}/versions/{version_id}`
+    - `POST /.../diagnostic-export-diff-gating-compare-presets/{preset_id}/versions/{version_id}/activate`
+    - `POST /.../diagnostic-export-diff-gating-compare-presets/{preset_id}/versions/{version_id}/archive`
+  - Implemented pin/unpin and pinning-status endpoints:
+    - `POST /.../diagnostic-export-diff-gating-compare-presets/{preset_id}/pin-version`
+    - `POST /.../diagnostic-export-diff-gating-compare-presets/{preset_id}/unpin-version`
+    - `GET /.../diagnostic-export-diff-gating-compare-presets/{preset_id}/pinning-status`
+  - Upgraded evaluate-preset resolution flow with deterministic version selection:
+    - `active_then_mutable`: explicit version -> active version -> mutable preset fields
+    - `pinned_preferred`: explicit version (if allowed) -> pinned version -> active version -> mutable preset fields
+    - `pinned_required`: explicit version (only per override rules) -> pinned version; fails when unpinned
+    - explicit override handling enforced:
+      - blocked when `allow_explicit_version_override=false` and explicit version differs from pinned
+      - `version_override_reason` required when override is allowed and explicit version differs from pinned
+  - Preset evaluation response now returns:
+    - `preset_version_id`
+    - `preset_version_number`
+    - `preset_snapshot_used`
+    - `version_resolution_source`
+    - `pinned_version_id`
+    - `explicit_version_override_used`
+    - `version_override_reason`
+  - Preset report list/detail now includes version/snapshot/resolution fields.
+  - Compare preset summary now includes version and pinning counters:
+    - version totals by status
+    - `presets_without_active_version`
+    - `pinned_presets`, `pinned_required_presets`, `pinned_preferred_presets`
+    - explicit override allow/block counters
+  - Verified and documented preset report archive route visibility:
+    - `POST /.../diagnostic-export-diff-gating-compare-preset-reports/{preset_report_id}/archive`
+  - Added persisted-action audit logs:
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_preset_version.created`
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_preset_version.activated`
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_preset_version.archived`
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_preset.version_pinned`
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_preset.version_unpinned`
+    - existing preset-report archive audit retained
+  - Added Phase 5.28 tests for:
+    - version creation/list/detail/activation/archive behavior
+    - active/pinned archive blocking and snapshot immutability
+    - pin/unpin validation and pinning-status metadata
+    - version-aware evaluation resolution across `active_then_mutable`, `pinned_preferred`, `pinned_required`
+    - explicit override enforcement and reason requirements
+    - persisted report version/snapshot/resolution field persistence
+    - report archive route behavior
+    - summary version/pinning counters and audit coverage
+    - source compare/gating non-mutation checks
+  - Scope constraints preserved:
+    - backend-only
+    - immutable version snapshots
+    - read-only evaluation unless `persist_report=true`
+    - no source compare report mutation
+    - no source gating report mutation
+    - no automation triggers
+    - no approval/rejection mutation
+    - no task/review/sequence/acknowledgement creation
+    - no external storage and no PDF/ZIP
+    - no frontend changes
+
+## Phase 5.29 - Assignment-Default Resolution for Diagnostic Export-Diff Gating Compare Presets
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added diagnostic export-diff compare preset assignment persistence:
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_preset_assignments`
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_preset_assignment_history`
+    - migration: `0064_diag_export_diff_gating_compare_preset_assignments.py`
+  - Implemented assignment CRUD + history endpoints:
+    - `POST /.../diagnostic-export-diff-gating-compare-preset-assignments`
+    - `GET /.../diagnostic-export-diff-gating-compare-preset-assignments`
+    - `PATCH /.../diagnostic-export-diff-gating-compare-preset-assignments/{assignment_id}`
+    - `POST /.../diagnostic-export-diff-gating-compare-preset-assignments/{assignment_id}/archive`
+    - `GET /.../diagnostic-export-diff-gating-compare-preset-assignments/{assignment_id}/history`
+  - Implemented deterministic assignment resolution endpoint:
+    - `POST /.../diagnostic-export-diff-gating-compare-preset-assignments/resolve`
+    - precedence order:
+      1. explicit preset
+      2. compare-report scope
+      3. gating-profile scope
+      4. sequence-pack scope
+      5. ai-system scope
+      6. review-type scope
+      7. rollout-class scope
+      8. export-type scope
+      9. all-ai-governance scope
+    - tie-breakers within same scope: `priority desc`, `updated_at desc`, `id asc`
+  - Implemented evaluate-default endpoint:
+    - `POST /.../diagnostic-export-diff-gating-compare-reports/{compare_report_id}/evaluate-default-preset`
+    - explicit preset overrides mapped defaults
+    - mapped default resolution errors when resolved preset is inactive/archived
+    - preserves Phase 5.28 version/pinning behavior and returns version-resolution metadata
+    - persisted preset reports now include `preset_resolution` in `result_json`
+  - Implemented assignment summary endpoint:
+    - `GET /.../diagnostic-export-diff-gating-compare-preset-assignments/summary`
+  - Added persisted-action audit logs:
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_preset_assignment.created`
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_preset_assignment.updated`
+    - `ai_system_governance_diagnostic_export_diff_gating_compare_preset_assignment.archived`
+  - Added Phase 5.29 tests for:
+    - assignment CRUD/validation/history (including duplicate active exact-scope blocking)
+    - tenant scope validation for compare-report and gating-profile scoped mappings
+    - deterministic precedence + explicit override behavior in resolve and evaluate-default
+    - version/pinning preservation in evaluate-default flows
+    - persisted report `preset_resolution` metadata storage
+    - summary counters and audit coverage
+    - source compare report non-mutation
+  - Scope constraints preserved:
+    - backend-only
+    - deterministic defaults only (no automation triggers)
+    - explicit preset precedence maintained
+    - no source compare report mutation
+    - no task/review/sequence/acknowledgement creation
+    - no external storage and no PDF/ZIP
+    - no frontend changes
+
+## Phase 5.30 - Final Phase 5 Closure: Read-Only Assignment Coverage Diagnostics + Governance Route Audit
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added read-only diagnostics endpoints for **diagnostic export-diff gating compare preset assignments**:
+    - `POST /.../diagnostic-export-diff-gating-compare-preset-assignments/coverage-diagnostics`
+    - `GET /.../diagnostic-export-diff-gating-compare-preset-assignments/health-diagnostics`
+    - `GET /.../diagnostic-export-diff-gating-compare-preset-assignments/coverage-summary`
+  - Implemented deterministic coverage diagnostics evaluation for up to 500 contexts with:
+    - active resolution using Phase 5.29 precedence
+    - optional inactive/archived assignment inspection (not used for active resolution)
+    - optional version diagnostics (`include_version_diagnostics`)
+    - per-context diagnostics, severity, precedence trace, and aggregate diagnostic counts
+  - Added diagnostic codes and severity mapping for closure hardening:
+    - `RESOLVED`
+    - `NO_ASSIGNMENT_FOUND`
+    - `EXPLICIT_PRESET_USED`
+    - `CONFLICTING_ASSIGNMENTS_SAME_SCOPE`
+    - `MULTIPLE_ASSIGNMENTS_DIFFERENT_SCOPE`
+    - `ASSIGNMENT_TARGET_PRESET_INACTIVE`
+    - `ASSIGNMENT_TARGET_PRESET_ARCHIVED`
+    - `ASSIGNMENT_TARGET_PRESET_MISSING_ACTIVE_VERSION`
+    - `PINNED_VERSION_MISSING`
+    - `PINNED_VERSION_ARCHIVED`
+    - `PINNED_REQUIRED_WITHOUT_PIN`
+    - `CROSS_SCOPE_FALLBACK_USED`
+  - Implemented assignment health diagnostics aggregates:
+    - assignment status totals
+    - assignments to inactive/archived/missing presets
+    - pinned-required-without-pin counts
+    - duplicate exact-scope active groups
+    - same-scope conflict groups
+  - Implemented coverage summary aggregates:
+    - total active/inactive/archived assignments
+    - total problem assignments
+    - assignment distribution by scope
+    - referenced preset counts
+    - active presets without assignments
+    - pinned presets with assignment counts
+  - Performed route/docs consistency pass for Phase 5:
+    - ensured Phase 5.30 diagnostics routes are visible in README endpoint inventory
+    - added Phase 5.30 closure note and read-only caveat language
+    - kept archive/version/pinning routes documented and visible
+  - Added Phase 5.30 tests:
+    - bulk coverage diagnostics resolution and diagnostics code assertions
+    - precedence checks (`compare_report` over broader scopes; profile and scope fallback behavior)
+    - inactive/archived assignment inspection without selection
+    - inactive/archived preset target diagnostics
+    - pinned-required and pinned-version-archived diagnostics
+    - tenant validation for compare report, gating profile, sequence pack, and ai systems
+    - no-assignment behavior (`NO_ASSIGNMENT_FOUND`)
+    - read-only guarantees: no assignment/history/audit row creation from diagnostics calls
+    - health diagnostics and coverage summary aggregate behavior
+    - README Phase 5.30 closure note presence
+  - Scope constraints preserved:
+    - backend-only
+    - no DB migration for closure diagnostics
+    - read-only diagnostics only (no persistence chain extension)
+    - no assignment mutation
+    - no audit logging for read-only diagnostics routes
+    - no automation trigger
+    - no approval/rejection mutation
+    - no task/review/sequence/acknowledgement creation
+    - no external storage and no PDF/ZIP
+    - no frontend changes
+  - Phase 5 closure statement:
+    - Phase 5 is now closed as a finalized governance hardening baseline.
+    - Subsequent work should begin under Phase 6 unless a regression fix is required.
+
+## Phase 6.0 - Contract Stabilization for Phase 5 Governance API Surface
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added a lightweight, read-only Phase 5 governance contract registry service:
+    - `app/services/ai_governance_contract_service.py`
+    - canonical contract groups define:
+      - `group_key`, `title`, `description`, `route_prefix`
+      - `critical_endpoints`
+      - `response_contract_fields`
+      - `invariants`
+      - `caveats`
+  - Added contract visibility endpoints (read-only, no persistence, no audit writes):
+    - `GET /api/v1/ai-governance/contracts/phase5`
+    - `GET /api/v1/ai-governance/contracts/phase5/compatibility-summary`
+    - `GET /api/v1/ai-governance/contracts/phase5/{group_key}`
+  - Route ordering hardening:
+    - static `/contracts/phase5/compatibility-summary` route is registered before `/contracts/phase5/{group_key}` to prevent dynamic-route swallowing.
+  - Added response schemas for contract endpoints:
+    - `AISystemGovernancePhase5ContractGroup`
+    - `AISystemGovernancePhase5ContractsResponse`
+    - `AISystemGovernancePhase5CompatibilitySummaryResponse`
+  - Registered canonical contract groups for the full Phase 5 governance surface:
+    - `ai_system_inventory`
+    - `governance_reviews`
+    - `governance_attestations`
+    - `review_scheduling`
+    - `recurrence_templates`
+    - `sequence_packs`
+    - `guardrail_freeze_windows`
+    - `guardrail_policy_sets`
+    - `guardrail_policy_assignments`
+    - `policy_resolution_simulations`
+    - `policy_resolution_diffs`
+    - `gating_profiles`
+    - `gating_compare_reports`
+    - `gating_compare_presets`
+    - `gating_compare_preset_versions`
+    - `gating_compare_preset_assignments`
+    - `preset_assignment_diagnostics`
+    - `diagnostic_reports`
+    - `diagnostic_exports`
+    - `diagnostic_export_diffs`
+    - `diagnostic_export_diff_reason_codes`
+    - `diagnostic_export_diff_gating`
+    - `diagnostic_export_diff_gating_compare`
+    - `diagnostic_export_diff_gating_compare_presets`
+    - `diagnostic_export_diff_gating_compare_preset_versions`
+    - `diagnostic_export_diff_gating_compare_preset_assignments`
+  - Added Phase 6.0 compatibility tests:
+    - contracts list/detail/compatibility-summary endpoint coverage
+    - required Phase 5 contract groups presence
+    - non-empty critical endpoint and response-field registry checks
+    - unknown group key 404 handling
+    - static-route ordering behavior verification
+    - auth + tenant-org header requirement checks
+    - no-audit/no-mutation checks for contract endpoints
+    - representative response-shape key-presence checks for critical Phase 5 endpoints:
+      - preset assignment resolve
+      - coverage diagnostics
+      - diagnostic export verify
+      - diagnostic export diff
+      - export diff reason-code catalog
+      - export-diff gating classify
+      - export-diff gating compare
+      - compare preset evaluate-preset
+      - compare preset evaluate-default-preset
+  - README updates:
+    - added contract endpoint inventory entries
+    - added Phase 6.0 contract stabilization note and caveat language
+- Scope constraints preserved:
+  - backend-only
+  - no DB migration, no new tables
+  - no workflow mutation endpoints introduced
+  - no governance record mutation
+  - no persistence side effects from contract endpoints
+  - no audit writes for contract endpoints
+  - no external storage and no PDF/ZIP
+  - no AI inference
+  - no frontend changes
+
+## Phase 6.1 - AI Risk Classification Foundation
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added manual-first, tenant-scoped AI risk assessment models:
+    - `ai_system_risk_assessments`
+    - `ai_system_risk_assessment_snapshots`
+  - Added API support for AI risk assessment lifecycle under `/api/v1/ai-governance/ai-risk`:
+    - create/list/detail/update
+    - submit-for-review
+    - complete (creates `completion_snapshot`)
+    - archive with required reason (creates `archive_snapshot`)
+    - manual snapshot creation (`manual_snapshot`)
+    - snapshot list/detail
+    - summary endpoint
+  - Added deterministic scoring based only on manual `likelihood` and `impact` values:
+    - no AI inference
+    - no legal/regulatory automatic classification
+  - Added immutable snapshot hashing:
+    - canonical JSON snapshot payload
+    - SHA-256 digest persisted as `snapshot_sha256`
+  - Added Phase 6 contract registry initialization:
+    - `GET /api/v1/ai-governance/contracts/phase6`
+    - includes `ai_risk_assessments` group contract metadata
+  - Added audit logs for persisted risk actions:
+    - `ai_system_risk_assessment.created`
+    - `ai_system_risk_assessment.updated`
+    - `ai_system_risk_assessment.submitted_for_review`
+    - `ai_system_risk_assessment.completed`
+    - `ai_system_risk_assessment.archived`
+    - `ai_system_risk_assessment_snapshot.created`
+  - Added migration:
+    - `0065_ai_risk_assessment_foundation`
+  - Added Phase 6.1 tests:
+    - validation coverage (tenant, archived AI systems, enums, owner membership)
+    - deterministic scoring checks
+    - list/detail filters and tenant scoping
+    - lifecycle transition and archived-update restrictions
+    - completion/archive snapshot creation
+    - manual snapshot hash determinism and immutability checks
+    - summary aggregation checks
+    - Phase 6 contract endpoint + no-audit/no-mutation checks
+- Scope constraints preserved:
+  - backend-only
+  - manual-first risk records only
+  - no AI inference
+  - no automatic legal/regulatory classification
+  - no review/task/sequence/acknowledgement auto-creation
+  - no approval/rejection automation
+  - no external APIs or external storage
+  - no PDF/ZIP
+  - no hard deletes
+  - no frontend changes
+
+## Phase 6.2 - Manual Risk Scoring Profiles + Contract-Protected Risk Presentation
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added tenant-scoped risk scoring profile model:
+    - `ai_system_risk_scoring_profiles`
+    - configurable `likelihood_weights_json`, `impact_weights_json`, `risk_level_thresholds_json`
+    - status lifecycle (`active`, `inactive`, `archived`) with status-based archive
+    - org-scoped single-default behavior across active profiles
+  - Extended risk assessment model with profile-backed presentation fields:
+    - `scoring_profile_id`
+    - `scoring_profile_snapshot_json`
+    - `score_explanation_json`
+    - `calculated_risk_level`
+  - Added scoring profile endpoints under `/api/v1/ai-governance/ai-risk/scoring-profiles`:
+    - create/list/detail/update/archive
+    - set-default
+    - preview-score (read-only, no audit)
+    - summary
+  - Added assessment scoring recalculation endpoint:
+    - `POST /api/v1/ai-governance/ai-risk/assessments/{assessment_id}/recalculate-score`
+    - supports explicit profile or org default profile fallback
+    - stores profile snapshot + score explanation metadata on assessment
+    - preserves manual `risk_level` by default; optional explicit overwrite flag
+  - Added deterministic scoring engine behavior:
+    - deterministic mapping from manual likelihood/impact values and configured profile weights/thresholds
+    - overlap validation and deterministic sorting for thresholds
+    - unknown likelihood/impact yields `inherent_risk_score=null` and `calculated_risk_level=null`
+  - Updated risk snapshot payload generation to include scoring metadata fields.
+  - Updated Phase 6 contracts:
+    - expanded `ai_risk_assessments` response contract fields to include scoring presentation fields
+    - added `ai_risk_scoring_profiles` contract group
+  - Added persisted-action audit logs:
+    - `ai_system_risk_scoring_profile.created`
+    - `ai_system_risk_scoring_profile.updated`
+    - `ai_system_risk_scoring_profile.archived`
+    - `ai_system_risk_scoring_profile.default_set`
+    - `ai_system_risk_assessment.score_recalculated`
+  - Added migration:
+    - `0066_ai_risk_scoring_profiles`
+  - Added Phase 6.2 tests:
+    - scoring profile CRUD + validation + tenant scope
+    - default profile behavior and archive rules
+    - read-only preview scoring and no-audit verification
+    - explicit/default recalculation behavior and manual-vs-calculated separation
+    - unknown-input null-score handling
+    - contract field coverage and Phase 6 contract group coverage
+    - README route coverage for Phase 6.1 archive/snapshot endpoints
+- Scope constraints preserved:
+  - backend-only
+  - manual-first scoring configuration only
+  - no AI inference
+  - no legal/regulatory automatic classification
+  - no review/task/sequence/acknowledgement auto-creation
+  - no approval/rejection automation
+  - no external APIs or external storage
+  - no PDF/ZIP
+  - no hard deletes
+  - no frontend changes
+
+## Phase 6.3 - Risk-Dimension Weighting Templates + Residual-Risk Presentation
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added tenant-scoped dimension weighting template model:
+    - `ai_system_risk_dimension_weighting_templates` behavior implemented via table `ai_system_risk_dimension_templates`
+    - deterministic config fields: `dimension_weights_json`, `dimension_thresholds_json`
+    - status lifecycle (`active`, `inactive`, `archived`) and org-scoped single-default behavior
+  - Extended risk assessment model with dimension/residual presentation fields:
+    - `dimension_template_id`
+    - `dimension_template_snapshot_json`
+    - `dimension_inputs_json`
+    - `dimension_score_json`
+    - `dimension_weighted_score`
+    - `calculated_dimension_risk_level`
+    - `residual_likelihood`
+    - `residual_impact`
+    - `calculated_residual_risk_level`
+    - `residual_score_explanation_json`
+  - Added dimension template endpoints under `/api/v1/ai-governance/ai-risk/dimension-templates`:
+    - create/list/detail/update/archive
+    - set-default
+    - preview-score (read-only, no audit)
+    - summary
+  - Added assessment dimension/residual endpoints:
+    - `POST /ai-risk/assessments/{assessment_id}/apply-dimension-template`
+    - `POST /ai-risk/assessments/{assessment_id}/preview-residual-risk` (read-only, no audit)
+    - `POST /ai-risk/assessments/{assessment_id}/apply-residual-risk`
+  - Added deterministic dimension/residual calculations:
+    - manual dimension level mapping (`low=1`, `medium=2`, `high=3`, `critical=4`)
+    - weighted average by configured template weights
+    - deterministic threshold mapping to `calculated_dimension_risk_level`
+    - residual score/level from manual residual likelihood+impact and scoring profile weights/thresholds
+  - Preserved manual-vs-calculated separation:
+    - manual `risk_level` remains manual by default
+    - calculated fields are presentation-only outputs
+    - no legal/regulatory auto-classification
+  - Updated Phase 6 contracts:
+    - expanded `ai_risk_assessments` response contract fields with dimension/residual fields
+    - added `ai_risk_dimension_templates` contract group
+  - Added persisted-action audit logs:
+    - `ai_system_risk_dimension_template.created`
+    - `ai_system_risk_dimension_template.updated`
+    - `ai_system_risk_dimension_template.archived`
+    - `ai_system_risk_dimension_template.default_set`
+    - `ai_system_risk_assessment.dimension_template_applied`
+    - `ai_system_risk_assessment.residual_risk_applied`
+  - Added migration:
+    - `0067_ai_risk_dimension_templates`
+  - Added Phase 6.3 tests:
+    - template CRUD and validation (keys, weights, thresholds)
+    - default behavior and tenant scope
+    - read-only preview behavior (no audit/no mutation)
+    - apply-dimension-template persistence and manual risk-level preservation
+    - preview/apply residual risk behavior with scoring-profile selection rules
+    - contract field coverage and summary checks
+- Scope constraints preserved:
+  - backend-only
+  - manual-first deterministic presentation only
+  - no AI inference
+  - no legal/regulatory automatic classification
+  - no review/task/sequence/acknowledgement auto-creation
+  - no approval/rejection automation
+  - no external APIs or external storage
+  - no PDF/ZIP
+  - no hard deletes
+  - no frontend changes
+
+## Phase 6.4 - Manual AI Risk Classification Taxonomy + Classification Records
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added tenant-scoped manual classification taxonomy template model:
+    - `ai_system_risk_classification_taxonomy_templates`
+    - deterministic taxonomy config field: `taxonomy_json` with validated `label_groups`
+    - status lifecycle (`active`, `inactive`, `archived`) with org-scoped single-default behavior
+  - Added tenant-scoped manual classification record model:
+    - `ai_system_risk_classification_records`
+    - assessment-scoped manual labels (`classification_json`) + confidence/justification/source metadata
+    - optional org-scoped references (`evidence_ids_json`, `control_ids_json`, `risk_ids_json`)
+    - status lifecycle (`active`, `superseded`, `archived`) with optional supersession on create
+  - Extended risk assessment model with lightweight classification metadata:
+    - `latest_classification_id`
+    - `classification_status`
+    - `classification_summary_json`
+  - Added taxonomy endpoints under `/api/v1/ai-governance/ai-risk/classification-taxonomies`:
+    - create/list/detail/update/archive
+    - set-default
+  - Added classification record endpoints:
+    - `POST /ai-risk/assessments/{assessment_id}/classifications`
+    - `GET /ai-risk/assessments/{assessment_id}/classifications`
+    - `GET /ai-risk/classifications/{classification_id}`
+    - `POST /ai-risk/classifications/{classification_id}/archive`
+    - `GET /ai-risk/classifications/summary`
+  - Added deterministic manual-classification behavior:
+    - taxonomy validation for duplicate `group_key` and duplicate `label_key` within group
+    - label membership validation against taxonomy when taxonomy is provided/resolved
+    - optional default taxonomy fallback when taxonomy is omitted
+    - archived assessment blocks new classification records
+    - no automatic mutation of `risk_level` or `calculated_risk_level`
+  - Updated risk assessment snapshot payload:
+    - includes `latest_classification_id`, `classification_status`, `classification_summary_json`
+    - includes `classification_caveat` metadata for replayable manual-assertion context
+  - Updated Phase 6 contracts:
+    - expanded `ai_risk_assessments` response contract fields with classification metadata fields
+    - added `ai_risk_classification_taxonomies` contract group
+    - added `ai_risk_classification_records` contract group
+  - Added persisted-action audit logs:
+    - `ai_system_risk_classification_taxonomy.created`
+    - `ai_system_risk_classification_taxonomy.updated`
+    - `ai_system_risk_classification_taxonomy.archived`
+    - `ai_system_risk_classification_taxonomy.default_set`
+    - `ai_system_risk_classification_record.created`
+    - `ai_system_risk_classification_record.archived`
+  - Added migration:
+    - `0068_ai_risk_classification_foundation`
+  - Added Phase 6.4 tests:
+    - taxonomy CRUD + validation + tenant scope
+    - classification create/list/detail/archive + supersession behavior
+    - optional evidence/control/risk tenant validation behavior
+    - archived-assessment guardrail
+    - assessment detail and snapshot metadata coverage
+    - Phase 6 contract field/group coverage
+- Scope constraints preserved:
+  - backend-only
+  - manual-first classification assertions only
+  - no AI inference
+  - no legal/regulatory automatic classification
+  - no review/task/sequence/acknowledgement auto-creation
+  - no approval/rejection automation
+  - no external APIs or external storage
+  - no PDF/ZIP
+  - no hard deletes
+  - no frontend changes
+
+## Phase 6.5 - Classification Review Controls + Immutable Classification Snapshots + Governance Signals Foundation
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added manual classification review-state fields on `ai_system_risk_classification_records`:
+    - `review_status` (`not_submitted|in_review|changes_requested|reviewed|rejected`)
+    - review/request/reject metadata fields (`*_at`, `*_by_user_id`, notes/reason)
+  - Added immutable classification snapshot model:
+    - `ai_system_risk_classification_record_snapshots`
+    - deterministic canonical `snapshot_sha256`
+    - monotonic `snapshot_version` per classification record
+  - Added governance signals model foundation:
+    - `governance_signals`
+    - deterministic indicator fields (`signal_type`, `reason_code`, `severity`, `status`, `source_json`)
+    - manual resolve/dismiss lifecycle with reason capture
+  - Extended risk assessment metadata for response parity:
+    - `latest_classification_review_status`
+    - `open_signal_count`
+  - Added classification review-state endpoints:
+    - submit-for-review, request-changes, mark-reviewed, reject
+  - Added classification snapshot endpoints:
+    - create/list/detail
+  - Added governance signal endpoints:
+    - list/detail
+    - resolve/dismiss
+    - summary
+  - Added deterministic assessment signal refresh endpoint:
+    - `POST /ai-risk/assessments/{assessment_id}/refresh-classification-signals`
+    - preview (`persist_signals=false`) is read-only/no audit
+    - persist (`persist_signals=true`) creates idempotent open signals and writes audit
+  - Updated classification and assessment response metadata:
+    - classification: review-state metadata, `latest_snapshot_id`, `open_signal_count`
+    - assessment: `open_signal_count`, `latest_classification_review_status`
+  - Updated Phase 6 contracts:
+    - added groups: `ai_risk_classification_review`, `ai_risk_classification_snapshots`, `governance_signals`
+    - expanded classification/assessment contract-protected fields for review and signal metadata
+  - Added migration:
+    - `0069_ai_risk_classification_review_signals`
+  - Added Phase 6.5 tests:
+    - review-state transitions and validation
+    - immutable snapshot creation/version/hash checks
+    - tenant-scoped snapshot/signal list/detail
+    - signal resolve/dismiss reason requirements and no source-record mutation checks
+    - signal refresh preview/persist behavior + idempotency
+    - contract coverage for new Phase 6 groups
+- Scope constraints preserved:
+  - backend-only
+  - manual-first governance behavior
+  - deterministic signal generation only
+  - no AI inference
+  - no automatic legal/regulatory classification
+  - no task/review workflow auto-creation
+  - no approval/rejection automation beyond manual classification review state
+  - no external APIs or external storage
+  - no PDF/ZIP
+  - no hard deletes
+  - no frontend changes
+
+## Phase 6.6 - Signal Prioritization + Next-Best-Attention Ordering
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added deterministic, read-only governance signal prioritization logic in `AISystemRiskAssessmentService`:
+    - base severity weights (`info=10`, `warning=40`, `critical=80`)
+    - age weights by bucket (`0/5/10/20/30`)
+    - assessment risk-context weights (manual risk level + residual/dimension calculated levels)
+    - open-signal density weight by related AI system (`min(count*3, 20)` when count > 1)
+    - deterministic ordering: `priority_score desc`, `created_at asc`, `id asc`
+    - deterministic `priority_band` mapping (`low|medium|high|urgent`)
+    - explainable `priority_explanation_json` with source fields and algorithm marker
+  - Added new read-only signal prioritization endpoints:
+    - `GET /api/v1/ai-governance/signals/prioritized`
+    - `GET /api/v1/ai-governance/signals/groups`
+    - `GET /api/v1/ai-governance/signals/priority-summary`
+    - `GET /api/v1/ai-governance/signals/{signal_id}/priority-explanation`
+    - `GET /api/v1/ai-governance/ai-systems/{ai_system_id}/attention`
+  - Added new response schemas:
+    - `GovernanceSignalPrioritizedRead`
+    - `GovernanceSignalGroupRead`
+    - `GovernanceSignalAttentionRead`
+    - `GovernanceSignalPrioritySummary`
+    - `GovernanceSignalPriorityExplanation`
+  - Extended governance signal read contract fields with optional priority presentation metadata:
+    - `priority_score`, `priority_band`, `priority_explanation_json`, `group_key`
+  - Updated Phase 6 contracts:
+    - expanded `governance_signals` response contract fields with priority presentation keys
+    - added `governance_signal_prioritization` contract group
+  - Added Phase 6.6 tests:
+    - deterministic score ordering and band mapping
+    - age/risk-context/density influence checks
+    - grouped view aggregation checks
+    - AI-system attention view and tenant isolation checks
+    - priority summary and explanation checks
+    - no-audit/no-mutation checks for read-only prioritization endpoints
+    - Phase 6 contract coverage for `governance_signal_prioritization`
+- Test cadence executed:
+  - targeted: `tests/unit/test_ai_system_signal_prioritization_phase66.py`
+  - affected: Phase 6.5 signal tests, Phase 6 contract tests, and affected Phase 6.1–6.4 risk test modules
+  - all executed tests passed
+- Scope constraints preserved:
+  - backend-only
+  - deterministic read-only prioritization only
+  - no AI inference
+  - no automatic legal/regulatory classification
+  - no task/recommendation/review auto-creation
+  - no approval/rejection automation
+  - no external APIs or external storage
+  - no PDF/ZIP
+  - no hard deletes
+  - no frontend changes
+
+## Phase 6.7 - Attention Candidate Actions / Static Next-Best-Action Foundation
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added deterministic, static governance action template catalog in `AISystemRiskAssessmentService`:
+    - `create_classification_record` (`assessment_missing_classification`)
+    - `review_classification` (`classification_needs_review`)
+    - `improve_classification_justification` (`classification_low_confidence`)
+    - `address_classification_change_request` (`classification_changes_requested`)
+    - `revise_or_replace_classification` (`classification_rejected`)
+    - `attach_classification_evidence` (`classification_has_unlinked_evidence`)
+    - `create_current_classification` (`assessment_has_superseded_classification_only`)
+  - Added deterministic read-only candidate action generation from open prioritized signals:
+    - maps signal reason codes to static templates
+    - groups duplicates by `action_key + target_entity_type + target_entity_id`
+    - candidate priority is highest source signal priority
+    - deterministic ordering: `priority_score desc`, `priority_band rank desc`, `action_key asc`, `target_entity_id asc/null last`
+    - explainable `rationale` and `rationale_json` with algorithm marker
+  - Added new read-only endpoints:
+    - `GET /api/v1/ai-governance/actions/templates`
+    - `GET /api/v1/ai-governance/actions/candidates`
+    - `GET /api/v1/ai-governance/actions/candidates/explain`
+    - `GET /api/v1/ai-governance/actions/candidate-summary`
+    - `GET /api/v1/ai-governance/ai-systems/{ai_system_id}/candidate-actions`
+    - `GET /api/v1/ai-governance/ai-risk/assessments/{assessment_id}/candidate-actions`
+  - Added new response schemas:
+    - `GovernanceActionTemplateRead`
+    - `GovernanceActionTemplateCatalogResponse`
+    - `GovernanceCandidateActionRead`
+    - `GovernanceAISystemCandidateActionsRead`
+    - `GovernanceRiskAssessmentCandidateActionsRead`
+    - `GovernanceCandidateActionSummary`
+  - Updated Phase 6 contracts:
+    - added `governance_candidate_actions` group
+    - contract-protected fields include `action_key`, `action_type`, `priority_score`, `priority_band`, `source_signal_ids`, `source_reason_codes`, `rationale`, `human_approval_required`, `automation_allowed`, `target_entity_type`, `target_entity_id`, `caveat`
+  - Added Phase 6.7 targeted tests:
+    - template catalog and contract group checks
+    - candidate generation from open signals
+    - resolved/dismissed/unmapped behavior checks
+    - grouping and highest-priority derivation
+    - deterministic ordering and filter checks
+    - AI-system/assessment views with tenant isolation
+    - summary and explanation endpoint coverage
+    - read-only no-audit and no-mutation checks
+- Scope constraints preserved:
+  - backend-only
+  - deterministic read-only suggestions only
+  - no AI inference
+  - no automatic legal/regulatory classification
+  - no task/review/recommendation persistence
+  - no automation triggers
+  - no source-record mutation
+  - no external APIs or external storage
+  - no PDF/ZIP
+  - no hard deletes
+  - no frontend changes
+
+## Phase 6.8 - Persisted Recommendation Snapshots + Diffable History
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added immutable recommendation snapshot persistence model:
+    - `governance_recommendation_snapshots`
+    - scope support: `organization`, `ai_system`, `risk_assessment`
+    - deterministic integrity metadata: `source_candidate_hash`, `snapshot_sha256`
+    - per-scope versioning: `snapshot_version`, `previous_snapshot_id`
+    - optional `diff_from_previous_json` for history comparability
+  - Added recommendation snapshot endpoints:
+    - `POST /api/v1/ai-governance/recommendations/snapshots/preview` (read-only, no audit/no writes)
+    - `POST /api/v1/ai-governance/recommendations/snapshots` (persisted immutable snapshot)
+    - `GET /api/v1/ai-governance/recommendations/snapshots`
+    - `GET /api/v1/ai-governance/recommendations/snapshots/{snapshot_id}`
+    - `GET /api/v1/ai-governance/recommendations/snapshots/{snapshot_id}/diff`
+    - `GET /api/v1/ai-governance/recommendations/snapshots/latest`
+    - `GET /api/v1/ai-governance/recommendations/snapshots/summary`
+  - Snapshot generation is deterministic and derives only from existing Phase 6.7 candidate actions (no execution path).
+  - Added deterministic snapshot diff logic over candidate-action identity (`action_key + target_entity_type + target_entity_id`) with added/removed/changed/unchanged outputs.
+  - Added Phase 6 contract group:
+    - `governance_recommendation_snapshots`
+  - Added Phase 6.8 targeted tests:
+    - preview no-write/no-audit
+    - persisted snapshot version/hash behavior
+    - org/ai-system/risk-assessment scope behavior
+    - tenant isolation for latest/detail
+    - diff/default previous and explicit compare behavior
+    - list/detail/summary coverage
+    - read-only endpoints no audit
+    - no task/review creation side effects
+- Audit behavior:
+  - persisted creation only: `governance_recommendation_snapshot.created`
+  - preview/list/detail/diff/latest/summary remain read-only with no audit writes
+- Scope constraints preserved:
+  - backend-only
+  - deterministic only
+  - no AI inference
+  - no task/review creation
+  - no automation trigger
+  - no source governance record mutation
+  - no external APIs or external storage
+  - no PDF/ZIP
+  - no hard deletes
+  - no frontend changes
+
+## Phase 6.9 - Recommendation Lifecycle / Acknowledgement Controls + Phase 6 Regression Gate
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added immutable-snapshot-safe recommendation action disposition model:
+    - `governance_recommendation_action_dispositions`
+    - one latest row per `(organization_id, recommendation_snapshot_id, action_identity_hash)` via unique index
+    - status values: `acknowledged`, `dismissed`, `deferred`, `accepted_for_manual_work`
+    - lifecycle metadata fields: `note`, `reason`, `deferred_until`, `created_by_user_id`, `updated_by_user_id`
+  - Added deterministic action identity hashing from snapshot action fields:
+    - `action_key`
+    - `target_entity_type`
+    - `target_entity_id`
+    - `related_ai_system_id`
+    - `related_risk_assessment_id`
+  - Added lifecycle endpoints:
+    - `GET /api/v1/ai-governance/recommendations/snapshots/{snapshot_id}/actions`
+    - `POST /api/v1/ai-governance/recommendations/snapshots/{snapshot_id}/actions/{action_identity_hash}/acknowledge`
+    - `POST /api/v1/ai-governance/recommendations/snapshots/{snapshot_id}/actions/{action_identity_hash}/dismiss`
+    - `POST /api/v1/ai-governance/recommendations/snapshots/{snapshot_id}/actions/{action_identity_hash}/defer`
+    - `POST /api/v1/ai-governance/recommendations/snapshots/{snapshot_id}/actions/{action_identity_hash}/accept-for-manual-work`
+    - `GET /api/v1/ai-governance/recommendations/action-dispositions`
+    - `GET /api/v1/ai-governance/recommendations/action-dispositions/summary`
+  - Updated snapshot detail endpoint:
+    - `GET /api/v1/ai-governance/recommendations/snapshots/{snapshot_id}?include_dispositions=true`
+    - adds non-persisted `actions_overlay` with `action_identity_hash` and disposition metadata
+    - does not mutate immutable snapshot payload JSON
+  - Updated Phase 6 contracts:
+    - added `governance_recommendation_action_dispositions` group and protected fields
+  - Added Phase 6.9 targeted tests in:
+    - `tests/unit/test_ai_system_recommendation_action_dispositions_phase69.py`
+- Audit behavior:
+  - audited persisted lifecycle writes only:
+    - `governance_recommendation_action.acknowledged`
+    - `governance_recommendation_action.dismissed`
+    - `governance_recommendation_action.deferred`
+    - `governance_recommendation_action.accepted_for_manual_work`
+  - read-only endpoints (`actions list`, `dispositions list`, `summary`, detail overlays) write no audit rows
+- Regression gate (with `SECRET_KEY=test-secret-key-for-phase-6-regression`):
+  - targeted/affected suites passed, including Phase 6.1–6.9 modules and contract checks
+  - Alembic heads check passed (`0071_governance_recommendation_action_dispositions`)
+  - service/router import smoke passed with configured `SECRET_KEY`
+- Scope constraints preserved:
+  - backend-only
+  - deterministic/manual-first only
+  - no AI inference
+  - no task/review creation
+  - no automation trigger
+  - no source signal/assessment/classification/AI-system mutation from lifecycle endpoints
+  - immutable recommendation snapshot payloads preserved
+  - no external APIs/storage, no PDF/ZIP, no frontend changes
+
+## Phase 6.10 - Copilot Draft Layer / Deterministic Governance Draft Previews
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added deterministic read-only Copilot draft service:
+    - `app/services/governance_copilot_draft_service.py`
+    - draft types:
+      - `ai_system_attention_brief`
+      - `risk_assessment_review_brief`
+      - `recommendation_snapshot_summary`
+      - `classification_review_brief`
+      - `executive_risk_summary`
+      - `action_plan_brief`
+    - generation mode is fixed: `deterministic_template`
+    - outputs include source traceability:
+      - `source_signal_ids`
+      - `source_recommendation_snapshot_id`
+      - `source_action_identity_hashes`
+      - `source_entities_json`
+  - Added new read-only Copilot endpoints:
+    - `GET /api/v1/ai-governance/copilot/draft-types`
+    - `POST /api/v1/ai-governance/copilot/drafts/preview`
+    - `GET /api/v1/ai-governance/ai-systems/{ai_system_id}/copilot-brief`
+    - `GET /api/v1/ai-governance/ai-risk/assessments/{assessment_id}/copilot-brief`
+    - `GET /api/v1/ai-governance/recommendations/snapshots/{snapshot_id}/copilot-summary`
+    - `GET /api/v1/ai-governance/copilot/executive-risk-summary`
+  - Added Phase 6 contract group:
+    - `governance_copilot_draft_previews`
+  - Added Phase 6.10 targeted tests:
+    - `tests/unit/test_ai_system_copilot_drafts_phase610.py`
+    - catalog and contract checks
+    - generic preview validation and tenant ownership checks
+    - AI-system and risk-assessment brief generation
+    - recommendation snapshot copilot summary generation with disposition-aware context
+    - executive summary generation
+    - read-only/no-audit/no-mutation assertions
+- Audit behavior:
+  - no audit writes for all Copilot draft endpoints (read-only preview layer)
+- Test cadence run:
+  - targeted: `tests/unit/test_ai_system_copilot_drafts_phase610.py` -> passed
+  - affected:
+    - `tests/unit/test_ai_system_signal_prioritization_phase66.py`
+    - `tests/unit/test_ai_system_candidate_actions_phase67.py`
+    - `tests/unit/test_ai_system_recommendation_snapshots_phase68.py`
+    - `tests/unit/test_ai_system_recommendation_action_dispositions_phase69.py`
+    - `tests/unit/test_ai_system_governance_contracts_phase60.py`
+    - all passed
+- Scope constraints preserved:
+  - backend-only
+  - deterministic template generation only
+  - no external AI APIs / no LLM calls
+  - no task/review creation
+  - no automation trigger
+  - no source record mutation (signals, assessments, classifications, AI systems, recommendation snapshots, dispositions)
+  - no external storage / no PDF/ZIP / no frontend changes
+
+## Phase 6.11 - Persisted Copilot Draft Snapshots + Diffable Draft History
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added immutable draft snapshot persistence model:
+    - `governance_copilot_draft_snapshots`
+    - fields include `draft_type`, `scope_type`, `scope_id`, `draft_payload_json`, source-trace metadata, `source_context_hash`, `snapshot_sha256`, `snapshot_version`, `previous_snapshot_id`, and `diff_from_previous_json`
+  - Added migration:
+    - `alembic/versions/0072_governance_copilot_draft_snapshots.py`
+  - Extended deterministic Copilot draft service:
+    - snapshot preview payload builder with deterministic `source_context_hash`
+    - immutable snapshot creation with deterministic `snapshot_sha256`
+    - per `organization + draft_type + scope` versioning
+    - previous-link + diff generation for executive summary/findings/next steps/open questions/source references
+  - Added new endpoints:
+    - `POST /api/v1/ai-governance/copilot/draft-snapshots/preview`
+    - `POST /api/v1/ai-governance/copilot/draft-snapshots`
+    - `GET /api/v1/ai-governance/copilot/draft-snapshots`
+    - `GET /api/v1/ai-governance/copilot/draft-snapshots/{snapshot_id}`
+    - `GET /api/v1/ai-governance/copilot/draft-snapshots/{snapshot_id}/diff`
+    - `GET /api/v1/ai-governance/copilot/draft-snapshots/latest`
+    - `GET /api/v1/ai-governance/copilot/draft-snapshots/summary`
+  - Updated Phase 6 contracts:
+    - added `governance_copilot_draft_snapshots` group and protected fields
+  - Added targeted tests:
+    - `tests/unit/test_ai_system_copilot_draft_snapshots_phase611.py`
+- Audit behavior:
+  - persisted creation only: `governance_copilot_draft_snapshot.created`
+  - preview/list/detail/diff/latest/summary write no audit rows
+- Scope constraints preserved:
+  - backend-only
+  - deterministic template generation only
+  - no external AI APIs / no LLM calls
+  - no task/review creation
+  - no automation trigger
+  - no source record mutation (signals, assessments, classifications, AI systems, recommendation snapshots, dispositions)
+  - no external storage / no PDF/ZIP / no frontend changes
+
+## Phase 6.12 - Phase 6 Closure Regression Gate + Contract Hardening
+- Date: 2026-06-20
+- Status: Completed (closed with environment warning on DB-authenticated `alembic current`)
+- Scope:
+  - stabilization/closure only (no new product workflow added)
+  - backend only
+  - no frontend changes
+  - no external AI/LLM or external legal/regulatory service usage
+- Route inventory and ordering audit:
+  - audited Phase 6 endpoint groups in `app/api/v1/ai_governance.py`:
+    - contracts phase6
+    - ai risk assessments
+    - scoring profiles
+    - dimension templates
+    - classification taxonomies
+    - classification records
+    - classification review actions
+    - classification snapshots
+    - governance signals
+    - signal prioritization
+    - candidate actions
+    - recommendation snapshots
+    - recommendation action dispositions
+    - copilot draft previews
+    - copilot draft snapshots
+  - static route ordering validated before dynamic routes for key families:
+    - `/contracts/phase5/compatibility-summary` before `/contracts/phase5/{group_key}`
+    - `/recommendations/snapshots/latest|summary` before `/recommendations/snapshots/{snapshot_id}`
+    - `/copilot/draft-snapshots/latest|summary` before `/copilot/draft-snapshots/{snapshot_id}`
+    - `/ai-risk/assessments/summary` before `/ai-risk/assessments/{assessment_id}`
+    - `/ai-risk/classifications/summary` before `/ai-risk/classifications/{classification_id}`
+- Contract registry audit:
+  - Phase 6 contract groups verified present and complete in `app/services/ai_governance_contract_service.py`:
+    - `ai_risk_assessments`
+    - `ai_risk_scoring_profiles`
+    - `ai_risk_dimension_templates`
+    - `ai_risk_classification_taxonomies`
+    - `ai_risk_classification_records`
+    - `ai_risk_classification_review`
+    - `ai_risk_classification_snapshots`
+    - `governance_signals`
+    - `governance_signal_prioritization`
+    - `governance_candidate_actions`
+    - `governance_recommendation_snapshots`
+    - `governance_recommendation_action_dispositions`
+    - `governance_copilot_draft_previews`
+    - `governance_copilot_draft_snapshots`
+  - each group contains endpoint coverage, protected response fields, semantics, invariants, and caveat text
+- Boundary audit (manual-first/legal-safe):
+  - manual `risk_level` remains separate from `calculated_risk_level`
+  - classification records and review state do not auto-mutate risk levels
+  - signals are indicators only and do not mutate source records
+  - prioritization/candidate action/copilot preview endpoints are read-only
+  - recommendation snapshots and copilot draft snapshots are immutable history records
+  - recommendation action dispositions track handling metadata only and do not execute actions
+- Audit-log behavior audit:
+  - write actions audited for Phase 6 persisted operations (risk, taxonomy/classification, review/snapshots, signal lifecycle, recommendation snapshot/disposition writes, copilot draft snapshot creation)
+  - read-only endpoints confirmed non-auditing by tests for preview/list/detail/summary/diff/latest/prioritization/candidate-action/copilot preview surfaces
+- Migration/import sanity:
+  - `alembic heads` => `0072_governance_copilot_draft_snapshots (head)`
+  - `alembic history` chain intact through `0072`
+  - router/service import smoke with `SECRET_KEY` set => passed
+  - `alembic current` without `SECRET_KEY` => expected config failure (`SECRET_KEY` missing)
+  - `alembic current` with `SECRET_KEY` => DB auth failure for local Postgres user (`complivibe_user`) in this environment
+- Regression gate execution (with `SECRET_KEY=test-secret-key-for-phase-6-closure`):
+  - Phase 6 suite subset requested by closure prompt: 66 tests passed
+  - selected Phase 5 compatibility set: 17 tests passed
+  - broader unit gate: `tests/unit` => 420 tests passed
+- Closure status:
+  - Phase 6 marked closed
+  - closed with environment warning only for DB-authenticated Alembic current check
+  - no external services added
+  - no frontend changes
+- Recommended next phase:
+  - Safe autopilot policy guardrails built on existing deterministic intelligence outputs (no autonomous execution)
+
+## Phase 7.0 - Safe Autopilot Policy Guardrails Foundation
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added persisted autopilot policy model:
+    - `governance_autopilot_policies`
+    - migration: `alembic/versions/0073_governance_autopilot_policies.py`
+  - Added autopilot policy endpoints:
+    - `POST /api/v1/ai-governance/autopilot/policies`
+    - `GET /api/v1/ai-governance/autopilot/policies`
+    - `GET /api/v1/ai-governance/autopilot/policies/{policy_id}`
+    - `PATCH /api/v1/ai-governance/autopilot/policies/{policy_id}`
+    - `POST /api/v1/ai-governance/autopilot/policies/{policy_id}/archive`
+    - `POST /api/v1/ai-governance/autopilot/policies/{policy_id}/set-default`
+    - `GET /api/v1/ai-governance/autopilot/policies/resolved`
+  - Added deterministic read-only autopilot evaluation endpoints:
+    - `POST /api/v1/ai-governance/autopilot/evaluate-candidate-action`
+    - `POST /api/v1/ai-governance/autopilot/evaluate-recommendation-snapshot`
+    - `POST /api/v1/ai-governance/autopilot/evaluate-copilot-draft-snapshot`
+    - `GET /api/v1/ai-governance/autopilot/summary`
+  - Added Phase 7 contracts endpoint:
+    - `GET /api/v1/ai-governance/contracts/phase7`
+    - contract groups:
+      - `governance_autopilot_policies`
+      - `governance_autopilot_policy_evaluations`
+  - Implemented deterministic resolved-safe-default policy behavior:
+    - fallback mode: `suggest_only`
+    - all mutation/external effects flags disabled
+    - high/urgent approval required by default
+  - Added targeted tests:
+    - `tests/unit/test_ai_system_autopilot_policies_phase70.py`
+- Audit behavior:
+  - write endpoints audited:
+    - `governance_autopilot_policy.created`
+    - `governance_autopilot_policy.updated`
+    - `governance_autopilot_policy.archived`
+    - `governance_autopilot_policy.default_set`
+  - read-only autopilot endpoints do not write audit logs
+- Safety boundary verification:
+  - no automation execution
+  - no task/review creation
+  - no source record mutation
+  - no signal/recommendation/copilot snapshot mutation from evaluations
+  - no external APIs/services
+- Test gate:
+  - targeted/affected suite: 33 passed
+  - migration head check: `0073_governance_autopilot_policies (head)`
+  - import smoke with `SECRET_KEY` set: passed
+
+## Phase 7.1 - Safe Autopilot Execution Planning / Dry-Run Intents
+- Date: 2026-06-20
+- Status: Completed
+- What changed:
+  - Added autopilot execution intent model:
+    - `governance_autopilot_execution_intents`
+    - migration: `alembic/versions/0074_governance_autopilot_execution_intents.py`
+  - Added deny-by-default deterministic capability matrix:
+    - `GET /api/v1/ai-governance/autopilot/capabilities`
+  - Added dry-run execution intent previews:
+    - `POST /api/v1/ai-governance/autopilot/execution-intents/preview-candidate-action`
+    - `POST /api/v1/ai-governance/autopilot/execution-intents/preview-recommendation-snapshot`
+    - `POST /api/v1/ai-governance/autopilot/execution-intents/preview-copilot-draft-snapshot`
+  - Added optional persisted dry-run intent records:
+    - `POST /api/v1/ai-governance/autopilot/execution-intents`
+    - `GET /api/v1/ai-governance/autopilot/execution-intents`
+    - `GET /api/v1/ai-governance/autopilot/execution-intents/{intent_id}`
+    - `POST /api/v1/ai-governance/autopilot/execution-intents/{intent_id}/archive`
+    - `GET /api/v1/ai-governance/autopilot/execution-intents/summary`
+  - Added Phase 7 contracts:
+    - `governance_autopilot_capabilities`
+    - `governance_autopilot_execution_intents`
+  - Added targeted tests:
+    - `tests/unit/test_ai_system_autopilot_execution_intents_phase71.py`
+- Audit behavior:
+  - persisted writes audited:
+    - `governance_autopilot_execution_intent.created`
+    - `governance_autopilot_execution_intent.archived`
+  - read-only endpoints write no audit rows:
+    - capabilities
+    - preview endpoints
+    - list/detail/summary
+- Safety boundary verification:
+  - no execution
+  - no task/review creation
+  - no automation trigger
+  - no mutation of source governance records, recommendation snapshots/dispositions, or copilot draft snapshots
+  - no external services
+- Test gate:
+  - targeted/affected suite: 38 passed
+  - migration head check: `0074_governance_autopilot_execution_intents (head)`
+  - import smoke with `SECRET_KEY` set: passed
+
+## Phase 7.2 - Manual Approval Envelope for Execution Intents
+- Date: 2026-06-21
+- Status: Completed
+- What changed:
+  - Added autopilot execution approval model:
+    - `governance_autopilot_execution_approvals`
+    - migration: `alembic/versions/0075_governance_autopilot_execution_approvals.py`
+  - Added approval requirements and readiness endpoints:
+    - `GET /api/v1/ai-governance/autopilot/execution-intents/{intent_id}/approval-requirements`
+    - `GET /api/v1/ai-governance/autopilot/execution-intents/{intent_id}/readiness`
+  - Added approval request and lifecycle endpoints:
+    - `POST /api/v1/ai-governance/autopilot/execution-intents/{intent_id}/approval-requests`
+    - `GET /api/v1/ai-governance/autopilot/execution-intents/{intent_id}/approval-requests`
+    - `GET /api/v1/ai-governance/autopilot/execution-approvals`
+    - `GET /api/v1/ai-governance/autopilot/execution-approvals/{approval_id}`
+    - `POST /api/v1/ai-governance/autopilot/execution-approvals/{approval_id}/approve`
+    - `POST /api/v1/ai-governance/autopilot/execution-approvals/{approval_id}/reject`
+    - `POST /api/v1/ai-governance/autopilot/execution-approvals/{approval_id}/cancel`
+    - `GET /api/v1/ai-governance/autopilot/execution-approvals/summary`
+  - Added Phase 7 contract group:
+    - `governance_autopilot_execution_approvals`
+  - Added targeted tests:
+    - `tests/unit/test_ai_system_autopilot_execution_approvals_phase72.py`
+- Audit behavior:
+  - persisted lifecycle writes audited:
+    - `governance_autopilot_execution_approval.requested`
+    - `governance_autopilot_execution_approval.approved`
+    - `governance_autopilot_execution_approval.rejected`
+    - `governance_autopilot_execution_approval.cancelled`
+  - read-only endpoints write no audit rows:
+    - approval requirements
+    - readiness
+    - list/detail/summary
+- Safety boundary verification:
+  - approval remains non-executing metadata only
+  - no task/review creation
+  - no automation trigger
+  - no mutation of source governance records
+  - no external services
+- Test gate:
+  - targeted/affected suite (Phase 7.2 + affected 7.1/7.0 + 6.x contracts/intelligence): 42 passed
+  - migration head check: `0075_governance_autopilot_execution_approvals (head)`
+  - import smoke with `SECRET_KEY` set: passed
+
+## Phase 7.3 - Dual-Control Approval Policy and Quorum Rules
+- Date: 2026-06-21
+- Status: Completed
+- What changed:
+  - Added approval policy and vote models:
+    - `governance_autopilot_approval_policies`
+    - `governance_autopilot_execution_approval_votes`
+    - migration: `alembic/versions/0076_governance_autopilot_approval_policies_and_votes.py`
+  - Added approval policy endpoints:
+    - `POST /api/v1/ai-governance/autopilot/approval-policies`
+    - `GET /api/v1/ai-governance/autopilot/approval-policies`
+    - `GET /api/v1/ai-governance/autopilot/approval-policies/{policy_id}`
+    - `PATCH /api/v1/ai-governance/autopilot/approval-policies/{policy_id}`
+    - `POST /api/v1/ai-governance/autopilot/approval-policies/{policy_id}/archive`
+    - `POST /api/v1/ai-governance/autopilot/approval-policies/{policy_id}/set-default`
+    - `GET /api/v1/ai-governance/autopilot/approval-policies/resolved`
+    - `GET /api/v1/ai-governance/autopilot/approval-policies/summary`
+  - Added approval vote/quorum endpoints:
+    - `GET /api/v1/ai-governance/autopilot/execution-approvals/{approval_id}/quorum-status`
+    - `GET /api/v1/ai-governance/autopilot/execution-approvals/{approval_id}/votes`
+    - `POST /api/v1/ai-governance/autopilot/execution-approvals/{approval_id}/votes/approve`
+    - `POST /api/v1/ai-governance/autopilot/execution-approvals/{approval_id}/votes/reject`
+  - Updated readiness and approval payloads to include quorum fields:
+    - `approval_vote_count`
+    - `rejection_vote_count`
+    - `quorum_met`
+    - `rejection_threshold_met`
+  - Preserved backward compatibility:
+    - `POST /api/v1/ai-governance/autopilot/execution-approvals/{approval_id}/approve`
+    - `POST /api/v1/ai-governance/autopilot/execution-approvals/{approval_id}/reject`
+    now flow through vote/quorum logic.
+  - Added Phase 7 contracts:
+    - `governance_autopilot_approval_policies`
+    - `governance_autopilot_approval_votes`
+    - `governance_autopilot_approval_quorum`
+  - Added targeted tests:
+    - `tests/unit/test_ai_system_autopilot_approval_quorum_phase73.py`
+- Audit behavior:
+  - persisted writes audited:
+    - `governance_autopilot_approval_policy.created`
+    - `governance_autopilot_approval_policy.updated`
+    - `governance_autopilot_approval_policy.archived`
+    - `governance_autopilot_approval_policy.default_set`
+    - `governance_autopilot_execution_approval_vote.approved`
+    - `governance_autopilot_execution_approval_vote.rejected`
+  - read-only endpoints write no audit rows:
+    - policy list/detail/resolved/summary
+    - vote list
+    - quorum status
+    - readiness
+- Safety boundary verification:
+  - quorum and dual-control are readiness-only
+  - no execution
+  - no task/review creation
+  - no automation trigger
+  - no mutation of source governance records
+  - no external services
+- Test gate:
+  - targeted/affected suite (Phase 7.3 + affected 7.2/7.1/7.0 + contracts): 22 passed
+  - migration head check: `0076_governance_autopilot_approval_policies_and_votes (head)`
+  - import smoke with `SECRET_KEY` set: passed
+
+## Phase 7.4 - Runner Interface Contract and Dry-Run Runner Simulation
+- Date: 2026-06-21
+- Status: Completed
+- What changed:
+  - Added runner simulation model:
+    - `governance_autopilot_runner_simulations`
+    - migration: `alembic/versions/0077_governance_autopilot_runner_simulations.py`
+  - Added runner interface and verification endpoints:
+    - `GET /api/v1/ai-governance/autopilot/runner-interface/contract`
+    - `POST /api/v1/ai-governance/autopilot/runner-interface/verify-handoff`
+  - Added execution-intent handoff preview endpoint:
+    - `POST /api/v1/ai-governance/autopilot/execution-intents/{intent_id}/runner-handoff/preview`
+  - Added dry-run runner simulation endpoints:
+    - `POST /api/v1/ai-governance/autopilot/execution-intents/{intent_id}/runner-simulations`
+    - `GET /api/v1/ai-governance/autopilot/runner-simulations`
+    - `GET /api/v1/ai-governance/autopilot/runner-simulations/{simulation_id}`
+    - `POST /api/v1/ai-governance/autopilot/runner-simulations/{simulation_id}/archive`
+    - `GET /api/v1/ai-governance/autopilot/runner-simulations/summary`
+  - Added Phase 7 contracts:
+    - `governance_autopilot_runner_interface`
+    - `governance_autopilot_runner_simulations`
+  - Added targeted tests:
+    - `tests/unit/test_ai_system_autopilot_runner_simulations_phase74.py`
+- Audit behavior:
+  - persisted writes audited:
+    - `governance_autopilot_runner_simulation.created`
+    - `governance_autopilot_runner_simulation.archived`
+  - read-only endpoints write no audit rows:
+    - runner interface contract
+    - handoff preview
+    - handoff verification
+    - simulation list/detail/summary
+- Safety boundary verification:
+  - runner interface and simulations are dry-run-only
+  - no job queue
+  - no execution
+  - no task/review creation
+  - no automation trigger
+  - no mutation of source governance records
+  - no external services
+- Test gate:
+  - targeted/affected suite (Phase 7.4 + affected 7.3/7.2/7.1/7.0 + contracts): 26 passed
+  - migration head check: `0077_governance_autopilot_runner_simulations (head)`
+  - import smoke with `SECRET_KEY` set: passed
+
+## Phase 7.5 - Runner Admission Controls + Replay-Safe Handoff Token
+- Date: 2026-06-21
+- Status: Completed
+- What changed:
+  - Added runner admission model:
+    - `governance_autopilot_runner_admissions`
+    - migration: `alembic/versions/0078_governance_autopilot_runner_admissions.py`
+  - Added non-executing runner admission endpoints:
+    - `POST /api/v1/ai-governance/autopilot/runner-simulations/{simulation_id}/admission-preview`
+    - `POST /api/v1/ai-governance/autopilot/runner-simulations/{simulation_id}/admissions`
+    - `GET /api/v1/ai-governance/autopilot/runner-admissions`
+    - `GET /api/v1/ai-governance/autopilot/runner-admissions/{admission_id}`
+    - `POST /api/v1/ai-governance/autopilot/runner-admissions/{admission_id}/verify-token`
+    - `POST /api/v1/ai-governance/autopilot/runner-admissions/{admission_id}/revoke`
+    - `POST /api/v1/ai-governance/autopilot/runner-admissions/{admission_id}/archive`
+    - `GET /api/v1/ai-governance/autopilot/runner-admissions/summary`
+  - Added consistency lock checks and replay-safe token handling:
+    - deterministic admission preview checks over simulation/intent/readiness/quorum/policy consistency
+    - hash-only token storage with one-time plaintext return on admitted creation
+    - duplicate active idempotency admissions return existing metadata without token reissue
+    - token verification is hash-based and read-only
+  - Added Phase 7 contract group:
+    - `governance_autopilot_runner_admissions`
+  - Added targeted tests:
+    - `tests/unit/test_ai_system_autopilot_runner_admissions_phase75.py`
+- Audit behavior:
+  - persisted writes audited:
+    - `governance_autopilot_runner_admission.created`
+    - `governance_autopilot_runner_admission.revoked`
+    - `governance_autopilot_runner_admission.archived`
+  - read-only endpoints write no audit rows:
+    - admission preview
+    - list/detail/summary
+    - token verification
+- Safety boundary verification:
+  - admissions/tokens are non-executing artifacts only
+  - no job queue
+  - no execution
+  - no task/review creation
+  - no automation trigger
+  - no mutation of source governance records
+  - no external services
+- Test gate:
+  - targeted/affected suite (Phase 7.5 + affected 7.4/7.3/7.2/7.1/7.0 + contracts): 27 passed
+  - migration head check: `0078_governance_autopilot_runner_admissions (head)`
+  - import smoke with `SECRET_KEY` set: passed
+
+## Phase 7.6 - Runner Lease / Session Envelope
+- Date: 2026-06-21
+- Status: Completed
+- What changed:
+  - Added runner session model:
+    - `governance_autopilot_runner_sessions`
+    - migration: `alembic/versions/0079_governance_autopilot_runner_sessions.py`
+  - Added non-executing runner session endpoints:
+    - `POST /api/v1/ai-governance/autopilot/runner-admissions/{admission_id}/session-preview`
+    - `POST /api/v1/ai-governance/autopilot/runner-admissions/{admission_id}/sessions`
+    - `GET /api/v1/ai-governance/autopilot/runner-sessions`
+    - `GET /api/v1/ai-governance/autopilot/runner-sessions/{session_id}`
+    - `POST /api/v1/ai-governance/autopilot/runner-sessions/{session_id}/verify`
+    - `POST /api/v1/ai-governance/autopilot/runner-sessions/{session_id}/revoke`
+    - `POST /api/v1/ai-governance/autopilot/runner-sessions/{session_id}/archive`
+    - `POST /api/v1/ai-governance/autopilot/runner-sessions/expire-stale`
+    - `GET /api/v1/ai-governance/autopilot/runner-sessions/summary`
+  - Added secure lease/session controls:
+    - session creation requires admitted admission + valid handoff token
+    - plaintext session token returned once on create only
+    - only session token hash/fingerprint persisted
+    - verification increments attempt count, enforces max-attempt lock, applies replay-window checks, and rejects expired/revoked/archived/locked sessions
+    - deterministic stale-expiry endpoint marks active sessions expired when `expires_at < now`
+  - Added Phase 7 contract group:
+    - `governance_autopilot_runner_sessions`
+  - Added targeted tests:
+    - `tests/unit/test_ai_system_autopilot_runner_sessions_phase76.py`
+- Audit behavior:
+  - persisted writes audited:
+    - `governance_autopilot_runner_session.created`
+    - `governance_autopilot_runner_session.verified`
+    - `governance_autopilot_runner_session.verification_failed`
+    - `governance_autopilot_runner_session.locked`
+    - `governance_autopilot_runner_session.revoked`
+    - `governance_autopilot_runner_session.archived`
+    - `governance_autopilot_runner_session.expired`
+  - read-only endpoints write no audit rows:
+    - session preview
+    - list/detail/summary
+- Safety boundary verification:
+  - sessions/leases are non-executing artifacts only
+  - no job queue
+  - no execution
+  - no task/review creation
+  - no automation trigger
+  - no mutation of source governance records
+  - no external services
+
+## Phase 7.7 - Session-to-Future-Runner Handshake Contract
+- Date: 2026-06-21
+- Status: Completed
+- What changed:
+  - Added runner handshake model:
+    - `governance_autopilot_runner_handshakes`
+    - migration: `alembic/versions/0080_governance_autopilot_runner_handshakes.py`
+  - Added non-executing handshake contract/lifecycle endpoints:
+    - `GET /api/v1/ai-governance/autopilot/runner-handshake/contract`
+    - `POST /api/v1/ai-governance/autopilot/runner-sessions/{session_id}/handshake-preview`
+    - `POST /api/v1/ai-governance/autopilot/runner-sessions/{session_id}/handshakes`
+    - `GET /api/v1/ai-governance/autopilot/runner-handshakes`
+    - `GET /api/v1/ai-governance/autopilot/runner-handshakes/{handshake_id}`
+    - `POST /api/v1/ai-governance/autopilot/runner-handshakes/{handshake_id}/verify`
+    - `POST /api/v1/ai-governance/autopilot/runner-handshakes/{handshake_id}/revoke`
+    - `POST /api/v1/ai-governance/autopilot/runner-handshakes/{handshake_id}/archive`
+    - `GET /api/v1/ai-governance/autopilot/runner-handshakes/summary`
+  - Added secure deterministic handshake behavior:
+    - handshake preview is read-only and does not increment session attempts
+    - persisted create path verifies session token through session verification logic
+    - deterministic handshake envelope hash (`handshake_sha256`) and fingerprint storage
+    - deterministic/default idempotency key support with active-handshake reuse
+    - revoke/archive lifecycle is status-based (no hard delete)
+  - Added Phase 7 contract group:
+    - `governance_autopilot_runner_handshakes`
+  - Added targeted tests:
+    - `tests/unit/test_ai_system_autopilot_runner_handshakes_phase77.py`
+- Audit behavior:
+  - persisted writes audited:
+    - `governance_autopilot_runner_handshake.created`
+    - `governance_autopilot_runner_handshake.revoked`
+    - `governance_autopilot_runner_handshake.archived`
+  - read-only endpoints write no audit rows:
+    - handshake contract
+    - handshake preview
+    - list/detail/summary
+    - handshake verification
+- Safety boundary verification:
+  - handshakes are non-executing artifacts only
+  - no job queue
+  - no execution
+  - no task/review creation
+  - no automation trigger
+  - no mutation of source governance records
+  - no external services
+- Test gate:
+  - targeted Phase 7.7 tests: 4 passed
+  - affected suite (7.7 + affected 7.6/7.5/7.4/7.3/7.2/7.1/7.0 + contracts): 20 passed
+  - migration head check: `0080_governance_autopilot_runner_handshakes (head)`
+  - import smoke with `SECRET_KEY` set: passed
+- Next step: Run broader Phase 7 regression gate in Phase 7.8.
+
+## Phase 7.8 - Phase 7 Regression Gate + Autopilot Boundary Hardening
+- Date: 2026-06-21
+- Status: Completed (with environment DB-auth warning on `alembic current`)
+- Route inventory audit:
+  - Verified Phase 7 endpoint groups:
+    - contracts/phase7
+    - autopilot policies + policy evaluations + capabilities
+    - execution intents + execution approvals + approval policies + votes/quorum
+    - runner interface + simulations + admissions + sessions + handshakes
+  - Verified static-before-dynamic ordering for conflict-prone paths:
+    - `/summary` routes before `/{id}` siblings
+    - `/resolved` routes before `/{policy_id}` siblings
+    - `/contract`, `/capabilities`, `/expire-stale` static routes before dynamic siblings
+  - No route ordering conflicts found.
+- Contract audit:
+  - Verified `GET /api/v1/ai-governance/contracts/phase7` includes:
+    - `governance_autopilot_policies`
+    - `governance_autopilot_policy_evaluations`
+    - `governance_autopilot_capabilities`
+    - `governance_autopilot_execution_intents`
+    - `governance_autopilot_execution_approvals`
+    - `governance_autopilot_approval_policies`
+    - `governance_autopilot_approval_votes`
+    - `governance_autopilot_approval_quorum`
+    - `governance_autopilot_runner_interface`
+    - `governance_autopilot_runner_simulations`
+    - `governance_autopilot_runner_admissions`
+    - `governance_autopilot_runner_sessions`
+    - `governance_autopilot_runner_handshakes`
+  - Hardened contract payload fields for completeness:
+    - `endpoints`
+    - `protected_fields`
+    - `read_write_semantics`
+    - `non_execution_guarantee`
+    - `no_legal_regulatory_determination`
+- Non-execution boundary audit:
+  - Verified no real runner implementation exists.
+  - Verified no job queue path, no task/review auto-creation, no source governance mutation from Phase 7 endpoints.
+  - Verified no external AI/LLM calls and no external service calls on Phase 7 autopilot paths.
+  - Verified no email/notification dispatch paths in Phase 7 autopilot surfaces.
+  - Verified no compliance approval/certification automation language in Phase 7 behavior.
+- Security/token + idempotency audit:
+  - Admission token plaintext returned once only; persisted as hash/fingerprint.
+  - Session token plaintext returned once only; persisted as hash/fingerprint.
+  - Handshake list/detail expose no plaintext session/admission tokens.
+  - Token verification uses hash comparisons.
+  - Session invalid attempts increment counters and max-attempt lock behavior enforced.
+  - Expired/revoked/archived sessions verify invalid.
+  - Handoff/handshake payload invariants enforce `dry_run=true` and `execution_allowed=false`.
+  - Duplicate idempotency keys do not create duplicate active simulation/admission/handshake records.
+- Audit boundary audit:
+  - Read-only endpoints verified no-audit:
+    - contracts
+    - previews
+    - list/detail/summary
+    - read-only verification endpoints (handoff verify + handshake envelope verify)
+    - policy evaluation
+    - runner interface contract
+  - Persisted writes verified audited across policies/intents/approvals/votes/simulations/admissions/sessions/handshakes lifecycle events.
+- Migration sanity:
+  - `alembic heads`: `0080_governance_autopilot_runner_handshakes (head)`
+  - `alembic history`: chain intact through `0080`
+  - import smoke (router/service) with `SECRET_KEY`: passed
+  - `alembic current` without `SECRET_KEY`: expected settings error
+  - `alembic current` with `SECRET_KEY`: local DB credential/auth failure (`complivibe_user`) in this environment
+- Tests executed (`SECRET_KEY=test-secret-key-for-phase-7-regression`):
+  - Phase 7 + affected Phase 6 required gate:
+    - `test_ai_system_autopilot_policies_phase70.py`
+    - `test_ai_system_autopilot_execution_intents_phase71.py`
+    - `test_ai_system_autopilot_execution_approvals_phase72.py`
+    - `test_ai_system_autopilot_approval_quorum_phase73.py`
+    - `test_ai_system_autopilot_runner_simulations_phase74.py`
+    - `test_ai_system_autopilot_runner_admissions_phase75.py`
+    - `test_ai_system_autopilot_runner_sessions_phase76.py`
+    - `test_ai_system_autopilot_runner_handshakes_phase77.py`
+    - `test_ai_system_candidate_actions_phase67.py`
+    - `test_ai_system_recommendation_snapshots_phase68.py`
+    - `test_ai_system_recommendation_action_dispositions_phase69.py`
+    - `test_ai_system_copilot_drafts_phase610.py`
+    - `test_ai_system_copilot_draft_snapshots_phase611.py`
+    - `test_ai_system_governance_contracts_phase60.py`
+    - Result: 62/62 collected tests passed
+  - Added Phase 7.8 regression checks:
+    - `test_ai_system_autopilot_regression_gate_phase78.py`
+  - Optional broader unit gate:
+    - `tests/unit -q`: 455/455 collected tests passed
+- Reports:
+  - Added `reports/phase7-regression-report.md`
+  - Added `reports/phase7-regression-report.json`
+- Warnings:
+  - `StarletteDeprecationWarning` (`fastapi.testclient`/`httpx`)
+  - Python 3.12 `crypt` deprecation warning from `passlib`
+  - environment DB-auth issue for `alembic current` (non-code regression)
+- Final Phase 7 status:
+  - Phase 7 is stable and ready for next design decision.
+  - Autopilot boundary remains manual-first and non-executing.
+
+## Phase 7.9 - Execution-Safety Architecture Review / Future Runner Decision Gate
+- Date: 2026-06-21
+- Status: Completed
+- Summary:
+  - Produced a formal execution-safety architecture review and future-runner decision gate for the non-executing Phase 7 autopilot stack.
+  - Confirmed that Phase 7 remains a guardrail-only chain: policy -> capability matrix -> execution intent -> approval envelope -> quorum -> readiness -> simulation -> admission -> session -> handshake.
+  - Confirmed no real runner exists and no execution path is introduced in this phase.
+- Reports created:
+  - `reports/phase7-execution-safety-architecture-review.md`
+  - `reports/phase7-execution-safety-architecture-review.json`
+- Contract hardening:
+  - Added top-level Phase 7 contract metadata:
+    - `execution_allowed=false`
+    - `real_runner_present=false`
+    - `job_queue_present=false`
+    - `future_runner_requires_architecture_review=true`
+  - Reinforced top-level caveat language with explicit no-runner wording.
+- Safety decision:
+  - Permanently blocked automation categories are documented (legal/regulatory determinations, compliance certification, risk acceptance, external publication, destructive/immutable record changes, unapproved external emails/connectors, production-system modification, and autonomous audit claims).
+  - Future-runner candidates are limited to internal low-risk/reversible metadata-only operations and remain not implemented.
+  - Recommended next phase is `Phase 8.0 No-Op Runner Event Log only` as the safest execution-adjacent option.
+- No-execution confirmation:
+  - No runner introduced.
+  - No job queue introduced.
+  - No task/review creation introduced.
+  - No source governance mutation introduced.
+  - No external service/API/email/notification behavior introduced.
+- Tests executed:
+  - `tests/unit/test_ai_system_autopilot_regression_gate_phase78.py`
+  - `tests/unit/test_ai_system_autopilot_execution_safety_phase79.py`
+  - `tests/unit/test_ai_system_governance_contracts_phase60.py`
+  - `tests/unit/test_ai_system_autopilot_policies_phase70.py`
+- Result:
+  - All targeted tests for the Phase 7.9 gate passed.
+- Warnings:
+  - Existing environment DB-auth limitation for local `alembic current` remains external to code.
+
+## Phase 8.0 - No-Op Runner Event Log Only
+- Date: 2026-06-21
+- Status: Completed
+- Summary:
+  - Added a non-executing no-op runner control-plane event log layer on top of runner handshakes.
+  - Implemented deterministic idempotent event recording for future-runner eligibility checkpoints without any action execution.
+  - Preserved strict tenant isolation, manual-first boundaries, and no-execution guarantees.
+- Added migration/model:
+  - migration: `alembic/versions/0081_governance_autopilot_noop_runner_events.py`
+  - model: `app/models/governance_autopilot_noop_runner_event.py`
+- Added endpoints:
+  - `GET /api/v1/ai-governance/contracts/phase8`
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/contract`
+  - `POST /api/v1/ai-governance/autopilot/runner-handshakes/{handshake_id}/noop-runner/preview`
+  - `POST /api/v1/ai-governance/autopilot/runner-handshakes/{handshake_id}/noop-runner/events`
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/events`
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/events/{event_id}`
+  - `POST /api/v1/ai-governance/autopilot/noop-runner/events/{event_id}/verify`
+  - `POST /api/v1/ai-governance/autopilot/noop-runner/events/{event_id}/archive`
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/events/summary`
+- Contract/service updates:
+  - Added Phase 8 contract registry response with hard boundary flags:
+    - `execution_allowed=false`
+    - `real_runner_present=false`
+    - `job_queue_present=false`
+    - `noop_runner_only=true`
+  - Added contract group:
+    - `governance_noop_runner_events`
+  - Added no-op runner contract/preview/create/list/detail/verify/archive/summary service flows.
+  - Enforced invariant payload fields on persisted events:
+    - `noop_only=true`
+    - `dry_run=true`
+    - `execution_allowed=false`
+- Audit boundaries:
+  - Persisted writes audited:
+    - `governance_autopilot_noop_runner_event.created`
+    - `governance_autopilot_noop_runner_event.archived`
+  - Read-only endpoints intentionally non-audited:
+    - contracts
+    - previews
+    - list/detail/summary
+    - verify endpoint
+- Safety boundary confirmation:
+  - No real runner introduced.
+  - No job queue introduced.
+  - No task creation introduced.
+  - No review creation introduced.
+  - No source governance mutation introduced.
+  - No external service/API/email/notification behavior introduced.
+- Tests executed:
+  - `tests/unit/test_ai_system_autopilot_noop_runner_events_phase80.py`
+  - `tests/unit/test_ai_system_autopilot_runner_handshakes_phase77.py`
+  - `tests/unit/test_ai_system_autopilot_regression_gate_phase78.py`
+  - `tests/unit/test_ai_system_autopilot_execution_safety_phase79.py`
+  - `tests/unit/test_ai_system_governance_contracts_phase60.py`
+  - Result: 14/14 passed
+- Migration/import smoke:
+  - `.venv/bin/alembic heads` -> `0081_governance_autopilot_noop_runner_events (head)`
+  - `PYTHONPATH=. SECRET_KEY=... .venv/bin/python -c ...` import smoke passed.
+- Warnings:
+  - `StarletteDeprecationWarning` (`fastapi.testclient` / `httpx`)
+  - Python `crypt` deprecation warning via `passlib`
+- Next recommendation:
+  - Keep execution disabled and design Phase 8.1 control-plane observability hardening (operator-visible run log/reporting) before any execution design work.
+
+## Phase 8.1 - No-Op Runner Control-Plane Observability + Operator Ledger
+- Date: 2026-06-21
+- Status: Completed
+- Summary:
+  - Added read-only operator ledger and observability reports over no-op runner events.
+  - Preserved strict non-execution boundaries and no-audit behavior for all new report endpoints.
+  - Extended Phase 8 contracts to register observability coverage and safety posture reporting fields.
+- Added endpoints:
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/ledger`
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/reports/timeline`
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/reports/blockers`
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/reports/readiness`
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/reports/idempotency`
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/reports/control-plane-health`
+- Contract/service updates:
+  - Added Phase 8 contract group: `governance_noop_runner_observability`
+  - Updated Phase 8 caveat language to include read-only observability boundaries.
+  - Added deterministic report aggregation for blockers/readiness/idempotency/control-plane health.
+- Read-only boundary confirmation:
+  - No DB writes in observability endpoints.
+  - No audit writes in observability endpoints.
+  - No task/review/job creation or source mutation behavior introduced.
+- Tests executed:
+  - `tests/unit/test_ai_system_autopilot_noop_runner_observability_phase81.py`
+  - `tests/unit/test_ai_system_autopilot_noop_runner_events_phase80.py`
+  - `tests/unit/test_ai_system_governance_contracts_phase60.py`
+- Warnings:
+  - Existing `StarletteDeprecationWarning` from test-client stack remains.
+  - Existing Python `crypt` deprecation warning via `passlib` remains.
+- Next recommendation:
+  - Keep execution disabled and proceed to Phase 8.2 focused on operator diagnostics UX contracts or retention/report export policy (still read-only, no runner).
+
+## Phase 8.2 - Operator Diagnostics Contract Polish + Bounded Export Payloads
+- Date: 2026-06-21
+- Status: Completed
+- Summary:
+  - Added stable diagnostics report contract/manifest endpoints for no-op runner observability.
+  - Added bounded JSON export/checksum endpoints with deterministic query/result hashes.
+  - Preserved strict read-only boundaries: no DB writes, no audit writes, no file creation.
+- Added endpoints:
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/reports/contract`
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/reports/diagnostics-manifest`
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/reports/bounded-export`
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/reports/checksum`
+- Metadata standard:
+  - `report_schema_version=noop_runner_reports.v1`
+  - `report_type`
+  - `generated_at`
+  - `query_hash`
+  - `result_hash`
+  - hard safety flags (`execution_allowed=false`, `real_runner_present=false`, `job_queue_present=false`, `noop_runner_only=true`)
+- Contract updates:
+  - Added Phase 8 contract group: `governance_noop_runner_operator_diagnostics`
+  - Added diagnostics/export contract caveat language (JSON-only, no files, no execution).
+- Tests executed:
+  - `tests/unit/test_ai_system_autopilot_noop_runner_observability_phase81.py`
+  - `tests/unit/test_ai_system_autopilot_noop_runner_events_phase80.py`
+  - `tests/unit/test_ai_system_governance_contracts_phase60.py`
+  - plus affected Phase 7.7/7.8/7.9 suites
+- Warnings:
+  - Existing `StarletteDeprecationWarning` from test-client stack remains.
+  - Existing Python `crypt` deprecation warning via `passlib` remains.
+- Next recommendation:
+  - Keep execution disabled; consider Phase 8.3 diagnostics retention policy and stricter report compatibility tests (still no runner/no execution).
+
+## Phase 8.3 - Diagnostics Compatibility Guarantees + Golden Response-Shape Tests
+- Date: 2026-06-21
+- Status: Completed
+- Summary:
+  - Added explicit diagnostics compatibility-policy metadata for no-op runner reporting surfaces.
+  - Added golden response-shape tests for Phase 8 diagnostics endpoints and Phase 8 contract group coverage.
+  - Preserved strict read-only boundaries: no DB writes, no audit writes, no file creation, no execution behavior.
+- Added endpoint:
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/reports/compatibility-policy`
+- Contract/manifest updates:
+  - Diagnostics contract now includes:
+    - `compatibility_policy_version`
+    - `compatibility_policy_endpoint`
+    - `additive_fields_allowed`
+    - `breaking_changes_require_new_schema_version`
+    - `minimum_supported_schema_version`
+    - `current_supported_schema_version`
+  - Diagnostics manifest now includes:
+    - `compatibility_policy_version`
+    - `compatibility_policy_endpoint`
+    - `minimum_supported_schema_version`
+    - `current_supported_schema_version`
+  - Added Phase 8 contract group:
+    - `governance_noop_runner_diagnostics_compatibility`
+- Golden/safety tests added:
+  - `tests/unit/test_ai_system_autopilot_noop_runner_diagnostics_compatibility_phase83.py`
+  - Verifies required top-level shapes for contract/manifest/bounded-export/checksum/compatibility-policy and Phase 8 contract group presence.
+  - Verifies no DB row writes, no audit writes, no source/task/review mutation, and no report-file creation during read-only diagnostics calls.
+- Warnings:
+  - Existing `StarletteDeprecationWarning` from test-client stack remains.
+  - Existing Python `crypt` deprecation warning via `passlib` remains.
+- Next recommendation:
+  - Keep execution disabled and proceed to Phase 8.4 only if needed for client-integration ergonomics (pagination UX/diagnostic filtering), still read-only and no runner.
+
+## Phase 8.4 - Read-Only Client Integration Polish for No-Op Runner Diagnostics
+- Date: 2026-06-21
+- Status: Completed
+- Summary:
+  - Added read-only client integration metadata endpoints for no-op runner diagnostics.
+  - Added backward-compatible pagination metadata on bounded export responses.
+  - Preserved strict non-execution boundaries with no DB writes, no audit writes, and no file creation for new endpoints.
+- Added endpoints:
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/reports/client-contract`
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/reports/filter-options`
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/reports/pagination-contract`
+- Contract/manifest updates:
+  - Diagnostics contract now includes:
+    - `filter_options_endpoint`
+    - `pagination_contract_endpoint`
+    - `client_contract_endpoint`
+  - Diagnostics manifest now includes:
+    - `filter_options_endpoint`
+    - `pagination_contract_endpoint`
+    - `client_contract_endpoint`
+  - Phase 8 contract now includes:
+    - `governance_noop_runner_client_integration`
+- Backward-compatibility behavior:
+  - `GET /reports/bounded-export` retains top-level pagination fields:
+    - `limit`, `offset`, `truncated`, `next_offset`, `row_count`
+  - Adds nested `pagination` metadata:
+    - `limit`, `offset`, `truncated`, `next_offset`, `row_count`, `max_limit`, `pagination_contract_version`
+- Tests added:
+  - `tests/unit/test_ai_system_autopilot_noop_runner_client_integration_phase84.py`
+  - Verifies endpoint shapes, route ordering, bounded-export compatibility, phase8 contract group presence, hard safety flags, and read-only/no-file side-effect boundaries.
+- Warnings:
+  - Existing `StarletteDeprecationWarning` from test-client stack remains.
+  - Existing Python `crypt` deprecation warning via `passlib` remains.
+- Next recommendation:
+  - Keep execution disabled and proceed to Phase 8.5 only for read-only operator UX refinements or API ergonomics; do not introduce a runner/job queue.
+
+## Phase 8.5 - Field-Level Client Docs + Display Metadata for No-Op Runner Diagnostics
+- Date: 2026-06-21
+- Status: Completed
+- Summary:
+  - Added read-only field-level diagnostics docs and display metadata for no-op runner reporting APIs.
+  - Added localization key-map and client hints metadata endpoints for future client rendering consistency.
+  - Preserved strict read-only/non-executing boundaries with no DB writes, no audit writes, and no file creation.
+- Added endpoints:
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/reports/field-docs`
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/reports/display-metadata`
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/reports/localization-map`
+  - `GET /api/v1/ai-governance/autopilot/noop-runner/reports/client-hints`
+- Contract/metadata updates:
+  - Client-contract now links:
+    - `field_docs_endpoint`
+    - `display_metadata_endpoint`
+    - `localization_map_endpoint`
+    - `client_hints_endpoint`
+  - Filter-options and pagination-contract now link:
+    - `field_docs_endpoint`
+    - `display_metadata_endpoint`
+    - `client_hints_endpoint`
+  - Reports contract and diagnostics manifest now link:
+    - `field_docs_endpoint`
+    - `display_metadata_endpoint`
+    - `localization_map_endpoint`
+    - `client_hints_endpoint`
+  - Added Phase 8 contract group:
+    - `governance_noop_runner_client_field_docs`
+- Tests added:
+  - `tests/unit/test_ai_system_autopilot_noop_runner_client_field_docs_phase85.py`
+  - Verifies endpoint shapes, required field-doc metadata keys, localization map defaults (`en` only), client-contract linking, route ordering, contract group presence, hard safety flags, and no side effects.
+- Warnings:
+  - Existing `StarletteDeprecationWarning` from test-client stack remains.
+  - Existing Python `crypt` deprecation warning via `passlib` remains.
+- Next recommendation:
+  - Keep execution disabled and proceed to Phase 8.6 only for additional read-only operator ergonomics or contract linting; do not introduce a runner/job queue.
+
+## Phase 8.6 - Phase 8 Diagnostics Contract Lint + Integration Readiness Gate
+- Date: 2026-06-21
+- Status: Completed
+- Summary:
+  - Ran a Phase 8 diagnostics integration-readiness stabilization gate.
+  - Linted endpoint inventory, static-before-dynamic route ordering, Phase 8 contract completeness, response shapes, compatibility/version invariants, and read-only boundaries.
+  - Confirmed hard non-execution flags remain enforced.
+- Added tests:
+  - `tests/unit/test_ai_system_autopilot_noop_runner_integration_readiness_phase86.py`
+  - Coverage includes:
+    - full Phase 8 endpoint-family inventory and reachability
+    - route-ordering assertions for static diagnostics paths before dynamic event routes
+    - Phase 8 contract group presence and contract-structure checks
+    - response-shape key lint for events/observability/diagnostics/compatibility/client metadata endpoints
+    - backward-compatibility checks (bounded-export top-level pagination + nested pagination; v1 version invariants)
+    - read-only/no-audit/no-file/no-mutation assertions
+    - write-surface boundary assertions for no-op event create/archive audit behavior
+- Reports created:
+  - `reports/phase8-diagnostics-integration-readiness-report.md`
+  - `reports/phase8-diagnostics-integration-readiness-report.json`
+- Test run (targeted/affected):
+  - `tests/unit/test_ai_system_autopilot_noop_runner_integration_readiness_phase86.py`
+  - `tests/unit/test_ai_system_autopilot_noop_runner_client_field_docs_phase85.py`
+  - `tests/unit/test_ai_system_autopilot_noop_runner_client_integration_phase84.py`
+  - `tests/unit/test_ai_system_autopilot_noop_runner_diagnostics_compatibility_phase83.py`
+  - `tests/unit/test_ai_system_autopilot_noop_runner_observability_phase81.py`
+  - `tests/unit/test_ai_system_autopilot_noop_runner_events_phase80.py`
+  - `tests/unit/test_ai_system_autopilot_execution_safety_phase79.py`
+  - `tests/unit/test_ai_system_autopilot_regression_gate_phase78.py`
+  - `tests/unit/test_ai_system_governance_contracts_phase60.py`
+  - Result: `20 passed`
+- Import/migration sanity:
+  - Import smoke with `SECRET_KEY` passed.
+  - `alembic heads` reports: `0081_governance_autopilot_noop_runner_events (head)`.
+- Warnings:
+  - Existing `StarletteDeprecationWarning` from test-client stack remains.
+  - Existing Python `crypt` deprecation warning via `passlib` remains.
+- Next recommendation:
+  - Keep execution disabled and move to a Phase 8.7 API ergonomics/consistency cleanup only if needed; do not introduce a real runner or job queue.
+
+## Phase 8.7 - Phase 8 API Ergonomics Cleanup + Closure Freeze Gate
+- Date: 2026-06-21
+- Status: Completed
+- Summary:
+  - Performed final Phase 8 closure/freeze checks for naming consistency, caveat consistency, safety-flag consistency, and response ergonomics across no-op runner events/observability/diagnostics/client metadata endpoints.
+  - Preserved strict no-op/non-executing boundaries with no persistence expansion, no audit expansion, no file creation via API endpoints, and no execution behaviors.
+  - Tightened Phase 8 caveat text to explicitly include no real runner, no job queue, and JSON-only diagnostics/export constraints.
+- Endpoint/contract verification:
+  - Verified endpoint families remain present and reachable for:
+    - Phase 8 contract registry
+    - no-op runner event surfaces
+    - observability surfaces
+    - diagnostics contract/manifest/export/checksum surfaces
+    - compatibility/client/filter/pagination/field-docs/display/localization/client-hints surfaces
+  - Verified static-before-dynamic ordering remains safe (`/events/summary` and `/reports/*` before `/events/{event_id}`).
+  - Verified Phase 8 contract groups remain complete:
+    - `governance_noop_runner_events`
+    - `governance_noop_runner_observability`
+    - `governance_noop_runner_operator_diagnostics`
+    - `governance_noop_runner_diagnostics_compatibility`
+    - `governance_noop_runner_client_integration`
+    - `governance_noop_runner_client_field_docs`
+- Test coverage added:
+  - `tests/unit/test_ai_system_autopilot_noop_runner_phase8_closure_phase87.py`
+  - Validates:
+    - Phase 8 groups and hard flags stability
+    - version naming invariants for diagnostics/client surfaces
+    - bounded-export backward compatibility (top-level + nested pagination)
+    - route-ordering safety
+    - read-only/no-audit/no-file/no-mutation boundaries
+    - README/DEVELOPMENT_LOG Phase 8.7 presence
+- Reports created:
+  - `reports/phase8-closure-report.md`
+  - `reports/phase8-closure-report.json`
+- Warnings:
+  - Existing `StarletteDeprecationWarning` from test-client stack remains.
+  - Existing Python `crypt` deprecation warning via `passlib` remains.
+- Next recommendation:
+  - Keep Phase 8 frozen as integration-ready no-op diagnostics/control-plane surface.
+  - If execution work is considered later, begin a separate Phase 9 architecture/RFC gate rather than extending Phase 8.
+
+## Phase 8.9 - Reality Audit for AI Trust Infrastructure Transition
+- Date: 2026-06-22
+- Status: Completed (audit-only)
+- What changed:
+  - Performed repository reality audit for AI Trust Infrastructure transition readiness.
+  - Collected repository/migration status, obligation-count source diffs, architecture inventories (AI systems, risk/evidence/controls), RBAC inventory, and no-op automation boundary evidence.
+  - Ran required tests and captured exact command results.
+- Files changed:
+  - `docs/engineering/phase_8_9_reality_audit.md`
+  - `DEVELOPMENT_LOG.md`
+- Audit results summary:
+  - Alembic head is `0081_governance_autopilot_noop_runner_events` and matches expected.
+  - Workspace has no `.git` metadata, so branch/remotes/default branch/dirty-state are not discoverable here.
+  - Obligation counts differ by source:
+    - Seed service obligations exist only for NIST AI RMF and GDPR.
+    - Starter content packs contain one obligation each for EU AI Act, ISO 42001, NIST AI RMF, India DPDP, GDPR, and SOC 2.
+    - Migrations do not insert framework obligation rows for these audited frameworks.
+    - Test fixture baseline is schema-only; obligation rows appear only when seed logic is invoked.
+  - AI system/governance/risk-classification architecture is present and extensive; risk/evidence/control/export/score architecture is present.
+  - No-op automation boundary remains in place through no-op runner events, with non-execution flags and caveats.
+- Test result:
+  - Command: `.venv/bin/pytest tests/unit`
+    - Result: failed during collection (`75 errors`, `2 warnings`, exit code `2`)
+    - Primary failure: `ModuleNotFoundError: No module named 'tests'`
+  - Command: `.venv/bin/pytest`
+    - Result: failed during collection (`75 errors`, `2 warnings`, exit code `2`)
+    - Primary failure: `ModuleNotFoundError: No module named 'tests'`
+- Warnings:
+  - Preserve Phase 7/8 no-op automation safety boundary; no real job execution.
+  - Do not implement real connectors, real email sending, or external side effects before planned phases.
+- Next step: Implement Phase 9.0 AI Bill of Materials Foundation

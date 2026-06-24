@@ -1,0 +1,43 @@
+{
+  "phase": "6",
+  "closure_phase": "6.12",
+  "date": "2026-06-20",
+  "status": "closed_with_environment_warning",
+  "tests": {
+    "phase6_subset_passed": 66,
+    "selected_phase5_compat_passed": 17,
+    "tests_unit_passed": 420
+  },
+  "migration": {
+    "head": "0072_governance_copilot_draft_snapshots",
+    "alembic_current": "failed_environment_db_auth",
+    "import_smoke": "passed"
+  },
+  "contracts": {
+    "phase6_groups_verified": [
+      "ai_risk_assessments",
+      "ai_risk_scoring_profiles",
+      "ai_risk_dimension_templates",
+      "ai_risk_classification_taxonomies",
+      "ai_risk_classification_records",
+      "ai_risk_classification_review",
+      "ai_risk_classification_snapshots",
+      "governance_signals",
+      "governance_signal_prioritization",
+      "governance_candidate_actions",
+      "governance_recommendation_snapshots",
+      "governance_recommendation_action_dispositions",
+      "governance_copilot_draft_previews",
+      "governance_copilot_draft_snapshots"
+    ]
+  },
+  "boundaries": {
+    "deterministic_only": true,
+    "manual_first": true,
+    "no_external_ai_or_llm": true,
+    "no_task_or_review_auto_creation": true,
+    "no_automation_trigger": true,
+    "immutable_snapshots_preserved": true
+  },
+  "next_phase_recommendation": "Phase 7.0 safe autopilot policy guardrails"
+}

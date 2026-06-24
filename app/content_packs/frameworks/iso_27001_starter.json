@@ -1,0 +1,49 @@
+{
+  "pack_key": "iso_27001_starter",
+  "framework_code": "ISO_27001",
+  "framework_name": "ISO 27001",
+  "version_label": "2022",
+  "version": "1.0",
+  "coverage_level": "starter",
+  "review_status": "unreviewed",
+  "import_type": "starter_pack",
+  "source_name": "local_starter_pack",
+  "source_reference": "iso_27001_starter",
+  "caveat": "This framework content pack is a structured starter representation and does not constitute legal advice or complete regulatory coverage. This is a starter content pack for scoping purposes only. It does not constitute legal advice or a complete compliance determination.",
+  "sections": [
+    {"section_code": "CLAUSE-5", "title": "Leadership", "description": "ISO 27001 Clause 5", "status": "active"},
+    {"section_code": "CLAUSE-6", "title": "Planning", "description": "ISO 27001 Clause 6", "status": "active"},
+    {"section_code": "CLAUSE-7", "title": "Support", "description": "ISO 27001 Clause 7", "status": "active"},
+    {"section_code": "CLAUSE-8", "title": "Operation", "description": "ISO 27001 Clause 8", "status": "active"},
+    {"section_code": "CLAUSE-9", "title": "Performance Evaluation", "description": "ISO 27001 Clause 9", "status": "active"},
+    {"section_code": "CLAUSE-10", "title": "Improvement", "description": "ISO 27001 Clause 10", "status": "active"},
+    {"section_code": "ANNEX-A", "title": "Annex A Controls", "description": "ISO 27001 Annex A", "status": "active"}
+  ],
+  "obligations": [
+    {"stable_key": "ISO_27001.ISO27001-5-01", "reference_code": "ISO27001-5-01", "obligation_code": "ISO27001-5-01", "title": "Define ISMS leadership commitment", "description": "Top management shall demonstrate commitment to the ISMS and align objectives with business direction.", "obligation_type": "process", "applicability_notes": "Applies to all certified scope entities.", "section_code": "CLAUSE-5", "jurisdiction": "International", "status": "active", "criticality": "normal", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "ISO_27001.ISO27001-5-02", "reference_code": "ISO27001-5-02", "obligation_code": "ISO27001-5-02", "title": "Establish information security policy", "description": "Publish and maintain an information security policy communicated across the organization.", "obligation_type": "documentation", "applicability_notes": "Policy should be approved and periodically reviewed.", "section_code": "CLAUSE-5", "jurisdiction": "International", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "ISO_27001.ISO27001-6-01", "reference_code": "ISO27001-6-01", "obligation_code": "ISO27001-6-01", "title": "Define ISMS scope and risk criteria", "description": "Define ISMS boundaries and criteria for information security risk assessment and treatment.", "obligation_type": "assessment", "applicability_notes": "Scope should cover people, process, and technology boundaries.", "section_code": "CLAUSE-6", "jurisdiction": "International", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "ISO_27001.ISO27001-6-02", "reference_code": "ISO27001-6-02", "obligation_code": "ISO27001-6-02", "title": "Perform periodic risk assessments", "description": "Assess information security risks and maintain treatment plans with accepted residual risk rationale.", "obligation_type": "assessment", "applicability_notes": "Should be updated for major organizational and technical changes.", "section_code": "CLAUSE-6", "jurisdiction": "International", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "ISO_27001.ISO27001-7-01", "reference_code": "ISO27001-7-01", "obligation_code": "ISO27001-7-01", "title": "Maintain competence and awareness", "description": "Ensure personnel competence, awareness, and training relevant to information security responsibilities.", "obligation_type": "process", "applicability_notes": "Evidence may include training logs and role-based curricula.", "section_code": "CLAUSE-7", "jurisdiction": "International", "status": "active", "criticality": "normal", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "ISO_27001.ISO27001-7-02", "reference_code": "ISO27001-7-02", "obligation_code": "ISO27001-7-02", "title": "Control documented information", "description": "Create, update, and protect documented ISMS information with revision and retention control.", "obligation_type": "documentation", "applicability_notes": "Applies to policies, procedures, and records.", "section_code": "CLAUSE-7", "jurisdiction": "International", "status": "active", "criticality": "normal", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "ISO_27001.ISO27001-8-01", "reference_code": "ISO27001-8-01", "obligation_code": "ISO27001-8-01", "title": "Operate risk treatment controls", "description": "Implement and operate controls selected through risk treatment and track operational effectiveness.", "obligation_type": "control", "applicability_notes": "Traceability to statement of applicability is recommended.", "section_code": "CLAUSE-8", "jurisdiction": "International", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "ISO_27001.ISO27001-9-01", "reference_code": "ISO27001-9-01", "obligation_code": "ISO27001-9-01", "title": "Conduct internal ISMS audits", "description": "Perform planned internal audits to determine conformity and effectiveness of the ISMS.", "obligation_type": "assessment", "applicability_notes": "Audit scope and criteria should be documented.", "section_code": "CLAUSE-9", "jurisdiction": "International", "status": "active", "criticality": "normal", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "ISO_27001.ISO27001-10-01", "reference_code": "ISO27001-10-01", "obligation_code": "ISO27001-10-01", "title": "Manage nonconformities and corrective actions", "description": "Record ISMS nonconformities, perform root-cause analysis, and implement corrective actions.", "obligation_type": "process", "applicability_notes": "Corrective actions should be tracked to completion.", "section_code": "CLAUSE-10", "jurisdiction": "International", "status": "active", "criticality": "normal", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "ISO_27001.ISO27001-A-01", "reference_code": "ISO27001-A-01", "obligation_code": "ISO27001-A-01", "title": "Implement access control and incident management controls", "description": "Deploy Annex A controls for access management, logging, and security incident handling.", "obligation_type": "control", "applicability_notes": "Includes identity lifecycle and incident response procedures.", "section_code": "ANNEX-A", "jurisdiction": "International", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"}
+  ],
+  "content_versions": [
+    {"reference_code": "ISO27001-5-01", "version_label": "1.0", "obligation_text": "Demonstrate top management commitment for ISMS effectiveness.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "ISO27001-5-02", "version_label": "1.0", "obligation_text": "Maintain and communicate an approved information security policy.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "ISO27001-6-01", "version_label": "1.0", "obligation_text": "Define ISMS scope and criteria for information security risk assessment.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "ISO27001-6-02", "version_label": "1.0", "obligation_text": "Conduct periodic risk assessments and document treatment decisions.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "ISO27001-7-01", "version_label": "1.0", "obligation_text": "Ensure personnel competence and awareness for ISMS responsibilities.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "ISO27001-7-02", "version_label": "1.0", "obligation_text": "Control documented ISMS information lifecycle and accessibility.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "ISO27001-8-01", "version_label": "1.0", "obligation_text": "Implement and operate controls selected through risk treatment.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "ISO27001-9-01", "version_label": "1.0", "obligation_text": "Perform internal audits on planned intervals for ISMS conformance.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "ISO27001-10-01", "version_label": "1.0", "obligation_text": "Address ISMS nonconformities and corrective actions.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "ISO27001-A-01", "version_label": "1.0", "obligation_text": "Apply Annex A controls for access management and incident response.", "coverage_level": "starter", "review_status": "unreviewed"}
+  ],
+  "applicability_questions": [],
+  "evidence_requirements": [],
+  "control_suggestions": []
+}

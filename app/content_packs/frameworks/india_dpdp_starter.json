@@ -1,0 +1,50 @@
+{
+  "pack_key": "india_dpdp_starter",
+  "framework_code": "INDIA_DPDP",
+  "framework_name": "India DPDP",
+  "version_label": "2023",
+  "version": "1.0",
+  "coverage_level": "starter",
+  "review_status": "unreviewed",
+  "import_type": "starter_pack",
+  "source_name": "local_starter_pack",
+  "source_reference": "india_dpdp_starter",
+  "caveat": "This framework content pack is a structured starter representation and does not constitute legal advice or complete regulatory coverage. This is a starter content pack for scoping purposes only. It does not constitute legal advice or a complete compliance determination.",
+  "sections": [
+    {"section_code": "SEC-4", "title": "Consent and Notice", "description": "DPDP consent and notice obligations", "status": "active"},
+    {"section_code": "SEC-11-13", "title": "Data Principal Rights", "description": "Rights and grievance obligations", "status": "active"},
+    {"section_code": "SEC-8", "title": "Data Fiduciary Duties", "description": "Core fiduciary responsibilities", "status": "active"},
+    {"section_code": "SEC-9-10", "title": "Children and Significant Fiduciaries", "description": "Additional duties", "status": "active"}
+  ],
+  "obligations": [
+    {"stable_key": "INDIA_DPDP.DPDP-01", "reference_code": "DPDP-01", "obligation_code": "DPDP-01", "title": "Provide clear notice before consent", "description": "Provide plain-language notice of processing purposes, data categories, rights, and grievance channels.", "obligation_type": "documentation", "applicability_notes": "Applies to personal data processing requiring consent.", "section_code": "SEC-4", "jurisdiction": "India", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "INDIA_DPDP.DPDP-02", "reference_code": "DPDP-02", "obligation_code": "DPDP-02", "title": "Obtain valid consent", "description": "Collect free, specific, informed, unconditional, and unambiguous consent where required.", "obligation_type": "control", "applicability_notes": "Maintain auditable consent capture records.", "section_code": "SEC-4", "jurisdiction": "India", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "INDIA_DPDP.DPDP-03", "reference_code": "DPDP-03", "obligation_code": "DPDP-03", "title": "Enable withdrawal of consent", "description": "Provide practical mechanisms for data principals to withdraw consent.", "obligation_type": "process", "applicability_notes": "Withdrawal should be as easy as giving consent.", "section_code": "SEC-4", "jurisdiction": "India", "status": "active", "criticality": "normal", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "INDIA_DPDP.DPDP-04", "reference_code": "DPDP-04", "obligation_code": "DPDP-04", "title": "Support access and summary rights", "description": "Provide data principals access to personal data processing summaries and related information.", "obligation_type": "process", "applicability_notes": "Include response timelines and identity verification.", "section_code": "SEC-11-13", "jurisdiction": "India", "status": "active", "criticality": "normal", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "INDIA_DPDP.DPDP-05", "reference_code": "DPDP-05", "obligation_code": "DPDP-05", "title": "Support correction and erasure rights", "description": "Provide request workflows for correction, completion, updating, and erasure as applicable.", "obligation_type": "process", "applicability_notes": "Coordinate with processors and downstream systems.", "section_code": "SEC-11-13", "jurisdiction": "India", "status": "active", "criticality": "normal", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "INDIA_DPDP.DPDP-06", "reference_code": "DPDP-06", "obligation_code": "DPDP-06", "title": "Operate grievance redress mechanism", "description": "Implement grievance intake, tracking, and resolution channels for data principal complaints.", "obligation_type": "process", "applicability_notes": "Designate response owners and escalation timelines.", "section_code": "SEC-11-13", "jurisdiction": "India", "status": "active", "criticality": "normal", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "INDIA_DPDP.DPDP-07", "reference_code": "DPDP-07", "obligation_code": "DPDP-07", "title": "Implement reasonable security safeguards", "description": "Adopt technical and organizational safeguards to prevent personal data breaches.", "obligation_type": "control", "applicability_notes": "Risk-based controls should be reviewed periodically.", "section_code": "SEC-8", "jurisdiction": "India", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "INDIA_DPDP.DPDP-08", "reference_code": "DPDP-08", "obligation_code": "DPDP-08", "title": "Notify breaches as required", "description": "Notify the Board and affected data principals as required in the event of personal data breaches.", "obligation_type": "process", "applicability_notes": "Define breach classification and notification criteria.", "section_code": "SEC-8", "jurisdiction": "India", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "INDIA_DPDP.DPDP-09", "reference_code": "DPDP-09", "obligation_code": "DPDP-09", "title": "Delete data when purpose is met", "description": "Delete personal data once purpose is fulfilled and retention is no longer required.", "obligation_type": "control", "applicability_notes": "Retention exceptions should be documented.", "section_code": "SEC-8", "jurisdiction": "India", "status": "active", "criticality": "normal", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "INDIA_DPDP.DPDP-10", "reference_code": "DPDP-10", "obligation_code": "DPDP-10", "title": "Apply children’s data protections", "description": "Implement age-related safeguards and parental consent where legally required.", "obligation_type": "control", "applicability_notes": "Applies when services involve children’s personal data.", "section_code": "SEC-9-10", "jurisdiction": "India", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "INDIA_DPDP.DPDP-11", "reference_code": "DPDP-11", "obligation_code": "DPDP-11", "title": "Meet significant data fiduciary duties", "description": "For designated significant data fiduciaries, implement required governance, auditing, and impact assessment duties.", "obligation_type": "assessment", "applicability_notes": "Apply when designation criteria are met by authority.", "section_code": "SEC-9-10", "jurisdiction": "India", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "INDIA_DPDP.DPDP-12", "reference_code": "DPDP-12", "obligation_code": "DPDP-12", "title": "Maintain accountability records", "description": "Maintain records showing compliance with consent, rights handling, safeguards, and grievance management obligations.", "obligation_type": "documentation", "applicability_notes": "Supports regulator inquiry and internal assurance.", "section_code": "SEC-8", "jurisdiction": "India", "status": "active", "criticality": "normal", "coverage_level": "starter", "review_status": "unreviewed"}
+  ],
+  "content_versions": [
+    {"reference_code": "DPDP-01", "version_label": "1.0", "obligation_text": "Provide clear processing notice before collecting consent.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "DPDP-02", "version_label": "1.0", "obligation_text": "Obtain valid consent where required under the Act.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "DPDP-03", "version_label": "1.0", "obligation_text": "Enable simple withdrawal of consent and associated processing updates.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "DPDP-04", "version_label": "1.0", "obligation_text": "Respond to access and processing summary requests.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "DPDP-05", "version_label": "1.0", "obligation_text": "Support correction and erasure request handling.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "DPDP-06", "version_label": "1.0", "obligation_text": "Maintain grievance redress operations for data principals.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "DPDP-07", "version_label": "1.0", "obligation_text": "Implement reasonable security safeguards for personal data.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "DPDP-08", "version_label": "1.0", "obligation_text": "Notify required parties in the event of personal data breaches.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "DPDP-09", "version_label": "1.0", "obligation_text": "Delete personal data when retention is no longer required.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "DPDP-10", "version_label": "1.0", "obligation_text": "Apply children’s data protections and age-related safeguards.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "DPDP-11", "version_label": "1.0", "obligation_text": "Comply with additional duties for significant data fiduciaries.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "DPDP-12", "version_label": "1.0", "obligation_text": "Maintain accountability records evidencing compliance duties.", "coverage_level": "starter", "review_status": "unreviewed"}
+  ],
+  "applicability_questions": [],
+  "evidence_requirements": [],
+  "control_suggestions": []
+}

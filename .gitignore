@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+.env
+.env.local
+.mypy_cache/
+.ruff_cache/
+.idea/
+.vscode/
+.DS_Store
+alembic/versions/*.pyc

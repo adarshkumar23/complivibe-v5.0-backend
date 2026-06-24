@@ -1,0 +1,73 @@
+{
+  "pack_key": "colorado_ai_act_starter",
+  "framework_code": "COLORADO_AI_ACT",
+  "framework_name": "Colorado AI Act",
+  "version_label": "2024",
+  "coverage_level": "starter",
+  "review_status": "unreviewed",
+  "import_type": "starter_pack",
+  "source_name": "local_starter_pack",
+  "source_reference": "colorado_ai_act_starter",
+  "caveat": "This framework content pack is a structured starter representation and does not constitute legal advice or complete regulatory coverage.",
+  "sections": [
+    {
+      "section_code": "PART-1",
+      "title": "Starter Section PART-1",
+      "description": "Starter section metadata for Colorado AI Act",
+      "status": "active"
+    }
+  ],
+  "obligations": [
+    {
+      "stable_key": "COLORADO_AI_ACT.COAI-OBL-1",
+      "reference_code": "COAI-OBL-1",
+      "title": "Starter obligation COAI-OBL-1",
+      "obligation_type": "governance",
+      "jurisdiction": "Colorado, United States",
+      "status": "active",
+      "section_code": "PART-1",
+      "criticality": "normal",
+      "coverage_level": "starter",
+      "review_status": "unreviewed",
+      "caveat": "Starter obligation summary only; not complete legal text."
+    }
+  ],
+  "content_versions": [
+    {
+      "reference_code": "COAI-OBL-1",
+      "version_label": "2024",
+      "obligation_text": "Starter summary for COAI-OBL-1.",
+      "coverage_level": "starter",
+      "review_status": "unreviewed"
+    }
+  ],
+  "applicability_questions": [
+    {
+      "reference_code": "COAI-OBL-1",
+      "question_key": "COAI-OBL-1.applicable",
+      "question_text": "Is COAI-OBL-1 applicable to your organization context?",
+      "answer_type": "boolean",
+      "required": true,
+      "status": "active"
+    }
+  ],
+  "evidence_requirements": [
+    {
+      "reference_code": "COAI-OBL-1",
+      "requirement_key": "COAI-OBL-1.policy",
+      "title": "Policy or procedure evidence",
+      "evidence_type": "policy_document",
+      "required": true,
+      "status": "active"
+    }
+  ],
+  "control_suggestions": [
+    {
+      "reference_code": "COAI-OBL-1",
+      "control_title": "Starter control for COAI-OBL-1",
+      "control_description": "Implement and document control coverage for COAI-OBL-1.",
+      "priority": "high",
+      "status": "active"
+    }
+  ]
+}

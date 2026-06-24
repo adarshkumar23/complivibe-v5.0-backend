@@ -1,0 +1,46 @@
+{
+  "pack_key": "eu_ai_act_starter",
+  "framework_code": "EU_AI_ACT",
+  "framework_name": "EU AI Act",
+  "version_label": "2024",
+  "version": "1.0",
+  "coverage_level": "starter",
+  "review_status": "unreviewed",
+  "import_type": "starter_pack",
+  "source_name": "local_starter_pack",
+  "source_reference": "eu_ai_act_starter",
+  "caveat": "This framework content pack is a structured starter representation and does not constitute legal advice or complete regulatory coverage. This is a starter content pack for scoping purposes only. It does not constitute legal advice or a complete compliance determination.",
+  "sections": [
+    {"section_code": "ART-5", "title": "Prohibited AI Practices", "description": "EU AI Act Article 5", "status": "active"},
+    {"section_code": "ART-9-15", "title": "High-Risk AI Requirements", "description": "EU AI Act Articles 9-15", "status": "active"},
+    {"section_code": "ART-16-29", "title": "Provider and Deployer Duties", "description": "EU AI Act Articles 16-29", "status": "active"},
+    {"section_code": "ART-50", "title": "Transparency Obligations", "description": "EU AI Act Article 50", "status": "active"}
+  ],
+  "obligations": [
+    {"stable_key": "EU_AI_ACT.EUAI-OBL-1", "reference_code": "EUAI-OBL-1", "obligation_code": "EUAI-OBL-1", "title": "Prohibit disallowed AI practices", "description": "Ensure no deployment of prohibited AI practices within the organization’s products or operations.", "obligation_type": "control", "applicability_notes": "Baseline obligation for all EU-in-scope deployments.", "section_code": "ART-5", "jurisdiction": "European Union", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "EU_AI_ACT.EUAI-02", "reference_code": "EUAI-02", "obligation_code": "EUAI-02", "title": "Maintain high-risk AI risk management system", "description": "Implement risk management process for high-risk AI systems across lifecycle phases.", "obligation_type": "process", "applicability_notes": "Applies when system classification is high-risk.", "section_code": "ART-9-15", "jurisdiction": "European Union", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "EU_AI_ACT.EUAI-03", "reference_code": "EUAI-03", "obligation_code": "EUAI-03", "title": "Ensure data governance and quality for high-risk AI", "description": "Establish data governance, relevance, representativeness, and quality controls for training/validation/test data.", "obligation_type": "control", "applicability_notes": "Includes bias and error monitoring considerations.", "section_code": "ART-9-15", "jurisdiction": "European Union", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "EU_AI_ACT.EUAI-04", "reference_code": "EUAI-04", "obligation_code": "EUAI-04", "title": "Prepare technical documentation", "description": "Maintain technical documentation enabling conformity assessment and supervisory review.", "obligation_type": "documentation", "applicability_notes": "Documentation should be current for significant updates.", "section_code": "ART-9-15", "jurisdiction": "European Union", "status": "active", "criticality": "normal", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "EU_AI_ACT.EUAI-05", "reference_code": "EUAI-05", "obligation_code": "EUAI-05", "title": "Implement logging and traceability", "description": "Enable event logging and traceability for high-risk system operation.", "obligation_type": "control", "applicability_notes": "Useful for incident analysis and regulatory response.", "section_code": "ART-9-15", "jurisdiction": "European Union", "status": "active", "criticality": "normal", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "EU_AI_ACT.EUAI-06", "reference_code": "EUAI-06", "obligation_code": "EUAI-06", "title": "Provide human oversight mechanisms", "description": "Design and enforce human oversight controls proportionate to system risk.", "obligation_type": "control", "applicability_notes": "Defines intervention and override requirements.", "section_code": "ART-9-15", "jurisdiction": "European Union", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "EU_AI_ACT.EUAI-07", "reference_code": "EUAI-07", "obligation_code": "EUAI-07", "title": "Meet robustness, accuracy, and cybersecurity targets", "description": "Set and monitor robustness, accuracy, and cybersecurity requirements for high-risk systems.", "obligation_type": "assessment", "applicability_notes": "Metrics and thresholds should be documented and tested.", "section_code": "ART-9-15", "jurisdiction": "European Union", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "EU_AI_ACT.EUAI-08", "reference_code": "EUAI-08", "obligation_code": "EUAI-08", "title": "Complete conformity assessment and registration", "description": "Perform required conformity assessment and system registration before placing on market where applicable.", "obligation_type": "assessment", "applicability_notes": "Check routes and deadlines for CE marking/registration obligations.", "section_code": "ART-16-29", "jurisdiction": "European Union", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "EU_AI_ACT.EUAI-09", "reference_code": "EUAI-09", "obligation_code": "EUAI-09", "title": "Operate post-market monitoring and incident reporting", "description": "Implement post-market monitoring and serious-incident reporting processes.", "obligation_type": "process", "applicability_notes": "Incident triage and escalation criteria should be defined.", "section_code": "ART-16-29", "jurisdiction": "European Union", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "EU_AI_ACT.EUAI-10", "reference_code": "EUAI-10", "obligation_code": "EUAI-10", "title": "Provide user-facing transparency notices", "description": "Where required, inform individuals that they are interacting with AI or exposed to AI-generated/manipulated content.", "obligation_type": "documentation", "applicability_notes": "Applies to applicable transparency use cases under Article 50.", "section_code": "ART-50", "jurisdiction": "European Union", "status": "active", "criticality": "normal", "coverage_level": "starter", "review_status": "unreviewed"}
+  ],
+  "content_versions": [
+    {"reference_code": "EUAI-OBL-1", "version_label": "1.0", "obligation_text": "Do not place or use prohibited AI practices.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "EUAI-02", "version_label": "1.0", "obligation_text": "Operate lifecycle risk management for high-risk AI systems.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "EUAI-03", "version_label": "1.0", "obligation_text": "Implement data governance and quality controls for high-risk AI.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "EUAI-04", "version_label": "1.0", "obligation_text": "Maintain technical documentation for conformity and oversight.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "EUAI-05", "version_label": "1.0", "obligation_text": "Implement logging and traceability for system operation.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "EUAI-06", "version_label": "1.0", "obligation_text": "Provide effective human oversight mechanisms.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "EUAI-07", "version_label": "1.0", "obligation_text": "Meet defined robustness, accuracy, and cybersecurity requirements.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "EUAI-08", "version_label": "1.0", "obligation_text": "Complete required conformity assessment and registrations.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "EUAI-09", "version_label": "1.0", "obligation_text": "Run post-market monitoring and incident reporting workflows.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "EUAI-10", "version_label": "1.0", "obligation_text": "Provide required transparency notices to affected individuals.", "coverage_level": "starter", "review_status": "unreviewed"}
+  ],
+  "applicability_questions": [],
+  "evidence_requirements": [],
+  "control_suggestions": []
+}

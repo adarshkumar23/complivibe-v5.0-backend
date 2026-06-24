@@ -1,0 +1,114 @@
+from fastapi import APIRouter
+
+from app.api.v1 import (
+    ai_governance,
+    ai_systems,
+    compliance_contracts,
+    compliance_dashboard,
+    compliance_policies,
+    compliance_deadlines,
+    common_controls,
+    employee_attestations,
+    policy_templates,
+    policy_exceptions,
+    policy_issue_links,
+    policy_risk_mappings,
+    technical_controls,
+    oscal,
+    compliance_risks,
+    risk_appetite,
+    risk_indicators,
+    risk_scores,
+    risk_settings,
+    control_exceptions,
+    control_monitoring_alerts,
+    control_monitoring,
+    control_monitoring_rules,
+    automation,
+    audit_logs,
+    auth,
+    controls,
+    control_tests,
+    control_recommendations,
+    framework_content,
+    framework_pack_reviews,
+    framework_review_capacity,
+    dashboard,
+    governance,
+    governance_overrides,
+    governance_override_templates,
+    email,
+    evidence,
+    exports,
+    frameworks,
+    health,
+    memberships,
+    obligations,
+    organizations,
+    recertification,
+    reports,
+    risks,
+    roles,
+    scoring,
+    tasks,
+    users,
+    vendors,
+    attestations,
+)
+
+api_router = APIRouter()
+api_router.include_router(ai_governance.router)
+api_router.include_router(ai_systems.router)
+api_router.include_router(automation.router)
+api_router.include_router(health.router)
+api_router.include_router(organizations.router)
+api_router.include_router(auth.router)
+api_router.include_router(users.router)
+api_router.include_router(memberships.router)
+api_router.include_router(roles.router)
+api_router.include_router(audit_logs.router)
+api_router.include_router(frameworks.router)
+api_router.include_router(framework_pack_reviews.router)
+api_router.include_router(framework_pack_reviews.queue_router)
+api_router.include_router(framework_review_capacity.router)
+api_router.include_router(obligations.router)
+api_router.include_router(controls.router)
+api_router.include_router(control_tests.router)
+api_router.include_router(control_recommendations.router)
+api_router.include_router(framework_content.router)
+api_router.include_router(evidence.router)
+api_router.include_router(risks.router)
+api_router.include_router(recertification.router)
+api_router.include_router(reports.router)
+api_router.include_router(tasks.router)
+api_router.include_router(scoring.router)
+api_router.include_router(dashboard.router)
+api_router.include_router(governance.router)
+api_router.include_router(governance_overrides.router)
+api_router.include_router(governance_override_templates.router)
+api_router.include_router(compliance_policies.router)
+api_router.include_router(compliance_contracts.router)
+api_router.include_router(compliance_dashboard.router)
+api_router.include_router(compliance_deadlines.router)
+api_router.include_router(common_controls.router)
+api_router.include_router(employee_attestations.router)
+api_router.include_router(policy_templates.router)
+api_router.include_router(policy_exceptions.router)
+api_router.include_router(policy_issue_links.router)
+api_router.include_router(policy_risk_mappings.router)
+api_router.include_router(technical_controls.router)
+api_router.include_router(technical_controls.ingest_router)
+api_router.include_router(oscal.router)
+api_router.include_router(compliance_risks.router)
+api_router.include_router(risk_appetite.router)
+api_router.include_router(risk_indicators.router)
+api_router.include_router(risk_scores.router)
+api_router.include_router(risk_settings.router)
+api_router.include_router(control_exceptions.router)
+api_router.include_router(control_monitoring_alerts.router)
+api_router.include_router(control_monitoring.router)
+api_router.include_router(control_monitoring_rules.router)
+api_router.include_router(exports.router)
+api_router.include_router(attestations.router)
+api_router.include_router(email.router)
+api_router.include_router(vendors.router)

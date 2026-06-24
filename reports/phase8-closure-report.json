@@ -1,0 +1,51 @@
+{
+  "phase": "8.7",
+  "title": "Phase 8 API Ergonomics Cleanup + Closure Freeze Gate",
+  "date": "2026-06-21",
+  "status": "pass",
+  "endpoint_families": {
+    "phase8_contract": true,
+    "noop_runner_events": true,
+    "observability": true,
+    "diagnostics": true,
+    "compatibility_client": true
+  },
+  "contract_groups": [
+    "governance_noop_runner_events",
+    "governance_noop_runner_observability",
+    "governance_noop_runner_operator_diagnostics",
+    "governance_noop_runner_diagnostics_compatibility",
+    "governance_noop_runner_client_integration",
+    "governance_noop_runner_client_field_docs"
+  ],
+  "version_inventory": {
+    "report_schema_version": "noop_runner_reports.v1",
+    "client_contract_version": "noop_runner_client_contract.v1",
+    "pagination_contract_version": "noop_runner_pagination.v1",
+    "compatibility_policy_version": "noop_runner_compatibility.v1",
+    "field_docs_version": "noop_runner_field_docs.v1",
+    "display_metadata_version": "noop_runner_display_metadata.v1",
+    "localization_map_version": "noop_runner_localization_map.v1",
+    "client_hints_version": "noop_runner_client_hints.v1"
+  },
+  "hard_safety_flags": {
+    "execution_allowed": false,
+    "real_runner_present": false,
+    "job_queue_present": false,
+    "noop_runner_only": true
+  },
+  "compatibility": {
+    "additive_fields_allowed": true,
+    "breaking_changes_require_new_schema_version": true,
+    "bounded_export_backward_compatible": true
+  },
+  "documentation": {
+    "readme_phase80_to_phase87_present": true,
+    "development_log_phase80_to_phase87_present": true
+  },
+  "warnings": [
+    "Existing StarletteDeprecationWarning from test-client stack.",
+    "Existing Python crypt deprecation warning via passlib."
+  ],
+  "final_recommendation": "Freeze Phase 8 as integration-ready no-op diagnostics surface. Start a separate architecture RFC gate before any execution behavior."
+}

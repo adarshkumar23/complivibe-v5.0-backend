@@ -1,0 +1,73 @@
+{
+  "pack_key": "iso_42001_starter",
+  "framework_code": "ISO_42001",
+  "framework_name": "ISO 42001",
+  "version_label": "2023",
+  "coverage_level": "starter",
+  "review_status": "unreviewed",
+  "import_type": "starter_pack",
+  "source_name": "local_starter_pack",
+  "source_reference": "iso_42001_starter",
+  "caveat": "This framework content pack is a structured starter representation and does not constitute legal advice or complete regulatory coverage.",
+  "sections": [
+    {
+      "section_code": "CLAUSE-4",
+      "title": "Starter Section CLAUSE-4",
+      "description": "Starter section metadata for ISO 42001",
+      "status": "active"
+    }
+  ],
+  "obligations": [
+    {
+      "stable_key": "ISO_42001.ISO42001-OBL-1",
+      "reference_code": "ISO42001-OBL-1",
+      "title": "Starter obligation ISO42001-OBL-1",
+      "obligation_type": "governance",
+      "jurisdiction": "International",
+      "status": "active",
+      "section_code": "CLAUSE-4",
+      "criticality": "normal",
+      "coverage_level": "starter",
+      "review_status": "unreviewed",
+      "caveat": "Starter obligation summary only; not complete legal text."
+    }
+  ],
+  "content_versions": [
+    {
+      "reference_code": "ISO42001-OBL-1",
+      "version_label": "2023",
+      "obligation_text": "Starter summary for ISO42001-OBL-1.",
+      "coverage_level": "starter",
+      "review_status": "unreviewed"
+    }
+  ],
+  "applicability_questions": [
+    {
+      "reference_code": "ISO42001-OBL-1",
+      "question_key": "ISO42001-OBL-1.applicable",
+      "question_text": "Is ISO42001-OBL-1 applicable to your organization context?",
+      "answer_type": "boolean",
+      "required": true,
+      "status": "active"
+    }
+  ],
+  "evidence_requirements": [
+    {
+      "reference_code": "ISO42001-OBL-1",
+      "requirement_key": "ISO42001-OBL-1.policy",
+      "title": "Policy or procedure evidence",
+      "evidence_type": "policy_document",
+      "required": true,
+      "status": "active"
+    }
+  ],
+  "control_suggestions": [
+    {
+      "reference_code": "ISO42001-OBL-1",
+      "control_title": "Starter control for ISO42001-OBL-1",
+      "control_description": "Implement and document control coverage for ISO42001-OBL-1.",
+      "priority": "high",
+      "status": "active"
+    }
+  ]
+}
