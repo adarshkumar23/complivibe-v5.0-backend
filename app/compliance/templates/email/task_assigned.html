@@ -1,0 +1,9 @@
+{% extends "base_email.html" %}
+{% block content %}
+<p>A new task has been assigned to you.</p>
+<p><strong>Task:</strong> {{ task_title }}</p>
+<p><strong>Due date:</strong> {{ due_date }}</p>
+<p><strong>Assigned by:</strong> {{ assigned_by }}</p>
+<p><strong>Description:</strong> {{ description }}</p>
+{% if cta_link %}<p><a class="cta-button" href="{{ cta_link }}">Open Task</a></p>{% endif %}
+{% endblock %}

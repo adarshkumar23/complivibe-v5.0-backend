@@ -1,0 +1,10 @@
+{% extends "base_email.html" %}
+{% block content %}
+<p>A data breach notification is due to the supervisory authority.</p>
+<p><strong>Breach type:</strong> {{ breach_type }}</p>
+<p><strong>Supervisory authority:</strong> {{ supervisory_authority }}</p>
+<p><strong>Deadline:</strong> {{ deadline }}</p>
+<p><strong>Hours remaining:</strong>
+  {% if urgent %}<span class="urgent">{{ hours_remaining }}</span>{% else %}{{ hours_remaining }}{% endif %}
+</p>
+{% endblock %}

@@ -30,6 +30,8 @@ class EmailOutbox(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=True,
     )
     event_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    template_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    template_context: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     recipient_email: Mapped[str] = mapped_column(String(320), nullable=False)
     recipient_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,

@@ -1,0 +1,1 @@
+"""AI governance contracts registry."""

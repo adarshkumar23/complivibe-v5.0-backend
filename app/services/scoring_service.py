@@ -1,7 +1,8 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.control import Control
@@ -75,6 +76,46 @@ class ScoringService:
                 by_control[row.control_id] = row
         return by_control
 
+    def _controls_with_open_high_critical_issues(self, organization_id: uuid.UUID) -> int:
+        params = {"organization_id": str(organization_id)}
+
+        queries = [
+            text(
+                """
+                SELECT COUNT(DISTINCT icl.control_id)
+                FROM issue_control_links icl
+                JOIN tasks t ON t.id = icl.issue_id
+                WHERE icl.organization_id = :organization_id
+                  AND icl.deleted_at IS NULL
+                  AND t.organization_id = :organization_id
+                  AND t.status IN ('open', 'in_progress', 'blocked')
+                  AND LOWER(COALESCE(t.priority, '')) IN ('high', 'critical')
+                """
+            ),
+            text(
+                """
+                SELECT COUNT(DISTINCT icl.control_id)
+                FROM issue_control_links icl
+                JOIN issues i ON i.id = icl.issue_id
+                WHERE icl.organization_id = :organization_id
+                  AND icl.deleted_at IS NULL
+                  AND i.organization_id = :organization_id
+                  AND i.status IN ('open', 'in_progress', 'blocked')
+                  AND LOWER(COALESCE(i.severity, '')) IN ('high', 'critical')
+                """
+            ),
+        ]
+
+        for query in queries:
+            try:
+                with self.db.begin_nested():
+                    value = self.db.execute(query, params).scalar_one()
+                return int(value or 0)
+            except SQLAlchemyError:
+                continue
+
+        return 0
+
     def compute_control_health(self, organization_id: uuid.UUID) -> dict:
         active_controls = self._active_controls_count(organization_id)
         implemented_controls = int(
@@ -97,6 +138,7 @@ class ScoringService:
         latest_runs = self._latest_runs_by_control(organization_id)
         controls_with_passing_latest_test = sum(1 for run in latest_runs.values() if run.result == "passed")
         controls_with_failed_latest_test = sum(1 for run in latest_runs.values() if run.result == "failed")
+        controls_with_open_high_critical_issues = self._controls_with_open_high_critical_issues(organization_id)
 
         if active_controls == 0:
             score = 0
@@ -104,7 +146,16 @@ class ScoringService:
             implemented_ratio = implemented_controls / active_controls
             passing_ratio = controls_with_passing_latest_test / active_controls
             needs_review_ratio = controls_needing_review / active_controls
-            score = self._clamp_score((implemented_ratio * 0.55 + passing_ratio * 0.45 - needs_review_ratio * 0.2) * 100)
+            open_high_critical_issue_ratio = controls_with_open_high_critical_issues / active_controls
+            score = self._clamp_score(
+                (
+                    implemented_ratio * 0.55
+                    + passing_ratio * 0.45
+                    - needs_review_ratio * 0.2
+                    - open_high_critical_issue_ratio * 0.3
+                )
+                * 100
+            )
 
         inputs = {
             "active_controls": active_controls,
@@ -112,15 +163,18 @@ class ScoringService:
             "controls_with_passing_latest_test": controls_with_passing_latest_test,
             "controls_with_failed_latest_test": controls_with_failed_latest_test,
             "controls_needing_review": controls_needing_review,
+            "controls_with_open_high_critical_issues": controls_with_open_high_critical_issues,
         }
         breakdown = {
             "implemented_ratio": round((implemented_controls / active_controls) if active_controls else 0, 4),
             "latest_test_pass_ratio": round((controls_with_passing_latest_test / active_controls) if active_controls else 0, 4),
             "needs_review_ratio": round((controls_needing_review / active_controls) if active_controls else 0, 4),
+            "open_high_critical_issue_ratio": round((controls_with_open_high_critical_issues / active_controls) if active_controls else 0, 4),
             "weights": {
                 "implemented_ratio": 0.55,
                 "latest_test_pass_ratio": 0.45,
                 "needs_review_penalty": -0.2,
+                "open_high_critical_issue_penalty": -0.3,
             },
         }
         recommendations = []
@@ -128,6 +182,8 @@ class ScoringService:
             recommendations.append("Review controls with failed latest tests and assign remediation tasks.")
         if controls_needing_review > 0:
             recommendations.append("Resolve controls marked needs_review to improve control health.")
+        if controls_with_open_high_critical_issues > 0:
+            recommendations.append("Resolve open high/critical issues linked to controls to improve control health.")
 
         return {
             "snapshot_type": "control_health",

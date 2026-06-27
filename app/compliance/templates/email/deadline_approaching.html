@@ -1,0 +1,8 @@
+{% extends "base_email.html" %}
+{% block content %}
+<p>A compliance deadline is approaching.</p>
+<p><strong>Deadline:</strong> {{ deadline_title }}</p>
+<p><strong>Due date:</strong> {{ due_date }}</p>
+<p><strong>Framework:</strong> {{ framework_name }}</p>
+<p><strong>Days remaining:</strong> {{ days_remaining }}</p>
+{% endblock %}

@@ -80,6 +80,9 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
 
         roles = SeedService.ensure_roles_for_organization(db, organization.id)
         SeedService.ensure_policy_templates(db)
+        SeedService.ensure_questionnaire_scoring_rules(db)
+        SeedService.ensure_issue_sla_policies(db, organization.id)
+        SeedService.ensure_default_data_access_anomaly_rules(db, organization.id, user.id)
         owner_role = roles["owner"]
 
         membership = Membership(

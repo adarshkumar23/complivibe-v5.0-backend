@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,8 +10,15 @@ from app.models.framework_version import FrameworkVersion
 from app.models.obligation import Obligation
 from app.models.permission import Permission
 from app.models.policy_template import PolicyTemplate
+from app.models.issue_sla_policy import IssueSLAPolicy
+from app.models.questionnaire_scoring_rule import QuestionnaireScoringRule
+from app.models.questionnaire_template import QuestionnaireTemplate
+from app.models.questionnaire_template_question import QuestionnaireTemplateQuestion
+from app.models.questionnaire_template_section import QuestionnaireTemplateSection
+from app.models.eu_act_annex_mapping import EUActAnnexMapping
 from app.models.role import Role
 from app.models.role_permission import RolePermission
+from app.models.data_access_anomaly_rule import DataAccessAnomalyRule
 
 PERMISSIONS: dict[str, str] = {
     "org:read": "Read organization details",
@@ -66,6 +73,8 @@ PERMISSIONS: dict[str, str] = {
     "policy_risks:view": "Read policy-to-risk mappings and coverage summaries",
     "policy_issues:manage": "Create, update, and delete policy-to-issue links",
     "policy_issues:view": "Read policy-to-issue links and effectiveness summaries",
+    "audit:read": "Read audit engagements and PBC evidence request lists",
+    "audit:write": "Create and manage audit engagements and PBC evidence request lists",
     "governance_override:read": "Read governance override requests",
     "governance_override:create": "Create governance override requests",
     "governance_override:approve": "Approve or reject governance override requests",
@@ -86,6 +95,8 @@ PERMISSIONS: dict[str, str] = {
     "vendors:read": "Read vendor and third-party inventory",
     "vendors:write": "Create and update vendor inventory records",
     "vendors:admin": "Archive and administer vendor inventory records",
+    "vendor:read": "Read vendor questionnaire templates, responses, and scoring rules",
+    "vendor:write": "Create and manage vendor questionnaire templates, responses, and scoring rules",
     "monitoring:read": "Read control monitoring definitions and results",
     "monitoring:write": "Create and manage control monitoring definitions and results",
     "compliance_deadlines:read": "Read compliance deadlines and calendar events",
@@ -94,6 +105,25 @@ PERMISSIONS: dict[str, str] = {
     "risk_appetite:write": "Create and manage risk appetite thresholds",
     "risk_indicators:read": "Read key risk indicators",
     "risk_indicators:write": "Create and manage key risk indicators",
+    "issues:read": "Read formal issue log records and dashboards",
+    "issues:write": "Create and manage formal issue log records",
+    "issues:admin": "Manage organization-level issue module settings",
+    "escalations:read": "Read escalation policies and escalation events",
+    "escalations:write": "Create and manage escalation policies",
+    "ai_governance:read": "Read AI governance dashboard summary",
+    "ai_governance:write": "Create and update AI governance reviews and classifications",
+    "ai_governance:approve": "Approve or reject AI governance reviews and conditional approvals",
+    "integrations:read": "Read MLOps integrations and sync logs",
+    "integrations:write": "Create and manage MLOps integrations and sync operations",
+    "data:read": "Read data observability assets and classification summaries",
+    "data:write": "Create and manage data observability assets and classifications",
+    "privacy:read": "Read privacy processing activities and Article 30 RoPA reports",
+    "privacy:write": "Create and manage privacy processing activities and RoPA links",
+    "privacy:approve": "Approve and reject privacy governance workflows such as DPIAs",
+    "scheduler:admin": "Read scheduler jobs and execution run logs",
+    "drafts:use": "Create, review, and apply AI-assisted drafting outputs",
+    "webhooks:read": "Read outbound webhook endpoints and delivery history",
+    "webhooks:write": "Create and manage outbound webhook endpoints and test emissions",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {
@@ -143,6 +173,8 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "policy_risks:view",
         "policy_issues:manage",
         "policy_issues:view",
+        "audit:read",
+        "audit:write",
         "governance_override:read",
         "governance_override:create",
         "governance_override:approve",
@@ -163,12 +195,29 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "vendors:read",
         "vendors:write",
         "vendors:admin",
+        "vendor:read",
+        "vendor:write",
         "monitoring:read",
         "monitoring:write",
         "compliance_deadlines:read",
         "compliance_deadlines:write",
         "risk_appetite:read",
         "risk_indicators:read",
+        "issues:read",
+        "issues:write",
+        "escalations:read",
+        "escalations:write",
+        "ai_governance:read",
+        "ai_governance:write",
+        "integrations:read",
+        "integrations:write",
+        "data:read",
+        "data:write",
+        "privacy:read",
+        "privacy:write",
+        "drafts:use",
+        "webhooks:read",
+        "webhooks:write",
         "technical_controls:manage",
         "technical_controls:view",
     },
@@ -199,6 +248,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "policy_exceptions:view",
         "policy_risks:view",
         "policy_issues:view",
+        "audit:read",
         "governance_override:read",
         "governance_override:approve",
         "governance_override_template:read",
@@ -207,10 +257,17 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "ai_systems:read",
         "compliance_policies:read",
         "vendors:read",
+        "vendor:read",
         "monitoring:read",
         "compliance_deadlines:read",
         "risk_appetite:read",
         "risk_indicators:read",
+        "issues:read",
+        "escalations:read",
+        "ai_governance:read",
+        "integrations:read",
+        "data:read",
+        "privacy:read",
         "technical_controls:manage",
         "technical_controls:view",
     },
@@ -235,16 +292,23 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "policy_exceptions:view",
         "policy_risks:view",
         "policy_issues:view",
+        "audit:read",
         "governance_override:read",
         "governance_override_template:read",
         "framework_review_capacity:read",
         "ai_systems:read",
         "compliance_policies:read",
         "vendors:read",
+        "vendor:read",
         "monitoring:read",
         "compliance_deadlines:read",
         "risk_appetite:read",
         "risk_indicators:read",
+        "escalations:read",
+        "ai_governance:read",
+        "integrations:read",
+        "data:read",
+        "privacy:read",
         "technical_controls:view",
     },
     "readonly": {
@@ -263,16 +327,23 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "policy_exceptions:view",
         "policy_risks:view",
         "policy_issues:view",
+        "audit:read",
         "governance_override:read",
         "governance_override_template:read",
         "framework_review_capacity:read",
         "ai_systems:read",
         "compliance_policies:read",
         "vendors:read",
+        "vendor:read",
         "monitoring:read",
         "compliance_deadlines:read",
         "risk_appetite:read",
         "risk_indicators:read",
+        "issues:read",
+        "escalations:read",
+        "integrations:read",
+        "data:read",
+        "privacy:read",
         "technical_controls:view",
     },
 }
@@ -316,6 +387,49 @@ PILLAR1_AUDIT_ACTION_REGISTRY: dict[str, tuple[str, ...]] = {
         "vendor.control_linked",
         "vendor.control_unlinked",
     ),
+    "vendor_questionnaires": (
+        "questionnaire_template.created",
+        "questionnaire_template.cloned",
+        "questionnaire_template.deleted",
+        "questionnaire_response.created",
+        "questionnaire_response.answer_submitted",
+        "questionnaire_response.bulk_answers_submitted",
+        "questionnaire_response.status_transitioned",
+        "questionnaire_response.score_computed",
+        "scoring_rule.created",
+        "scoring_rule.updated",
+        "scoring_rule.deactivated",
+    ),
+    "inbound_questionnaires": (
+        "inbound_questionnaire.session_created",
+        "inbound_questionnaire.item_added",
+        "inbound_questionnaire.items_bulk_added",
+        "inbound_questionnaire.item_drafted",
+        "inbound_questionnaire.all_drafted",
+        "inbound_questionnaire.item_approved",
+        "inbound_questionnaire.item_edited",
+        "inbound_questionnaire.item_rejected",
+        "inbound_questionnaire.item_sent",
+        "inbound_questionnaire.session_completed",
+    ),
+    "subprocessors": (
+        "subprocessor.created",
+        "subprocessor.updated",
+        "subprocessor.dpa_status_updated",
+        "subprocessor.reviewed",
+        "subprocessor.deleted",
+        "subprocessor.transfer_added",
+        "subprocessor.dpa_expiry_swept",
+    ),
+    "customer_commitments": (
+        "customer_commitment.created",
+        "customer_commitment.updated",
+        "customer_commitment.triggered",
+        "customer_commitment.fulfilled",
+        "customer_commitment.waived",
+        "customer_commitment.deleted",
+        "customer_commitment.sweep_processed",
+    ),
     "risk_indicators": (
         "risk_indicator.created",
         "risk_indicator.updated",
@@ -346,6 +460,52 @@ PILLAR1_AUDIT_ACTION_REGISTRY: dict[str, tuple[str, ...]] = {
         "control_monitoring_alert.resolved",
         "control_monitoring_alert.dismissed",
         "control_monitoring_alert.assigned",
+    ),
+    "issues": (
+        "issue.created",
+        "issue.updated",
+        "issue.assigned",
+        "issue.transitioned",
+        "issue.promoted_from_alert",
+        "issue.promoted_from_finding",
+        "issue.deleted",
+        "issue_settings.updated",
+        "rca.created",
+        "rca.updated",
+        "rca.reviewed",
+        "sla_policy.updated",
+        "sla.response_breached",
+        "sla.resolution_breached",
+    ),
+    "escalations": (
+        "escalation_policy.created",
+        "escalation_policy.updated",
+        "escalation_policy.deactivated",
+        "escalation.fired",
+    ),
+    "breach_notifications": (
+        "breach_notification.created",
+        "breach_notification.regulator_notified",
+        "breach_notification.subjects_notified",
+        "breach_notification.closed",
+        "breach_notification.deadline_warned",
+    ),
+    "webhooks": (
+        "webhook_endpoint.created",
+        "webhook_endpoint.updated",
+        "webhook_endpoint.deactivated",
+        "webhook_endpoint.deleted",
+        "webhook.emitted",
+    ),
+    "offboarding": (
+        "offboarding.validated",
+        "offboarding.executed",
+        "offboarding.risks_reassigned",
+        "offboarding.controls_reassigned",
+        "offboarding.tasks_reassigned",
+        "offboarding.policies_reassigned",
+        "offboarding.vendors_reassigned",
+        "offboarding.audit_engagements_reassigned",
     ),
     "control_exceptions": (
         "control_exception.created",
@@ -413,6 +573,49 @@ PILLAR1_AUDIT_ACTION_REGISTRY: dict[str, tuple[str, ...]] = {
         "compliance_deadline.waived",
         "compliance_deadline.cancelled",
         "compliance_deadline.evaluated",
+    ),
+    "audit_engagements": (
+        "audit_engagement.created",
+        "audit_engagement.updated",
+        "audit_engagement.status_transitioned",
+        "audit_engagement.deleted",
+    ),
+    "pbc_items": (
+        "pbc_item.created",
+        "pbc_item.submitted",
+        "pbc_item.accepted",
+        "pbc_item.rejected",
+        "pbc_item.overdue_marked",
+        "pbc_item.deleted",
+    ),
+    "auditor_portal": (
+        "auditor_portal.invitation_created",
+        "auditor_portal.invitation_revoked",
+        "auditor_portal.access",
+    ),
+    "audit_findings": (
+        "audit_finding.created",
+        "audit_finding.updated",
+        "audit_finding.status_transitioned",
+        "audit_finding.risk_linked",
+        "audit_finding.bulk_transitioned",
+        "audit_finding.deleted",
+    ),
+    "audit_schedules": (
+        "audit_schedule.created",
+        "audit_schedule.updated",
+        "audit_schedule.status_changed",
+        "audit_schedule.engagement_linked",
+        "audit_schedule.reminder_processed",
+    ),
+    "evidence_packages": (
+        "evidence_package.created",
+        "evidence_package.item_added",
+        "evidence_package.item_removed",
+        "evidence_package.assembled",
+        "evidence_package.exported",
+        "evidence_package.archived",
+        "evidence_package.deleted",
     ),
 }
 
@@ -525,7 +728,7 @@ FRAMEWORK_SEEDS: list[dict] = [
         "authority": "ISO/IEC",
         "version": "2023",
         "status": "active",
-        "coverage_level": "metadata_only",
+        "coverage_level": "starter",
         "source_url": None,
         "effective_date": None,
     },
@@ -581,6 +784,122 @@ FRAMEWORK_VERSION_SEEDS: list[dict] = [
     {"framework_code": "GDPR", "version_label": "2018", "status": "active", "coverage_level": "starter"},
 ]
 
+DATA_ACCESS_DEFAULT_RULES: list[dict] = [
+    {
+        "rule_type": "access_count_spike",
+        "rule_config": {"count": 100, "window_minutes": 10},
+    },
+    {
+        "rule_type": "after_hours_access",
+        "rule_config": {"business_start": "09:00", "business_end": "18:00", "timezone": "UTC"},
+    },
+    {
+        "rule_type": "mass_download",
+        "rule_config": {"bytes": 5368709120},
+    },
+    {
+        "rule_type": "failed_access_spike",
+        "rule_config": {"count": 20, "window_minutes": 5},
+    },
+]
+
+ISO42001_OBLIGATIONS: list[tuple[str, str]] = [
+    ("4.1", "Understanding the organization and its context for AI"),
+    ("4.2", "Understanding the needs and expectations of interested parties for AI"),
+    ("4.3", "Determining the scope of the AI management system"),
+    ("4.4", "AI management system establishment and maintenance"),
+    ("5.1", "Leadership commitment to AI management system"),
+    ("5.2", "AI policy establishment and communication"),
+    ("5.3", "Organizational roles, responsibilities and authorities for AI"),
+    ("6.1", "Actions to address risks and opportunities in AI"),
+    ("6.1.2", "AI impact assessment process"),
+    ("6.2", "AI objectives and planning to achieve them"),
+    ("7.1", "Resources for AI management system"),
+    ("7.2", "AI-specific competence requirements"),
+    ("7.3", "Awareness of AI policies and objectives"),
+    ("7.4", "Communication regarding AI management"),
+    ("7.5", "Documented information management for AI"),
+    ("8.1", "Operational planning and control for AI systems"),
+    ("8.2", "AI risk assessment process"),
+    ("8.3", "AI risk treatment process"),
+    ("8.4", "AI system impact assessment"),
+    ("8.5", "Data management for AI systems"),
+    ("8.6", "Responsible AI development practices"),
+    ("8.7", "AI system verification and validation"),
+    ("8.8", "AI system documentation"),
+    ("8.9", "AI system deployment controls"),
+    ("9.1", "Monitoring, measurement, analysis and evaluation of AI"),
+    ("9.2", "Internal audit of AI management system"),
+    ("9.3", "Management review of AI management system"),
+    ("10.1", "Continual improvement of AI management system"),
+    ("10.2", "Nonconformity and corrective action for AI"),
+    ("10.3", "Innovation and learning in AI management"),
+]
+
+NIST_AI_RMF_SUBCATEGORIES: dict[str, list[tuple[str, str]]] = {
+    "GOVERN": [
+        ("GOVERN-1.1", "Policies, processes, procedures, and practices for AI risk management"),
+        ("GOVERN-1.2", "AI risk tolerance and appetite"),
+        ("GOVERN-1.3", "Organizational roles and responsibilities for AI risk"),
+        ("GOVERN-1.4", "AI risk management integration into enterprise risk"),
+        ("GOVERN-1.5", "Processes for ongoing AI risk identification and management"),
+        ("GOVERN-1.6", "Organizational teams are committed to AI risk management"),
+        ("GOVERN-1.7", "AI risk processes across the AI lifecycle"),
+        ("GOVERN-2.1", "Scientific knowledge about AI risk and impacts"),
+        ("GOVERN-2.2", "AI risk accountability and organizational practices"),
+        ("GOVERN-4.1", "Organizational teams understand their roles in AI risk"),
+        ("GOVERN-4.2", "Risk awareness and information sharing practices"),
+        ("GOVERN-5.1", "Policies for engagement with AI community"),
+        ("GOVERN-5.2", "Mechanisms to incorporate affected groups' feedback"),
+        ("GOVERN-6.1", "Policies for AI risk in supply chain"),
+        ("GOVERN-6.2", "AI risk tracking in procurement and partnerships"),
+    ],
+    "MAP": [
+        ("MAP-1.1", "Intended purpose and context documented"),
+        ("MAP-1.2", "AI classification applicable to use case"),
+        ("MAP-1.3", "Scientific findings on AI risks"),
+        ("MAP-1.4", "Risks and benefits to stakeholders"),
+        ("MAP-1.5", "Organizational risk tolerance applied"),
+        ("MAP-1.6", "Practices for involving affected groups"),
+        ("MAP-2.1", "Scientific disciplines relevant to the AI system"),
+        ("MAP-2.2", "Scientific output and basis for decisions"),
+        ("MAP-2.3", "AI system benefits and limitations documented"),
+        ("MAP-3.1", "AI context established and documented"),
+        ("MAP-3.2", "AI benefits and limitations communicated"),
+        ("MAP-3.5", "Risks to affected groups identified"),
+        ("MAP-5.1", "Likelihood and magnitude of AI risks identified"),
+        ("MAP-5.2", "Practices for risk prioritization"),
+    ],
+    "MEASURE": [
+        ("MEASURE-1.1", "AI risk measurement methods identified"),
+        ("MEASURE-1.3", "Internal AI risk experts and methods"),
+        ("MEASURE-2.1", "Test sets developed for evaluating AI risks"),
+        ("MEASURE-2.2", "AI system metrics established"),
+        ("MEASURE-2.3", "AI system testing and evaluation documented"),
+        ("MEASURE-2.5", "AI system performance evaluated"),
+        ("MEASURE-2.6", "Evaluations are documented and interpretable"),
+        ("MEASURE-2.7", "AI system security and resilience tested"),
+        ("MEASURE-2.8", "Fairness and bias evaluations performed"),
+        ("MEASURE-2.9", "Privacy risks evaluated"),
+        ("MEASURE-2.10", "AI system privacy tested"),
+        ("MEASURE-2.11", "Fairness and bias evaluation documented"),
+        ("MEASURE-3.1", "Risk tracking mechanisms established"),
+        ("MEASURE-3.3", "Feedback mechanisms established"),
+    ],
+    "MANAGE": [
+        ("MANAGE-1.1", "Risks managed and prioritized"),
+        ("MANAGE-1.2", "Treatment plans developed for high risks"),
+        ("MANAGE-1.3", "Responses to identified AI risks"),
+        ("MANAGE-2.1", "Resources allocated for AI risk management"),
+        ("MANAGE-2.2", "AI risk treatment plans maintained"),
+        ("MANAGE-2.4", "Mechanisms for timely response to AI risks"),
+        ("MANAGE-3.1", "AI incident response plans established"),
+        ("MANAGE-3.2", "Affected parties informed of incidents"),
+        ("MANAGE-4.1", "Post-deployment AI risks monitored"),
+        ("MANAGE-4.2", "Feedback mechanisms for post-deployment"),
+    ],
+}
+
 OBLIGATION_SEEDS: list[dict] = [
     {
         "framework_code": "NIST_AI_RMF",
@@ -596,6 +915,41 @@ OBLIGATION_SEEDS: list[dict] = [
         "effective_date": None,
         "parent_obligation_id": None,
     },
+    *[
+        {
+            "framework_code": "ISO_42001",
+            "reference_code": reference_code,
+            "title": title,
+            "description": title,
+            "plain_language_summary": title,
+            "obligation_type": "governance",
+            "jurisdiction": "International",
+            "source_url": None,
+            "version": "2023",
+            "status": "active",
+            "effective_date": None,
+            "parent_obligation_id": None,
+        }
+        for reference_code, title in ISO42001_OBLIGATIONS
+    ],
+    *[
+        {
+            "framework_code": "NIST_AI_RMF",
+            "reference_code": reference_code,
+            "title": title,
+            "description": title,
+            "plain_language_summary": title,
+            "obligation_type": function_name.lower(),
+            "jurisdiction": "United States",
+            "source_url": None,
+            "version": "1.0",
+            "status": "active",
+            "effective_date": None,
+            "parent_obligation_id": None,
+        }
+        for function_name, subcategories in NIST_AI_RMF_SUBCATEGORIES.items()
+        for reference_code, title in subcategories
+    ],
     {
         "framework_code": "GDPR",
         "reference_code": "GDPR-ART5",
@@ -881,8 +1235,545 @@ POLICY_TEMPLATE_SEEDS: list[dict] = [
     },
 ]
 
+QUESTIONNAIRE_TEMPLATE_SEEDS: list[dict] = [
+    {
+        "template_type": "sig_lite",
+        "name": "SIG Lite",
+        "version": "2023",
+        "description": "Standardized Information Gathering Lite questionnaire for vendor security assessments.",
+        "sections": [
+            {
+                "title": "Risk Management",
+                "order_index": 0,
+                "questions": [
+                    {
+                        "question_text": "Does the organization have a formally documented risk management program?",
+                        "question_type": "yes_no",
+                        "category_tag": "risk_management",
+                        "framework_ref": "SOC2 CC3.1",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Is a formal risk assessment conducted at least annually or when significant changes occur?",
+                        "question_type": "yes_no",
+                        "category_tag": "risk_assessment",
+                        "framework_ref": "ISO27001 A.8.2",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Security Policy",
+                "order_index": 1,
+                "questions": [
+                    {
+                        "question_text": "Is there a documented and board-approved information security policy?",
+                        "question_type": "yes_no",
+                        "category_tag": "security_policy",
+                        "framework_ref": "ISO27001 A.5.1",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Is the security policy reviewed and updated at least annually?",
+                        "question_type": "yes_no",
+                        "category_tag": "security_policy_review",
+                        "framework_ref": "SOC2 CC2.2",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Access Control",
+                "order_index": 2,
+                "questions": [
+                    {
+                        "question_text": "Is multi-factor authentication (MFA) enforced for all privileged and remote access?",
+                        "question_type": "yes_no",
+                        "category_tag": "access_control_mfa",
+                        "framework_ref": "SOC2 CC6.1",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Is access reviewed and recertified at least semi-annually?",
+                        "question_type": "yes_no",
+                        "category_tag": "access_review",
+                        "framework_ref": "ISO27001 A.9.2.5",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Is role-based access control (RBAC) implemented across all critical systems?",
+                        "question_type": "yes_no",
+                        "category_tag": "rbac",
+                        "framework_ref": "SOC2 CC6.3",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Vulnerability Management",
+                "order_index": 3,
+                "questions": [
+                    {
+                        "question_text": "Is automated vulnerability scanning conducted at least monthly on all production systems?",
+                        "question_type": "yes_no",
+                        "category_tag": "vulnerability_management",
+                        "framework_ref": "SOC2 CC7.1",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Is penetration testing conducted at least annually by an independent third party?",
+                        "question_type": "yes_no",
+                        "category_tag": "penetration_testing",
+                        "framework_ref": "SOC2 CC4.1",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Are critical security patches applied within 30 days of release?",
+                        "question_type": "yes_no",
+                        "category_tag": "patch_management",
+                        "framework_ref": "ISO27001 A.12.6.1",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Data Protection",
+                "order_index": 4,
+                "questions": [
+                    {
+                        "question_text": "Is sensitive and customer data encrypted at rest using AES-256 or equivalent?",
+                        "question_type": "yes_no",
+                        "category_tag": "encryption_at_rest",
+                        "framework_ref": "SOC2 CC6.7",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Is data in transit protected using TLS 1.2 or higher?",
+                        "question_type": "yes_no",
+                        "category_tag": "encryption_in_transit",
+                        "framework_ref": "SOC2 CC6.7",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Is there a formal data retention and disposal policy?",
+                        "question_type": "yes_no",
+                        "category_tag": "data_retention",
+                        "framework_ref": "ISO27001 A.8.3",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Incident Management",
+                "order_index": 5,
+                "questions": [
+                    {
+                        "question_text": "Is there a documented and tested incident response plan?",
+                        "question_type": "yes_no",
+                        "category_tag": "incident_response",
+                        "framework_ref": "SOC2 CC7.3",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Can security incidents affecting customer data be notified within 72 hours?",
+                        "question_type": "yes_no",
+                        "category_tag": "breach_notification",
+                        "framework_ref": "GDPR Art. 33",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Business Continuity",
+                "order_index": 6,
+                "questions": [
+                    {
+                        "question_text": "Is there a documented business continuity plan (BCP) tested at least annually?",
+                        "question_type": "yes_no",
+                        "category_tag": "business_continuity",
+                        "framework_ref": "ISO27001 A.17.1",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Are defined Recovery Time Objectives (RTOs) and Recovery Point Objectives (RPOs) documented?",
+                        "question_type": "yes_no",
+                        "category_tag": "rto_rpo",
+                        "framework_ref": "SOC2 A1.2",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Network Security",
+                "order_index": 7,
+                "questions": [
+                    {
+                        "question_text": "Is network segmentation implemented to isolate sensitive and production systems?",
+                        "question_type": "yes_no",
+                        "category_tag": "network_segmentation",
+                        "framework_ref": "SOC2 CC6.6",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Privacy",
+                "order_index": 8,
+                "questions": [
+                    {
+                        "question_text": "Is there a formal privacy policy covering data subject rights and GDPR obligations?",
+                        "question_type": "yes_no",
+                        "category_tag": "privacy_policy",
+                        "framework_ref": "GDPR Art. 13",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Is a Data Protection Officer (DPO) or privacy lead designated for privacy program oversight?",
+                        "question_type": "yes_no",
+                        "category_tag": "privacy_governance",
+                        "framework_ref": "GDPR Art. 37",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+        ],
+    },
+    {
+        "template_type": "caiq",
+        "name": "CAIQ v4",
+        "version": "4.0",
+        "description": "Cloud Security Alliance Consensus Assessment Initiative Questionnaire for cloud vendor risk assessment.",
+        "sections": [
+            {
+                "title": "Governance, Risk & Compliance",
+                "order_index": 0,
+                "questions": [
+                    {
+                        "question_text": "Do you have a documented information security management system (ISMS)?",
+                        "question_type": "yes_no",
+                        "category_tag": "information_security_program",
+                        "framework_ref": "ISO27001 A.5.1",
+                        "help_text": "CAIQ GRC-01",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Do you perform formal risk assessments that include cloud-specific risks at least annually?",
+                        "question_type": "yes_no",
+                        "category_tag": "risk_assessment",
+                        "framework_ref": "ISO27001 A.8.2",
+                        "help_text": "CAIQ GRC-06",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Identity & Access Management",
+                "order_index": 1,
+                "questions": [
+                    {
+                        "question_text": "Do you enforce MFA for all user and administrative access to cloud services?",
+                        "question_type": "yes_no",
+                        "category_tag": "access_control_mfa",
+                        "framework_ref": "SOC2 CC6.1",
+                        "help_text": "CAIQ IAM-02",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Do you implement least privilege and RBAC for all cloud resources and APIs?",
+                        "question_type": "yes_no",
+                        "category_tag": "rbac",
+                        "framework_ref": "SOC2 CC6.3",
+                        "help_text": "CAIQ IAM-04",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Data Security & Privacy",
+                "order_index": 2,
+                "questions": [
+                    {
+                        "question_text": "Do you encrypt all customer data at rest within cloud storage services?",
+                        "question_type": "yes_no",
+                        "category_tag": "encryption_at_rest",
+                        "framework_ref": "SOC2 CC6.7",
+                        "help_text": "CAIQ DSP-01",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Do you have a formal data classification and handling policy?",
+                        "question_type": "yes_no",
+                        "category_tag": "data_classification",
+                        "framework_ref": "ISO27001 A.8.2",
+                        "help_text": "CAIQ DSP-07",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Are data processing agreements (DPAs) in place with all subprocessors?",
+                        "question_type": "yes_no",
+                        "category_tag": "subprocessor_dpa",
+                        "framework_ref": "GDPR Art. 28",
+                        "help_text": "CAIQ DSP-17",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Cryptography & Key Management",
+                "order_index": 3,
+                "questions": [
+                    {
+                        "question_text": "Do you use AES-256 or equivalent approved encryption algorithms for all data protection?",
+                        "question_type": "yes_no",
+                        "category_tag": "encryption_algorithms",
+                        "framework_ref": "NIST SP 800-57",
+                        "help_text": "CAIQ CEK-01",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Are cryptographic keys rotated at least annually or upon suspected compromise?",
+                        "question_type": "yes_no",
+                        "category_tag": "key_management",
+                        "framework_ref": "SOC2 CC6.7",
+                        "help_text": "CAIQ CEK-03",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Logging & Monitoring",
+                "order_index": 4,
+                "questions": [
+                    {
+                        "question_text": "Do you maintain comprehensive audit logs for all privileged user actions?",
+                        "question_type": "yes_no",
+                        "category_tag": "audit_logging",
+                        "framework_ref": "SOC2 CC7.2",
+                        "help_text": "CAIQ LOG-01",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Are security logs retained for a minimum of 12 months?",
+                        "question_type": "yes_no",
+                        "category_tag": "log_retention",
+                        "framework_ref": "ISO27001 A.12.4.1",
+                        "help_text": "CAIQ LOG-05",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Human Resources Security",
+                "order_index": 5,
+                "questions": [
+                    {
+                        "question_text": "Do you conduct background verification checks on all employees with access to customer data?",
+                        "question_type": "yes_no",
+                        "category_tag": "background_checks",
+                        "framework_ref": "ISO27001 A.7.1",
+                        "help_text": "CAIQ HRS-01",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Is annual security awareness training mandatory for all personnel?",
+                        "question_type": "yes_no",
+                        "category_tag": "security_training",
+                        "framework_ref": "ISO27001 A.7.2.2",
+                        "help_text": "CAIQ HRS-04",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Threat & Vulnerability Management",
+                "order_index": 6,
+                "questions": [
+                    {
+                        "question_text": "Do you conduct automated vulnerability scanning at least monthly?",
+                        "question_type": "yes_no",
+                        "category_tag": "vulnerability_management",
+                        "framework_ref": "SOC2 CC7.1",
+                        "help_text": "CAIQ TVM-01",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Do you conduct annual penetration testing by a qualified independent third party?",
+                        "question_type": "yes_no",
+                        "category_tag": "penetration_testing",
+                        "framework_ref": "SOC2 CC4.1",
+                        "help_text": "CAIQ TVM-07",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Application Security",
+                "order_index": 7,
+                "questions": [
+                    {
+                        "question_text": "Do you perform automated static code analysis (SAST) on all production code releases?",
+                        "question_type": "yes_no",
+                        "category_tag": "code_review",
+                        "framework_ref": "SOC2 CC8.1",
+                        "help_text": "CAIQ AIS-01",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Do you apply OWASP Top 10 mitigations in your software development process?",
+                        "question_type": "yes_no",
+                        "category_tag": "owasp",
+                        "framework_ref": "ISO27001 A.14.2.1",
+                        "help_text": "CAIQ AIS-04",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Business Continuity",
+                "order_index": 8,
+                "questions": [
+                    {
+                        "question_text": "Is a documented and tested BCP in place covering cloud service disruption scenarios?",
+                        "question_type": "yes_no",
+                        "category_tag": "business_continuity",
+                        "framework_ref": "ISO27001 A.17.1",
+                        "help_text": "CAIQ BCR-01",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Are RTOs and RPOs defined and tested for all critical cloud services?",
+                        "question_type": "yes_no",
+                        "category_tag": "rto_rpo",
+                        "framework_ref": "SOC2 A1.2",
+                        "help_text": "CAIQ BCR-09",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Incident Management",
+                "order_index": 9,
+                "questions": [
+                    {
+                        "question_text": "Can you notify affected customers of security incidents within 72 hours?",
+                        "question_type": "yes_no",
+                        "category_tag": "breach_notification",
+                        "framework_ref": "GDPR Art. 33",
+                        "help_text": "CAIQ SEF-05",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+        ],
+    },
+]
+
+QUESTIONNAIRE_HIGH_IMPACT_RULES: dict[str, dict[str, str | int]] = {
+    "penetration_testing": {
+        "score_delta": 20,
+        "rule_name": "Missing annual pen test",
+        "rationale": "Lack of annual penetration testing leaves undetected vulnerabilities unaddressed.",
+    },
+    "encryption_at_rest": {
+        "score_delta": 25,
+        "rule_name": "No encryption at rest",
+        "rationale": "Customer data unencrypted at rest represents a critical data exposure risk.",
+    },
+    "access_control_mfa": {
+        "score_delta": 20,
+        "rule_name": "No MFA enforced",
+        "rationale": "Absence of MFA significantly increases risk of unauthorized account access.",
+    },
+    "incident_response": {
+        "score_delta": 15,
+        "rule_name": "No incident response plan",
+        "rationale": "Absence of an IRP increases dwell time and breach impact.",
+    },
+    "breach_notification": {
+        "score_delta": 20,
+        "rule_name": "Cannot notify within 72hrs",
+        "rationale": "Failure to notify within 72 hours violates GDPR Article 33.",
+    },
+    "information_security_program": {
+        "score_delta": 15,
+        "rule_name": "No security program",
+        "rationale": "Lack of a formal security program weakens governance and control oversight.",
+    },
+    "security_policy": {
+        "score_delta": 15,
+        "rule_name": "No security program",
+        "rationale": "Lack of a formal security program weakens governance and control oversight.",
+    },
+}
+
+ANNEX_III_SECTORS: list[dict[str, object]] = [
+    {
+        "ref": "III.1",
+        "type": "annex_iii",
+        "sector": "Biometric identification and categorisation",
+        "description": "AI systems intended for biometric identification or categorisation of natural persons, including facial recognition.",
+        "articles": ["Art. 6", "Art. 10", "Art. 13"],
+    },
+    {
+        "ref": "III.2",
+        "type": "annex_iii",
+        "sector": "Critical infrastructure management",
+        "description": "AI systems as safety components in management and operation of critical infrastructure (road traffic, water, gas, heating, electricity).",
+        "articles": ["Art. 6", "Art. 9"],
+    },
+    {
+        "ref": "III.3",
+        "type": "annex_iii",
+        "sector": "Education and vocational training",
+        "description": "AI systems determining access to educational institutions, evaluating learning outcomes, monitoring student behaviour.",
+        "articles": ["Art. 6", "Art. 13", "Art. 14"],
+    },
+    {
+        "ref": "III.4",
+        "type": "annex_iii",
+        "sector": "Employment and workers management",
+        "description": "AI systems for recruitment, promotion, termination, task allocation and monitoring of employees.",
+        "articles": ["Art. 6", "Art. 9", "Art. 14"],
+    },
+    {
+        "ref": "III.5",
+        "type": "annex_iii",
+        "sector": "Access to essential services",
+        "description": "AI systems evaluating eligibility for essential public services including healthcare, housing, creditworthiness.",
+        "articles": ["Art. 6", "Art. 13", "Art. 14"],
+    },
+    {
+        "ref": "III.6",
+        "type": "annex_iii",
+        "sector": "Law enforcement",
+        "description": "AI systems for risk assessment, polygraphs, evaluation of evidence reliability, crime prediction, profiling.",
+        "articles": ["Art. 6", "Art. 10"],
+    },
+    {
+        "ref": "III.7",
+        "type": "annex_iii",
+        "sector": "Migration, asylum and border control",
+        "description": "AI systems for risk assessment, lie detection, examination of applications, monitoring for illegal border crossings.",
+        "articles": ["Art. 6", "Art. 9"],
+    },
+    {
+        "ref": "III.8",
+        "type": "annex_iii",
+        "sector": "Administration of justice",
+        "description": "AI systems assisting courts in researching, interpreting facts/law, applying law to concrete sets of facts.",
+        "articles": ["Art. 6", "Art. 13", "Art. 14"],
+    },
+]
+
 
 class SeedService:
+    ISSUE_SLA_DEFAULTS: tuple[tuple[str, int, int], ...] = (
+        ("critical", 1, 24),
+        ("high", 4, 72),
+        ("medium", 24, 168),
+        ("low", 72, 720),
+    )
+
     @staticmethod
     def ensure_permissions(db: Session) -> dict[str, Permission]:
         existing = {p.key: p for p in db.execute(select(Permission)).scalars().all()}
@@ -1011,6 +1902,40 @@ class SeedService:
         return rows
 
     @staticmethod
+    def ensure_default_data_access_anomaly_rules(db: Session, organization_id: uuid.UUID, created_by: uuid.UUID) -> list[DataAccessAnomalyRule]:
+        rows: list[DataAccessAnomalyRule] = []
+        existing = {
+            row.rule_type: row
+            for row in db.execute(
+                select(DataAccessAnomalyRule).where(
+                    DataAccessAnomalyRule.organization_id == organization_id,
+                    DataAccessAnomalyRule.data_asset_id.is_(None),
+                    DataAccessAnomalyRule.deleted_at.is_(None),
+                )
+            ).scalars().all()
+        }
+        for payload in DATA_ACCESS_DEFAULT_RULES:
+            if payload["rule_type"] in existing:
+                rows.append(existing[payload["rule_type"]])
+                continue
+            now = datetime.now(UTC)
+            row = DataAccessAnomalyRule(
+                organization_id=organization_id,
+                data_asset_id=None,
+                rule_type=payload["rule_type"],
+                rule_config=payload["rule_config"],
+                is_active=True,
+                created_by=created_by,
+                created_at=now,
+                updated_at=now,
+                deleted_at=None,
+            )
+            db.add(row)
+            db.flush()
+            rows.append(row)
+        return rows
+
+    @staticmethod
     def ensure_global_email_templates(db: Session) -> list[EmailTemplate]:
         existing = {
             (tpl.organization_id, tpl.template_key, tpl.version): tpl
@@ -1062,3 +1987,232 @@ class SeedService:
 
         db.flush()
         return created
+
+    @staticmethod
+    def ensure_questionnaire_templates(db: Session) -> list[QuestionnaireTemplate]:
+        existing_templates = {
+            row.template_type: row
+            for row in db.execute(
+                select(QuestionnaireTemplate).where(
+                    QuestionnaireTemplate.organization_id.is_(None),
+                    QuestionnaireTemplate.is_system_template.is_(True),
+                )
+            ).scalars().all()
+        }
+        seeded: list[QuestionnaireTemplate] = []
+
+        for template_seed in QUESTIONNAIRE_TEMPLATE_SEEDS:
+            row = existing_templates.get(template_seed["template_type"])
+            if row is None:
+                row = QuestionnaireTemplate(
+                    organization_id=None,
+                    template_type=template_seed["template_type"],
+                    name=template_seed["name"],
+                    version=template_seed["version"],
+                    description=template_seed["description"],
+                    is_system_template=True,
+                    is_active=True,
+                    created_by=None,
+                )
+                db.add(row)
+                db.flush()
+                existing_templates[template_seed["template_type"]] = row
+            else:
+                row.name = template_seed["name"]
+                row.version = template_seed["version"]
+                row.description = template_seed["description"]
+                row.is_system_template = True
+                row.is_active = True
+
+            section_map = {
+                (section.title, section.order_index): section
+                for section in db.execute(
+                    select(QuestionnaireTemplateSection).where(
+                        QuestionnaireTemplateSection.template_id == row.id,
+                    )
+                ).scalars().all()
+            }
+            for section_seed in template_seed["sections"]:
+                section_key = (section_seed["title"], int(section_seed["order_index"]))
+                section = section_map.get(section_key)
+                if section is None:
+                    section = QuestionnaireTemplateSection(
+                        template_id=row.id,
+                        title=section_seed["title"],
+                        description=section_seed.get("description"),
+                        order_index=int(section_seed["order_index"]),
+                    )
+                    db.add(section)
+                    db.flush()
+                    section_map[section_key] = section
+
+                question_map = {
+                    (question.question_text, question.order_index): question
+                    for question in db.execute(
+                        select(QuestionnaireTemplateQuestion).where(
+                            QuestionnaireTemplateQuestion.template_id == row.id,
+                            QuestionnaireTemplateQuestion.section_id == section.id,
+                        )
+                    ).scalars().all()
+                }
+                for q_idx, question_seed in enumerate(section_seed["questions"]):
+                    question_key = (question_seed["question_text"], q_idx)
+                    question = question_map.get(question_key)
+                    if question is None:
+                        question = QuestionnaireTemplateQuestion(
+                            template_id=row.id,
+                            section_id=section.id,
+                            question_text=question_seed["question_text"],
+                            question_type=question_seed["question_type"],
+                            category_tag=question_seed["category_tag"],
+                            framework_ref=question_seed.get("framework_ref"),
+                            allowed_values=question_seed.get("allowed_values"),
+                            expected_answer=question_seed.get("expected_answer"),
+                            is_required=bool(question_seed.get("is_required", True)),
+                            order_index=q_idx,
+                            help_text=question_seed.get("help_text"),
+                        )
+                        db.add(question)
+                        db.flush()
+                    else:
+                        question.question_type = question_seed["question_type"]
+                        question.category_tag = question_seed["category_tag"]
+                        question.framework_ref = question_seed.get("framework_ref")
+                        question.allowed_values = question_seed.get("allowed_values")
+                        question.expected_answer = question_seed.get("expected_answer")
+                        question.is_required = bool(question_seed.get("is_required", True))
+                        question.help_text = question_seed.get("help_text")
+                        question.order_index = q_idx
+                        question.section_id = section.id
+
+            seeded.append(row)
+
+        db.flush()
+        return seeded
+
+    @staticmethod
+    def ensure_questionnaire_scoring_rules(db: Session) -> list[QuestionnaireScoringRule]:
+        templates = SeedService.ensure_questionnaire_templates(db)
+        template_ids = [row.id for row in templates]
+        if not template_ids:
+            return []
+
+        questions = db.execute(
+            select(QuestionnaireTemplateQuestion).where(QuestionnaireTemplateQuestion.template_id.in_(template_ids))
+        ).scalars().all()
+        existing_rules = {
+            (row.organization_id, row.question_id, row.condition_operator, row.condition_value): row
+            for row in db.execute(
+                select(QuestionnaireScoringRule).where(QuestionnaireScoringRule.organization_id.is_(None))
+            ).scalars().all()
+        }
+        seeded: list[QuestionnaireScoringRule] = []
+
+        for question in questions:
+            if question.question_type != "yes_no":
+                continue
+            if (question.expected_answer or "").strip().lower() != "yes":
+                continue
+
+            no_override = QUESTIONNAIRE_HIGH_IMPACT_RULES.get(question.category_tag)
+            no_rule_name = "Control expectation not met"
+            no_rationale = "The answer indicates the expected control is not in place."
+            no_delta = 15
+            if no_override is not None:
+                no_rule_name = str(no_override["rule_name"])
+                no_rationale = str(no_override["rationale"])
+                no_delta = int(no_override["score_delta"])
+
+            rule_specs = [
+                ("eq", "No", no_delta, no_rule_name, no_rationale),
+                (
+                    "eq",
+                    "Yes",
+                    -5,
+                    "Control expectation met",
+                    "The answer indicates expected control coverage is in place.",
+                ),
+            ]
+            for operator, value, delta, name, rationale in rule_specs:
+                key = (None, question.id, operator, value)
+                row = existing_rules.get(key)
+                if row is None:
+                    row = QuestionnaireScoringRule(
+                        organization_id=None,
+                        template_id=question.template_id,
+                        question_id=question.id,
+                        rule_name=name,
+                        condition_operator=operator,
+                        condition_value=value,
+                        score_delta=delta,
+                        rationale=rationale,
+                        is_active=True,
+                    )
+                    db.add(row)
+                    db.flush()
+                    existing_rules[key] = row
+                else:
+                    row.template_id = question.template_id
+                    row.rule_name = name
+                    row.score_delta = delta
+                    row.rationale = rationale
+                    row.is_active = True
+                seeded.append(row)
+
+        db.flush()
+        return seeded
+
+    @staticmethod
+    def ensure_issue_sla_policies(db: Session, organization_id: uuid.UUID) -> list[IssueSLAPolicy]:
+        existing = {
+            row.severity: row
+            for row in db.execute(
+                select(IssueSLAPolicy).where(IssueSLAPolicy.organization_id == organization_id)
+            ).scalars().all()
+        }
+        seeded: list[IssueSLAPolicy] = []
+        for severity, response_hours, resolution_hours in SeedService.ISSUE_SLA_DEFAULTS:
+            row = existing.get(severity)
+            if row is None:
+                row = IssueSLAPolicy(
+                    organization_id=organization_id,
+                    severity=severity,
+                    response_sla_hours=response_hours,
+                    resolution_sla_hours=resolution_hours,
+                )
+                db.add(row)
+                db.flush()
+            seeded.append(row)
+        db.flush()
+        return seeded
+
+    @staticmethod
+    def ensure_eu_act_annex_mappings(db: Session) -> list[EUActAnnexMapping]:
+        existing = {
+            row.annex_ref: row
+            for row in db.execute(select(EUActAnnexMapping)).scalars().all()
+        }
+        seeded: list[EUActAnnexMapping] = []
+        for item in ANNEX_III_SECTORS:
+            ref = str(item["ref"])
+            row = existing.get(ref)
+            if row is None:
+                row = EUActAnnexMapping(
+                    annex_ref=ref,
+                    annex_type=str(item["type"]),
+                    sector=str(item["sector"]),
+                    description=str(item["description"]),
+                    article_refs=list(item["articles"]),
+                    is_active=True,
+                )
+                db.add(row)
+                db.flush()
+            else:
+                row.annex_type = str(item["type"])
+                row.sector = str(item["sector"])
+                row.description = str(item["description"])
+                row.article_refs = list(item["articles"])
+                row.is_active = True
+            seeded.append(row)
+        db.flush()
+        return seeded

@@ -7,6 +7,11 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
 from app.core.event_bus import EventBus, EventPayload, EventType
+from app.ai_governance.schemas.third_party_model_card_aibom import (
+    ThirdPartyAIAssessmentCreate,
+    ThirdPartyAIAssessmentRead,
+)
+from app.ai_governance.services.third_party_ai_service import ThirdPartyAIService
 from app.models.vendor_control_link import VendorControlLink
 from app.models.vendor_risk_score import VendorRiskScore
 from app.models.membership import Membership
@@ -141,6 +146,10 @@ def _vendor_control_link_read(row: VendorControlLink) -> VendorControlLinkRead:
         unlink_reason=row.unlink_reason,
         created_at=row.created_at,
     )
+
+
+def _third_party_ai_assessment_read(row) -> ThirdPartyAIAssessmentRead:
+    return ThirdPartyAIAssessmentRead.model_validate(row)
 
 
 @router.post("", response_model=VendorRead, status_code=status.HTTP_201_CREATED)
@@ -426,6 +435,41 @@ def create_vendor_assessment(
     db.commit()
     db.refresh(row)
     return _assessment_read(row)
+
+
+@router.post("/{vendor_id}/ai-model-assessments", response_model=ThirdPartyAIAssessmentRead, status_code=status.HTTP_201_CREATED)
+def create_vendor_ai_model_assessment(
+    vendor_id: uuid.UUID,
+    payload: ThirdPartyAIAssessmentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("vendors:write")),
+    __: Membership = Depends(require_permission("ai_governance:write")),
+) -> ThirdPartyAIAssessmentRead:
+    row = ThirdPartyAIService(db).create_assessment(organization.id, vendor_id, payload, current_user.id)
+    db.commit()
+    db.refresh(row)
+    return _third_party_ai_assessment_read(row)
+
+
+@router.get("/{vendor_id}/ai-model-assessments", response_model=list[ThirdPartyAIAssessmentRead])
+def list_vendor_ai_model_assessments(
+    vendor_id: uuid.UUID,
+    status_filter: str | None = Query(default=None, alias="status"),
+    risk_level: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("vendors:read")),
+    __: Membership = Depends(require_permission("ai_governance:read")),
+) -> list[ThirdPartyAIAssessmentRead]:
+    rows = ThirdPartyAIService(db).list_assessments(
+        organization.id,
+        vendor_id=vendor_id,
+        status_filter=status_filter,
+        risk_level=risk_level,
+    )
+    return [_third_party_ai_assessment_read(row) for row in rows]
 
 
 @router.get("/{vendor_id}/assessments/summary", response_model=VendorAssessmentSummary)

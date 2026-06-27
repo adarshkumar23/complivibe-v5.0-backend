@@ -29,6 +29,8 @@ from app.schemas.evidence import EvidenceRead
 from app.compliance.services.control_exception_service import ControlExceptionService
 from app.services.audit_service import AuditService
 from app.services.control_service import ControlService
+from app.compliance.services.issue_control_link_service import IssueControlLinkService
+from app.schemas.issue_links import ControlAssociatedIssuesGroupedRead, ControlFailureRateRead
 
 router = APIRouter(prefix="/controls", tags=["controls"])
 
@@ -209,6 +211,35 @@ def get_control_detail(
         evidence_count=evidence_count,
         active_exception=exception_context,
     )
+
+
+@router.get("/{control_id}/associated-issues", response_model=ControlAssociatedIssuesGroupedRead)
+def get_control_associated_issues(
+    control_id: uuid.UUID,
+    failure_type: str | None = Query(default=None),
+    status_filter: str | None = Query(default=None, alias="status"),
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("issues:read")),
+) -> ControlAssociatedIssuesGroupedRead:
+    payload = IssueControlLinkService(db).get_control_associated_issues(
+        organization.id,
+        control_id,
+        failure_type=failure_type,
+        status_value=status_filter,
+    )
+    return ControlAssociatedIssuesGroupedRead(**payload)
+
+
+@router.get("/{control_id}/failure-rate", response_model=ControlFailureRateRead)
+def get_control_failure_rate(
+    control_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("issues:read")),
+) -> ControlFailureRateRead:
+    payload = IssueControlLinkService(db).get_control_failure_rate(organization.id, control_id)
+    return ControlFailureRateRead(**payload)
 
 
 @router.get("/{control_id}/evidence", response_model=list[EvidenceRead])

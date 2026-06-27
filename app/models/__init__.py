@@ -2,6 +2,11 @@ from app.models.audit_log import AuditLog
 from app.models.applicability_evaluation_result import ApplicabilityEvaluationResult
 from app.models.applicability_evaluation_run import ApplicabilityEvaluationRun
 from app.models.ai_system import AISystem
+from app.models.ai_governance_event import AIGovernanceEvent
+from app.models.ai_governance_review import AIGovernanceReview
+from app.models.ai_review_criteria_response import AIReviewCriteriaResponse
+from app.models.ai_risk_classification import AIRiskClassification
+from app.models.ai_use_case import AIUseCase
 from app.models.ai_system_control_link import AISystemControlLink
 from app.models.ai_system_evidence_link import AISystemEvidenceLink
 from app.models.ai_system_risk_assessment import AISystemRiskAssessment
@@ -101,6 +106,7 @@ from app.models.control_test_definition import ControlTestDefinition
 from app.models.control_test_run import ControlTestRun
 from app.models.compliance_report import ComplianceReport
 from app.models.compliance_report_section import ComplianceReportSection
+from app.models.custom_report_template import CustomReportTemplate
 from app.models.compliance_policy import CompliancePolicy
 from app.models.compliance_policy_version import CompliancePolicyVersion
 from app.models.compliance_policy_approval_request import CompliancePolicyApprovalRequest
@@ -114,6 +120,7 @@ from app.models.evidence_item import EvidenceItem
 from app.models.email_delivery_event import EmailDeliveryEvent
 from app.models.email_outbox import EmailOutbox
 from app.models.email_template import EmailTemplate
+from app.models.digest_config import DigestConfig
 from app.models.evidence_recertification_policy import EvidenceRecertificationPolicy
 from app.models.framework import Framework
 from app.models.framework_content_import import FrameworkContentImport
@@ -188,6 +195,30 @@ from app.models.vendor_assessment import VendorAssessment
 from app.models.vendor_assessment_question import VendorAssessmentQuestion
 from app.models.vendor_risk_score import VendorRiskScore
 from app.models.vendor_control_link import VendorControlLink
+from app.models.questionnaire_template import QuestionnaireTemplate
+from app.models.questionnaire_template_section import QuestionnaireTemplateSection
+from app.models.questionnaire_template_question import QuestionnaireTemplateQuestion
+from app.models.vendor_questionnaire_response import VendorQuestionnaireResponse
+from app.models.vendor_questionnaire_answer import VendorQuestionnaireAnswer
+from app.models.questionnaire_scoring_rule import QuestionnaireScoringRule
+from app.models.compliance_certification import ComplianceCertification
+from app.models.inbound_questionnaire_session import InboundQuestionnaireSession
+from app.models.inbound_questionnaire_item import InboundQuestionnaireItem
+from app.models.subprocessor import Subprocessor
+from app.models.subprocessor_data_transfer import SubprocessorDataTransfer
+from app.models.customer_commitment import CustomerCommitment
+from app.models.eu_act_annex_mapping import EUActAnnexMapping
+from app.models.eu_ai_act_classification import EUAIActClassification
+from app.models.eu_act_conformity_assessment import EUActConformityAssessment
+from app.models.eu_act_fria import EUActFRIA
+from app.models.eu_act_post_market_plan import EUActPostMarketPlan
+from app.models.commitment_notification_log import CommitmentNotificationLog
+from app.models.trust_center_configuration import TrustCenterConfiguration
+from app.models.trust_center_access_request import TrustCenterAccessRequest
+from app.models.trust_center_published_policy import TrustCenterPublishedPolicy
+from app.models.ai_vendor_assessment import AIVendorAssessment
+from app.models.vendor_mitigation_case import VendorMitigationCase
+from app.models.vendor_mitigation_action import VendorMitigationAction
 from app.models.control_monitoring_definition import ControlMonitoringDefinition
 from app.models.control_monitoring_result import ControlMonitoringResult
 from app.models.control_monitoring_rule import ControlMonitoringRule
@@ -214,6 +245,83 @@ from app.models.policy_risk_mapping import PolicyRiskMapping
 from app.models.policy_template import PolicyTemplate
 from app.models.policy_template_clone import PolicyTemplateClone
 from app.models.policy_issue_link import PolicyIssueLink
+from app.models.issue import Issue
+from app.models.issue_transition import IssueTransition
+from app.models.org_issue_settings import OrgIssueSettings
+from app.models.issue_policy_link import IssuePolicyLink
+from app.models.issue_control_link import IssueControlLink
+from app.models.remediation_suggestion import RemediationSuggestion
+from app.models.incident_classification import IncidentClassification
+from app.models.root_cause_analysis import RootCauseAnalysis
+from app.models.issue_sla_policy import IssueSLAPolicy
+from app.models.issue_sla_tracking import IssueSLATracking
+from app.models.escalation_policy import EscalationPolicy
+from app.models.escalation_event import EscalationEvent
+from app.models.breach_notification import BreachNotification
+from app.models.shadow_ai_detection import ShadowAIDetection
+from app.models.ai_risk_assessment import AIRiskAssessment
+from app.models.ai_risk_assessment_question import AIRiskAssessmentQuestion
+from app.models.ai_risk_assessment_response import AIRiskAssessmentResponse
+from app.models.iso42001_conformity_tracker import ISO42001ConformityTracker
+from app.models.nist_ai_rmf_implementation import NISTAIRMFImplementation
+from app.models.ai_rmf_function_response import AIRMFFunctionResponse
+from app.models.third_party_ai_assessment import ThirdPartyAIAssessment
+from app.models.model_card import ModelCard
+from app.models.aibom_record import AIBOMRecord
+from app.models.aibom_component import AIBOMComponent
+from app.models.ai_policy_guardrail import AIPolicyGuardrail
+from app.models.ai_guardrail_event import AIGuardrailEvent
+from app.models.ai_approval_envelope import AIApprovalEnvelope
+from app.models.ai_envelope_approval import AIEnvelopeApproval
+from app.models.ai_monitoring_config import AIMonitoringConfig
+from app.models.ai_monitoring_reading import AIMonitoringReading
+from app.models.ai_risk_signal import AIRiskSignal
+from app.models.ai_risk_recommendation import AIRiskRecommendation
+from app.models.mlops_integration import MLOpsIntegration
+from app.models.data_asset import DataAsset
+from app.models.data_lineage_node import DataLineageNode
+from app.models.data_lineage_edge import DataLineageEdge
+from app.models.openmetadata_integration import OpenMetadataIntegration
+from app.models.data_quality_config import DataQualityConfig
+from app.models.data_quality_reading import DataQualityReading
+from app.models.data_access_log import DataAccessLog
+from app.models.data_access_anomaly_rule import DataAccessAnomalyRule
+from app.models.data_retention_policy import DataRetentionPolicy
+from app.models.data_retention_review import DataRetentionReview
+from app.models.data_incident import DataIncident
+from app.models.data_asset_obligation_link import DataAssetObligationLink
+from app.models.data_residency_policy import DataResidencyPolicy
+from app.models.data_residency_violation import DataResidencyViolation
+from app.models.org_email_config import OrgEmailConfig
+from app.models.processing_activity import ProcessingActivity
+from app.models.ropa_framework_link import RopaFrameworkLink
+from app.models.dpia import DPIA
+from app.models.dpia_checklist_item import DPIAChecklistItem
+from app.models.lawful_basis_record import LawfulBasisRecord
+from app.models.data_subject_request import DataSubjectRequest
+from app.models.dpa_agreement import DPAAgreement
+from app.models.dsr_fulfillment_step import DSRFulfillmentStep
+from app.models.dsr_sla_tracking import DSRSLATracking
+from app.models.privacy_notice import PrivacyNotice
+from app.models.notice_user_acknowledgement import NoticeUserAcknowledgement
+from app.models.consent_record import ConsentRecord
+from app.models.cookie_registry import CookieRegistry
+from app.models.consent_banner_config import ConsentBannerConfig
+from app.models.user_notification_preference import UserNotificationPreference
+from app.models.org_ai_config import OrgAIConfig
+from app.models.draft_request import DraftRequest
+from app.models.webhook_endpoint import WebhookEndpoint
+from app.models.webhook_delivery import WebhookDelivery
+from app.models.offboarding_configuration import OffboardingConfiguration
+from app.models.offboarding_record import OffboardingRecord
+from app.models.scheduler_run_log import SchedulerRunLog
+from app.models.audit_engagement import AuditEngagement
+from app.models.pbc_item import PbcItem
+from app.models.auditor_portal_invitation import AuditorPortalInvitation
+from app.models.audit_finding import AuditFinding
+from app.models.audit_schedule import AuditSchedule
+from app.models.evidence_package import EvidencePackage
+from app.models.evidence_package_item import EvidencePackageItem
 
 __all__ = [
     "Organization",
@@ -224,7 +332,12 @@ __all__ = [
     "Permission",
     "RolePermission",
     "AuditLog",
+    "AIGovernanceEvent",
+    "AIGovernanceReview",
+    "AIReviewCriteriaResponse",
+    "AIRiskClassification",
     "AISystem",
+    "AIUseCase",
     "AISystemControlLink",
     "AISystemEvidenceLink",
     "AISystemRiskAssessment",
@@ -325,6 +438,7 @@ __all__ = [
     "ControlTestRun",
     "ComplianceReport",
     "ComplianceReportSection",
+    "CustomReportTemplate",
     "CompliancePolicy",
     "CompliancePolicyVersion",
     "CompliancePolicyApprovalRequest",
@@ -364,6 +478,30 @@ __all__ = [
     "VendorAssessmentQuestion",
     "VendorRiskScore",
     "VendorControlLink",
+    "QuestionnaireTemplate",
+    "QuestionnaireTemplateSection",
+    "QuestionnaireTemplateQuestion",
+    "VendorQuestionnaireResponse",
+    "VendorQuestionnaireAnswer",
+    "QuestionnaireScoringRule",
+    "ComplianceCertification",
+    "InboundQuestionnaireSession",
+    "InboundQuestionnaireItem",
+    "Subprocessor",
+    "SubprocessorDataTransfer",
+    "CustomerCommitment",
+    "EUActAnnexMapping",
+    "EUAIActClassification",
+    "EUActConformityAssessment",
+    "EUActFRIA",
+    "EUActPostMarketPlan",
+    "CommitmentNotificationLog",
+    "TrustCenterConfiguration",
+    "TrustCenterAccessRequest",
+    "TrustCenterPublishedPolicy",
+    "AIVendorAssessment",
+    "VendorMitigationCase",
+    "VendorMitigationAction",
     "ControlMonitoringDefinition",
     "ControlMonitoringResult",
     "ControlMonitoringRule",
@@ -388,6 +526,82 @@ __all__ = [
     "PolicyExceptionApproval",
     "PolicyRiskMapping",
     "PolicyIssueLink",
+    "Issue",
+    "IssueTransition",
+    "OrgIssueSettings",
+    "IssuePolicyLink",
+    "IssueControlLink",
+    "RemediationSuggestion",
+    "IncidentClassification",
+    "RootCauseAnalysis",
+    "IssueSLAPolicy",
+    "IssueSLATracking",
+    "EscalationPolicy",
+    "EscalationEvent",
+    "BreachNotification",
+    "ShadowAIDetection",
+    "AIRiskAssessment",
+    "AIRiskAssessmentQuestion",
+    "AIRiskAssessmentResponse",
+    "ISO42001ConformityTracker",
+    "NISTAIRMFImplementation",
+    "AIRMFFunctionResponse",
+    "ThirdPartyAIAssessment",
+    "ModelCard",
+    "AIBOMRecord",
+    "AIBOMComponent",
+    "AIPolicyGuardrail",
+    "AIGuardrailEvent",
+    "AIApprovalEnvelope",
+    "AIEnvelopeApproval",
+    "AIMonitoringConfig",
+    "AIMonitoringReading",
+    "AIRiskSignal",
+    "AIRiskRecommendation",
+    "MLOpsIntegration",
+    "DataAsset",
+    "DataLineageNode",
+    "DataLineageEdge",
+    "OpenMetadataIntegration",
+    "DataQualityConfig",
+    "DataQualityReading",
+    "DataAccessLog",
+    "DataAccessAnomalyRule",
+    "DataRetentionPolicy",
+    "DataRetentionReview",
+    "DataIncident",
+    "DataAssetObligationLink",
+    "DataResidencyPolicy",
+    "DataResidencyViolation",
+    "OrgEmailConfig",
+    "ProcessingActivity",
+    "RopaFrameworkLink",
+    "DPIA",
+    "DPIAChecklistItem",
+    "LawfulBasisRecord",
+    "DataSubjectRequest",
+    "DPAAgreement",
+    "DSRFulfillmentStep",
+    "DSRSLATracking",
+    "PrivacyNotice",
+    "NoticeUserAcknowledgement",
+    "ConsentRecord",
+    "CookieRegistry",
+    "ConsentBannerConfig",
+    "OrgAIConfig",
+    "DraftRequest",
+    "WebhookEndpoint",
+    "WebhookDelivery",
+    "OffboardingConfiguration",
+    "OffboardingRecord",
+    "SchedulerRunLog",
     "PolicyTemplate",
     "PolicyTemplateClone",
+    "AuditEngagement",
+    "PbcItem",
+    "AuditorPortalInvitation",
+    "AuditFinding",
+    "AuditSchedule",
+    "EvidencePackage",
+    "EvidencePackageItem",
 ]

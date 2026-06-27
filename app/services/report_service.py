@@ -5,6 +5,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
+from app.compliance.services.board_scorecard_builder import BoardScorecardBuilder
+from app.compliance.services.executive_narrative_builder import ExecutiveNarrativeBuilder
 from app.models.compliance_report import ComplianceReport
 from app.models.compliance_report_section import ComplianceReportSection
 from app.models.control import Control
@@ -33,6 +35,14 @@ ALLOWED_REPORT_TYPES = {
     "task_execution",
     "control_health",
     "audit_preparation",
+    "board_scorecard",
+    "executive_narrative",
+    "custom",
+    "soc2_readiness",
+    "gdpr_ropa",
+    "iso27001_soa",
+    "nist_ai_rmf_summary",
+    "eu_ai_act_conformity",
 }
 
 REPORT_CAVEAT = (
@@ -705,6 +715,97 @@ class ReportService:
         }
         return sections, summary, provenance
 
+    def _build_board_scorecard(self, organization_id: uuid.UUID) -> tuple[list[dict], dict, dict]:
+        payload = BoardScorecardBuilder().build(organization_id, self.db)
+        sections = [
+            self._section(
+                key="board_scorecard",
+                title="Board Scorecard",
+                body=payload["narrative"],
+                data=payload,
+                provenance={
+                    "source_models": [
+                        "score_snapshots",
+                        "risks",
+                        "issues",
+                        "compliance_certifications",
+                        "compliance_deadlines",
+                        "organization_obligation_states",
+                    ]
+                },
+                sort_order=1,
+            ),
+            self._section(
+                key="caveats",
+                title="Caveats",
+                body=REPORT_CAVEAT,
+                data={"caveat": REPORT_CAVEAT},
+                provenance={"source_models": []},
+                sort_order=99,
+            ),
+        ]
+        provenance = {
+            "generated_at": self.now().isoformat(),
+            "source_model_counts": {
+                "risks_summary": len(payload["risks_summary"]),
+                "upcoming_deadlines": len(payload["upcoming_deadlines"]),
+            },
+        }
+        return sections, payload, provenance
+
+    def _build_executive_narrative(self, organization_id: uuid.UUID) -> tuple[list[dict], dict, dict]:
+        payload = ExecutiveNarrativeBuilder().build(organization_id, self.db)
+        section_text = payload["sections"]
+        sections = [
+            self._section(
+                key="where_we_stand",
+                title="Where We Stand",
+                body=section_text["where_we_stand"],
+                data={"where_we_stand": section_text["where_we_stand"]},
+                provenance={"source_models": ["score_snapshots", "frameworks", "controls", "control_obligation_mappings", "obligations"]},
+                sort_order=1,
+            ),
+            self._section(
+                key="needs_attention",
+                title="Needs Attention",
+                body=section_text["needs_attention"],
+                data={"needs_attention": section_text["needs_attention"]},
+                provenance={"source_models": ["risks", "issues"]},
+                sort_order=2,
+            ),
+            self._section(
+                key="achievements_this_quarter",
+                title="Achievements This Quarter",
+                body=section_text["achievements_this_quarter"],
+                data={"achievements_this_quarter": section_text["achievements_this_quarter"]},
+                provenance={"source_models": ["compliance_certifications", "risks"]},
+                sort_order=3,
+            ),
+            self._section(
+                key="upcoming",
+                title="Upcoming",
+                body=section_text["upcoming"],
+                data={"upcoming": section_text["upcoming"]},
+                provenance={"source_models": ["compliance_deadlines"]},
+                sort_order=4,
+            ),
+            self._section(
+                key="caveats",
+                title="Caveats",
+                body=payload["caveat"],
+                data={"caveat": payload["caveat"]},
+                provenance={"source_models": []},
+                sort_order=99,
+            ),
+        ]
+        provenance = {
+            "generated_at": self.now().isoformat(),
+            "source_model_counts": {
+                "sections": len(section_text),
+            },
+        }
+        return sections, payload, provenance
+
     def build_report(
         self,
         *,
@@ -731,6 +832,10 @@ class ReportService:
             return self._build_executive_summary(organization_id)
         if report_type == "audit_preparation":
             return self._build_executive_summary(organization_id)
+        if report_type == "board_scorecard":
+            return self._build_board_scorecard(organization_id)
+        if report_type == "executive_narrative":
+            return self._build_executive_narrative(organization_id)
 
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported report_type")
 

@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     ACTIVATION_TOKEN_EXPIRE_HOURS: int = 72
     BACKEND_CORS_ORIGINS: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    FILE_STORAGE_PATH: str = "/tmp/complivibe_exports/"
+    AZURE_OPENAI_ENDPOINT: str | None = None
+    AZURE_OPENAI_API_KEY: str | None = None
+    AZURE_OPENAI_DEPLOYMENT: str | None = None
+    AZURE_OPENAI_API_VERSION: str | None = None
+    MLOPS_CONFIG_ENCRYPTION_KEY: str | None = None
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod

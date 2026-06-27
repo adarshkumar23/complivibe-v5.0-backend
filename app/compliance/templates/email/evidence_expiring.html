@@ -1,0 +1,8 @@
+{% extends "base_email.html" %}
+{% block content %}
+<p>Evidence linked to a control is expiring.</p>
+<p><strong>Evidence:</strong> {{ evidence_title }}</p>
+<p><strong>Expiry date:</strong> {{ expiry_date }}</p>
+<p><strong>Control:</strong> {{ control_name }}</p>
+<p><strong>Days remaining:</strong> {{ days_remaining }}</p>
+{% endblock %}

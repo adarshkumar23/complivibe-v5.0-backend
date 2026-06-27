@@ -1,0 +1,291 @@
+from __future__ import annotations
+
+from tests.helpers.auth_org import bootstrap_org_user
+
+VENDORS_BASE = "/api/v1/compliance/vendors"
+SYSTEMS_BASE = "/api/v1/ai-governance/systems"
+THIRD_PARTY_BASE = "/api/v1/ai-governance/third-party-assessments"
+
+
+def _create_vendor(client, headers: dict[str, str], owner_id: str, name: str = "TP Vendor") -> str:
+    resp = client.post(
+        VENDORS_BASE,
+        headers=headers,
+        json={
+            "name": name,
+            "vendor_type": "software",
+            "owner_user_id": owner_id,
+            "risk_tier": "not_assessed",
+            "status": "active",
+            "data_access": True,
+            "processes_personal_data": True,
+            "sub_processor": True,
+        },
+    )
+    assert resp.status_code == 201
+    return resp.json()["id"]
+
+
+def _create_system(client, headers: dict[str, str], owner_id: str, name: str = "A61 System") -> str:
+    resp = client.post(
+        SYSTEMS_BASE,
+        headers=headers,
+        json={
+            "name": name,
+            "system_type": "model",
+            "owner_id": owner_id,
+            "deployment_status": "development",
+            "risk_tier": "limited",
+        },
+    )
+    assert resp.status_code == 201
+    return resp.json()["id"]
+
+
+def test_a61_third_party_ai_assessment_workflow(client):
+    org = bootstrap_org_user(client, email_prefix="a61-org")
+    vendor_id = _create_vendor(client, org["org_headers"], org["user_id"], name="A61 Vendor")
+    system_id = _create_system(client, org["org_headers"], org["user_id"], name="A61 System")
+
+    # Create third-party AI assessment.
+    created = client.post(
+        f"{VENDORS_BASE}/{vendor_id}/ai-model-assessments",
+        headers=org["org_headers"],
+        json={
+            "ai_system_id": system_id,
+            "model_name": "Vendor Model X",
+            "model_version": "1.0",
+            "data_egress_type": "identified",
+            "model_card_provided": False,
+            "bias_testing_documented": False,
+            "explainability_level": "none",
+            "contractual_ai_terms_reviewed": False,
+            "eu_act_compliance_status": "non_compliant",
+        },
+    )
+    assert created.status_code == 201
+    assessment_id = created.json()["id"]
+
+    # Complete: deterministic risk scoring should yield critical for this payload.
+    completed = client.post(
+        f"{THIRD_PARTY_BASE}/{assessment_id}/complete",
+        headers=org["org_headers"],
+    )
+    assert completed.status_code == 200
+    assert completed.json()["overall_risk_level"] == "critical"
+    assert completed.json()["status"] == "completed"
+
+    # Linked AI system risk_tier updated from critical -> high.
+    system_after = client.get(f"{SYSTEMS_BASE}/{system_id}", headers=org["org_headers"])
+    assert system_after.status_code == 200
+    assert system_after.json()["risk_tier"] == "high"
+
+    # Block updates after completed.
+    blocked_update = client.patch(
+        f"{THIRD_PARTY_BASE}/{assessment_id}",
+        headers=org["org_headers"],
+        json={"model_version": "1.1"},
+    )
+    assert blocked_update.status_code == 422
+
+    # Favorable flags => low risk.
+    favorable = client.post(
+        f"{VENDORS_BASE}/{vendor_id}/ai-model-assessments",
+        headers=org["org_headers"],
+        json={
+            "model_name": "Vendor Model Safe",
+            "data_egress_type": "none",
+            "model_card_provided": True,
+            "bias_testing_documented": True,
+            "explainability_level": "full",
+            "contractual_ai_terms_reviewed": True,
+            "eu_act_compliance_status": "compliant",
+        },
+    )
+    assert favorable.status_code == 201
+    favorable_id = favorable.json()["id"]
+
+    favorable_done = client.post(
+        f"{THIRD_PARTY_BASE}/{favorable_id}/complete",
+        headers=org["org_headers"],
+    )
+    assert favorable_done.status_code == 200
+    assert favorable_done.json()["overall_risk_level"] == "low"
+
+    # Org isolation.
+    org_b = bootstrap_org_user(client, email_prefix="a61-org-b")
+    forbidden = client.get(f"{THIRD_PARTY_BASE}/{assessment_id}", headers=org_b["org_headers"])
+    assert forbidden.status_code == 404
+
+
+def test_a62_model_card_versioning_and_publish(client):
+    org = bootstrap_org_user(client, email_prefix="a62-org")
+    system_id = _create_system(client, org["org_headers"], org["user_id"], name="A62 System")
+
+    # Create v1 draft.
+    v1 = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/model-card",
+        headers=org["org_headers"],
+        json={
+            "intended_purpose": "Assist support triage",
+            "known_limitations": ["May miss context"],
+            "approved_use_cases": ["Ticket routing"],
+            "prohibited_use_cases": ["Medical diagnosis"],
+            "contact_owner_id": org["user_id"],
+        },
+    )
+    assert v1.status_code == 201
+    v1_body = v1.json()
+    assert v1_body["version"] == 1
+    assert v1_body["status"] == "draft"
+    assert v1_body["content_hash"] is not None
+
+    # Publish v1.
+    publish_v1 = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/model-cards/{v1_body['id']}/publish",
+        headers=org["org_headers"],
+    )
+    assert publish_v1.status_code == 200
+    assert publish_v1.json()["status"] == "published"
+    assert publish_v1.json()["published_at"] is not None
+
+    # Published cards are immutable.
+    blocked_update = client.patch(
+        f"{SYSTEMS_BASE}/{system_id}/model-cards/{v1_body['id']}",
+        headers=org["org_headers"],
+        json={"intended_purpose": "Updated purpose"},
+    )
+    assert blocked_update.status_code == 422
+
+    # Create new version (v2) and publish it; previous published should be archived.
+    v2 = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/model-card",
+        headers=org["org_headers"],
+        json={
+            "intended_purpose": "Assist support triage v2",
+            "known_limitations": ["May miss context", "Needs monitoring"],
+            "approved_use_cases": ["Ticket routing", "FAQ suggestions"],
+            "prohibited_use_cases": ["Medical diagnosis"],
+            "contact_owner_id": org["user_id"],
+        },
+    )
+    assert v2.status_code == 201
+    assert v2.json()["version"] == 2
+
+    publish_v2 = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/model-cards/{v2.json()['id']}/publish",
+        headers=org["org_headers"],
+    )
+    assert publish_v2.status_code == 200
+    assert publish_v2.json()["status"] == "published"
+
+    all_versions = client.get(f"{SYSTEMS_BASE}/{system_id}/model-cards", headers=org["org_headers"])
+    assert all_versions.status_code == 200
+    versions = all_versions.json()
+    assert len(versions) == 2
+    by_version = {item["version"]: item for item in versions}
+    assert by_version[1]["status"] == "archived"
+    assert by_version[2]["status"] == "published"
+
+    active = client.get(f"{SYSTEMS_BASE}/{system_id}/model-card", headers=org["org_headers"])
+    assert active.status_code == 200
+    assert active.json()["version"] == 2
+    assert active.json()["status"] == "published"
+
+
+def test_a63_aibom_versioning_and_diff(client):
+    org = bootstrap_org_user(client, email_prefix="a63-org")
+    system_id = _create_system(client, org["org_headers"], org["user_id"], name="A63 System")
+
+    # Create v1.
+    v1 = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/aibom",
+        headers=org["org_headers"],
+        json={"notes": "Initial inventory"},
+    )
+    assert v1.status_code == 201
+    assert v1.json()["version"] == 1
+
+    add_a1 = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/aibom/components",
+        headers=org["org_headers"],
+        json={
+            "component_type": "base_model",
+            "name": "gpt-base",
+            "version": "1.0",
+        },
+    )
+    assert add_a1.status_code == 201
+
+    add_b1 = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/aibom/components",
+        headers=org["org_headers"],
+        json={
+            "component_type": "training_data",
+            "name": "dataset-v1",
+            "version": "2026-01",
+        },
+    )
+    assert add_b1.status_code == 201
+
+    duplicate = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/aibom/components",
+        headers=org["org_headers"],
+        json={
+            "component_type": "base_model",
+            "name": "gpt-base",
+            "version": "1.1",
+        },
+    )
+    assert duplicate.status_code == 409
+
+    # Create v2 and alter component set.
+    v2 = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/aibom",
+        headers=org["org_headers"],
+        json={"notes": "Second inventory"},
+    )
+    assert v2.status_code == 201
+    assert v2.json()["version"] == 2
+
+    add_a2 = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/aibom/components",
+        headers=org["org_headers"],
+        json={
+            "component_type": "base_model",
+            "name": "gpt-base",
+            "version": "2.0",
+        },
+    )
+    assert add_a2.status_code == 201
+
+    add_c2 = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/aibom/components",
+        headers=org["org_headers"],
+        json={
+            "component_type": "third_party_api",
+            "name": "toxicity-api",
+            "version": "3",
+        },
+    )
+    assert add_c2.status_code == 201
+
+    diff = client.get(
+        f"{SYSTEMS_BASE}/{system_id}/aibom/diff?v1=1&v2=2",
+        headers=org["org_headers"],
+    )
+    assert diff.status_code == 200
+    body = diff.json()
+
+    assert {item["name"] for item in body["added"]} == {"toxicity-api"}
+    assert {item["name"] for item in body["removed"]} == {"dataset-v1"}
+    changed_names = {item["name"] for item in body["changed"]}
+    assert "gpt-base" in changed_names
+
+    # Org isolation.
+    org_b = bootstrap_org_user(client, email_prefix="a63-org-b")
+    forbidden = client.get(
+        f"{SYSTEMS_BASE}/{system_id}/aibom/diff?v1=1&v2=2",
+        headers=org_b["org_headers"],
+    )
+    assert forbidden.status_code == 404

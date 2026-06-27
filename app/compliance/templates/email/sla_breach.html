@@ -1,0 +1,9 @@
+{% extends "base_email.html" %}
+{% block content %}
+<p>An SLA has been breached and requires immediate attention.</p>
+<p><strong>Entity type:</strong> {{ entity_type }}</p>
+<p><strong>Reference:</strong> {{ entity_ref }}</p>
+<p><strong>Deadline:</strong> {{ deadline }}</p>
+<p><strong>Hours overdue:</strong> {{ hours_overdue }}</p>
+<p><strong>Owner:</strong> {{ owner }}</p>
+{% endblock %}

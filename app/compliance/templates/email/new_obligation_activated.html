@@ -1,0 +1,8 @@
+{% extends "base_email.html" %}
+{% block content %}
+<p>A new compliance obligation has been activated for your organization.</p>
+<p><strong>Obligation:</strong> {{ obligation_title }}</p>
+<p><strong>Framework:</strong> {{ framework_name }}</p>
+{% if due_date %}<p><strong>Due date:</strong> {{ due_date }}</p>{% endif %}
+<p><strong>Owner:</strong> {{ owner }}</p>
+{% endblock %}

@@ -1,6 +1,42 @@
 from fastapi import APIRouter
+from app.ai_governance.routers import ai_systems as ai_governance_systems
+from app.ai_governance.routers import shadow_ai as ai_governance_shadow_ai
+from app.ai_governance.routers import ai_reviews as ai_governance_reviews
+from app.ai_governance.routers import eu_act_workflows as ai_governance_eu_act_workflows
+from app.ai_governance.routers import iso42001 as ai_governance_iso42001
+from app.ai_governance.routers import nist_rmf as ai_governance_nist_rmf
+from app.ai_governance.routers import third_party_ai as ai_governance_third_party_ai
+from app.ai_governance.routers import guardrails as ai_governance_guardrails
+from app.ai_governance.routers import approval_envelopes as ai_governance_approval_envelopes
+from app.ai_governance.routers import ai_risk_assessments as ai_governance_risk_assessments
+from app.ai_governance.routers import monitoring as ai_governance_monitoring
+from app.ai_governance.routers import risk_signals as ai_governance_risk_signals
+from app.ai_governance.routers import recommendations as ai_governance_recommendations
+from app.ai_governance.routers import diagnostics as ai_governance_diagnostics
+from app.ai_governance.routers import mlops as ai_governance_mlops
+from app.ai_governance.routers import contracts as ai_governance_contracts
+from app.data_observability.routers import data_assets as data_observability_assets
+from app.data_observability.routers import lineage as data_observability_lineage
+from app.data_observability.routers import quality as data_observability_quality
+from app.data_observability.routers import access_monitoring as data_observability_access
+from app.data_observability.routers import retention as data_observability_retention
+from app.data_observability.routers import incidents as data_observability_incidents
+from app.data_observability.routers import dashboard as data_observability_dashboard
+from app.data_observability.routers import obligation_coverage as data_observability_obligation_coverage
+from app.data_observability.routers import residency as data_observability_residency
+from app.privacy.routers import ropa as privacy_ropa
+from app.privacy.routers import dsar as privacy_dsar
+from app.privacy.routers import notices as privacy_notices
+from app.privacy.routers import consent as privacy_consent
+from app.privacy.routers import cookies as privacy_cookies
+from app.privacy.routers import dpia as privacy_dpia
+from app.privacy.routers import lawful_basis as privacy_lawful_basis
+from app.privacy.routers import dpa as privacy_dpa
+from app.privacy.routers import notification_preferences as privacy_notification_preferences
+from app.privacy.routers import digest as privacy_digest
 
 from app.api.v1 import (
+    admin_email_config,
     ai_governance,
     ai_systems,
     compliance_contracts,
@@ -9,6 +45,12 @@ from app.api.v1 import (
     compliance_deadlines,
     common_controls,
     employee_attestations,
+    audit_engagements,
+    audit_schedules,
+    pbc_items,
+    auditor_portal,
+    audit_findings,
+    evidence_packages,
     policy_templates,
     policy_exceptions,
     policy_issue_links,
@@ -47,17 +89,80 @@ from app.api.v1 import (
     organizations,
     recertification,
     reports,
+    custom_reports,
     risks,
     roles,
     scoring,
     tasks,
     users,
     vendors,
+    questionnaire_templates,
+    questionnaire_responses,
+    scoring_rules,
+    inbound_questionnaires,
+    subprocessors,
+    customer_commitments,
+    escalation_policies,
+    issues,
+    issue_settings,
+    sla_policies,
+    breach_notifications,
+    incident_analytics,
+    trust_center_public,
+    trust_center_admin,
+    ai_vendor_assessments,
+    vendor_mitigation,
+    ai_governance_dashboard,
+    ai_drafting,
+    scheduler_admin,
+    webhooks,
+    offboarding,
     attestations,
 )
 
 api_router = APIRouter()
+api_router.include_router(ai_governance_systems.router)
+api_router.include_router(ai_governance_shadow_ai.router)
+api_router.include_router(ai_governance_reviews.router)
+api_router.include_router(ai_governance_eu_act_workflows.router)
+api_router.include_router(ai_governance_iso42001.router)
+api_router.include_router(ai_governance_nist_rmf.router)
+api_router.include_router(ai_governance_third_party_ai.router)
+api_router.include_router(ai_governance_guardrails.router)
+api_router.include_router(ai_governance_guardrails.events_router)
+api_router.include_router(ai_governance_approval_envelopes.router)
+api_router.include_router(ai_governance_monitoring.router)
+api_router.include_router(ai_governance_monitoring.inbound_router)
+api_router.include_router(ai_governance_risk_signals.router)
+api_router.include_router(ai_governance_recommendations.router)
+api_router.include_router(ai_governance_diagnostics.router)
+api_router.include_router(ai_governance_mlops.router)
+api_router.include_router(ai_governance_contracts.router)
+api_router.include_router(data_observability_assets.router)
+api_router.include_router(data_observability_lineage.router)
+api_router.include_router(data_observability_quality.router)
+api_router.include_router(data_observability_access.router)
+api_router.include_router(data_observability_retention.router)
+api_router.include_router(data_observability_incidents.router)
+api_router.include_router(data_observability_dashboard.router)
+api_router.include_router(data_observability_obligation_coverage.router)
+api_router.include_router(data_observability_residency.router)
+api_router.include_router(privacy_ropa.router)
+api_router.include_router(privacy_dsar.router)
+api_router.include_router(privacy_notices.router)
+api_router.include_router(privacy_consent.router)
+api_router.include_router(privacy_cookies.router)
+api_router.include_router(privacy_dpia.router)
+api_router.include_router(privacy_lawful_basis.router)
+api_router.include_router(privacy_dpa.router)
+api_router.include_router(privacy_notification_preferences.router)
+api_router.include_router(privacy_digest.router)
+api_router.include_router(ai_governance_risk_assessments.systems_router)
+api_router.include_router(ai_governance_risk_assessments.router)
 api_router.include_router(ai_governance.router)
+api_router.include_router(ai_governance_dashboard.router)
+api_router.include_router(ai_drafting.router)
+api_router.include_router(admin_email_config.router)
 api_router.include_router(ai_systems.router)
 api_router.include_router(automation.router)
 api_router.include_router(health.router)
@@ -72,6 +177,7 @@ api_router.include_router(framework_pack_reviews.router)
 api_router.include_router(framework_pack_reviews.queue_router)
 api_router.include_router(framework_review_capacity.router)
 api_router.include_router(obligations.router)
+api_router.include_router(obligations.compliance_router)
 api_router.include_router(controls.router)
 api_router.include_router(control_tests.router)
 api_router.include_router(control_recommendations.router)
@@ -80,6 +186,7 @@ api_router.include_router(evidence.router)
 api_router.include_router(risks.router)
 api_router.include_router(recertification.router)
 api_router.include_router(reports.router)
+api_router.include_router(custom_reports.router)
 api_router.include_router(tasks.router)
 api_router.include_router(scoring.router)
 api_router.include_router(dashboard.router)
@@ -92,6 +199,12 @@ api_router.include_router(compliance_dashboard.router)
 api_router.include_router(compliance_deadlines.router)
 api_router.include_router(common_controls.router)
 api_router.include_router(employee_attestations.router)
+api_router.include_router(audit_engagements.router)
+api_router.include_router(audit_schedules.router)
+api_router.include_router(pbc_items.router)
+api_router.include_router(auditor_portal.router)
+api_router.include_router(audit_findings.router)
+api_router.include_router(evidence_packages.router)
 api_router.include_router(policy_templates.router)
 api_router.include_router(policy_exceptions.router)
 api_router.include_router(policy_issue_links.router)
@@ -112,3 +225,23 @@ api_router.include_router(exports.router)
 api_router.include_router(attestations.router)
 api_router.include_router(email.router)
 api_router.include_router(vendors.router)
+api_router.include_router(questionnaire_templates.router)
+api_router.include_router(questionnaire_responses.router)
+api_router.include_router(scoring_rules.router)
+api_router.include_router(inbound_questionnaires.router)
+api_router.include_router(subprocessors.router)
+api_router.include_router(customer_commitments.router)
+api_router.include_router(escalation_policies.router)
+api_router.include_router(issues.router)
+api_router.include_router(issue_settings.router)
+api_router.include_router(sla_policies.router)
+api_router.include_router(breach_notifications.router)
+api_router.include_router(issues.remediation_router)
+api_router.include_router(incident_analytics.router)
+api_router.include_router(trust_center_public.router)
+api_router.include_router(trust_center_admin.router)
+api_router.include_router(ai_vendor_assessments.router)
+api_router.include_router(vendor_mitigation.router)
+api_router.include_router(scheduler_admin.router)
+api_router.include_router(webhooks.router)
+api_router.include_router(offboarding.router)

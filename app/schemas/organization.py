@@ -9,14 +9,14 @@ from app.schemas.common import UUIDTimestampSchema
 
 class OrganizationRead(UUIDTimestampSchema):
     name: str
-    slug: str
+    slug: str | None = None
     is_active: bool
 
 
 class OrganizationSummary(BaseModel):
     id: UUID
     name: str
-    slug: str
+    slug: str | None = None
 
 
 class OrganizationUpdateRequest(BaseModel):

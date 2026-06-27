@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.models.email_delivery_event import EmailDeliveryEvent
 from app.models.email_outbox import EmailOutbox
 from app.models.email_template import EmailTemplate
+from app.privacy.services.notification_preference_service import NotificationPreferenceService
 
 VAR_PATTERN = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 
@@ -150,19 +151,40 @@ class EmailService:
         created_by_user_id: uuid.UUID,
         variables_json: dict,
         initial_status: str,
+        notification_type: str | None = None,
+        severity: str | None = None,
     ) -> EmailOutbox:
+        effective_notification_type = notification_type or template.template_key or event_type
+        effective_severity = severity
+        if effective_severity is None and isinstance(metadata_json, dict):
+            maybe_severity = metadata_json.get("severity")
+            if isinstance(maybe_severity, str):
+                effective_severity = maybe_severity
+
+        suppressed_by_preference = False
+        if recipient_user_id is not None:
+            suppressed_by_preference = not NotificationPreferenceService(self.db).should_notify(
+                organization_id,
+                recipient_user_id,
+                effective_notification_type,
+                severity=effective_severity,
+            )
+
         rendered = self.render_template(template, variables_json)
         queued_at = self._now()
+        target_status = "skipped" if suppressed_by_preference else initial_status
         outbox = EmailOutbox(
             organization_id=organization_id,
             template_id=template.id,
             event_type=event_type,
+            template_name=None,
+            template_context=None,
             recipient_email=recipient_email,
             recipient_user_id=recipient_user_id,
             subject=str(rendered["subject"]),
             body_text=str(rendered["body_text"]),
             body_html=rendered["body_html"],
-            status=initial_status,
+            status=target_status,
             priority=priority,
             scheduled_at=scheduled_at,
             queued_at=queued_at,
@@ -177,10 +199,14 @@ class EmailService:
         self.add_delivery_event(
             organization_id=organization_id,
             email_outbox_id=outbox.id,
-            event_type="queued",
+            event_type="skipped_by_preference" if suppressed_by_preference else "queued",
             status_from=None,
             status_to=outbox.status,
-            details_json={"event_type": event_type},
+            details_json={
+                "event_type": event_type,
+                "notification_type": effective_notification_type,
+                "suppressed_by_preference": suppressed_by_preference,
+            },
             created_by_user_id=created_by_user_id,
         )
 

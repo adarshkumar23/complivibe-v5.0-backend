@@ -1,0 +1,44 @@
+{% extends "base_email.html" %}
+{% block content %}
+<p>Hello {{ user_name }}, here is your daily compliance digest.</p>
+
+{% if overdue_tasks %}
+<h3>⚠️ Overdue Tasks ({{ overdue_tasks|length }})</h3>
+<ul>
+  {% for t in overdue_tasks %}
+  <li>{{ t.title }} — {{ t.days_overdue }} day(s) overdue</li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if expiring_evidence %}
+<h3>📋 Evidence Expiring Soon</h3>
+<ul>
+  {% for e in expiring_evidence %}
+  <li>{{ e.title }} — {{ e.days_remaining }} day(s) remaining</li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if open_risks %}
+<h3>🔴 High Priority Risks</h3>
+<ul>
+  {% for r in open_risks %}
+  <li>{{ r.title }} — <strong>{{ r.severity }}</strong></li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if upcoming_deadlines %}
+<h3>📅 Upcoming Deadlines</h3>
+<ul>
+  {% for d in upcoming_deadlines %}
+  <li>{{ d.title }} — due {{ d.due_date }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if not overdue_tasks and not expiring_evidence and not open_risks and not upcoming_deadlines %}
+<p>✅ All clear! No urgent items requiring your attention today.</p>
+{% endif %}
+{% endblock %}

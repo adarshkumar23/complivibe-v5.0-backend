@@ -1,0 +1,9 @@
+{% extends "base_email.html" %}
+{% block content %}
+<p>A data subject rights request has been received and requires processing.</p>
+<p><strong>Request ref:</strong> {{ request_ref }}</p>
+<p><strong>Type:</strong> {{ request_type }}</p>
+<p><strong>Subject:</strong> {{ subject_name }}</p>
+<p><strong>Response deadline:</strong> {{ response_deadline }}</p>
+<p><strong>Framework:</strong> {{ regulatory_framework }}</p>
+{% endblock %}

@@ -1,0 +1,8 @@
+{% extends "base_email.html" %}
+{% block content %}
+<p>A risk has been escalated and requires your attention.</p>
+<p><strong>Risk:</strong> {{ risk_title }}</p>
+<p><strong>Severity:</strong> {{ severity }}</p>
+<p><strong>Escalated by:</strong> {{ escalated_by }}</p>
+<p><strong>Reason:</strong> {{ escalation_reason }}</p>
+{% endblock %}

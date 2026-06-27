@@ -1,0 +1,10 @@
+{% extends "base_email.html" %}
+{% block content %}
+<p>An audit finding has been raised and assigned to you.</p>
+<p><strong>Reference:</strong> {{ finding_ref }}</p>
+<p><strong>Severity:</strong> {{ severity }}</p>
+<p><strong>Title:</strong> {{ title }}</p>
+<p><strong>Description:</strong> {{ description }}</p>
+<p><strong>Target remediation date:</strong> {{ target_remediation_date }}</p>
+<p><strong>Engagement:</strong> {{ engagement_title }}</p>
+{% endblock %}

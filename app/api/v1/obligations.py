@@ -46,8 +46,10 @@ from app.services.control_service import ControlService
 from app.services.framework_content_service import FrameworkContentService
 from app.services.rbac_service import RBACService
 from app.services.seed_service import SeedService
+from app.data_observability.services.data_obligation_service import DataObligationService
 
 router = APIRouter(prefix="/obligations", tags=["obligations"])
+compliance_router = APIRouter(prefix="/compliance/obligations", tags=["obligations"])
 
 
 def _content_version_read(row: ObligationContentVersion) -> ObligationContentVersionRead:
@@ -276,6 +278,16 @@ def _control_read(control: Control) -> ControlRead:
         created_at=control.created_at,
         updated_at=control.updated_at,
     )
+
+
+@compliance_router.get("/{obligation_id}/data-assets", response_model=list[dict])
+def list_obligation_data_assets(
+    obligation_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("data:read")),
+) -> list[dict]:
+    return DataObligationService(db).get_obligation_assets(organization.id, obligation_id)
 
 
 @router.get("/{obligation_id}", response_model=ObligationRead)

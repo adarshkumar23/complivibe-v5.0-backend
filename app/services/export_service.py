@@ -40,6 +40,8 @@ ALLOWED_EXPORT_TYPES = {
     "task_execution_json",
     "executive_summary_json",
     "audit_preparation_json",
+    "compliance_report_pdf",
+    "compliance_report_docx",
 }
 
 INTEGRITY_ALGORITHM = "HMAC-SHA256"
@@ -132,6 +134,96 @@ class ExportService:
             details_json=details_json,
             created_by_user_id=created_by_user_id,
         )
+
+    def create_completed_binary_export_job(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        source_report_id: uuid.UUID | None,
+        export_type: str,
+        title: str,
+        description: str | None,
+        file_path: str,
+        file_format: str,
+        file_size_bytes: int,
+        checksum_sha256: str,
+        requested_by_user_id: uuid.UUID,
+    ) -> ExportJob:
+        job = self.create_job(
+            organization_id=organization_id,
+            export_type=export_type,
+            title=title,
+            description=description,
+            source_report_id=source_report_id,
+            framework_id=None,
+            period_start=None,
+            period_end=None,
+            metadata_json={
+                "file_path": file_path,
+                "format": file_format,
+                "file_size_bytes": file_size_bytes,
+            },
+            requested_by_user_id=requested_by_user_id,
+        )
+
+        job.status = "processing"
+        job.started_at = self.now()
+        self.db.flush()
+        self._add_event(
+            job=job,
+            event_type="export.started",
+            from_status="queued",
+            to_status="processing",
+            details_json={"source_report_id": str(source_report_id) if source_report_id else None},
+            created_by_user_id=requested_by_user_id,
+        )
+
+        completed_at = self.now()
+        manifest = {
+            "export_job_id": str(job.id),
+            "source_report_id": str(source_report_id) if source_report_id else None,
+            "file_path": file_path,
+            "file_format": file_format,
+            "file_size_bytes": file_size_bytes,
+            "generated_at": completed_at.isoformat(),
+            "package_checksum_sha256": checksum_sha256,
+        }
+        provenance = {
+            "source_models": ["compliance_reports", "compliance_report_sections"],
+            "generated_at": completed_at.isoformat(),
+            "generated_by_user_id": str(requested_by_user_id),
+        }
+        package_json = {
+            "package_version": job.package_version,
+            "export_type": export_type,
+            "organization_id": str(organization_id),
+            "generated_at": completed_at.isoformat(),
+            "title": title,
+            "manifest": manifest,
+            "provenance": provenance,
+            "storage": {"file_path": file_path, "format": file_format},
+        }
+
+        job.package_json = package_json
+        job.manifest_json = manifest
+        job.provenance_json = provenance
+        job.checksum_sha256 = checksum_sha256
+        job.integrity_signature = self.compute_integrity_signature(checksum_sha256)
+        job.signing_key_id = SIGNING_KEY_ID
+        job.signature_algorithm = INTEGRITY_ALGORITHM
+        job.status = "completed"
+        job.completed_at = completed_at
+        self.db.flush()
+
+        self._add_event(
+            job=job,
+            event_type="export.completed",
+            from_status="processing",
+            to_status="completed",
+            details_json={"checksum_sha256": checksum_sha256, "file_path": file_path},
+            created_by_user_id=requested_by_user_id,
+        )
+        return job
 
     def require_job(self, *, organization_id: uuid.UUID, export_job_id: uuid.UUID) -> ExportJob:
         row = self.repo.get_job(export_job_id)

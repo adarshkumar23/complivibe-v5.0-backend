@@ -1,0 +1,55 @@
+from datetime import date, datetime
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+from app.schemas.common import UUIDTimestampSchema
+
+PBC_STATUS_PATTERN = "^(pending|submitted|accepted|rejected|overdue)$"
+
+
+class PbcItemCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    description: str | None = None
+    assignee_id: UUID | None = None
+    due_date: date
+
+
+class PbcItemUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    assignee_id: UUID | None = None
+    due_date: date | None = None
+
+
+class PbcSubmitRequest(BaseModel):
+    evidence_id: UUID | None = None
+
+
+class PbcRejectRequest(BaseModel):
+    rejection_reason: str = Field(min_length=1)
+
+
+class PbcItemRead(UUIDTimestampSchema):
+    organization_id: UUID
+    audit_engagement_id: UUID
+    title: str
+    description: str | None = None
+    requester_id: UUID
+    assignee_id: UUID | None = None
+    due_date: date
+    status: str = Field(pattern=PBC_STATUS_PATTERN)
+    evidence_id: UUID | None = None
+    submitted_at: datetime | None = None
+    accepted_at: datetime | None = None
+    rejected_at: datetime | None = None
+    rejection_reason: str | None = None
+
+
+class PbcSummary(BaseModel):
+    total_items: int
+    by_status: dict[str, int]
+    overdue_count: int
+    completion_rate: float
+    items_without_evidence: int
+    avg_days_to_submit: float | None = None

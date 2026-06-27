@@ -1,8 +1,11 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.compliance.services.issue_policy_link_service import IssuePolicyLinkService as FormalIssuePolicyLinkService
+from app.compliance.services.issue_service import IssueService
 from app.compliance.services.policy_issue_link_service import PolicyIssueLinkService
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
 from app.models.compliance_policy import CompliancePolicy
@@ -198,9 +201,55 @@ def list_policy_issue_links_for_issue(
     _: Membership = Depends(require_permission("policy_issues:view")),
 ) -> list[PolicyIssueLinkResponse]:
     service = PolicyIssueLinkService(db)
-    issue = service.require_issue_in_org(organization.id, issue_id)
-    rows = service.list_links_for_issue(organization.id, issue_id)
-    return [_link_read(link, policy=policy, issue=issue, service=service) for link, policy in rows]
+    try:
+        issue = service.require_issue_in_org(organization.id, issue_id)
+        rows = service.list_links_for_issue(organization.id, issue_id)
+        return [_link_read(link, policy=policy, issue=issue, service=service) for link, policy in rows]
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_404_NOT_FOUND:
+            raise
+
+    formal_rows = FormalIssuePolicyLinkService(db).get_issue_policy_links(organization.id, issue_id)
+    formal_issue = IssueService(db).get_issue(organization.id, issue_id)
+
+    if not formal_rows:
+        return []
+
+    policy_ids = [row.policy_id for row in formal_rows]
+    policies = db.execute(
+        select(CompliancePolicy).where(
+            CompliancePolicy.organization_id == organization.id,
+            CompliancePolicy.id.in_(policy_ids),
+        )
+    ).scalars().all()
+    policy_by_id = {row.id: row for row in policies}
+
+    violation_type_map = {"violated": "violation", "related": "observation"}
+    payload: list[PolicyIssueLinkResponse] = []
+    for row in formal_rows:
+        policy = policy_by_id.get(row.policy_id)
+        payload.append(
+            PolicyIssueLinkResponse(
+                id=row.id,
+                organization_id=row.organization_id,
+                policy_id=row.policy_id,
+                issue_id=row.issue_id,
+                violation_type=violation_type_map.get(row.link_type, "observation"),
+                severity_impact=formal_issue.severity if formal_issue.severity in {"low", "medium", "high", "critical"} else "medium",
+                notes=None,
+                linked_by=row.linked_by,
+                created_at=row.linked_at,
+                updated_at=row.linked_at,
+                policy=PolicyIssuePolicyRef(id=policy.id, name=policy.title) if policy is not None else None,
+                issue=PolicyIssueIssueRef(
+                    id=formal_issue.id,
+                    title=formal_issue.title,
+                    status=formal_issue.status,
+                    severity=formal_issue.severity,
+                ),
+            )
+        )
+    return payload
 
 
 @router.get("/issues/{issue_id}/policy-context", response_model=IssuePolicyContextResponse)

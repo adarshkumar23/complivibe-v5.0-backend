@@ -1,0 +1,90 @@
+import uuid
+from datetime import datetime
+from decimal import Decimal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class MonitoringConfigCreate(BaseModel):
+    metric_type: str
+    threshold_value: Decimal
+    comparison_direction: str
+    alert_on_breach: bool = True
+    check_frequency: str | None = None
+    baseline_value: Decimal | None = None
+    api_key: str | None = Field(default=None, min_length=12, max_length=255)
+
+
+class MonitoringConfigUpdate(BaseModel):
+    metric_type: str | None = None
+    threshold_value: Decimal | None = None
+    comparison_direction: str | None = None
+    alert_on_breach: bool | None = None
+    check_frequency: str | None = None
+    baseline_value: Decimal | None = None
+    api_key: str | None = Field(default=None, min_length=12, max_length=255)
+    is_active: bool | None = None
+
+
+class MonitoringConfigRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    ai_system_id: uuid.UUID
+    metric_type: str
+    threshold_value: Decimal
+    comparison_direction: str
+    alert_on_breach: bool
+    check_frequency: str | None
+    baseline_value: Decimal | None
+    last_checked_at: datetime | None
+    last_reading_value: Decimal | None
+    is_active: bool
+    api_key_configured: bool = False
+    created_by: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: datetime | None
+
+
+class MonitoringReadingCreate(BaseModel):
+    config_id: uuid.UUID
+    value: Decimal
+    source_tool: str | None = Field(default=None, max_length=100)
+
+
+class MonitoringReadingInboundCreate(BaseModel):
+    config_id: uuid.UUID
+    value: Decimal
+    metric_type: str | None = None
+    source_tool: str | None = Field(default=None, max_length=100)
+
+
+class MonitoringReadingRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    config_id: uuid.UUID
+    value: Decimal
+    reading_source: str
+    source_tool: str | None
+    within_threshold: bool
+    created_at: datetime
+
+
+class MonitoringDashboardItem(BaseModel):
+    config_id: uuid.UUID
+    metric_type: str
+    is_active: bool
+    threshold_value: Decimal
+    comparison_direction: str
+    last_reading_value: Decimal | None
+    within_threshold: bool | None
+    last_checked_at: datetime | None
+
+
+class MonitoringDashboardRead(BaseModel):
+    configs: list[MonitoringDashboardItem]
+    recent_breaches: list[MonitoringReadingRead]

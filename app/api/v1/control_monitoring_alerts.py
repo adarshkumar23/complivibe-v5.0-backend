@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
 from app.models.control_monitoring_alert import ControlMonitoringAlert
+from app.models.issue import Issue
 from app.models.membership import Membership
 from app.models.organization import Organization
 from app.models.user import User
@@ -17,6 +18,8 @@ from app.schemas.control_monitoring_alert import (
     ControlMonitoringAlertResolveRequest,
     ControlMonitoringAlertSummary,
 )
+from app.schemas.issue import IssuePromoteCreate, IssueRead
+from app.compliance.services.issue_service import IssueService
 from app.services.audit_service import AuditService
 from app.services.control_monitoring_alert_service import ControlMonitoringAlertService
 
@@ -47,6 +50,29 @@ def _alert_read(row: ControlMonitoringAlert) -> ControlMonitoringAlertRead:
         dismissal_reason=row.dismissal_reason,
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+def _issue_read(row: Issue) -> IssueRead:
+    return IssueRead(
+        id=row.id,
+        organization_id=row.organization_id,
+        title=row.title,
+        description=row.description,
+        issue_type=row.issue_type,
+        severity=row.severity,
+        source_type=row.source_type,
+        source_id=row.source_id,
+        status=row.status,
+        owner_id=row.owner_id,
+        assigned_to=row.assigned_to,
+        created_by=row.created_by,
+        resolution_note=row.resolution_note,
+        resolved_at=row.resolved_at,
+        closed_at=row.closed_at,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        deleted_at=row.deleted_at,
     )
 
 
@@ -159,6 +185,21 @@ def get_alert(
 ) -> ControlMonitoringAlertRead:
     row = ControlMonitoringAlertService(db).require_alert_in_org(organization.id, alert_id)
     return _alert_read(row)
+
+
+@router.post("/{alert_id}/create-issue", response_model=IssueRead, status_code=status.HTTP_201_CREATED)
+def create_issue_from_alert(
+    alert_id: uuid.UUID,
+    payload: IssuePromoteCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("issues:write")),
+) -> IssueRead:
+    row = IssueService(db).promote_from_alert(organization.id, alert_id, payload, current_user.id)
+    db.commit()
+    db.refresh(row)
+    return _issue_read(row)
 
 
 @router.post("/{alert_id}/acknowledge", response_model=ControlMonitoringAlertRead)

@@ -1,0 +1,387 @@
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, date, datetime, timedelta
+
+from app.models.consent_record import ConsentRecord
+from app.models.cookie_registry import CookieRegistry
+from app.models.email_outbox import EmailOutbox
+from app.models.notice_user_acknowledgement import NoticeUserAcknowledgement
+from app.privacy.services.consent_service import ConsentService
+from tests.helpers.auth_org import bootstrap_org_user
+
+
+NOTICES_BASE = "/api/v1/privacy/notices"
+CONSENT_BASE = "/api/v1/privacy/consent"
+COOKIES_BASE = "/api/v1/privacy"
+ROPA_BASE = "/api/v1/privacy/ropa"
+ASSETS_BASE = "/api/v1/data-observability/assets"
+LINEAGE_BASE = "/api/v1/data-observability/lineage"
+
+
+def _create_notice(client, headers: dict[str, str], **overrides):
+    payload = {
+        "title": "Privacy Notice",
+        "content": "This is our privacy notice.",
+        "language": "en",
+        "frameworks": ["gdpr"],
+    }
+    payload.update(overrides)
+    response = client.post(NOTICES_BASE, headers=headers, json=payload)
+    assert response.status_code == 201
+    return response.json()
+
+
+def _create_processing_activity(client, headers: dict[str, str], owner_id: str, **overrides):
+    payload = {
+        "name": "Consent Activity",
+        "description": "Tracks user consent",
+        "purpose": "Consent tracking",
+        "legal_basis": "consent",
+        "data_categories": ["email"],
+        "special_categories": [],
+        "data_subject_types": ["customers"],
+        "retention_period": "2 years",
+        "recipients": ["internal"],
+        "international_transfers": False,
+        "status": "active",
+        "risk_level": "low",
+        "owner_id": owner_id,
+        "linked_data_asset_ids": [],
+        "linked_subprocessor_ids": [],
+    }
+    payload.update(overrides)
+    response = client.post(f"{ROPA_BASE}/activities", headers=headers, json=payload)
+    assert response.status_code == 201
+    return response.json()
+
+
+def _configure_ingest_key(client, headers: dict[str, str], key: str = "privacy-ingest-key-12345") -> str:
+    response = client.post(
+        f"{LINEAGE_BASE}/openmetadata/configure",
+        headers=headers,
+        json={
+            "base_url": "https://openmetadata.example.test",
+            "jwt_token": "test-token",
+            "org_api_key": key,
+        },
+    )
+    assert response.status_code == 200
+    return response.json()["ingest_api_key"]
+
+
+def test_d88_notice_versioning_and_acknowledgement(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="d88-org")
+
+    first = _create_notice(client, org["org_headers"], title="Privacy Notice v1", content="v1")
+    assert first["content_hash"]
+
+    publish_first = client.post(f"{NOTICES_BASE}/{first['id']}/publish", headers=org["org_headers"])
+    assert publish_first.status_code == 200
+    assert publish_first.json()["status"] == "published"
+
+    second = _create_notice(client, org["org_headers"], title="Privacy Notice v2", content="v2")
+    publish_second = client.post(f"{NOTICES_BASE}/{second['id']}/publish", headers=org["org_headers"])
+    assert publish_second.status_code == 200
+    assert publish_second.json()["status"] == "published"
+
+    # Ensure the previous published notice was archived.
+    from app.models.privacy_notice import PrivacyNotice
+
+    first_db = db_session.query(PrivacyNotice).filter(PrivacyNotice.id == uuid.UUID(first["id"])).first()
+    assert first_db is not None
+    assert first_db.status == "archived"
+
+    active = client.get(f"{NOTICES_BASE}/active", headers=org["org_headers"])
+    assert active.status_code == 200
+    assert active.json()["id"] == second["id"]
+
+    ack = client.post(f"{NOTICES_BASE}/{second['id']}/acknowledge", headers=org["org_headers"])
+    assert ack.status_code == 200
+
+    ack_again = client.post(f"{NOTICES_BASE}/{second['id']}/acknowledge", headers=org["org_headers"])
+    assert ack_again.status_code == 200
+
+    ack_rows = (
+        db_session.query(NoticeUserAcknowledgement)
+        .filter(
+            NoticeUserAcknowledgement.organization_id == uuid.UUID(org["organization_id"]),
+            NoticeUserAcknowledgement.notice_id == uuid.UUID(second["id"]),
+            NoticeUserAcknowledgement.user_id == uuid.UUID(org["user_id"]),
+        )
+        .all()
+    )
+    assert len(ack_rows) == 1
+
+    status_resp = client.get(f"{NOTICES_BASE}/{second['id']}/acknowledgements", headers=org["org_headers"])
+    assert status_resp.status_code == 200
+    body = status_resp.json()
+    assert body["acknowledged_count"] >= 1
+    assert body["acknowledgement_rate_pct"] >= 0
+
+
+def test_d85_consent_lifecycle_inbound_and_expiry(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="d85-org")
+
+    ingest_key = _configure_ingest_key(client, org["org_headers"])
+
+    activity = _create_processing_activity(client, org["org_headers"], org["user_id"])
+
+    # Record consent (JWT endpoint).
+    rec = client.post(
+        CONSENT_BASE,
+        headers=org["org_headers"],
+        json={
+            "processing_activity_id": activity["id"],
+            "subject_identifier": "subject-123",
+            "consent_mechanism": "explicit_checkbox",
+            "granted": True,
+            "metadata": {"channel": "web"},
+        },
+    )
+    assert rec.status_code == 201
+    rec_body = rec.json()
+    assert rec_body["subject_identifier_hash"] == ConsentService.hash_subject_identifier("subject-123")
+
+    # Same subject+activity should upsert, not duplicate.
+    rec2 = client.post(
+        CONSENT_BASE,
+        headers=org["org_headers"],
+        json={
+            "processing_activity_id": activity["id"],
+            "subject_identifier": "subject-123",
+            "consent_mechanism": "explicit_checkbox",
+            "granted": True,
+            "metadata": {"channel": "app"},
+        },
+    )
+    assert rec2.status_code == 201
+
+    rows = (
+        db_session.query(ConsentRecord)
+        .filter(
+            ConsentRecord.organization_id == uuid.UUID(org["organization_id"]),
+            ConsentRecord.processing_activity_id == uuid.UUID(activity["id"]),
+            ConsentRecord.subject_identifier_hash == ConsentService.hash_subject_identifier("subject-123"),
+        )
+        .all()
+    )
+    assert len(rows) == 1
+
+    # Withdrawal propagation to data asset owners.
+    asset = client.post(
+        ASSETS_BASE,
+        headers=org["org_headers"],
+        json={
+            "name": "consent_asset",
+            "asset_type": "table",
+            "owner_id": org["user_id"],
+            "schema_column_names": ["email"],
+        },
+    )
+    assert asset.status_code == 201
+
+    updated_activity = client.patch(
+        f"{ROPA_BASE}/activities/{activity['id']}",
+        headers=org["org_headers"],
+        json={"linked_data_asset_ids": [asset.json()["id"]]},
+    )
+    assert updated_activity.status_code == 200
+
+    withdraw = client.post(
+        f"{CONSENT_BASE}/{rec_body['id']}/withdraw",
+        headers=org["org_headers"],
+        json={"reason": "user requested withdrawal"},
+    )
+    assert withdraw.status_code == 200
+    assert withdraw.json()["granted"] is False
+    assert withdraw.json()["withdrawn_at"] is not None
+
+    outbox = (
+        db_session.query(EmailOutbox)
+        .filter(
+            EmailOutbox.organization_id == uuid.UUID(org["organization_id"]),
+            EmailOutbox.event_type == "consent.withdrawn",
+        )
+        .all()
+    )
+    assert len(outbox) >= 1
+
+    status_true = client.get(
+        f"{CONSENT_BASE}/status",
+        headers=org["org_headers"],
+        params={"activity_id": activity["id"], "subject_identifier": "subject-123"},
+    )
+    assert status_true.status_code == 200
+    assert status_true.json()["has_consent"] is False
+
+    # Inbound endpoint requires API key and no JWT.
+    inbound = client.post(
+        f"{CONSENT_BASE}/events",
+        headers={"X-CompliVibe-Key": ingest_key},
+        json={
+            "processing_activity_id": activity["id"],
+            "subject_identifier": "subject-456",
+            "consent_mechanism": "api_consent",
+            "granted": True,
+            "metadata": {"source": "webhook"},
+        },
+    )
+    assert inbound.status_code == 201
+
+    bad_inbound = client.post(
+        f"{CONSENT_BASE}/events",
+        headers={"X-CompliVibe-Key": "wrong-key"},
+        json={
+            "processing_activity_id": activity["id"],
+            "subject_identifier": "subject-789",
+            "consent_mechanism": "api_consent",
+            "granted": True,
+            "metadata": {},
+        },
+    )
+    assert bad_inbound.status_code == 401
+
+    # Expiry sweep marks granted consent as withdrawn.
+    inbound_id = uuid.UUID(inbound.json()["id"])
+    row = db_session.query(ConsentRecord).filter(ConsentRecord.id == inbound_id).first()
+    assert row is not None
+    row.expiry_date = date.today() - timedelta(days=1)
+    row.granted = True
+    row.withdrawn_at = None
+    row.withdrawal_reason = None
+    db_session.commit()
+
+    sweep = ConsentService(db_session).sweep_expired_consents()
+    assert sweep["expired"] >= 1
+
+    refreshed = db_session.query(ConsentRecord).filter(ConsentRecord.id == inbound_id).first()
+    assert refreshed is not None
+    assert refreshed.granted is False
+    assert refreshed.withdrawal_reason == "expired"
+
+
+def test_d87_cookie_registry_scan_and_public_banner(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="d87-org")
+    ingest_key = _configure_ingest_key(client, org["org_headers"], key="cookie-scan-key-12345")
+
+    created = client.post(
+        f"{COOKIES_BASE}/cookies",
+        headers=org["org_headers"],
+        json={
+            "name": "manual_cookie",
+            "domain": "example.com",
+            "category": "functional",
+            "purpose": "Preferences",
+            "provider": "CompliVibe",
+            "duration": "Session",
+            "is_third_party": False,
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["source"] == "manual"
+
+    scan1 = client.post(
+        f"{COOKIES_BASE}/cookie-registry/scan-report",
+        headers={"X-CompliVibe-Key": ingest_key},
+        json={
+            "domain": "example.com",
+            "cookies": [
+                {
+                    "name": "ga_cookie",
+                    "category": "analytics",
+                    "purpose": "Analytics",
+                    "provider": "Google",
+                    "duration": "1 year",
+                    "is_third_party": True,
+                },
+                {
+                    "name": "ga_cookie",
+                    "category": "analytics",
+                    "purpose": "Analytics",
+                    "provider": "Google",
+                    "duration": "1 year",
+                    "is_third_party": True,
+                },
+            ],
+            "scanned_at": datetime.now(UTC).isoformat(),
+        },
+    )
+    assert scan1.status_code == 201
+
+    ga_row = (
+        db_session.query(CookieRegistry)
+        .filter(
+            CookieRegistry.organization_id == uuid.UUID(org["organization_id"]),
+            CookieRegistry.name == "ga_cookie",
+            CookieRegistry.domain == "example.com",
+        )
+        .first()
+    )
+    assert ga_row is not None
+    assert ga_row.source == "scan_report"
+    first_seen = ga_row.first_seen_at
+    assert ga_row.last_seen_at is not None
+
+    scan2 = client.post(
+        f"{COOKIES_BASE}/cookie-registry/scan-report",
+        headers={"X-CompliVibe-Key": ingest_key},
+        json={
+            "domain": "example.com",
+            "cookies": [
+                {
+                    "name": "ga_cookie",
+                    "category": "analytics",
+                    "purpose": "Analytics",
+                    "provider": "Google",
+                    "duration": "1 year",
+                    "is_third_party": True,
+                },
+                {
+                    "name": "new_marketing_cookie",
+                    "category": "marketing",
+                    "purpose": "Ads",
+                    "provider": "AdNet",
+                    "duration": "30 days",
+                    "is_third_party": True,
+                },
+            ],
+            "scanned_at": (datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
+        },
+    )
+    assert scan2.status_code == 201
+
+    ga_row2 = (
+        db_session.query(CookieRegistry)
+        .filter(
+            CookieRegistry.organization_id == uuid.UUID(org["organization_id"]),
+            CookieRegistry.name == "ga_cookie",
+            CookieRegistry.domain == "example.com",
+        )
+        .first()
+    )
+    assert ga_row2 is not None
+    assert ga_row2.first_seen_at == first_seen
+
+    banner = client.post(
+        f"{COOKIES_BASE}/banner-config",
+        headers=org["org_headers"],
+        json={
+            "banner_title": "Cookie Preferences",
+            "banner_body": "Manage cookies",
+            "enabled_categories": ["strictly_necessary", "analytics", "marketing"],
+            "is_active": True,
+        },
+    )
+    assert banner.status_code == 200
+
+    orgs = client.get("/api/v1/organizations/me", headers=org["headers"])
+    assert orgs.status_code == 200
+    slug = orgs.json()[0]["slug"]
+
+    public = client.get(f"{COOKIES_BASE}/consent-banner/{slug}")
+    assert public.status_code == 200
+    body = public.json()
+    assert body["organization_slug"] == slug
+    assert isinstance(body["cookie_categories"], list)
+    assert "analytics" in body["cookie_categories"]

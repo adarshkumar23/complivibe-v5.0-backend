@@ -61,6 +61,7 @@ class CompliancePolicyRead(UUIDTimestampSchema):
     archived_at: datetime | None = None
     archived_by_user_id: UUID | None = None
     archive_reason: str | None = None
+    violation_count: int | None = 0
 
 
 class CompliancePolicySummary(BaseModel):

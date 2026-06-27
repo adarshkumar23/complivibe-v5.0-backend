@@ -1,0 +1,606 @@
+import logging
+
+from fastapi import FastAPI
+
+from app.compliance.services.audit_schedule_service import run_daily_audit_schedule_reminder_sweep
+from app.compliance.services.customer_commitment_service import run_daily_customer_commitment_trigger_sweep
+from app.compliance.services.escalation_service import run_daily_escalation_policy_evaluation
+from app.compliance.services.breach_notification_service import run_daily_breach_notification_deadline_sweep
+from app.compliance.services.vendor_mitigation_service import run_daily_vendor_mitigation_overdue_action_sweep
+from app.compliance.services.pbc_service import run_daily_pbc_overdue_sweep
+from app.compliance.services.subprocessor_service import run_daily_subprocessor_dpa_expiry_sweep
+from app.compliance.services.sla_service import run_hourly_issue_sla_breach_check
+from app.compliance.services.email_flush_service import run_email_outbox_flush_sweep
+from app.ai_governance.services.mlops_sync_service import run_daily_mlops_sync_sweep
+from app.data_observability.services.lineage_service import run_daily_openmetadata_sync_sweep
+from app.data_observability.services.retention_service import run_daily_data_retention_sweep
+from app.data_observability.services.residency_service import run_daily_data_residency_sweep
+from app.privacy.services.dsar_service import run_daily_dsr_sla_sweep
+from app.privacy.services.consent_service import run_daily_consent_expiry_sweep
+from app.privacy.services.dpa_service import run_daily_dpa_expiry_sweep
+from app.compliance.services.digest_service import run_daily_digest_send_sweep, run_weekly_digest_send_sweep
+from app.core.scheduler_logger import SchedulerJobLogger
+from app.core.config import get_settings
+from app.db.session import get_session_maker
+
+logger = logging.getLogger(__name__)
+
+SCHEDULER_JOB_IDS: list[str] = [
+    "pbc_overdue_daily_sweep",
+    "audit_schedule_reminder_sweep",
+    "subprocessor_dpa_expiry_sweep",
+    "commitment_trigger_sweep",
+    "mitigation_overdue_action_sweep",
+    "issue_sla_breach_check",
+    "escalation_policy_evaluation",
+    "breach_notification_deadline_sweep",
+    "mlops_daily_sync",
+    "openmetadata_daily_sync",
+    "data_retention_sweep",
+    "data_residency_sweep",
+    "email_outbox_flush",
+    "dsr_sla_sweep",
+    "consent_expiry_sweep",
+    "dpa_expiry_sweep",
+    "daily_digest_send",
+    "weekly_digest_send",
+]
+
+
+def _records_from_result(result: dict | None) -> int | None:
+    if not isinstance(result, dict):
+        return None
+    if isinstance(result.get("records_processed"), int):
+        return int(result["records_processed"])
+    values = [value for value in result.values() if isinstance(value, int) and not isinstance(value, bool)]
+    if not values:
+        return None
+    return int(sum(values))
+
+
+def _run_sweep_job_internal(*, db) -> dict:
+    try:
+        marked = run_daily_pbc_overdue_sweep(db)
+        db.commit()
+        logger.info("PBC overdue sweep complete", extra={"items_marked": marked})
+        return {"items_marked": marked, "records_processed": marked}
+    except Exception:
+        db.rollback()
+        logger.exception("PBC overdue sweep failed")
+        raise
+
+
+def _run_sweep_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="pbc_overdue_daily_sweep",
+        job_fn=_run_sweep_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_audit_schedule_reminder_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_audit_schedule_reminder_sweep(db)
+        db.commit()
+        logger.info("Audit schedule reminder sweep complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception:
+        db.rollback()
+        logger.exception("Audit schedule reminder sweep failed")
+        raise
+
+
+def _run_audit_schedule_reminder_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="audit_schedule_reminder_sweep",
+        job_fn=_run_audit_schedule_reminder_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_subprocessor_dpa_expiry_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_subprocessor_dpa_expiry_sweep(db)
+        db.commit()
+        logger.info("Subprocessor DPA expiry sweep complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception:
+        db.rollback()
+        logger.exception("Subprocessor DPA expiry sweep failed")
+        raise
+
+
+def _run_subprocessor_dpa_expiry_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="subprocessor_dpa_expiry_sweep",
+        job_fn=_run_subprocessor_dpa_expiry_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_commitment_trigger_sweep_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_customer_commitment_trigger_sweep(db)
+        db.commit()
+        logger.info("Customer commitment trigger sweep complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception:
+        db.rollback()
+        logger.exception("Customer commitment trigger sweep failed")
+        raise
+
+
+def _run_commitment_trigger_sweep_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="commitment_trigger_sweep",
+        job_fn=_run_commitment_trigger_sweep_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_mitigation_overdue_action_sweep_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_vendor_mitigation_overdue_action_sweep(db)
+        db.commit()
+        logger.info("Vendor mitigation overdue action sweep complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception:
+        db.rollback()
+        logger.exception("Vendor mitigation overdue action sweep failed")
+        raise
+
+
+def _run_mitigation_overdue_action_sweep_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="mitigation_overdue_action_sweep",
+        job_fn=_run_mitigation_overdue_action_sweep_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_issue_sla_breach_check_job_internal(*, db) -> dict:
+    try:
+        result = run_hourly_issue_sla_breach_check(db)
+        db.commit()
+        logger.info("Issue SLA breach check complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception:
+        db.rollback()
+        logger.exception("Issue SLA breach check failed")
+        raise
+
+
+def _run_issue_sla_breach_check_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="issue_sla_breach_check",
+        job_fn=_run_issue_sla_breach_check_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_escalation_policy_evaluation_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_escalation_policy_evaluation(db)
+        db.commit()
+        logger.info("Escalation policy evaluation complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception:
+        db.rollback()
+        logger.exception("Escalation policy evaluation failed")
+        raise
+
+
+def _run_escalation_policy_evaluation_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="escalation_policy_evaluation",
+        job_fn=_run_escalation_policy_evaluation_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_breach_notification_deadline_sweep_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_breach_notification_deadline_sweep(db)
+        db.commit()
+        logger.info("Breach notification deadline sweep complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception:
+        db.rollback()
+        logger.exception("Breach notification deadline sweep failed")
+        raise
+
+
+def _run_breach_notification_deadline_sweep_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="breach_notification_deadline_sweep",
+        job_fn=_run_breach_notification_deadline_sweep_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_mlops_daily_sync_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_mlops_sync_sweep(db)
+        db.commit()
+        logger.info("MLOps daily sync complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception:
+        db.rollback()
+        logger.exception("MLOps daily sync failed")
+        raise
+
+
+def _run_mlops_daily_sync_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="mlops_daily_sync",
+        job_fn=_run_mlops_daily_sync_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_openmetadata_daily_sync_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_openmetadata_sync_sweep(db)
+        db.commit()
+        logger.info("OpenMetadata daily sync complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception:
+        db.rollback()
+        logger.exception("OpenMetadata daily sync failed")
+        raise
+
+
+def _run_openmetadata_daily_sync_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="openmetadata_daily_sync",
+        job_fn=_run_openmetadata_daily_sync_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_data_retention_sweep_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_data_retention_sweep(db)
+        db.commit()
+        logger.info("Data retention sweep complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception:
+        db.rollback()
+        logger.exception("Data retention sweep failed")
+        raise
+
+
+def _run_data_retention_sweep_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="data_retention_sweep",
+        job_fn=_run_data_retention_sweep_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_data_residency_sweep_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_data_residency_sweep(db)
+        db.commit()
+        logger.info("Data residency sweep complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception:
+        db.rollback()
+        logger.exception("Data residency sweep failed")
+        raise
+
+
+def _run_data_residency_sweep_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="data_residency_sweep",
+        job_fn=_run_data_residency_sweep_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_email_outbox_flush_job_internal(*, db) -> dict:
+    try:
+        result = run_email_outbox_flush_sweep(db)
+        db.commit()
+        logger.info("Email outbox flush complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception:
+        db.rollback()
+        logger.exception("Email outbox flush failed")
+        raise
+
+
+def _run_email_outbox_flush_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="email_outbox_flush",
+        job_fn=_run_email_outbox_flush_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_dsr_sla_sweep_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_dsr_sla_sweep(db)
+        db.commit()
+        logger.info("DSR SLA sweep complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception:
+        db.rollback()
+        logger.exception("DSR SLA sweep failed")
+        raise
+
+
+def _run_dsr_sla_sweep_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="dsr_sla_sweep",
+        job_fn=_run_dsr_sla_sweep_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_consent_expiry_sweep_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_consent_expiry_sweep(db)
+        db.commit()
+        logger.info("Consent expiry sweep complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception:
+        db.rollback()
+        logger.exception("Consent expiry sweep failed")
+        raise
+
+
+def _run_consent_expiry_sweep_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="consent_expiry_sweep",
+        job_fn=_run_consent_expiry_sweep_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_dpa_expiry_sweep_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_dpa_expiry_sweep(db)
+        db.commit()
+        logger.info("DPA expiry sweep complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception:
+        db.rollback()
+        logger.exception("DPA expiry sweep failed")
+        raise
+
+
+def _run_dpa_expiry_sweep_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="dpa_expiry_sweep",
+        job_fn=_run_dpa_expiry_sweep_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_daily_digest_send_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_digest_send_sweep(db)
+        db.commit()
+        logger.info("Daily digest send sweep complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception:
+        db.rollback()
+        logger.exception("Daily digest send sweep failed")
+        raise
+
+
+def _run_daily_digest_send_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="daily_digest_send",
+        job_fn=_run_daily_digest_send_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_weekly_digest_send_job_internal(*, db) -> dict:
+    try:
+        result = run_weekly_digest_send_sweep(db)
+        db.commit()
+        logger.info("Weekly digest send sweep complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception:
+        db.rollback()
+        logger.exception("Weekly digest send sweep failed")
+        raise
+
+
+def _run_weekly_digest_send_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="weekly_digest_send",
+        job_fn=_run_weekly_digest_send_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def register_pbc_scheduler(app: FastAPI) -> None:
+    settings = get_settings()
+    if settings.APP_ENV == "test":
+        return
+
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+        from apscheduler.triggers.interval import IntervalTrigger
+    except Exception:
+        logger.warning("APScheduler is not installed; PBC overdue sweep scheduler not started")
+        return
+
+    scheduler = BackgroundScheduler(timezone="UTC")
+    scheduler.add_job(
+        _run_sweep_job,
+        trigger=CronTrigger(hour=0, minute=10),
+        id="pbc_overdue_daily_sweep",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_audit_schedule_reminder_job,
+        trigger=CronTrigger(hour=0, minute=20),
+        id="audit_schedule_reminder_sweep",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_subprocessor_dpa_expiry_job,
+        trigger=CronTrigger(hour=0, minute=30),
+        id="subprocessor_dpa_expiry_sweep",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_commitment_trigger_sweep_job,
+        trigger=CronTrigger(hour=0, minute=40),
+        id="commitment_trigger_sweep",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_mitigation_overdue_action_sweep_job,
+        trigger=CronTrigger(hour=0, minute=50),
+        id="mitigation_overdue_action_sweep",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_issue_sla_breach_check_job,
+        trigger=IntervalTrigger(hours=1),
+        id="issue_sla_breach_check",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_escalation_policy_evaluation_job,
+        trigger=CronTrigger(hour=1, minute=0),
+        id="escalation_policy_evaluation",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_breach_notification_deadline_sweep_job,
+        trigger=CronTrigger(hour=1, minute=10),
+        id="breach_notification_deadline_sweep",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_mlops_daily_sync_job,
+        trigger=CronTrigger(hour=1, minute=20),
+        id="mlops_daily_sync",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_openmetadata_daily_sync_job,
+        trigger=CronTrigger(hour=1, minute=30),
+        id="openmetadata_daily_sync",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_data_retention_sweep_job,
+        trigger=CronTrigger(hour=1, minute=40),
+        id="data_retention_sweep",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_data_residency_sweep_job,
+        trigger=CronTrigger(hour=1, minute=50),
+        id="data_residency_sweep",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_email_outbox_flush_job,
+        trigger=IntervalTrigger(minutes=5),
+        id="email_outbox_flush",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_dsr_sla_sweep_job,
+        trigger=CronTrigger(hour=2, minute=0),
+        id="dsr_sla_sweep",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_consent_expiry_sweep_job,
+        trigger=CronTrigger(hour=2, minute=10),
+        id="consent_expiry_sweep",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_dpa_expiry_sweep_job,
+        trigger=CronTrigger(hour=2, minute=20),
+        id="dpa_expiry_sweep",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_daily_digest_send_job,
+        trigger=CronTrigger(hour=8, minute=0),
+        id="daily_digest_send",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_weekly_digest_send_job,
+        trigger=CronTrigger(day_of_week="mon", hour=8, minute=0),
+        id="weekly_digest_send",
+        replace_existing=True,
+        coalesce=True,
+    )
+
+    @app.on_event("startup")
+    def _start_scheduler() -> None:
+        if not scheduler.running:
+            scheduler.start()
+
+    @app.on_event("shutdown")
+    def _shutdown_scheduler() -> None:
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
+
+    app.state.pbc_scheduler = scheduler  # type: ignore[attr-defined]

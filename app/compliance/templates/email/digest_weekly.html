@@ -1,0 +1,9 @@
+{% extends "digest_daily.html" %}
+{% block content %}
+{{ super() }}
+<h3>📊 This Week</h3>
+<ul>
+  <li>New issues this week: {{ new_issues_this_week }}</li>
+  <li>Obligations due this month: {{ obligations_due_this_month }}</li>
+</ul>
+{% endblock %}

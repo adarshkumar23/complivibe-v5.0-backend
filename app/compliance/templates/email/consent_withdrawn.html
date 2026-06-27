@@ -1,0 +1,7 @@
+{% extends "base_email.html" %}
+{% block content %}
+<p>A data subject has withdrawn consent for a processing activity.</p>
+<p><strong>Activity:</strong> {{ activity_name }}</p>
+{% if withdrawal_reason %}<p><strong>Reason:</strong> {{ withdrawal_reason }}</p>{% endif %}
+<p><strong>Linked data assets:</strong> {{ data_asset_names }}</p>
+{% endblock %}

@@ -33,11 +33,13 @@ from app.schemas.compliance_policy import (
 from app.services.audit_service import AuditService
 from app.services.compliance_policy_service import CompliancePolicyService
 from app.services.rbac_service import RBACService
+from app.compliance.services.issue_policy_link_service import IssuePolicyLinkService
+from app.schemas.issue_links import PolicyAssociatedIssueRead, PolicyViolationRateRead
 
 router = APIRouter(prefix="/compliance/policies", tags=["compliance_policies"])
 
 
-def _policy_read(row: CompliancePolicy) -> CompliancePolicyRead:
+def _policy_read(row: CompliancePolicy, *, violation_count: int = 0) -> CompliancePolicyRead:
     return CompliancePolicyRead(
         id=row.id,
         organization_id=row.organization_id,
@@ -57,6 +59,7 @@ def _policy_read(row: CompliancePolicy) -> CompliancePolicyRead:
         archived_at=row.archived_at,
         archived_by_user_id=row.archived_by_user_id,
         archive_reason=row.archive_reason,
+        violation_count=violation_count,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -197,7 +200,8 @@ def list_policies(
         stmt = stmt.where(CompliancePolicy.status != "archived")
 
     rows = db.execute(stmt.order_by(CompliancePolicy.created_at.desc())).scalars().all()
-    return [_policy_read(row) for row in rows]
+    violation_counts = IssuePolicyLinkService(db).get_policy_violation_counts(organization.id, [row.id for row in rows])
+    return [_policy_read(row, violation_count=violation_counts.get(row.id, 0)) for row in rows]
 
 
 @router.get("/{policy_id}", response_model=CompliancePolicyRead)
@@ -208,7 +212,31 @@ def get_policy(
     _: Membership = Depends(require_permission("compliance_policies:read")),
 ) -> CompliancePolicyRead:
     row = CompliancePolicyService(db).require_policy_in_org(organization.id, policy_id)
-    return _policy_read(row)
+    violation_count = IssuePolicyLinkService(db).get_policy_violation_counts(organization.id, [row.id]).get(row.id, 0)
+    return _policy_read(row, violation_count=violation_count)
+
+
+@router.get("/{policy_id}/associated-issues", response_model=list[PolicyAssociatedIssueRead])
+def get_policy_associated_issues(
+    policy_id: uuid.UUID,
+    link_type: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("issues:read")),
+) -> list[PolicyAssociatedIssueRead]:
+    payload = IssuePolicyLinkService(db).get_policy_associated_issues(organization.id, policy_id, link_type=link_type)
+    return [PolicyAssociatedIssueRead(**row) for row in payload]
+
+
+@router.get("/{policy_id}/violation-rate", response_model=PolicyViolationRateRead)
+def get_policy_violation_rate(
+    policy_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("issues:read")),
+) -> PolicyViolationRateRead:
+    payload = IssuePolicyLinkService(db).get_policy_violation_rate(organization.id, policy_id)
+    return PolicyViolationRateRead(**payload)
 
 
 @router.patch("/{policy_id}", response_model=CompliancePolicyRead)
