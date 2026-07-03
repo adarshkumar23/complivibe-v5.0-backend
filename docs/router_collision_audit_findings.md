@@ -1,6 +1,36 @@
 # Router Collision Audit Findings
 
-## Background
+## Update (independent re-audit)
+
+The original pass below (Audit Method: static parsing of
+`include_router(...)` calls) missed 2 collisions because they were on
+`policy_exceptions.router`'s **base** `POST`/`GET /policy-exceptions` path
+(item 2 below only checked `/{exception_id}`-suffixed paths and incorrectly
+listed the base list/create endpoints as "unique, preserved"). A follow-up
+audit built on **runtime introspection of the live `app.main.app` route
+table** (walking FastAPI's `_IncludedRouter`/`original_router` tree and
+accumulating each level's `include_context.prefix`, rather than statically
+parsing source files) is more reliable and found these 2 remaining
+collisions, which have now also been fixed:
+
+| Collision path | Live router (kept) | Dead code removed |
+|---|---|---|
+| `GET /compliance/policy-exceptions` | `app.compliance.routers.policy_exceptions.list_exceptions` (v2) | `app.api.v1.policy_exceptions.list_policy_exceptions` |
+| `POST /compliance/policy-exceptions` | `app.compliance.routers.policy_exceptions.create_exception` (v2) | `app.api.v1.policy_exceptions.create_policy_exception` |
+
+Verified live behavior matches the v2 (`compliance_policy_exceptions`)
+schema: `POST /api/v1/compliance/policy-exceptions` with `{"policy_id",
+"reason"}` returns 200 with a `PolicyExceptionResponse` shaped by
+`app/compliance/schemas/attestations_exceptions.py`, and the now-dead v1
+`create_policy_exception`/`list_policy_exceptions` handlers (and their
+now-unused imports `PolicyExceptionCreate`, `PolicyExceptionApprovalCreate`,
+`PolicyExceptionRejectionCreate`, `Query`, `status`) were removed from
+`app/api/v1/policy_exceptions.py`. An independent runtime scan of the full
+route table (1613 unique `(method, path)` keys) now reports **0 remaining
+collisions**, confirmed by walking `app.routes` directly rather than
+re-parsing source.
+
+## Background (original pass)
 
 A full audit of `app/api/v1/router.py` was performed to identify every
 `APIRouter` mounted at an overlapping HTTP path. The audit found **18

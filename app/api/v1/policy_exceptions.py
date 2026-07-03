@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.compliance.services.policy_exception_service import PolicyExceptionService
@@ -12,11 +12,8 @@ from app.models.policy_exception import PolicyException
 from app.models.policy_exception_approval import PolicyExceptionApproval
 from app.models.user import User
 from app.schemas.policy_exception import (
-    PolicyExceptionApprovalCreate,
     PolicyExceptionApprovalResponse,
-    PolicyExceptionCreate,
     PolicyExceptionDashboardResponse,
-    PolicyExceptionRejectionCreate,
     PolicyExceptionResponse,
     PolicyExceptionSummaryResponse,
     PolicyExceptionUpdate,
@@ -70,21 +67,6 @@ def _read_exception(
     )
 
 
-@router.post("/policy-exceptions", response_model=PolicyExceptionResponse, status_code=status.HTTP_201_CREATED)
-def create_policy_exception(
-    payload: PolicyExceptionCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("policy_exceptions:submit")),
-) -> PolicyExceptionResponse:
-    service = PolicyExceptionService(db)
-    row = service.create_exception(organization.id, payload, current_user.id)
-    db.commit()
-    db.refresh(row)
-    return _read_exception(service, row)
-
-
 @router.get("/policy-exceptions/dashboard", response_model=PolicyExceptionDashboardResponse)
 def policy_exception_dashboard(
     db: Session = Depends(get_db),
@@ -100,27 +82,6 @@ def policy_exception_dashboard(
         high_risk_active=[_read_exception(service, row) for row in payload["high_risk_active"]],
         overdue_pending=[_read_exception(service, row) for row in payload["overdue_pending"]],
     )
-
-
-@router.get("/policy-exceptions", response_model=list[PolicyExceptionResponse])
-def list_policy_exceptions(
-    policy_id: uuid.UUID | None = Query(default=None),
-    status_filter: str | None = Query(default=None, alias="status"),
-    requested_by: uuid.UUID | None = Query(default=None),
-    risk_level: str | None = Query(default=None),
-    db: Session = Depends(get_db),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("policy_exceptions:view")),
-) -> list[PolicyExceptionResponse]:
-    service = PolicyExceptionService(db)
-    rows = service.list_exceptions(
-        organization.id,
-        policy_id=policy_id,
-        status_value=status_filter,
-        requested_by=requested_by,
-        risk_level=risk_level,
-    )
-    return [_read_exception(service, row) for row in rows]
 
 
 @router.patch("/policy-exceptions/{exception_id}", response_model=PolicyExceptionResponse)
