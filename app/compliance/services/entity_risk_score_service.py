@@ -7,6 +7,7 @@ from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
 from app.compliance.services.risk_scoring_service import RiskScoringService
+from app.models.business_unit import BusinessUnit
 from app.models.data_asset import DataAsset
 from app.models.data_asset_risk_link import DataAssetRiskLink
 from app.models.entity_risk_score import EntityRiskScore
@@ -94,7 +95,15 @@ class EntityRiskScoreService:
             return row.name, None
 
         if entity_type == "business_unit":
-            return str(entity_id), "Business unit model not yet implemented. Entity label uses raw UUID."
+            row = db.execute(
+                select(BusinessUnit).where(
+                    BusinessUnit.organization_id == org_id,
+                    BusinessUnit.id == entity_id,
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found")
+            return row.name, None
 
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Invalid entity_type")
 
@@ -169,13 +178,10 @@ class EntityRiskScoreService:
             return risks, None
 
         if entity_type == "business_unit":
-            if not hasattr(Risk, "business_unit_id"):
-                return [], "Business unit links not yet implemented. Score based on 0 linked risks."
-
             rows = db.execute(
                 select(Risk).where(
                     Risk.organization_id == org_id,
-                    getattr(Risk, "business_unit_id") == entity_id,
+                    Risk.business_unit_id == entity_id,
                     Risk.status.not_in(["closed", "archived"]),
                 )
             ).scalars().all()

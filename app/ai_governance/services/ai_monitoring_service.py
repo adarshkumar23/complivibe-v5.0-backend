@@ -317,12 +317,16 @@ class AIMonitoringService:
                 metadata_json={"source": "service"},
             )
 
-        if not within_threshold and config.metric_type == "bias_parity_gap":
+        breach_signal_type = {
+            "bias_parity_gap": "bias_signal",
+            "output_drift": "output_distribution_shift",
+        }.get(config.metric_type)
+        if not within_threshold and breach_signal_type is not None:
             SignalService(self.db).emit_signal(
                 org_id,
                 config.ai_system_id,
-                signal_type="bias_signal",
-                description=f"Bias metric {config.metric_type} breached threshold: {value}",
+                signal_type=breach_signal_type,
+                description=f"Monitoring metric {config.metric_type} breached threshold: {value}",
             )
 
         return row

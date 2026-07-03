@@ -62,7 +62,7 @@ class RiskScoringService:
         return RiskScoringService._scale_raw_score(raw_score)
 
     @staticmethod
-    def compute_residual(risk: Risk, linked_controls: list[Control]) -> tuple[int, int, int]:
+    def compute_residual(risk: Risk, linked_controls: list[Control], inherent_score: int) -> tuple[int, int, int]:
         """Derive residual (post-control) likelihood/impact/score from currently linked controls.
 
         inherent_score is deliberately left untouched by control state elsewhere (it's the
@@ -77,6 +77,11 @@ class RiskScoringService:
         works. Any manual residual_likelihood/residual_impact set via a direct risk PATCH will
         be overwritten the next time a linked control/evidence/vendor event fires -- this is an
         auto-managed field, not a one-time manual override.
+
+        residual_score is clamped to inherent_score: residual_likelihood/impact are derived from
+        risk.likelihood/risk.impact, which is a different (and for factor_based risks, unrelated)
+        basis than inherent_score, so the raw product can otherwise exceed inherent_score --
+        logically impossible for a residual (post-control) risk level.
         """
         relevant = [c for c in linked_controls if c.status not in _CONTROL_NOT_RELEVANT_STATUSES]
         implemented = [c for c in relevant if c.status == "implemented"]
@@ -92,7 +97,7 @@ class RiskScoringService:
             residual_likelihood = max(1, risk.likelihood - reduction)
 
         residual_impact = risk.impact
-        residual_score = residual_likelihood * residual_impact
+        residual_score = min(residual_likelihood * residual_impact, inherent_score)
         return residual_likelihood, residual_impact, residual_score
 
     @classmethod

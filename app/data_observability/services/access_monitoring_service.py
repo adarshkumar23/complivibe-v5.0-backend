@@ -203,12 +203,25 @@ class AccessMonitoringService:
         ).all()
         by_access_result = {str(r): int(c) for r, c in by_result_rows}
 
-        unique_actors = int(
+        # actor_id (internal users) and actor_external (machine/external identifiers) are
+        # disjoint identifier spaces on the same row set -- a machine-ingest access log row
+        # has actor_id NULL and only actor_external populated, so both must be counted for
+        # unique_actors to reflect real distinct actors instead of only human users.
+        unique_internal_actors = int(
             self.db.execute(
                 select(func.count(func.distinct(DataAccessLog.actor_id))).where(*base_filters, DataAccessLog.actor_id.is_not(None))
             ).scalar_one()
             or 0
         )
+        unique_external_actors = int(
+            self.db.execute(
+                select(func.count(func.distinct(DataAccessLog.actor_external))).where(
+                    *base_filters, DataAccessLog.actor_external.is_not(None)
+                )
+            ).scalar_one()
+            or 0
+        )
+        unique_actors = unique_internal_actors + unique_external_actors
 
         anomaly_alert_filters = [
             ControlMonitoringAlert.organization_id == org_id,

@@ -59,7 +59,19 @@ class BuiltInPolicyEngine:
                     ],
                 }
 
-        # data_scope: default permit in this phase.
+        elif guardrail.guardrail_type == "data_scope":
+            allowed_categories = guardrail.constraint_value.get("allowed_data_categories", [])
+            requested_categories = action_context.get("data_categories", [])
+            if allowed_categories:
+                disallowed = [c for c in requested_categories if c not in allowed_categories]
+                if disallowed:
+                    return {
+                        "decision": "block",
+                        "violations": [
+                            f"Data categories {disallowed} are not in permitted scope: {allowed_categories}",
+                        ],
+                    }
+
         return {"decision": "permit", "violations": []}
 
 

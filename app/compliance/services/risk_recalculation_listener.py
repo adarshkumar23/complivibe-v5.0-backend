@@ -104,7 +104,7 @@ class RiskRecalculationListener:
             linked_controls = self._linked_active_controls(org_id=payload.org_id, risk_id=risk.id, db=db)
             previous_residual_score = risk.residual_score
             new_residual_likelihood, new_residual_impact, new_residual_score = RiskScoringService.compute_residual(
-                risk, linked_controls
+                risk, linked_controls, new_score
             )
 
             inherent_changed = new_score != previous_score

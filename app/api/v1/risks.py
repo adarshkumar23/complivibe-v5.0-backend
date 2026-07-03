@@ -141,7 +141,9 @@ def _recompute_residual(db: Session, organization_id: uuid.UUID, risk: Risk) -> 
             )
         ).scalars().all()
     )
-    residual_likelihood, residual_impact, residual_score = RiskScoringService.compute_residual(risk, linked_controls)
+    residual_likelihood, residual_impact, residual_score = RiskScoringService.compute_residual(
+        risk, linked_controls, risk.inherent_score
+    )
     risk.residual_likelihood = residual_likelihood
     risk.residual_impact = residual_impact
     risk.residual_score = residual_score
@@ -314,7 +316,7 @@ def create_risk(
     # No controls can be linked yet at creation time, so residual = inherent (nothing
     # mitigating this risk so far). It will be recomputed automatically as controls are
     # linked and change status (see RiskRecalculationListener).
-    residual_likelihood, residual_impact, residual_score = RiskScoringService.compute_residual(risk, [])
+    residual_likelihood, residual_impact, residual_score = RiskScoringService.compute_residual(risk, [], inherent_score)
     risk.inherent_score = inherent_score
     risk.severity = severity
     risk.residual_likelihood = residual_likelihood
@@ -481,6 +483,11 @@ def update_risk(
         residual_likelihood=risk.residual_likelihood,
         residual_impact=risk.residual_impact,
     )
+    # residual_score is derived from likelihood*impact, which is independent of
+    # inherent_score for factor_based risks (a weighted financial/brand/operational
+    # formula) -- residual can never exceed inherent risk by definition, so clamp it.
+    if residual_score is not None:
+        residual_score = min(residual_score, inherent_score)
     risk.inherent_score = inherent_score
     risk.severity = severity
     risk.residual_score = residual_score
