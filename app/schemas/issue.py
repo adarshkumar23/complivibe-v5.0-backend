@@ -5,7 +5,20 @@ from pydantic import BaseModel, Field
 
 ISSUE_TYPE_PATTERN = "^(security_incident|compliance_violation|operational_failure|vendor_failure|data_loss|unauthorized_access|policy_violation|custom)$"
 ISSUE_SEVERITY_PATTERN = "^(critical|high|medium|low)$"
-ISSUE_SOURCE_TYPE_PATTERN = "^(manual|monitoring_alert|audit_finding|vendor_assessment|external_report)$"
+# Must stay in sync with the ``ck_issues_source_type`` CHECK constraint on the
+# ``issues`` table (app/models/issue.py + alembic 0136). Internal escalation paths
+# (e.g. data-incident auto-issues) write the model directly, so IssueRead must be
+# able to serialize every value the DB permits — otherwise listing issues 500s.
+ISSUE_SOURCE_TYPES = (
+    "manual",
+    "monitoring_alert",
+    "audit_finding",
+    "vendor_assessment",
+    "external_report",
+    "data_incident",
+    "risk_assessment",
+)
+ISSUE_SOURCE_TYPE_PATTERN = "^(" + "|".join(ISSUE_SOURCE_TYPES) + ")$"
 ISSUE_STATUS_PATTERN = "^(open|investigating|mitigating|resolved|closed)$"
 
 

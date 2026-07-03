@@ -120,7 +120,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_risk_classification_record_snapshots_organization_id",
+        "ix_ai_system_risk_class_record_snaps_org_id_c0feb594",
         "ai_system_risk_classification_record_snapshots",
         ["organization_id"],
         unique=False,
@@ -150,7 +150,7 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_index(
-        "ix_ai_risk_classification_record_snapshots_org_classification_version",
+        "ix_ai_risk_class_record_snaps_org_class_ver_7933f4bd",
         "ai_system_risk_classification_record_snapshots",
         ["organization_id", "classification_id", "snapshot_version"],
         unique=False,
@@ -254,7 +254,7 @@ def downgrade() -> None:
     op.drop_table("governance_signals")
 
     op.drop_index(
-        "ix_ai_risk_classification_record_snapshots_org_classification_version",
+        "ix_ai_risk_class_record_snaps_org_class_ver_7933f4bd",
         table_name="ai_system_risk_classification_record_snapshots",
     )
     op.drop_index("ix_ai_risk_classification_record_snapshots_org_type", table_name="ai_system_risk_classification_record_snapshots")
@@ -271,7 +271,7 @@ def downgrade() -> None:
         table_name="ai_system_risk_classification_record_snapshots",
     )
     op.drop_index(
-        "ix_ai_system_risk_classification_record_snapshots_organization_id",
+        "ix_ai_system_risk_class_record_snaps_org_id_c0feb594",
         table_name="ai_system_risk_classification_record_snapshots",
     )
     op.drop_table("ai_system_risk_classification_record_snapshots")

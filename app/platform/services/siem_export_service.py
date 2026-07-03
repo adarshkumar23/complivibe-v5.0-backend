@@ -1,0 +1,319 @@
+from __future__ import annotations
+
+import hashlib
+import uuid
+from datetime import UTC, datetime
+
+from fastapi import HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models.audit_log import AuditLog
+from app.models.siem_export_config import SiemExportConfig
+from app.models.siem_export_run import SiemExportRun
+from app.platform.schemas.siem import SiemConfigCreate, SiemConfigUpdate
+from app.services.audit_service import AuditService
+
+
+class SiemExportService:
+    @staticmethod
+    def utcnow() -> datetime:
+        return datetime.now(UTC)
+
+    def create_config(
+        self,
+        org_id: uuid.UUID,
+        data: SiemConfigCreate,
+        created_by: uuid.UUID,
+        db: Session,
+    ) -> SiemExportConfig:
+        existing = self._get_config(org_id, db)
+        if existing:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="SIEM config already exists. Update it.")
+
+        api_key_hash = hashlib.sha256(data.api_key.encode()).hexdigest() if data.api_key else None
+        config = SiemExportConfig(
+            organization_id=org_id,
+            export_format=data.export_format,
+            delivery_method=data.delivery_method,
+            endpoint_url=data.endpoint_url,
+            api_key_hash=api_key_hash,
+            include_actions=data.include_actions,
+            exclude_actions=data.exclude_actions,
+            batch_size=data.batch_size,
+            created_by=created_by,
+        )
+        db.add(config)
+        db.flush()
+
+        AuditService(db).write_audit_log(
+            action="siem_config.created",
+            entity_type="siem_export_configs",
+            organization_id=org_id,
+            actor_user_id=created_by,
+            entity_id=config.id,
+        )
+        return config
+
+    def get_config(self, org_id: uuid.UUID, db: Session) -> SiemExportConfig:
+        config = self._get_config(org_id, db)
+        if config is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SIEM config not found")
+        return config
+
+    def update_config(
+        self,
+        org_id: uuid.UUID,
+        data: SiemConfigUpdate,
+        actor_user_id: uuid.UUID,
+        db: Session,
+    ) -> SiemExportConfig:
+        config = self.get_config(org_id, db)
+        payload = data.model_dump(exclude_unset=True)
+
+        if "api_key" in payload:
+            raw = payload.pop("api_key")
+            config.api_key_hash = hashlib.sha256(raw.encode()).hexdigest() if raw else None
+
+        for field, value in payload.items():
+            setattr(config, field, value)
+
+        config.updated_at = self.utcnow()
+        db.flush()
+
+        AuditService(db).write_audit_log(
+            action="siem_config.updated",
+            entity_type="siem_export_configs",
+            organization_id=org_id,
+            actor_user_id=actor_user_id,
+            entity_id=config.id,
+        )
+        return config
+
+    def activate_config(self, org_id: uuid.UUID, actor_user_id: uuid.UUID, db: Session) -> SiemExportConfig:
+        config = self.get_config(org_id, db)
+        config.is_active = True
+        config.updated_at = self.utcnow()
+        db.flush()
+        AuditService(db).write_audit_log(
+            action="siem_config.activated",
+            entity_type="siem_export_configs",
+            organization_id=org_id,
+            actor_user_id=actor_user_id,
+            entity_id=config.id,
+        )
+        return config
+
+    def deactivate_config(self, org_id: uuid.UUID, actor_user_id: uuid.UUID, db: Session) -> SiemExportConfig:
+        config = self.get_config(org_id, db)
+        config.is_active = False
+        config.updated_at = self.utcnow()
+        db.flush()
+        AuditService(db).write_audit_log(
+            action="siem_config.deactivated",
+            entity_type="siem_export_configs",
+            organization_id=org_id,
+            actor_user_id=actor_user_id,
+            entity_id=config.id,
+        )
+        return config
+
+    def delete_config(self, org_id: uuid.UUID, actor_user_id: uuid.UUID, db: Session) -> None:
+        config = self.get_config(org_id, db)
+        now = self.utcnow()
+        config.is_active = False
+        config.deleted_at = now
+        config.updated_at = now
+        db.flush()
+        AuditService(db).write_audit_log(
+            action="siem_config.deleted",
+            entity_type="siem_export_configs",
+            organization_id=org_id,
+            actor_user_id=actor_user_id,
+            entity_id=config.id,
+        )
+
+    def export_batch(
+        self,
+        org_id: uuid.UUID,
+        db: Session,
+        limit: int | None = 100,
+        since_id: uuid.UUID | None = None,
+    ) -> dict:
+        config = self._get_config(org_id, db)
+        if not config or not config.is_active:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SIEM export not configured or inactive")
+
+        effective_limit = max(1, min(limit or config.batch_size, 10000))
+        run = SiemExportRun(
+            organization_id=org_id,
+            config_id=config.id,
+            status="running",
+            cursor_start=since_id,
+        )
+        db.add(run)
+        db.flush()
+
+        query = db.query(AuditLog).filter(AuditLog.organization_id == org_id)
+        if since_id:
+            cursor_entry = db.get(AuditLog, since_id)
+            if cursor_entry and cursor_entry.organization_id == org_id:
+                query = query.filter(AuditLog.created_at > cursor_entry.created_at)
+
+        if config.include_actions:
+            query = query.filter(AuditLog.action.in_(config.include_actions))
+        if config.exclude_actions:
+            query = query.filter(AuditLog.action.notin_(config.exclude_actions))
+
+        entries = query.order_by(AuditLog.created_at.asc()).limit(effective_limit).all()
+
+        if not entries:
+            run.status = "completed"
+            run.records_exported = 0
+            run.completed_at = self.utcnow()
+            db.flush()
+            return {
+                "records": 0,
+                "payload": None,
+                "cursor": str(since_id) if since_id else None,
+                "has_more": False,
+                "format": config.export_format,
+            }
+
+        payload = self._format_payload(config.export_format, entries)
+        last_id = entries[-1].id
+        now = self.utcnow()
+
+        run.status = "completed"
+        run.records_exported = len(entries)
+        run.completed_at = now
+        run.cursor_end = last_id
+        config.last_exported_at = now
+        config.last_export_id = last_id
+        db.flush()
+
+        return {
+            "records": len(entries),
+            "payload": payload,
+            "cursor": str(last_id),
+            "has_more": len(entries) == effective_limit,
+            "format": config.export_format,
+        }
+
+    def preview_export(self, org_id: uuid.UUID, db: Session) -> dict:
+        config = self._get_config(org_id, db)
+        if not config:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SIEM config not found")
+
+        entries = (
+            db.query(AuditLog)
+            .filter(AuditLog.organization_id == org_id)
+            .order_by(AuditLog.created_at.desc())
+            .limit(10)
+            .all()
+        )
+        ordered = list(reversed(entries))
+        payload = self._format_payload(config.export_format, ordered)
+        cursor = str(ordered[-1].id) if ordered else None
+        return {
+            "records": len(ordered),
+            "payload": payload,
+            "cursor": cursor,
+            "has_more": False,
+            "format": config.export_format,
+        }
+
+    def list_runs(self, org_id: uuid.UUID, db: Session, limit: int = 20) -> list[SiemExportRun]:
+        return (
+            db.query(SiemExportRun)
+            .filter(SiemExportRun.organization_id == org_id)
+            .order_by(SiemExportRun.started_at.desc())
+            .limit(max(1, min(limit, 200)))
+            .all()
+        )
+
+    def _format_payload(self, export_format: str, entries: list[AuditLog]) -> list[dict] | str:
+        if export_format == "cef":
+            return self._format_cef(entries)
+        if export_format == "splunk_hec":
+            return self._format_splunk_hec(entries)
+        return self._format_json(entries)
+
+    def _format_json(self, entries: list[AuditLog]) -> list[dict]:
+        return [
+            {
+                "timestamp": item.created_at.isoformat(),
+                "action": item.action,
+                "entity_type": item.entity_type,
+                "entity_id": str(item.entity_id) if item.entity_id else None,
+                "organization_id": str(item.organization_id),
+                "actor_user_id": str(item.actor_user_id) if item.actor_user_id else None,
+                "ip_address": item.ip_address,
+                "metadata": item.metadata_json or {},
+            }
+            for item in entries
+        ]
+
+    def _format_cef(self, entries: list[AuditLog]) -> str:
+        lines: list[str] = []
+        for item in entries:
+            severity = self._action_to_cef_severity(item.action)
+            ext_parts = [
+                f"rt={int(item.created_at.timestamp() * 1000)}",
+                f"suser={item.actor_user_id or 'system'}",
+                "dvc=complivibe",
+                f"cs1={item.organization_id}",
+                "cs1Label=organizationId",
+                f"cs2={item.entity_type}",
+                "cs2Label=entityType",
+            ]
+            if item.ip_address:
+                ext_parts.append(f"src={item.ip_address}")
+            lines.append(
+                f"CEF:0|CompliVibe|CompliVibe|5.0|{item.action}|{item.action}|{severity}|{' '.join(ext_parts)}"
+            )
+        return "\n".join(lines)
+
+    def _format_splunk_hec(self, entries: list[AuditLog]) -> list[dict]:
+        return [
+            {
+                "time": item.created_at.timestamp(),
+                "host": "complivibe",
+                "source": "complivibe:audit",
+                "sourcetype": "complivibe:audit",
+                "index": "compliance",
+                "event": {
+                    "action": item.action,
+                    "entity_type": item.entity_type,
+                    "entity_id": str(item.entity_id) if item.entity_id else None,
+                    "org_id": str(item.organization_id),
+                    "actor": str(item.actor_user_id) if item.actor_user_id else None,
+                    "ip": item.ip_address,
+                    "metadata": item.metadata_json or {},
+                },
+            }
+            for item in entries
+        ]
+
+    def _action_to_cef_severity(self, action: str) -> int:
+        high_signals = {
+            "user.deprovisioned_via_scim",
+            "sso.login",
+            "breach_notification",
+            "security.trivy_scan_ingested",
+        }
+        if any(signal in action for signal in high_signals):
+            return 7
+        if "delete" in action or "remove" in action:
+            return 5
+        if "create" in action or "update" in action:
+            return 3
+        return 1
+
+    def _get_config(self, org_id: uuid.UUID, db: Session) -> SiemExportConfig | None:
+        return db.execute(
+            select(SiemExportConfig).where(
+                SiemExportConfig.organization_id == org_id,
+                SiemExportConfig.deleted_at.is_(None),
+            )
+        ).scalar_one_or_none()

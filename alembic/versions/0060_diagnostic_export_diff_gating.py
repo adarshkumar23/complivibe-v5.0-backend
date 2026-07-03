@@ -40,7 +40,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_diagnostic_export_diff_gating_profiles_organization_id",
+        "ix_ai_system_gov_diag_export_diff_gating_profs_org_id_f1e80f8c",
         "ai_system_governance_diagnostic_export_diff_gating_profiles",
         ["organization_id"],
         unique=False,
@@ -77,7 +77,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["organization_id"], ["organizations.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
             ["export_diff_report_id"],
-            ["ai_system_governance_preset_assignment_diagnostic_export_diff_reports.id"],
+            ["ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83.id"],
             ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
@@ -90,7 +90,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_diagnostic_export_diff_gating_reports_organization_id",
+        "ix_ai_system_gov_diag_export_diff_gating_rpts_org_id_91cca2a9",
         "ai_system_governance_diagnostic_export_diff_gating_reports",
         ["organization_id"],
         unique=False,
@@ -159,7 +159,7 @@ def downgrade() -> None:
         table_name="ai_system_governance_diagnostic_export_diff_gating_reports",
     )
     op.drop_index(
-        "ix_ai_system_governance_diagnostic_export_diff_gating_reports_organization_id",
+        "ix_ai_system_gov_diag_export_diff_gating_rpts_org_id_91cca2a9",
         table_name="ai_system_governance_diagnostic_export_diff_gating_reports",
     )
     op.drop_table("ai_system_governance_diagnostic_export_diff_gating_reports")
@@ -173,7 +173,7 @@ def downgrade() -> None:
         table_name="ai_system_governance_diagnostic_export_diff_gating_profiles",
     )
     op.drop_index(
-        "ix_ai_system_governance_diagnostic_export_diff_gating_profiles_organization_id",
+        "ix_ai_system_gov_diag_export_diff_gating_profs_org_id_f1e80f8c",
         table_name="ai_system_governance_diagnostic_export_diff_gating_profiles",
     )
     op.drop_table("ai_system_governance_diagnostic_export_diff_gating_profiles")

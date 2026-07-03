@@ -11,7 +11,7 @@ from app.db.mixins import OrganizationOwnedMixin, TimestampMixin, UUIDPrimaryKey
 class AISystemGovernancePresetAssignmentDiagnosticExportDiffReport(
     UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, Base
 ):
-    __tablename__ = "ai_system_governance_preset_assignment_diagnostic_export_diff_reports"
+    __tablename__ = "ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83"
     __table_args__ = (
         Index("ix_ai_sys_gov_preset_assign_diag_export_diff_org_status", "organization_id", "status"),
         Index("ix_ai_sys_gov_preset_assign_diag_export_diff_org_type", "organization_id", "export_type"),

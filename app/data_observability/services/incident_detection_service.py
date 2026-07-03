@@ -9,6 +9,7 @@ from app.models.control_monitoring_alert import ControlMonitoringAlert
 from app.models.data_asset import DataAsset
 from app.models.data_incident import DataIncident
 from app.models.issue import Issue
+from app.compliance.services.customer_commitment_service import CustomerCommitmentService
 from app.services.audit_service import AuditService
 
 ALLOWED_DETECTOR_TYPES = {"anomaly_rule", "quality_breach", "retention_violation", "residency_violation", "manual"}
@@ -205,6 +206,13 @@ class DataIncidentService:
             )
         else:
             self._create_noncritical_alert(incident)
+
+        CustomerCommitmentService(self.db).trigger_commitments_for_incident(
+            org_id,
+            incident.detector_type,
+            incident_id=incident.id,
+            actor_user_id=actor_user_id,
+        )
 
         return incident
 

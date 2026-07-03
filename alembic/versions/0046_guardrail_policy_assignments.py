@@ -42,7 +42,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_guardrail_policy_assignments_organization_id",
+        "ix_ai_system_gov_guardrail_pol_assigns_org_id_9f7cb4bf",
         "ai_system_governance_guardrail_policy_assignments",
         ["organization_id"],
         unique=False,
@@ -89,7 +89,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_guardrail_policy_assignment_history_organization_id",
+        "ix_ai_system_gov_guardrail_pol_assign_hist_org_id_8badccdd",
         "ai_system_governance_guardrail_policy_assignment_history",
         ["organization_id"],
         unique=False,
@@ -118,7 +118,7 @@ def downgrade() -> None:
         table_name="ai_system_governance_guardrail_policy_assignment_history",
     )
     op.drop_index(
-        "ix_ai_system_governance_guardrail_policy_assignment_history_organization_id",
+        "ix_ai_system_gov_guardrail_pol_assign_hist_org_id_8badccdd",
         table_name="ai_system_governance_guardrail_policy_assignment_history",
     )
     op.drop_table("ai_system_governance_guardrail_policy_assignment_history")
@@ -140,7 +140,7 @@ def downgrade() -> None:
         table_name="ai_system_governance_guardrail_policy_assignments",
     )
     op.drop_index(
-        "ix_ai_system_governance_guardrail_policy_assignments_organization_id",
+        "ix_ai_system_gov_guardrail_pol_assigns_org_id_9f7cb4bf",
         table_name="ai_system_governance_guardrail_policy_assignments",
     )
     op.drop_table("ai_system_governance_guardrail_policy_assignments")

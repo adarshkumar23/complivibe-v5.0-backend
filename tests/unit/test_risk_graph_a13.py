@@ -11,8 +11,10 @@ from app.models.framework import Framework
 from app.models.obligation import Obligation
 from app.models.risk import Risk
 from app.models.risk_control_link import RiskControlLink
+from app.models.risk_evidence_link import RiskEvidenceLink
 from app.models.vendor import Vendor
 from app.models.vendor_control_link import VendorControlLink
+from app.models.vendor_risk_score import VendorRiskScore
 from tests.helpers.auth_org import bootstrap_org_user
 
 
@@ -81,6 +83,20 @@ def _seed_graph_fixture(db_session, org_id: str, owner_user_id: str):
             linked_by_user_id=owner_uuid,
         )
     )
+    db_session.add(
+        VendorRiskScore(
+            organization_id=org_uuid,
+            vendor_id=vendor.id,
+            assessment_id=None,
+            likelihood="high",
+            impact="high",
+            inherent_risk_score=16,
+            risk_level="high",
+            score_explanation_json={"source": "seed"},
+            scored_by_user_id=owner_uuid,
+            notes="seed",
+        )
+    )
 
     framework = Framework(
         code=f"FW-{uuid.uuid4().hex[:8]}",
@@ -130,6 +146,16 @@ def _seed_graph_fixture(db_session, org_id: str, owner_user_id: str):
             link_status="active",
         )
     )
+    db_session.add(
+        RiskEvidenceLink(
+            organization_id=org_uuid,
+            risk_id=risk.id,
+            evidence_item_id=evidence.id,
+            link_type="supports_assessment",
+            status="active",
+            linked_by_user_id=owner_uuid,
+        )
+    )
 
     policy = CompliancePolicy(
         organization_id=org_uuid,
@@ -174,6 +200,9 @@ def test_a13_graph_returns_expected_node_types(client, db_session):
 
     types = {node["node_type"] for node in body["nodes"]}
     assert {"control", "vendor", "obligation", "evidence", "policy"}.issubset(types)
+    edges = {(edge["source_id"], edge["target_id"], edge["relationship"]) for edge in body["edges"]}
+    assert (fixture["risk_id"], fixture["evidence_id"], "has_evidence") in edges
+    assert (fixture["risk_id"], fixture["vendor_id"], "vendor_risk_factor") in edges
 
 
 def test_a13_depth1_returns_only_direct_links(client, db_session):
@@ -211,7 +240,11 @@ def test_a13_depth2_deduplicates_nodes_seen_at_both_levels(client, db_session):
     vendor_nodes = [n for n in body["nodes"] if n["node_id"] == fixture["vendor_id"]]
     assert len(vendor_nodes) == 1
 
-    risk_edge = [e for e in body["edges"] if e["source_id"] == fixture["risk_id"] and e["target_id"] == fixture["vendor_id"]]
+    risk_edge = [
+        e
+        for e in body["edges"]
+        if e["source_id"] == fixture["risk_id"] and e["target_id"] == fixture["vendor_id"] and e["relationship"] == "affects"
+    ]
     control_edge = [
         e
         for e in body["edges"]

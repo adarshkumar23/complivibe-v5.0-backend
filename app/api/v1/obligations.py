@@ -11,6 +11,7 @@ from app.models.framework import Framework
 from app.models.framework_section import FrameworkSection
 from app.models.membership import Membership
 from app.models.obligation import Obligation
+from app.models.cross_framework_obligation_mapping import CrossFrameworkObligationMapping
 from app.models.obligation_applicability_question import ObligationApplicabilityQuestion
 from app.models.obligation_applicability_rule import ObligationApplicabilityRule
 from app.models.obligation_content_version import ObligationContentVersion
@@ -47,6 +48,7 @@ from app.services.framework_content_service import FrameworkContentService
 from app.services.rbac_service import RBACService
 from app.services.seed_service import SeedService
 from app.data_observability.services.data_obligation_service import DataObligationService
+from app.ai_governance.services.semantic_mapping_service import SemanticMappingService
 
 router = APIRouter(prefix="/obligations", tags=["obligations"])
 compliance_router = APIRouter(prefix="/compliance/obligations", tags=["obligations"])
@@ -243,6 +245,7 @@ def _build_obligation_read(
         jurisdiction=obligation.jurisdiction,
         source_url=obligation.source_url,
         version=obligation.version,
+        ig_level=obligation.ig_level,
         status=obligation.status,
         effective_date=obligation.effective_date,
         parent_obligation_id=obligation.parent_obligation_id,
@@ -288,6 +291,60 @@ def list_obligation_data_assets(
     _: Membership = Depends(require_permission("data:read")),
 ) -> list[dict]:
     return DataObligationService(db).get_obligation_assets(organization.id, obligation_id)
+
+
+@compliance_router.get("/{obligation_id}/semantic-similar", response_model=list[dict])
+def list_semantic_similar_obligations(
+    obligation_id: uuid.UUID,
+    top_k: int = Query(default=10, ge=1, le=50),
+    min_score: float = Query(default=0.70, ge=0.0, le=1.0),
+    db: Session = Depends(get_db),
+    _: Membership = Depends(require_permission("compliance:read")),
+) -> list[dict]:
+    return SemanticMappingService().find_similar_obligations(
+        obligation_id=obligation_id,
+        db=db,
+        top_k=top_k,
+        min_score=min_score,
+        exclude_same_framework=True,
+    )
+
+
+@compliance_router.get("/{obligation_id}/cross-mappings", response_model=list[dict])
+def list_obligation_cross_mappings(
+    obligation_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: Membership = Depends(require_permission("frameworks:read")),
+) -> list[dict]:
+    source = db.execute(select(Obligation).where(Obligation.id == obligation_id)).scalar_one_or_none()
+    if source is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Obligation not found")
+    obligations = {
+        row.id: row
+        for row in db.execute(select(Obligation)).scalars().all()
+    }
+    mappings = db.execute(
+        select(CrossFrameworkObligationMapping).where(
+            CrossFrameworkObligationMapping.source_obligation_id == obligation_id
+        )
+    ).scalars().all()
+    payload: list[dict] = []
+    for mapping in mappings:
+        target = obligations.get(mapping.target_obligation_id)
+        if target is None:
+            continue
+        payload.append(
+            {
+                "id": str(mapping.id),
+                "source_obligation_id": str(mapping.source_obligation_id),
+                "source_reference_code": source.reference_code,
+                "target_obligation_id": str(mapping.target_obligation_id),
+                "target_reference_code": target.reference_code,
+                "mapping_type": mapping.mapping_type,
+                "notes": mapping.notes,
+            }
+        )
+    return payload
 
 
 @router.get("/{obligation_id}", response_model=ObligationRead)

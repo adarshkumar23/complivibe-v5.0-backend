@@ -14,6 +14,8 @@ from app.models.risk_control_link import RiskControlLink
 
 
 class RiskService:
+    APPETITE_FALLBACK_CATEGORIES = {"operational", "financial", "compliance", "reputational", "technology", "vendor"}
+
     def __init__(self, db: Session) -> None:
         self.db = db
 
@@ -75,11 +77,14 @@ class RiskService:
             )
 
     def check_appetite_breach(self, *, organization_id: uuid.UUID, risk: Risk, actor_user_id: uuid.UUID | None = None) -> None:
+        # Risk appetite currently supports the core six categories; map unknown categories conservatively.
+        # This keeps appetite checks active for auto-generated risks (e.g., AI/audit derived categories).
+        appetite_category = risk.category if risk.category in self.APPETITE_FALLBACK_CATEGORIES else "operational"
         RiskAppetiteService(self.db).check_appetite_breach(
             org_id=organization_id,
             risk_id=risk.id,
             new_score=risk.inherent_score,
-            risk_category=risk.category,
+            risk_category=appetite_category,
             actor_user_id=actor_user_id,
         )
 

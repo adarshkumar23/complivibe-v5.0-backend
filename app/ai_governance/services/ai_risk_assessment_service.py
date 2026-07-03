@@ -343,6 +343,8 @@ class AIRiskAssessmentService:
         )
         self.db.add(risk)
         self.db.flush()
+        from app.services.risk_service import RiskService
+        RiskService(self.db).check_appetite_breach(organization_id=org_id, risk=risk, actor_user_id=user_id)
 
         AIGovernanceEventService.log(
             self.db,

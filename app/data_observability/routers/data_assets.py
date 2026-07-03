@@ -19,6 +19,7 @@ from app.data_observability.schemas.data_obligations import (
     DataAssetObligationLinkCreate,
     DataAssetObligationLinkRead,
     DataObligationSuggestionRead,
+    DataObligationSuggestionPersistedRead,
 )
 from app.data_observability.schemas.quality import DataQualityConfigRead
 from app.data_observability.schemas.residency import DataResidencyCheckRead
@@ -257,6 +258,19 @@ def suggest_asset_obligations(
 ) -> list[DataObligationSuggestionRead]:
     rows = DataObligationService(db).suggest_obligations(organization.id, asset_id)
     return [DataObligationSuggestionRead.model_validate(row) for row in rows]
+
+
+@router.post("/{asset_id}/suggest-obligations", response_model=list[DataObligationSuggestionPersistedRead])
+def generate_asset_obligation_suggestions(
+    asset_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("data:read")),
+) -> list[DataObligationSuggestionPersistedRead]:
+    service = DataObligationService(db)
+    rows = service.generate_suggestions(organization.id, asset_id)
+    db.commit()
+    return [DataObligationSuggestionPersistedRead.model_validate(service.suggestion_payload(row)) for row in rows]
 
 
 @router.get("/{asset_id}/residency-status", response_model=DataResidencyCheckRead)

@@ -22,6 +22,7 @@ from app.schemas.technical_control import (
     TechnicalControlRuleUpdate,
 )
 from app.services.audit_service import AuditService
+from app.services.control_service import ControlService
 
 
 class TechnicalControlEvaluator:
@@ -525,7 +526,50 @@ class TechnicalControlResultService:
                 metadata_json={"source": "agent_ingest"},
             )
 
+        self._update_control_status_from_result(rule.control_id, agent.organization_id, passed)
+
         return result
+
+    def _update_control_status_from_result(
+        self,
+        control_id: uuid.UUID,
+        org_id: uuid.UUID,
+        passed: bool,
+    ) -> None:
+        control = self.db.execute(
+            select(Control).where(
+                Control.id == control_id,
+                Control.organization_id == org_id,
+            )
+        ).scalar_one_or_none()
+        if control is None:
+            return
+
+        if control.status in {"archived", "not_applicable"}:
+            return
+
+        new_status = "implemented" if passed else "failed"
+        if control.status == new_status:
+            return
+
+        previous_status = control.status
+        ControlService.set_status(
+            self.db,
+            organization_id=org_id,
+            control_id=control.id,
+            new_status=new_status,
+            triggered_by="technical_control_ingest",
+        )
+        AuditService(self.db).write_audit_log(
+            action="control.updated",
+            entity_type="control",
+            entity_id=control.id,
+            organization_id=org_id,
+            actor_user_id=None,
+            before_json={"status": previous_status},
+            after_json={"status": new_status},
+            metadata_json={"source": "technical_control_ingest", "passed": passed},
+        )
 
     def list_results(self, org_id: uuid.UUID, filters: TechnicalControlResultFilters) -> list[tuple[TechnicalControlResult, TechnicalControlRule]]:
         stmt = (

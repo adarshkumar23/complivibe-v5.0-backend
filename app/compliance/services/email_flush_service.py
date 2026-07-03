@@ -67,6 +67,13 @@ class EmailFlushService:
                 skipped += 1
                 continue
 
+            if email_service.enforce_outbox_notification_preference(
+                row,
+                actor_user_id=row.created_by_user_id,
+            ):
+                skipped += 1
+                continue
+
             subject = row.subject
             html_body = row.body_html or row.body_text
             if row.template_name and isinstance(row.template_context, dict):

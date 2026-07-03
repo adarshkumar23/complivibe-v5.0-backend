@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, Uuid
+from sqlalchemy import JSON, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -25,8 +25,12 @@ class DataAsset(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
             name="ck_data_assets_classification_type",
         ),
         CheckConstraint(
-            "classification_source IS NULL OR classification_source IN ('metadata_rules', 'presidio_sample', 'manual')",
+            "classification_source IS NULL OR classification_source IN ('metadata_rules', 'presidio_sample', 'manual', 'fides', 'openmetadata', 'mlflow')",
             name="ck_data_assets_classification_source",
+        ),
+        CheckConstraint(
+            "import_source IS NULL OR import_source IN ('manual', 'fides', 'openmetadata', 'mlflow')",
+            name="ck_data_assets_import_source",
         ),
         CheckConstraint(
             "classification_confidence IS NULL OR (classification_confidence >= 0 AND classification_confidence <= 1)",
@@ -36,11 +40,24 @@ class DataAsset(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
             "status IN ('active', 'archived', 'under_review', 'decommissioned')",
             name="ck_data_assets_status",
         ),
+        CheckConstraint(
+            "hipaa_safeguard_required IS NULL OR hipaa_safeguard_required IN ('administrative', 'physical', 'technical', 'all')",
+            name="ck_data_assets_hipaa_safeguard_required",
+        ),
         Index("ix_data_assets_org_asset_type", "organization_id", "asset_type"),
         Index("ix_data_assets_org_sensitivity", "organization_id", "sensitivity_tier"),
         Index("ix_data_assets_org_classification_type", "organization_id", "classification_type"),
         Index("ix_data_assets_org_status", "organization_id", "status"),
         Index("ix_data_assets_org_classification_confirmed", "organization_id", "classification_confirmed"),
+        Index(
+            "uix_data_assets_import",
+            "organization_id",
+            "import_source",
+            "import_key",
+            unique=True,
+            postgresql_where=text("import_key IS NOT NULL"),
+            sqlite_where=text("import_key IS NOT NULL"),
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -60,7 +77,11 @@ class DataAsset(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
     retention_review_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     data_volume_estimate: Mapped[str | None] = mapped_column(String(100), nullable=True)
     source_system: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    import_source: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    import_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
     tags: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    is_phi: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    hipaa_safeguard_required: Mapped[str | None] = mapped_column(String(20), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

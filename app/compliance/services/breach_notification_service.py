@@ -5,6 +5,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.compliance.services.incident_sla_service import resolve_regulatory_sla_hours
 from app.compliance.services.ai_drafting_service import AIDraftingService
 from app.models.breach_notification import BreachNotification
 from app.models.email_outbox import EmailOutbox
@@ -92,7 +93,8 @@ class BreachNotificationService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Breach notification already exists for this issue")
 
         issue_created_at = issue.created_at if issue.created_at.tzinfo is not None else issue.created_at.replace(tzinfo=UTC)
-        deadline = issue_created_at + timedelta(hours=int(data.regulatory_notification_hours))
+        resolved_hours = resolve_regulatory_sla_hours(data.regulatory_framework, int(data.regulatory_notification_hours))
+        deadline = issue_created_at + timedelta(hours=resolved_hours)
 
         row = BreachNotification(
             organization_id=org_id,
@@ -102,7 +104,7 @@ class BreachNotificationService:
             estimated_affected_count=data.estimated_affected_count,
             regulatory_notification_required=data.regulatory_notification_required,
             regulatory_framework=data.regulatory_framework,
-            regulatory_notification_hours=int(data.regulatory_notification_hours),
+            regulatory_notification_hours=resolved_hours,
             regulatory_notification_deadline=deadline,
             supervisory_authority=data.supervisory_authority,
             regulatory_notified_at=None,

@@ -455,3 +455,124 @@ class PolicyExceptionService:
             "high_risk_active": high_risk_active,
             "overdue_pending": overdue_pending,
         }
+
+    # Sprint 3 v2 methods used by /compliance/policy-exceptions lifecycle endpoints.
+    def create_exception_v2(
+        self,
+        org_id: uuid.UUID,
+        *,
+        policy_id: uuid.UUID,
+        reason: str,
+        requested_by: uuid.UUID,
+        compensating_measure_description: str | None = None,
+    ) -> PolicyException:
+        self.require_policy_in_org(org_id, policy_id)
+        row = PolicyException(
+            organization_id=org_id,
+            policy_id=policy_id,
+            policy_version=None,
+            title="Policy exception request",
+            description=reason,
+            justification=reason,
+            compensating_measure=compensating_measure_description,
+            compensating_measure_description=compensating_measure_description,
+            reason=reason,
+            requested_by=requested_by,
+            requestor_scope=None,
+            requested_expiry_date=self.utcdate(),
+            status="pending",
+            approved_expiry_date=None,
+            expiry_date=None,
+            risk_level="medium",
+        )
+        self.db.add(row)
+        self.db.flush()
+        AuditService(self.db).write_audit_log(
+            action="policy_exception.requested",
+            entity_type="policy_exception",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=requested_by,
+            metadata_json={"policy_id": str(policy_id)},
+        )
+        return row
+
+    def approve_exception_v2(
+        self,
+        org_id: uuid.UUID,
+        *,
+        exception_id: uuid.UUID,
+        approved_by: uuid.UUID,
+        expiry_date: date,
+    ) -> PolicyException:
+        row = self.require_exception(org_id, exception_id)
+        if row.status != "pending":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only pending exceptions can be approved")
+        if row.requested_by == approved_by:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Approver cannot be requester")
+
+        row.status = "approved"
+        row.approved_by = approved_by
+        row.approved_at = self.utcnow()
+        row.expiry_date = expiry_date
+        row.approved_expiry_date = expiry_date
+        self.db.flush()
+        AuditService(self.db).write_audit_log(
+            action="policy_exception.approved",
+            entity_type="policy_exception",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=approved_by,
+            metadata_json={"expiry_date": expiry_date.isoformat()},
+        )
+        return row
+
+    def reject_exception_v2(
+        self,
+        org_id: uuid.UUID,
+        *,
+        exception_id: uuid.UUID,
+        rejected_by: uuid.UUID,
+    ) -> PolicyException:
+        row = self.require_exception(org_id, exception_id)
+        if row.status != "pending":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only pending exceptions can be rejected")
+
+        row.status = "rejected"
+        row.rejected_by = rejected_by
+        row.rejected_at = self.utcnow()
+        self.db.flush()
+        AuditService(self.db).write_audit_log(
+            action="policy_exception.rejected",
+            entity_type="policy_exception",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=rejected_by,
+        )
+        return row
+
+    def expire_overdue_exceptions(self, org_id: uuid.UUID | None = None) -> int:
+        today = self.utcdate()
+        stmt = select(PolicyException).where(
+            PolicyException.status == "approved",
+            PolicyException.expiry_date.is_not(None),
+            PolicyException.expiry_date < today,
+        )
+        if org_id is not None:
+            stmt = stmt.where(PolicyException.organization_id == org_id)
+
+        rows = self.db.execute(stmt).scalars().all()
+        now = self.utcnow()
+        for row in rows:
+            row.status = "expired"
+            row.expired_at = now
+            self.db.flush()
+            AuditService(self.db).write_audit_log(
+                action="policy_exception.expired",
+                entity_type="policy_exception",
+                entity_id=row.id,
+                organization_id=row.organization_id,
+                actor_user_id=None,
+                metadata_json={"source": "sweep"},
+            )
+        return len(rows)

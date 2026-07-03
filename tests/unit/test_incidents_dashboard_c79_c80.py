@@ -286,14 +286,14 @@ def test_c80_data_observability_dashboard(client, db_session):
     q_breach = client.post(
         f"{QUALITY_BASE}/configs/{q_cfg_id}/readings",
         headers=org["org_headers"],
-        json={"value": 0.90, "source_tool": "great_expectations"},
+        json={"value": 1.10, "source_tool": "great_expectations"},
     )
     assert q_breach.status_code == 201
 
     q_pass = client.post(
         f"{QUALITY_BASE}/configs/{q_cfg_id}/readings",
         headers=org["org_headers"],
-        json={"value": 0.98, "source_tool": "great_expectations"},
+        json={"value": 0.90, "source_tool": "great_expectations"},
     )
     assert q_pass.status_code == 201
 
@@ -339,7 +339,7 @@ def test_c80_data_observability_dashboard(client, db_session):
 
     row = db_session.get(DataAsset, uuid.UUID(asset_2))
     assert row is not None
-    row.created_at = datetime.now(UTC) - timedelta(days=45)
+    row.retention_review_date = (datetime.now(UTC) - timedelta(days=15)).date()
     db_session.commit()
 
     sweep = client.post(f"{RETENTION_BASE}/trigger-sweep", headers=org["org_headers"])

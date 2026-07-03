@@ -29,5 +29,6 @@ class InboundQuestionnaireSession(UUIDPrimaryKeyMixin, TimestampMixin, Organizat
     drafted_count: Mapped[int] = mapped_column(nullable=False, default=0)
     approved_count: Mapped[int] = mapped_column(nullable=False, default=0)
     sent_count: Mapped[int] = mapped_column(nullable=False, default=0)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

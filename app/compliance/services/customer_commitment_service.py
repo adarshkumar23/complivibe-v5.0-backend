@@ -15,6 +15,14 @@ from app.services.audit_service import AuditService
 
 
 class CustomerCommitmentService:
+    # Maps CustomerCommitment.commitment_type to the canonical, user-facing notification
+    # preference type (see KNOWN_NOTIFICATION_TYPES in notification_preference_service.py).
+    # Commitment types with no direct match are left unmapped -- should_notify() defaults
+    # to "notify" for a type with no configured preference row, which is the safe default.
+    COMMITMENT_TYPE_TO_NOTIFICATION_TYPE: dict[str, str] = {
+        "breach_notification": "breach_notification_due",
+    }
+
     STATUS_TRANSITIONS: dict[str, set[str]] = {
         "active": {"triggered"},
         "triggered": {"fulfilled", "overdue", "waived"},
@@ -77,6 +85,23 @@ class CustomerCommitmentService:
         queued_count = 0
 
         if owner is not None and owner.email:
+            # `notification_type` here (reminder/triggered/escalation/fulfilled) is the
+            # commitment lifecycle event label, not the user-facing notification preference
+            # category -- those are two different vocabularies. Passing the lifecycle label
+            # through as metadata_json["notification_type"] made
+            # EmailService.derive_notification_type() treat it as authoritative (it checks
+            # metadata_json first), so it never fell through to a real preference type and
+            # the preference check silently never matched/suppressed anything. Resolve the
+            # actual preference type from the commitment's own type instead.
+            preference_notification_type = self.COMMITMENT_TYPE_TO_NOTIFICATION_TYPE.get(commitment.commitment_type)
+            metadata_json = {
+                "source": "customer_commitment_workflow",
+                "commitment_id": str(commitment.id),
+                "commitment_lifecycle_event": notification_type,
+            }
+            if preference_notification_type:
+                metadata_json["notification_type"] = preference_notification_type
+
             self.db.add(
                 EmailOutbox(
                     organization_id=commitment.organization_id,
@@ -93,11 +118,7 @@ class CustomerCommitmentService:
                     queued_at=self.utcnow(),
                     attempt_count=0,
                     max_attempts=3,
-                    metadata_json={
-                        "source": "customer_commitment_workflow",
-                        "commitment_id": str(commitment.id),
-                        "notification_type": notification_type,
-                    },
+                    metadata_json=metadata_json,
                     created_by_user_id=commitment.created_by,
                 )
             )
@@ -136,6 +157,7 @@ class CustomerCommitmentService:
             title=data.title,
             description=data.description,
             trigger_condition=data.trigger_condition,
+            triggering_incident_type=data.triggering_incident_type,
             trigger_date=data.trigger_date,
             notification_days_before=data.notification_days_before,
             sla_hours=data.sla_hours,
@@ -197,6 +219,7 @@ class CustomerCommitmentService:
             "title": row.title,
             "customer_name": row.customer_name,
             "trigger_date": row.trigger_date.isoformat() if row.trigger_date else None,
+            "triggering_incident_type": row.triggering_incident_type,
             "assigned_owner_id": str(row.assigned_owner_id),
         }
         for field, value in changes.items():
@@ -214,11 +237,79 @@ class CustomerCommitmentService:
                 "title": row.title,
                 "customer_name": row.customer_name,
                 "trigger_date": row.trigger_date.isoformat() if row.trigger_date else None,
+                "triggering_incident_type": row.triggering_incident_type,
                 "assigned_owner_id": str(row.assigned_owner_id),
             },
             metadata_json={"source": "api"},
         )
         return row
+
+    def trigger_commitments_for_incident(
+        self,
+        org_id: uuid.UUID,
+        incident_type: str,
+        *,
+        incident_id: uuid.UUID | None = None,
+        actor_user_id: uuid.UUID | None = None,
+    ) -> int:
+        normalized = (incident_type or "").strip().lower()
+        if not normalized:
+            return 0
+
+        aliases = {
+            "anomaly_rule": "security_incident",
+            "quality_breach": "service_incident",
+            "retention_violation": "data_breach",
+            "residency_violation": "data_breach",
+            "manual": "security_incident",
+        }
+        expanded_types = {normalized}
+        if aliases.get(normalized):
+            expanded_types.add(aliases[normalized])
+
+        active_rows = self.db.execute(
+            select(CustomerCommitment).where(
+                CustomerCommitment.organization_id == org_id,
+                CustomerCommitment.deleted_at.is_(None),
+                CustomerCommitment.status == "active",
+            )
+        ).scalars().all()
+
+        triggered_count = 0
+        for row in active_rows:
+            configured = (row.triggering_incident_type or "").strip().lower()
+            condition_text = (row.trigger_condition or "").strip().lower()
+
+            matched = configured in expanded_types if configured else any(t in condition_text for t in expanded_types)
+            if not matched:
+                continue
+
+            trigger_user_id = actor_user_id or row.created_by
+            self.trigger_commitment(
+                org_id,
+                row.id,
+                user_id=trigger_user_id,
+                triggered_by="api",
+            )
+            triggered_count += 1
+
+            AuditService(self.db).write_audit_log(
+                action="customer_commitment.incident_triggered",
+                entity_type="customer_commitment",
+                entity_id=row.id,
+                organization_id=org_id,
+                actor_user_id=actor_user_id,
+                after_json={
+                    "status": row.status,
+                    "incident_type": normalized,
+                },
+                metadata_json={
+                    "source": "incident_hook",
+                    "incident_id": str(incident_id) if incident_id else None,
+                },
+            )
+
+        return triggered_count
 
     def trigger_commitment(
         self,

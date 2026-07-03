@@ -31,10 +31,18 @@ def get_adapter(integration: MLOpsIntegration):
     """
     Decrypt config_json and return adapter.
     """
+    from fastapi import HTTPException, status
+
     config = decrypt_config(integration.config_json)
     if integration.integration_type == "mlflow":
-        return MLflowAdapter(
-            tracking_uri=str(config["tracking_uri"]),
-            token=config.get("token"),
-        )
+        try:
+            return MLflowAdapter(
+                tracking_uri=str(config["tracking_uri"]),
+                token=config.get("token"),
+            )
+        except ImportError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"MLflow integration unavailable: {exc}",
+            ) from exc
     raise ValueError(f"Unsupported integration type: {integration.integration_type}")

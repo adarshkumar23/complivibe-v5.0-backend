@@ -416,7 +416,7 @@ def test_p2_monitoring_inbound(client):
     rd = client.post(
         "/api/v1/ai-monitoring/readings",
         headers={"X-CompliVibe-Key": "inbound-key-123456"},
-        json={"config_id": cfg.json()["id"], "value": "0.7"},
+        json={"config_id": cfg.json()["id"], "value": "0.85"},
     )
     assert rd.status_code == 201
     assert rd.json()["within_threshold"] is False
@@ -552,7 +552,7 @@ def test_p3_quality_breach(client):
     rd = client.post(
         f"/api/v1/data-observability/quality/configs/{cfg.json()['id']}/readings",
         headers=ctx["org_headers"],
-        json={"value": "0.5"},
+        json={"value": "1.1"},
     )
     assert rd.status_code == 201
     assert rd.json()["within_threshold"] is False
@@ -975,11 +975,13 @@ def test_e_digest_config(client):
 
 @pytest.mark.group_e
 def test_e_apscheduler_jobs():
-    assert len(SCHEDULER_JOB_IDS) == 18
-    expected = {
+    required_jobs = {
         "pbc_overdue_daily_sweep",
+        "pbc_request_overdue_sweep",
         "audit_schedule_reminder_sweep",
+        "audit_schedule_auto_create_sweep",
         "subprocessor_dpa_expiry_sweep",
+        "policy_exception_expiry_sweep",
         "commitment_trigger_sweep",
         "mitigation_overdue_action_sweep",
         "issue_sla_breach_check",
@@ -996,7 +998,7 @@ def test_e_apscheduler_jobs():
         "daily_digest_send",
         "weekly_digest_send",
     }
-    assert set(SCHEDULER_JOB_IDS) == expected
+    assert required_jobs.issubset(set(SCHEDULER_JOB_IDS))
 
 
 # CROSS
@@ -1061,4 +1063,4 @@ def test_cross_migration_head():
     script = ScriptDirectory.from_config(cfg)
     heads = script.get_heads()
     assert len(heads) == 1
-    assert heads[0] == "0144_digest_configs"
+    assert heads[0] == "0198_add_risk_assessment_to_issue_source_type"

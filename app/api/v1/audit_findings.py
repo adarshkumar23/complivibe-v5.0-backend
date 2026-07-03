@@ -113,16 +113,6 @@ def list_findings(
     return [_read(row) for row in rows]
 
 
-@router.get("/summary", response_model=AuditFindingSummary)
-def get_finding_summary(
-    db: Session = Depends(get_db),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("audit:read")),
-) -> AuditFindingSummary:
-    payload = AuditFindingService(db).get_finding_summary(organization.id)
-    return AuditFindingSummary(**payload)
-
-
 @router.get("/engagement/{engagement_id}", response_model=list[AuditFindingRead])
 def list_findings_for_engagement(
     engagement_id: uuid.UUID,
@@ -145,17 +135,6 @@ def finding_summary_for_engagement(
 ) -> AuditFindingSummary:
     payload = AuditFindingService(db).get_finding_summary(organization.id, engagement_id=engagement_id)
     return AuditFindingSummary(**payload)
-
-
-@router.get("/{finding_id}", response_model=AuditFindingRead)
-def get_finding(
-    finding_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("audit:read")),
-) -> AuditFindingRead:
-    row = AuditFindingService(db).get_finding(organization.id, finding_id)
-    return _read(row)
 
 
 @router.post("/{finding_id}/create-issue", response_model=IssueRead, status_code=status.HTTP_201_CREATED)

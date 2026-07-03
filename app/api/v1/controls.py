@@ -5,7 +5,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
-from app.core.event_bus import EventBus, EventPayload, EventType
 from app.models.control import Control
 from app.models.control_obligation_mapping import ControlObligationMapping
 from app.models.evidence_item import EvidenceItem
@@ -25,7 +24,9 @@ from app.schemas.control import (
     ControlRead,
     ControlUpdate,
 )
+from app.schemas.common_controls import CommonControlCoverageReport
 from app.schemas.evidence import EvidenceRead
+from app.compliance.services.common_controls_service import CommonControlsService
 from app.compliance.services.control_exception_service import ControlExceptionService
 from app.services.audit_service import AuditService
 from app.services.control_service import ControlService
@@ -107,6 +108,7 @@ def list_controls(
     status: str | None = Query(default=None),
     criticality: str | None = Query(default=None),
     owner_user_id: uuid.UUID | None = Query(default=None),
+    business_unit_id: uuid.UUID | None = Query(default=None),
     search: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -119,6 +121,7 @@ def list_controls(
         status=status,
         criticality=criticality,
         owner_user_id=owner_user_id,
+        business_unit_id=business_unit_id,
         search=search,
         limit=limit,
         offset=offset,
@@ -242,6 +245,17 @@ def get_control_failure_rate(
     return ControlFailureRateRead(**payload)
 
 
+@router.get("/{control_id}/framework-coverage", response_model=CommonControlCoverageReport)
+def get_control_framework_coverage(
+    control_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("controls:read")),
+) -> CommonControlCoverageReport:
+    payload = CommonControlsService(db).get_coverage_report(control_id, organization.id)
+    return CommonControlCoverageReport(**payload)
+
+
 @router.get("/{control_id}/evidence", response_model=list[EvidenceRead])
 def list_evidence_for_control(
     control_id: uuid.UUID,
@@ -322,20 +336,14 @@ def update_control(
     )
 
     db.commit()
-    if before["status"] != control.status:
-        EventBus.get_instance().emit(
-            EventType.CONTROL_STATUS_CHANGED,
-            EventPayload(
-                org_id=organization.id,
-                entity_type="control",
-                entity_id=control.id,
-                event_type=EventType.CONTROL_STATUS_CHANGED,
-                previous_value=before["status"],
-                new_value=control.status,
-                triggered_by="user_action",
-                db=db,
-            ),
-        )
+    ControlService.emit_control_status_changed(
+        db,
+        organization_id=organization.id,
+        control_id=control.id,
+        previous_status=before["status"],
+        new_status=control.status,
+        triggered_by="user_action",
+    )
     db.refresh(control)
     return _control_read(control)
 
@@ -368,20 +376,14 @@ def archive_control(
     )
 
     db.commit()
-    if before_status != control.status:
-        EventBus.get_instance().emit(
-            EventType.CONTROL_STATUS_CHANGED,
-            EventPayload(
-                org_id=organization.id,
-                entity_type="control",
-                entity_id=control.id,
-                event_type=EventType.CONTROL_STATUS_CHANGED,
-                previous_value=before_status,
-                new_value=control.status,
-                triggered_by="user_action",
-                db=db,
-            ),
-        )
+    ControlService.emit_control_status_changed(
+        db,
+        organization_id=organization.id,
+        control_id=control.id,
+        previous_status=before_status,
+        new_status=control.status,
+        triggered_by="user_action",
+    )
     db.refresh(control)
     return _control_read(control)
 

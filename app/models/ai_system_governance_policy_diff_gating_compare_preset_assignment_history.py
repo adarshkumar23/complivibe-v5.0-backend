@@ -11,7 +11,7 @@ from app.db.mixins import OrganizationOwnedMixin, UUIDPrimaryKeyMixin
 class AISystemGovernancePolicyDiffGatingComparePresetAssignmentHistory(
     UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base
 ):
-    __tablename__ = "ai_system_governance_policy_diff_gating_compare_preset_assignment_history"
+    __tablename__ = "ai_system_gov_pol_diff_gating_cmp_pst_assign_hist_044c72ec"
     __table_args__ = (
         Index(
             "ix_ai_sys_gov_policy_diff_cmp_preset_assign_hist_org_assign",
@@ -27,7 +27,7 @@ class AISystemGovernancePolicyDiffGatingComparePresetAssignmentHistory(
 
     assignment_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
-        ForeignKey("ai_system_governance_policy_diff_gating_compare_preset_assignments.id", ondelete="CASCADE"),
+        ForeignKey("ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba1d54.id", ondelete="CASCADE"),
         nullable=False,
     )
     event_type: Mapped[str] = mapped_column(String(32), nullable=False)

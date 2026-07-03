@@ -40,7 +40,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_risk_classification_taxonomy_templates_organization_id",
+        "ix_ai_system_risk_class_taxonomy_tpls_org_id_ed3c6069",
         "ai_system_risk_classification_taxonomy_templates",
         ["organization_id"],
         unique=False,
@@ -184,7 +184,7 @@ def downgrade() -> None:
     op.drop_index("ix_ai_risk_classification_taxonomies_org_default", table_name="ai_system_risk_classification_taxonomy_templates")
     op.drop_index("ix_ai_risk_classification_taxonomies_org_status", table_name="ai_system_risk_classification_taxonomy_templates")
     op.drop_index(
-        "ix_ai_system_risk_classification_taxonomy_templates_organization_id",
+        "ix_ai_system_risk_class_taxonomy_tpls_org_id_ed3c6069",
         table_name="ai_system_risk_classification_taxonomy_templates",
     )
     op.drop_table("ai_system_risk_classification_taxonomy_templates")

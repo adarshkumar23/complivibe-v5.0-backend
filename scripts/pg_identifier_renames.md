@@ -1,0 +1,62 @@
+# PostgreSQL Identifier Renames
+
+- `ai_system_gov_diag_export_diff_gating_cmp_pst_assign_h_c22ea2d3` -> `ai_system_gov_diag_export_diff_gating_cmp_pst_assign_21af53f8`
+- `fk_ai_sys_gov_diag_export_diff_gating_cmp_presets_acti_ff9d0fda` -> `fk_ai_sys_gov_diag_export_diff_gating_cmp_presets_act_6912fb49`
+- `fk_ai_sys_gov_diag_export_diff_gating_cmp_presets_pinn_18c94057` -> `fk_ai_sys_gov_diag_export_diff_gating_cmp_presets_pin_7e97644f`
+- `fk_ai_sys_gov_diag_export_diff_gating_cmp_presets_pinn_fbdf9241` -> `fk_ai_sys_gov_diag_export_diff_gating_cmp_presets_pin_653ad67e`
+- `fk_ai_sys_gov_diag_export_diff_gating_cmp_presets_unpi_a92e3134` -> `fk_ai_sys_gov_diag_export_diff_gating_cmp_presets_unp_572a2b2a`
+- `fk_ai_sys_gov_diag_export_diff_gating_cmp_pst_rep_pinn_e17e0a9b` -> `fk_ai_sys_gov_diag_export_diff_gating_cmp_pst_rep_pin_3e8a9e98`
+- `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_h_1ff0eb08` -> `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_8b572bad`
+- `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_h_9fc546c9` -> `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_068f8286`
+- `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_o_1c86199f` -> `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_baf4b87e`
+- `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_o_7046e52e` -> `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_65278498`
+- `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_o_80d70770` -> `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_6af4dddb`
+- `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_o_9755ec69` -> `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_93fa4c13`
+- `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_org_acti_1f625345` -> `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_org_act_f1f8507b`
+- `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_org_pinn_c784b770` -> `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_org_pin_274463a6`
+- `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_ver_org_808bfd21_num` -> `ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_ver_org_3d2e08a6`
+- `ix_ai_sys_gov_pol_diff_gating_cmp_pst_org_baseline_pro_b7e3db17` -> `ix_ai_sys_gov_pol_diff_gating_cmp_pst_org_baseline_pr_c28c8478`
+- `ix_ai_sys_gov_pol_diff_gating_cmp_pst_org_baseline_rpt_2d4733e0` -> `ix_ai_sys_gov_pol_diff_gating_cmp_pst_org_baseline_rp_d9113c7f`
+- `ix_ai_system_gov_diag_export_diff_gating_cmp_presets_o_07fb8bfe` -> `ix_ai_system_gov_diag_export_diff_gating_cmp_presets_a33c3c29`
+- `ix_ai_system_gov_diag_export_diff_gating_cmp_pst_assig_aed263bd` -> `ix_ai_system_gov_diag_export_diff_gating_cmp_pst_assi_1ad304d3`
+- `ix_ai_system_gov_diag_export_diff_gating_cmp_pst_assig_c5509091` -> `ix_ai_system_gov_diag_export_diff_gating_cmp_pst_assi_a9442612`
+- `ix_ai_system_gov_pol_diff_gating_cmp_pst_assign_hist_044c72ec_organization_id` -> `ix_ai_system_gov_pol_diff_gating_cmp_pst_assign_hist_0c2dc1b3`
+- `ix_ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba1d54_organization_id` -> `ix_ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba_c506edb4`
+- `ix_ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b_organization_id` -> `ix_ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3_e68d8871`
+- `ix_ai_system_gov_pol_resolution_simulation_diff_rpts_o_7638e668` -> `ix_ai_system_gov_pol_resolution_simulation_diff_rpts_0f711ee6`
+- `ix_ai_system_gov_pol_resolution_simulation_rpts_org_id_aad71b07` -> `ix_ai_system_gov_pol_resolution_simulation_rpts_org_i_2eda254b`
+- `ix_ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83_organization_id` -> `ix_ai_system_gov_pst_assign_diag_export_diff_rpts_29e_7a807fd3`
+- `ix_ai_system_risk_assessments_org_calc_resid_risk_leve_cbfb7ad6` -> `ix_ai_system_risk_assessments_org_calc_resid_risk_lev_ab05b152`
+
+## Files Updated
+- `alembic/versions/0047_policy_resolution_simulation_reports.py`
+- `alembic/versions/0048_policy_resolution_simulation_diff_reports.py`
+- `alembic/versions/0052_policy_diff_gating_compare_presets.py`
+- `alembic/versions/0053_policy_diff_gating_compare_preset_versions.py`
+- `alembic/versions/0055_policy_diff_gating_compare_preset_assignments.py`
+- `alembic/versions/0058_preset_assignment_diagnostic_export_diff_reports.py`
+- `alembic/versions/0062_diagnostic_export_diff_gating_compare_presets.py`
+- `alembic/versions/0063_diag_export_diff_gating_compare_preset_versions.py`
+- `alembic/versions/0064_diag_export_diff_gating_compare_preset_assignments.py`
+- `alembic/versions/0067_ai_risk_dimension_templates.py`
+- `app/api/v1/ai_governance.py`
+- `app/models/__init__.py`
+- `app/models/ai_system_governance_diagnostic_export_diff_gating_compare_preset.py`
+- `app/models/ai_system_governance_diagnostic_export_diff_gating_compare_preset_assignment.py`
+- `app/models/ai_system_governance_diagnostic_export_diff_gating_compare_preset_assignment_history.py`
+- `app/models/ai_system_governance_diagnostic_export_diff_gating_compare_preset_version.py`
+- `app/models/ai_system_governance_policy_diff_gating_compare_preset.py`
+- `app/models/ai_system_risk_assessment.py`
+- `app/services/ai_system_governance_sequence_service.py`
+
+## 2026-06-30 (Sprint 1 P1)
+- `fk_risks_business_unit_id_business_units` -> `fk_risks_bu_id` (`alembic/versions/0176_business_units_data_tagging.py`)
+- `fk_controls_business_unit_id_business_units` -> `fk_controls_bu_id` (`alembic/versions/0176_business_units_data_tagging.py`)
+- `fk_compliance_policies_business_unit_id_business_units` -> `fk_comp_pols_bu_id` (`alembic/versions/0176_business_units_data_tagging.py`)
+- `fk_vendors_business_unit_id_business_units` -> `fk_vendors_bu_id` (`alembic/versions/0176_business_units_data_tagging.py`)
+- `fk_ai_systems_business_unit_id_business_units` -> `fk_ai_systems_bu_id` (`alembic/versions/0176_business_units_data_tagging.py`)
+- `ix_risks_business_unit_id` -> `ix_risks_bu_id` (`alembic/versions/0176_business_units_data_tagging.py`)
+- `ix_controls_business_unit_id` -> `ix_controls_bu_id` (`alembic/versions/0176_business_units_data_tagging.py`)
+- `ix_compliance_policies_business_unit_id` -> `ix_comp_pols_bu_id` (`alembic/versions/0176_business_units_data_tagging.py`)
+- `ix_vendors_business_unit_id` -> `ix_vendors_bu_id` (`alembic/versions/0176_business_units_data_tagging.py`)
+- `ix_ai_systems_business_unit_id` -> `ix_ai_systems_bu_id` (`alembic/versions/0176_business_units_data_tagging.py`)

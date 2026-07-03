@@ -1,0 +1,9 @@
+{
+  "summary": {
+    "total_identifiers_scanned": 5982,
+    "total_violations": 0,
+    "project_naming_convention": "none (app/db/base.py has no MetaData.naming_convention)",
+    "auto_fk_note": "Unnamed FK constraint names are backend-generated; static length validation is not applicable without naming_convention."
+  },
+  "violations": []
+}

@@ -14,7 +14,7 @@ class AISystemGovernanceDiagnosticExportDiffGatingComparePreset(
     OrganizationOwnedMixin,
     Base,
 ):
-    __tablename__ = "ai_system_governance_diagnostic_export_diff_gating_compare_presets"
+    __tablename__ = "ai_system_gov_diag_export_diff_gating_cmp_presets_ac16f85a"
     __table_args__ = (
         Index("ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_org_status", "organization_id", "status"),
         Index("ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_org_created", "organization_id", "created_at"),
@@ -24,12 +24,12 @@ class AISystemGovernanceDiagnosticExportDiffGatingComparePreset(
             "default_interpretation_band",
         ),
         Index(
-            "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_org_active_ver",
+            "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_org_act_f1f8507b",
             "organization_id",
             "active_version_id",
         ),
         Index(
-            "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_org_pinned_ver",
+            "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_org_pin_274463a6",
             "organization_id",
             "pinned_version_id",
         ),
@@ -45,20 +45,20 @@ class AISystemGovernanceDiagnosticExportDiffGatingComparePreset(
     active_version_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey(
-            "ai_system_governance_diagnostic_export_diff_gating_compare_preset_versions.id",
+            "ai_system_gov_diag_export_diff_gating_cmp_pst_vers_e1cd192c.id",
             ondelete="SET NULL",
             use_alter=True,
-            name="fk_ai_sys_gov_diag_export_diff_gating_cmp_presets_active_version_id",
+            name="fk_ai_sys_gov_diag_export_diff_gating_cmp_presets_act_6912fb49",
         ),
         nullable=True,
     )
     pinned_version_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey(
-            "ai_system_governance_diagnostic_export_diff_gating_compare_preset_versions.id",
+            "ai_system_gov_diag_export_diff_gating_cmp_pst_vers_e1cd192c.id",
             ondelete="SET NULL",
             use_alter=True,
-            name="fk_ai_sys_gov_diag_export_diff_gating_cmp_presets_pinned_version_id",
+            name="fk_ai_sys_gov_diag_export_diff_gating_cmp_presets_pin_7e97644f",
         ),
         nullable=True,
     )

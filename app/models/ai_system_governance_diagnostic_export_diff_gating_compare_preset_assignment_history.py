@@ -13,15 +13,15 @@ class AISystemGovernanceDiagnosticExportDiffGatingComparePresetAssignmentHistory
     OrganizationOwnedMixin,
     Base,
 ):
-    __tablename__ = "ai_system_governance_diagnostic_export_diff_gating_compare_preset_assignment_history"
+    __tablename__ = "ai_system_gov_diag_export_diff_gating_cmp_pst_assign_21af53f8"
     __table_args__ = (
         Index(
-            "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_assign_hist_org_assignment",
+            "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_8b572bad",
             "organization_id",
             "assignment_id",
         ),
         Index(
-            "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_assign_hist_org_event",
+            "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_068f8286",
             "organization_id",
             "event_type",
         ),
@@ -29,7 +29,7 @@ class AISystemGovernanceDiagnosticExportDiffGatingComparePresetAssignmentHistory
 
     assignment_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
-        ForeignKey("ai_system_governance_diagnostic_export_diff_gating_compare_preset_assignments.id", ondelete="CASCADE"),
+        ForeignKey("ai_system_gov_diag_export_diff_gating_cmp_pst_assigns_4644e2cb.id", ondelete="CASCADE"),
         nullable=False,
     )
     event_type: Mapped[str] = mapped_column(String(32), nullable=False)

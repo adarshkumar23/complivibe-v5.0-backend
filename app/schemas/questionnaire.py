@@ -241,6 +241,7 @@ class InboundQuestionnaireSessionRead(BaseModel):
     drafted_count: int
     approved_count: int
     sent_count: int
+    completed_at: datetime | None = None
     created_by: UUID
     created_at: datetime
     updated_at: datetime
@@ -313,3 +314,13 @@ class InboundQuestionnaireSessionSummary(BaseModel):
     high_confidence_items: int
     low_confidence_items: int
     source_type_distribution: dict[str, int]
+
+
+class InboundQuestionnaireResponseTimeMetricsRead(BaseModel):
+    session_id: UUID | None = None
+    avg_response_time_hours: float | None = None
+    median_response_time_hours: float | None = None
+    fastest_response_time_hours: float | None = None
+    slowest_response_time_hours: float | None = None
+    sessions_analyzed: int
+    sessions_still_pending: int

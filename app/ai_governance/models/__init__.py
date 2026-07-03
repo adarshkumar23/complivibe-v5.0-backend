@@ -13,6 +13,7 @@ from app.models.shadow_ai_detection import ShadowAIDetection
 from app.models.ai_risk_assessment import AIRiskAssessment
 from app.models.ai_risk_assessment_question import AIRiskAssessmentQuestion
 from app.models.ai_risk_assessment_response import AIRiskAssessmentResponse
+from app.models.ai_bias_assessment import AIBiasAssessment
 from app.models.iso42001_conformity_tracker import ISO42001ConformityTracker
 from app.models.nist_ai_rmf_implementation import NISTAIRMFImplementation
 from app.models.ai_rmf_function_response import AIRMFFunctionResponse
@@ -28,6 +29,7 @@ from app.models.ai_monitoring_config import AIMonitoringConfig
 from app.models.ai_monitoring_reading import AIMonitoringReading
 from app.models.ai_risk_signal import AIRiskSignal
 from app.models.ai_risk_recommendation import AIRiskRecommendation
+from app.models.ai_governance_diagnostic_snapshot import AIGovernanceDiagnosticSnapshot
 
 __all__ = [
     "AIGovernanceEvent",
@@ -45,6 +47,7 @@ __all__ = [
     "AIRiskAssessment",
     "AIRiskAssessmentQuestion",
     "AIRiskAssessmentResponse",
+    "AIBiasAssessment",
     "ISO42001ConformityTracker",
     "NISTAIRMFImplementation",
     "AIRMFFunctionResponse",
@@ -60,4 +63,5 @@ __all__ = [
     "AIMonitoringReading",
     "AIRiskSignal",
     "AIRiskRecommendation",
+    "AIGovernanceDiagnosticSnapshot",
 ]

@@ -48,13 +48,13 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_org_governance_manifest_verification_events_org_manifest_verified",
+        "ix_org_gov_mnfst_verif_events_org_mnfst_verified_09dcc7c1",
         "organization_governance_manifest_verification_events",
         ["organization_id", "manifest_id", "verified_at"],
         unique=False,
     )
     op.create_index(
-        "ix_org_governance_manifest_verification_events_org_trusted_verified",
+        "ix_org_gov_mnfst_verif_events_org_trusted_verified_3c5ac2ab",
         "organization_governance_manifest_verification_events",
         ["organization_id", "trusted", "verified_at"],
         unique=False,
@@ -63,11 +63,11 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index(
-        "ix_org_governance_manifest_verification_events_org_trusted_verified",
+        "ix_org_gov_mnfst_verif_events_org_trusted_verified_3c5ac2ab",
         table_name="organization_governance_manifest_verification_events",
     )
     op.drop_index(
-        "ix_org_governance_manifest_verification_events_org_manifest_verified",
+        "ix_org_gov_mnfst_verif_events_org_mnfst_verified_09dcc7c1",
         table_name="organization_governance_manifest_verification_events",
     )
     op.drop_table("organization_governance_manifest_verification_events")

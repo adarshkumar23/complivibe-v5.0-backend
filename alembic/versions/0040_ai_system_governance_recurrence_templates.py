@@ -54,7 +54,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_review_recurrence_templates_organization_id",
+        "ix_ai_system_gov_review_recurrence_tpls_org_id_7402976e",
         "ai_system_governance_review_recurrence_templates",
         ["organization_id"],
         unique=False,
@@ -137,7 +137,7 @@ def downgrade() -> None:
         table_name="ai_system_governance_review_recurrence_templates",
     )
     op.drop_index(
-        "ix_ai_system_governance_review_recurrence_templates_organization_id",
+        "ix_ai_system_gov_review_recurrence_tpls_org_id_7402976e",
         table_name="ai_system_governance_review_recurrence_templates",
     )
     op.drop_table("ai_system_governance_review_recurrence_templates")

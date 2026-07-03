@@ -31,6 +31,17 @@ class RetentionService:
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
 
+    @classmethod
+    def _retention_due_at(cls, asset: DataAsset) -> datetime:
+        # retention_review_date is the field actually exposed for editing via the asset API
+        # (set explicitly by a user, or auto-set when a retention policy is applied -- see
+        # apply_policy_to_asset). Editing it must have real effect on the sweep. Only fall
+        # back to created_at + retention_policy_days for assets that predate having a review
+        # date set at all.
+        if asset.retention_review_date is not None:
+            return cls._as_utc(datetime.combine(asset.retention_review_date, datetime.min.time()))
+        return cls._as_utc(asset.created_at) + timedelta(days=int(asset.retention_policy_days or 0))
+
     def _require_policy(self, org_id: uuid.UUID, policy_id: uuid.UUID) -> DataRetentionPolicy:
         row = self.db.execute(
             select(DataRetentionPolicy).where(
@@ -82,6 +93,7 @@ class RetentionService:
             applies_to_sensitivity_tiers=payload.get("applies_to_sensitivity_tiers") or [],
             legal_basis=payload.get("legal_basis"),
             action_on_expiry=payload["action_on_expiry"],
+            legal_hold=bool(payload.get("legal_hold", False)),
             is_active=True,
             created_by=created_by,
             created_at=now,
@@ -97,7 +109,12 @@ class RetentionService:
             entity_id=row.id,
             organization_id=org_id,
             actor_user_id=created_by,
-            after_json={"name": row.name, "retention_days": row.retention_days, "action_on_expiry": row.action_on_expiry},
+            after_json={
+                "name": row.name,
+                "retention_days": row.retention_days,
+                "action_on_expiry": row.action_on_expiry,
+                "legal_hold": row.legal_hold,
+            },
             metadata_json={"source": "api"},
         )
         return row
@@ -131,7 +148,35 @@ class RetentionService:
             entity_id=row.id,
             organization_id=org_id,
             actor_user_id=None,
-            after_json={"name": row.name, "retention_days": row.retention_days, "action_on_expiry": row.action_on_expiry},
+            after_json={
+                "name": row.name,
+                "retention_days": row.retention_days,
+                "action_on_expiry": row.action_on_expiry,
+                "legal_hold": row.legal_hold,
+            },
+            metadata_json={"source": "api"},
+        )
+        return row
+
+    def set_legal_hold(
+        self,
+        org_id: uuid.UUID,
+        policy_id: uuid.UUID,
+        legal_hold: bool,
+        updated_by: uuid.UUID,
+    ) -> DataRetentionPolicy:
+        row = self._require_policy(org_id, policy_id)
+        row.legal_hold = legal_hold
+        row.updated_at = self.utcnow()
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="data_retention.legal_hold_updated",
+            entity_type="data_retention_policy",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=updated_by,
+            after_json={"legal_hold": row.legal_hold},
             metadata_json={"source": "api"},
         )
         return row
@@ -245,7 +290,7 @@ class RetentionService:
         for asset in assets:
             if asset.retention_policy_days is None:
                 continue
-            due_at = self._as_utc(asset.created_at) + timedelta(days=int(asset.retention_policy_days))
+            due_at = self._retention_due_at(asset)
             if due_at > now:
                 continue
 
@@ -260,6 +305,8 @@ class RetentionService:
                 continue
 
             policy = self._find_applicable_policy(asset.organization_id, asset)
+            if policy is not None and bool(policy.legal_hold):
+                continue
             required_action = policy.action_on_expiry if policy else "flag"
             days_overdue = (now.date() - due_at.date()).days
 
@@ -397,7 +444,7 @@ class RetentionService:
         expired_count = 0
         within_count = 0
         for asset in assets:
-            due_at = self._as_utc(asset.created_at) + timedelta(days=int(asset.retention_policy_days or 0))
+            due_at = self._retention_due_at(asset)
             if due_at <= now:
                 expired_count += 1
             else:

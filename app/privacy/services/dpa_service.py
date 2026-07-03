@@ -15,6 +15,7 @@ from app.services.audit_service import AuditService
 
 ALLOWED_COUNTERPARTY_TYPES = {"processor", "sub_processor", "joint_controller", "controller"}
 ALLOWED_STATUSES = {"pending", "active", "expired", "under_review", "terminated"}
+ALLOWED_HIPAA_ENTITY_TYPES = {"covered_entity", "business_associate", "subcontractor"}
 STATUS_TRANSITIONS: dict[str, set[str]] = {
     "pending": {"active", "terminated"},
     "active": {"under_review", "expired", "terminated"},
@@ -92,6 +93,10 @@ class DPAService:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status")
         if payload.get("renewal_notice_days") is not None and int(payload["renewal_notice_days"]) < 0:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="renewal_notice_days must be >= 0")
+        if payload.get("baa_breach_notification_days") is not None and int(payload["baa_breach_notification_days"]) < 0:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="baa_breach_notification_days must be >= 0")
+        if payload.get("hipaa_covered_entity_type") is not None and payload["hipaa_covered_entity_type"] not in ALLOWED_HIPAA_ENTITY_TYPES:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid hipaa_covered_entity_type")
 
     def create_dpa(self, org_id: uuid.UUID, data, created_by: uuid.UUID) -> DPAAgreement:
         payload = data.model_dump()
@@ -118,6 +123,12 @@ class DPAService:
             bcrs_included=payload.get("bcrs_included"),
             data_transfer_countries=list(payload.get("data_transfer_countries") or []),
             processing_activity_ids=self._normalize_uuid_list(payload.get("processing_activity_ids") or []),
+            is_baa=bool(payload.get("is_baa", False)),
+            baa_effective_date=payload.get("baa_effective_date"),
+            baa_includes_phi=bool(payload.get("baa_includes_phi", False)),
+            baa_subcontractor_clause=bool(payload.get("baa_subcontractor_clause", False)),
+            baa_breach_notification_days=int(payload.get("baa_breach_notification_days", 60)),
+            hipaa_covered_entity_type=payload.get("hipaa_covered_entity_type"),
             review_notes=payload.get("review_notes"),
             owner_id=payload["owner_id"],
             created_by=created_by,

@@ -1,6 +1,7 @@
 """Pillar 2 services."""
 
 from app.ai_governance.services import (
+    atlas_assessment_service,
     ai_classifier,
     ai_governance_event_service,
     ai_risk_assessment_service,
@@ -24,11 +25,16 @@ from app.ai_governance.services import (
     signal_service,
     ai_recommendation_engine,
     ai_recommendation_service,
+    ai_depth_service,
     draft_context_service,
     mlops_sync_service,
+    ai_governance_diagnostic_service,
+    mlops_adapter_service,
+    semantic_mapping_service,
 )
 
 __all__ = [
+    "atlas_assessment_service",
     "ai_classifier",
     "ai_governance_event_service",
     "ai_risk_assessment_service",
@@ -52,6 +58,10 @@ __all__ = [
     "signal_service",
     "ai_recommendation_engine",
     "ai_recommendation_service",
+    "ai_depth_service",
     "draft_context_service",
     "mlops_sync_service",
+    "ai_governance_diagnostic_service",
+    "mlops_adapter_service",
+    "semantic_mapping_service",
 ]

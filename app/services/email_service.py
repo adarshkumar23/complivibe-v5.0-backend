@@ -13,6 +13,16 @@ from app.privacy.services.notification_preference_service import NotificationPre
 
 VAR_PATTERN = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 
+# Legacy event_type values that should map to canonical notification preference types.
+EVENT_TYPE_NOTIFICATION_MAP: dict[str, str] = {
+    "digest.daily": "digest_daily",
+    "digest.weekly": "digest_weekly",
+    "issue_sla.warning": "sla_breach",
+    "issue_sla.breached": "sla_breach",
+    "breach_notification.deadline_warning": "breach_notification_due",
+    "customer_commitment.deadline_reminder": "deadline_approaching",
+}
+
 
 class EmailService:
     def __init__(self, db: Session) -> None:
@@ -136,6 +146,78 @@ class EmailService:
         self.db.add(event)
         self.db.flush()
         return event
+
+    @staticmethod
+    def derive_notification_type(*, event_type: str | None, metadata_json: dict | None) -> str | None:
+        if isinstance(metadata_json, dict):
+            explicit = metadata_json.get("notification_type")
+            if isinstance(explicit, str) and explicit.strip():
+                return explicit.strip()
+
+        normalized = (event_type or "").strip()
+        if not normalized:
+            return None
+
+        mapped = EVENT_TYPE_NOTIFICATION_MAP.get(normalized)
+        if mapped:
+            return mapped
+
+        underscored = normalized.replace(".", "_")
+        if underscored:
+            return underscored
+        return None
+
+    def enforce_outbox_notification_preference(
+        self,
+        outbox: EmailOutbox,
+        *,
+        actor_user_id: uuid.UUID | None,
+    ) -> bool:
+        if outbox.status in {"sent", "cancelled", "dead_letter", "skipped"}:
+            return False
+        if outbox.organization_id is None or outbox.recipient_user_id is None:
+            return False
+
+        metadata = outbox.metadata_json if isinstance(outbox.metadata_json, dict) else None
+        notification_type = self.derive_notification_type(event_type=outbox.event_type, metadata_json=metadata)
+        if not notification_type:
+            return False
+
+        severity: str | None = None
+        if isinstance(metadata, dict):
+            maybe_severity = metadata.get("severity")
+            if isinstance(maybe_severity, str):
+                severity = maybe_severity
+
+        should_notify = NotificationPreferenceService(self.db).should_notify(
+            outbox.organization_id,
+            outbox.recipient_user_id,
+            notification_type,
+            severity=severity,
+        )
+        if should_notify:
+            return False
+
+        previous_status = outbox.status
+        outbox.status = "skipped"
+        outbox.failed_at = None
+        outbox.next_attempt_at = None
+        outbox.last_error = "Suppressed by user notification preference"
+
+        self.add_delivery_event(
+            organization_id=outbox.organization_id,
+            email_outbox_id=outbox.id,
+            event_type="skipped_by_preference",
+            status_from=previous_status,
+            status_to=outbox.status,
+            details_json={
+                "event_type": outbox.event_type,
+                "notification_type": notification_type,
+                "suppressed_by_preference": True,
+            },
+            created_by_user_id=actor_user_id,
+        )
+        return True
 
     def queue_email(
         self,

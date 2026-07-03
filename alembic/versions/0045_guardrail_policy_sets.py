@@ -72,7 +72,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_guardrail_policy_set_versions_organization_id",
+        "ix_ai_system_gov_guardrail_pol_set_vers_org_id_856743f5",
         "ai_system_governance_guardrail_policy_set_versions",
         ["organization_id"],
         unique=False,
@@ -111,7 +111,7 @@ def downgrade() -> None:
         table_name="ai_system_governance_guardrail_policy_set_versions",
     )
     op.drop_index(
-        "ix_ai_system_governance_guardrail_policy_set_versions_organization_id",
+        "ix_ai_system_gov_guardrail_pol_set_vers_org_id_856743f5",
         table_name="ai_system_governance_guardrail_policy_set_versions",
     )
     op.drop_table("ai_system_governance_guardrail_policy_set_versions")

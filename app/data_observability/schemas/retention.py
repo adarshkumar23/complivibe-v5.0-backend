@@ -13,6 +13,7 @@ class DataRetentionPolicyCreate(BaseModel):
     applies_to_sensitivity_tiers: list[str] = Field(default_factory=list)
     legal_basis: str | None = None
     action_on_expiry: str = "flag"
+    legal_hold: bool = False
 
 
 class DataRetentionPolicyUpdate(BaseModel):
@@ -24,6 +25,7 @@ class DataRetentionPolicyUpdate(BaseModel):
     applies_to_sensitivity_tiers: list[str] | None = None
     legal_basis: str | None = None
     action_on_expiry: str | None = None
+    legal_hold: bool | None = None
     is_active: bool | None = None
 
 
@@ -40,6 +42,7 @@ class DataRetentionPolicyRead(BaseModel):
     applies_to_sensitivity_tiers: list
     legal_basis: str | None
     action_on_expiry: str
+    legal_hold: bool
     is_active: bool
     created_by: uuid.UUID
     created_at: datetime
@@ -90,3 +93,7 @@ class RetentionSweepRead(BaseModel):
     assets_flagged: int
     tasks_created: int
     reminders_queued: int
+
+
+class RetentionLegalHoldUpdateRequest(BaseModel):
+    legal_hold: bool

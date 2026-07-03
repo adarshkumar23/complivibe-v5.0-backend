@@ -16,6 +16,7 @@ class CustomerCommitmentCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     description: str = Field(min_length=1)
     trigger_condition: str = Field(min_length=1)
+    triggering_incident_type: str | None = Field(default=None, max_length=100)
     trigger_date: date | None = None
     notification_days_before: int = Field(default=7, ge=1, le=90)
     sla_hours: int | None = None
@@ -29,6 +30,7 @@ class CustomerCommitmentUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     trigger_condition: str | None = None
+    triggering_incident_type: str | None = Field(default=None, max_length=100)
     trigger_date: date | None = None
     notification_days_before: int | None = Field(default=None, ge=1, le=90)
     sla_hours: int | None = None
@@ -53,6 +55,7 @@ class CustomerCommitmentRead(BaseModel):
     title: str
     description: str
     trigger_condition: str
+    triggering_incident_type: str | None = None
     trigger_date: date | None = None
     notification_days_before: int
     sla_hours: int | None = None

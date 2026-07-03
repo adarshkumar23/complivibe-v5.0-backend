@@ -163,7 +163,7 @@ def test_c76_quality_metrics(client):
     reading_breach = client.post(
         f"{QUALITY_BASE}/configs/{cfg_breach_id}/readings",
         headers=org["org_headers"],
-        json={"value": 0.90, "source_tool": "great_expectations", "notes": "late batch"},
+        json={"value": 1.10, "source_tool": "great_expectations", "notes": "late batch"},
     )
     assert reading_breach.status_code == 201
     assert reading_breach.json()["within_threshold"] is False
@@ -191,14 +191,14 @@ def test_c76_quality_metrics(client):
     reading_ok = client.post(
         f"{QUALITY_BASE}/configs/{cfg_ok_id}/readings",
         headers=org["org_headers"],
-        json={"value": 0.90, "source_tool": "dbt_test"},
+        json={"value": 0.99, "source_tool": "dbt_test"},
     )
     assert reading_ok.status_code == 201
     assert reading_ok.json()["within_threshold"] is True
 
     cfg_refreshed = client.get(f"{QUALITY_BASE}/configs/{cfg_ok_id}", headers=org["org_headers"])
     assert cfg_refreshed.status_code == 200
-    assert float(cfg_refreshed.json()["last_value"]) == 0.90
+    assert float(cfg_refreshed.json()["last_value"]) == 0.99
 
     deactivated = client.post(f"{QUALITY_BASE}/configs/{cfg_ok_id}/deactivate", headers=org["org_headers"])
     assert deactivated.status_code == 200

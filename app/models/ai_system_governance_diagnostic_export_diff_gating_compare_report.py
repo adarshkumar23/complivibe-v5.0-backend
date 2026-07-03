@@ -14,7 +14,7 @@ class AISystemGovernanceDiagnosticExportDiffGatingCompareReport(
     OrganizationOwnedMixin,
     Base,
 ):
-    __tablename__ = "ai_system_governance_diagnostic_export_diff_gating_compare_reports"
+    __tablename__ = "ai_system_gov_diag_export_diff_gating_cmp_rpts_884d7a31"
     __table_args__ = (
         Index("ix_ai_sys_gov_diag_export_diff_gating_cmp_org_status", "organization_id", "status"),
         Index("ix_ai_sys_gov_diag_export_diff_gating_cmp_org_created", "organization_id", "created_at"),

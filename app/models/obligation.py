@@ -30,7 +30,11 @@ class Obligation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     jurisdiction: Mapped[str] = mapped_column(String(128), nullable=False)
     source_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    ig_level: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    control_family: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    baseline: Mapped[str | None] = mapped_column(String(20), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    embedding_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     effective_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     parent_obligation_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,

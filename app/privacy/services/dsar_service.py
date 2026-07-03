@@ -15,7 +15,18 @@ from app.models.role import Role
 from app.models.user import User
 from app.services.audit_service import AuditService
 
-ALLOWED_REQUEST_TYPES = {"access", "erasure", "portability", "rectification", "restriction", "objection"}
+ALLOWED_REQUEST_TYPES = {
+    "access",
+    "erasure",
+    "portability",
+    "rectification",
+    "restriction",
+    "objection",
+    "opt_out_of_sale",
+    "limit_sensitive",
+    "know",
+    "correct",
+}
 ALLOWED_STATUS = {
     "received",
     "identity_verification",
@@ -199,6 +210,11 @@ class DSARService:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid request_type")
         if payload.get("regulatory_framework", "gdpr") not in ALLOWED_FRAMEWORKS:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid regulatory_framework")
+
+        if payload.get("request_type") == "know":
+            payload["request_type"] = "access"
+        elif payload.get("request_type") == "correct":
+            payload["request_type"] = "rectification"
 
         regulatory_framework = payload.get("regulatory_framework", "gdpr")
         deadline_days = self._compute_deadline_days(regulatory_framework, payload.get("deadline_days"))

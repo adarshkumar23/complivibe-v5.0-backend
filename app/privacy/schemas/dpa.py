@@ -23,6 +23,12 @@ class DPACreate(BaseModel):
     bcrs_included: bool | None = None
     data_transfer_countries: list[str] = Field(default_factory=list)
     processing_activity_ids: list[str] = Field(default_factory=list)
+    is_baa: bool = False
+    baa_effective_date: date | None = None
+    baa_includes_phi: bool = False
+    baa_subcontractor_clause: bool = False
+    baa_breach_notification_days: int = Field(default=60, ge=0)
+    hipaa_covered_entity_type: str | None = Field(default=None, max_length=30)
     review_notes: str | None = None
     owner_id: uuid.UUID
 
@@ -45,6 +51,12 @@ class DPAUpdate(BaseModel):
     bcrs_included: bool | None = None
     data_transfer_countries: list[str] | None = None
     processing_activity_ids: list[str] | None = None
+    is_baa: bool | None = None
+    baa_effective_date: date | None = None
+    baa_includes_phi: bool | None = None
+    baa_subcontractor_clause: bool | None = None
+    baa_breach_notification_days: int | None = Field(default=None, ge=0)
+    hipaa_covered_entity_type: str | None = Field(default=None, max_length=30)
     review_notes: str | None = None
     owner_id: uuid.UUID | None = None
 
@@ -79,6 +91,12 @@ class DPARead(BaseModel):
     bcrs_included: bool | None
     data_transfer_countries: list[Any]
     processing_activity_ids: list[Any]
+    is_baa: bool
+    baa_effective_date: date | None
+    baa_includes_phi: bool
+    baa_subcontractor_clause: bool
+    baa_breach_notification_days: int
+    hipaa_covered_entity_type: str | None
     review_notes: str | None
     owner_id: uuid.UUID
     created_by: uuid.UUID

@@ -4,6 +4,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.event_bus import EventBus, EventPayload, EventType
 from app.models.control import Control
 from app.models.control_obligation_mapping import ControlObligationMapping
 from app.models.evidence_control_link import EvidenceControlLink
@@ -14,6 +15,62 @@ from app.models.organization_framework import OrganizationFramework
 
 
 class ControlService:
+    @staticmethod
+    def emit_control_status_changed(
+        db: Session,
+        *,
+        organization_id: uuid.UUID,
+        control_id: uuid.UUID,
+        previous_status: str,
+        new_status: str,
+        triggered_by: str = "user_action",
+    ) -> None:
+        if previous_status == new_status:
+            return
+        EventBus.get_instance().emit(
+            EventType.CONTROL_STATUS_CHANGED,
+            EventPayload(
+                org_id=organization_id,
+                entity_type="control",
+                entity_id=control_id,
+                event_type=EventType.CONTROL_STATUS_CHANGED,
+                previous_value=previous_status,
+                new_value=new_status,
+                triggered_by=triggered_by,
+                db=db,
+            ),
+        )
+
+    @staticmethod
+    def set_status(
+        db: Session,
+        *,
+        organization_id: uuid.UUID,
+        control_id: uuid.UUID,
+        new_status: str,
+        triggered_by: str = "service",
+    ) -> Control:
+        control = db.execute(
+            select(Control).where(
+                Control.id == control_id,
+                Control.organization_id == organization_id,
+            )
+        ).scalar_one_or_none()
+        if control is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Control not found")
+        previous_status = control.status
+        control.status = new_status
+        db.flush()
+        ControlService.emit_control_status_changed(
+            db,
+            organization_id=organization_id,
+            control_id=control.id,
+            previous_status=previous_status,
+            new_status=new_status,
+            triggered_by=triggered_by,
+        )
+        return control
+
     @staticmethod
     def ensure_owner_is_active_member(db: Session, organization_id: uuid.UUID, owner_user_id: uuid.UUID | None) -> None:
         if owner_user_id is None:

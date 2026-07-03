@@ -20,7 +20,7 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.create_table(
-        "ai_system_governance_policy_diff_gating_compare_preset_assignments",
+        "ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba1d54",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("organization_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("preset_id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -46,38 +46,38 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_policy_diff_gating_compare_preset_assignments_organization_id",
-        "ai_system_governance_policy_diff_gating_compare_preset_assignments",
+        "ix_ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba_c506edb4",
+        "ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba1d54",
         ["organization_id"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_policy_diff_cmp_preset_assign_org_status",
-        "ai_system_governance_policy_diff_gating_compare_preset_assignments",
+        "ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba1d54",
         ["organization_id", "status"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_policy_diff_cmp_preset_assign_org_scope",
-        "ai_system_governance_policy_diff_gating_compare_preset_assignments",
+        "ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba1d54",
         ["organization_id", "scope_type"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_policy_diff_cmp_preset_assign_org_preset",
-        "ai_system_governance_policy_diff_gating_compare_preset_assignments",
+        "ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba1d54",
         ["organization_id", "preset_id"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_policy_diff_cmp_preset_assign_org_priority",
-        "ai_system_governance_policy_diff_gating_compare_preset_assignments",
+        "ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba1d54",
         ["organization_id", "priority"],
         unique=False,
     )
 
     op.create_table(
-        "ai_system_governance_policy_diff_gating_compare_preset_assignment_history",
+        "ai_system_gov_pol_diff_gating_cmp_pst_assign_hist_044c72ec",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("organization_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("assignment_id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -89,7 +89,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.ForeignKeyConstraint(
             ["assignment_id"],
-            ["ai_system_governance_policy_diff_gating_compare_preset_assignments.id"],
+            ["ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba1d54.id"],
             ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(["organization_id"], ["organizations.id"], ondelete="CASCADE"),
@@ -97,20 +97,20 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_policy_diff_gating_compare_preset_assignment_history_organization_id",
-        "ai_system_governance_policy_diff_gating_compare_preset_assignment_history",
+        "ix_ai_system_gov_pol_diff_gating_cmp_pst_assign_hist_0c2dc1b3",
+        "ai_system_gov_pol_diff_gating_cmp_pst_assign_hist_044c72ec",
         ["organization_id"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_policy_diff_cmp_preset_assign_hist_org_assign",
-        "ai_system_governance_policy_diff_gating_compare_preset_assignment_history",
+        "ai_system_gov_pol_diff_gating_cmp_pst_assign_hist_044c72ec",
         ["organization_id", "assignment_id"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_policy_diff_cmp_preset_assign_hist_org_created",
-        "ai_system_governance_policy_diff_gating_compare_preset_assignment_history",
+        "ai_system_gov_pol_diff_gating_cmp_pst_assign_hist_044c72ec",
         ["organization_id", "created_at"],
         unique=False,
     )
@@ -119,37 +119,37 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index(
         "ix_ai_sys_gov_policy_diff_cmp_preset_assign_hist_org_created",
-        table_name="ai_system_governance_policy_diff_gating_compare_preset_assignment_history",
+        table_name="ai_system_gov_pol_diff_gating_cmp_pst_assign_hist_044c72ec",
     )
     op.drop_index(
         "ix_ai_sys_gov_policy_diff_cmp_preset_assign_hist_org_assign",
-        table_name="ai_system_governance_policy_diff_gating_compare_preset_assignment_history",
+        table_name="ai_system_gov_pol_diff_gating_cmp_pst_assign_hist_044c72ec",
     )
     op.drop_index(
-        "ix_ai_system_governance_policy_diff_gating_compare_preset_assignment_history_organization_id",
-        table_name="ai_system_governance_policy_diff_gating_compare_preset_assignment_history",
+        "ix_ai_system_gov_pol_diff_gating_cmp_pst_assign_hist_0c2dc1b3",
+        table_name="ai_system_gov_pol_diff_gating_cmp_pst_assign_hist_044c72ec",
     )
-    op.drop_table("ai_system_governance_policy_diff_gating_compare_preset_assignment_history")
+    op.drop_table("ai_system_gov_pol_diff_gating_cmp_pst_assign_hist_044c72ec")
 
     op.drop_index(
         "ix_ai_sys_gov_policy_diff_cmp_preset_assign_org_priority",
-        table_name="ai_system_governance_policy_diff_gating_compare_preset_assignments",
+        table_name="ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba1d54",
     )
     op.drop_index(
         "ix_ai_sys_gov_policy_diff_cmp_preset_assign_org_preset",
-        table_name="ai_system_governance_policy_diff_gating_compare_preset_assignments",
+        table_name="ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba1d54",
     )
     op.drop_index(
         "ix_ai_sys_gov_policy_diff_cmp_preset_assign_org_scope",
-        table_name="ai_system_governance_policy_diff_gating_compare_preset_assignments",
+        table_name="ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba1d54",
     )
     op.drop_index(
         "ix_ai_sys_gov_policy_diff_cmp_preset_assign_org_status",
-        table_name="ai_system_governance_policy_diff_gating_compare_preset_assignments",
+        table_name="ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba1d54",
     )
     op.drop_index(
-        "ix_ai_system_governance_policy_diff_gating_compare_preset_assignments_organization_id",
-        table_name="ai_system_governance_policy_diff_gating_compare_preset_assignments",
+        "ix_ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba_c506edb4",
+        table_name="ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba1d54",
     )
-    op.drop_table("ai_system_governance_policy_diff_gating_compare_preset_assignments")
+    op.drop_table("ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba1d54")
 

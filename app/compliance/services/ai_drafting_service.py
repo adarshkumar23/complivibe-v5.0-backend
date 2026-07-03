@@ -189,22 +189,34 @@ class AIDraftingService:
         settings = get_settings()
         endpoint = settings.AZURE_OPENAI_ENDPOINT
         api_key = settings.AZURE_OPENAI_API_KEY
-        api_version = settings.AZURE_OPENAI_API_VERSION
-        deployment = settings.AZURE_OPENAI_DEPLOYMENT
-        if not endpoint or not api_key or not api_version or not deployment:
+        # AZURE_OPENAI_DEPLOYMENT_NAME is what .env actually sets; AZURE_OPENAI_DEPLOYMENT is
+        # a legacy/alternate field name. Prefer the former, matching ai_provider_service.py's
+        # established fallback pattern, rather than requiring both to be kept in sync.
+        deployment = settings.AZURE_OPENAI_DEPLOYMENT_NAME or settings.AZURE_OPENAI_DEPLOYMENT
+        if not endpoint or not api_key or not deployment:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="AI service temporarily unavailable. Please try again.",
             )
 
         try:
-            from openai import AzureOpenAI
+            # Azure OpenAI resources provisioned against the newer versionless GA API expose
+            # an endpoint ending in "/openai/v1" and take no api-version parameter at all; the
+            # plain OpenAI client (pointed at that base_url) is the correct client for those.
+            # Older Azure resources still use the classic "{resource}.openai.azure.com" host
+            # with a required api-version, which needs the AzureOpenAI client instead.
+            if endpoint.rstrip("/").endswith("/openai/v1"):
+                from openai import OpenAI
 
-            client = AzureOpenAI(
-                azure_endpoint=endpoint,
-                api_key=api_key,
-                api_version=api_version,
-            )
+                client = OpenAI(base_url=endpoint, api_key=api_key)
+            else:
+                from openai import AzureOpenAI
+
+                client = AzureOpenAI(
+                    azure_endpoint=endpoint,
+                    api_key=api_key,
+                    api_version=settings.AZURE_OPENAI_API_VERSION or "2024-10-21",
+                )
             response = client.chat.completions.create(
                 model=deployment,
                 messages=[
@@ -255,7 +267,8 @@ class AIDraftingService:
                 detail="AI service temporarily unavailable. Please try again.",
             ) from exc
 
-        deployment = get_settings().AZURE_OPENAI_DEPLOYMENT or "azure-gpt-4o"
+        settings = get_settings()
+        deployment = settings.AZURE_OPENAI_DEPLOYMENT_NAME or settings.AZURE_OPENAI_DEPLOYMENT or "azure-gpt-4o"
         row = DraftRequest(
             organization_id=org_id,
             draft_type=draft_type,

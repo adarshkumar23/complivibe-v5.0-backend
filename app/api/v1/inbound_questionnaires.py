@@ -16,6 +16,7 @@ from app.schemas.questionnaire import (
     InboundQuestionnaireDraftAllResult,
     InboundQuestionnaireItemCreate,
     InboundQuestionnaireItemRead,
+    InboundQuestionnaireResponseTimeMetricsRead,
     InboundQuestionnaireReviewRequest,
     InboundQuestionnaireSessionCreate,
     InboundQuestionnaireSessionRead,
@@ -39,6 +40,7 @@ def _session_read(row: InboundQuestionnaireSession) -> InboundQuestionnaireSessi
         drafted_count=row.drafted_count,
         approved_count=row.approved_count,
         sent_count=row.sent_count,
+        completed_at=row.completed_at,
         created_by=row.created_by,
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -104,6 +106,20 @@ def list_inbound_sessions(
         limit=limit,
     )
     return [_session_read(row) for row in rows]
+
+
+@router.get("/response-time-metrics", response_model=InboundQuestionnaireResponseTimeMetricsRead)
+def inbound_response_time_metrics(
+    session_id: uuid.UUID | None = Query(default=None),
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("vendor:read")),
+) -> InboundQuestionnaireResponseTimeMetricsRead:
+    payload = InboundQuestionnaireService(db).get_response_time_metrics(
+        organization.id,
+        session_id=session_id,
+    )
+    return InboundQuestionnaireResponseTimeMetricsRead(**payload)
 
 
 @router.get("/{session_id}", response_model=InboundQuestionnaireSessionRead)

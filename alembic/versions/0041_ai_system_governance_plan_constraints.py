@@ -43,7 +43,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_review_plan_constraints_organization_id",
+        "ix_ai_system_gov_review_plan_constraints_org_id_057f3d85",
         "ai_system_governance_review_plan_constraints",
         ["organization_id"],
         unique=False,
@@ -82,7 +82,7 @@ def downgrade() -> None:
         table_name="ai_system_governance_review_plan_constraints",
     )
     op.drop_index(
-        "ix_ai_system_governance_review_plan_constraints_organization_id",
+        "ix_ai_system_gov_review_plan_constraints_org_id_057f3d85",
         table_name="ai_system_governance_review_plan_constraints",
     )
     op.drop_table("ai_system_governance_review_plan_constraints")

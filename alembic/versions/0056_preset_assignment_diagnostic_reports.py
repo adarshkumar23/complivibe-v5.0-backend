@@ -45,7 +45,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_preset_assignment_diagnostic_reports_organization_id",
+        "ix_ai_system_gov_pst_assign_diag_rpts_org_id_f1d6c5c8",
         "ai_system_governance_preset_assignment_diagnostic_reports",
         ["organization_id"],
         unique=False,
@@ -102,7 +102,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_preset_assignment_diagnostic_diff_reports_organization_id",
+        "ix_ai_system_gov_pst_assign_diag_diff_rpts_org_id_4738efeb",
         "ai_system_governance_preset_assignment_diagnostic_diff_reports",
         ["organization_id"],
         unique=False,
@@ -151,7 +151,7 @@ def downgrade() -> None:
         table_name="ai_system_governance_preset_assignment_diagnostic_diff_reports",
     )
     op.drop_index(
-        "ix_ai_system_governance_preset_assignment_diagnostic_diff_reports_organization_id",
+        "ix_ai_system_gov_pst_assign_diag_diff_rpts_org_id_4738efeb",
         table_name="ai_system_governance_preset_assignment_diagnostic_diff_reports",
     )
     op.drop_table("ai_system_governance_preset_assignment_diagnostic_diff_reports")
@@ -165,7 +165,7 @@ def downgrade() -> None:
         table_name="ai_system_governance_preset_assignment_diagnostic_reports",
     )
     op.drop_index(
-        "ix_ai_system_governance_preset_assignment_diagnostic_reports_organization_id",
+        "ix_ai_system_gov_pst_assign_diag_rpts_org_id_f1d6c5c8",
         table_name="ai_system_governance_preset_assignment_diagnostic_reports",
     )
     op.drop_table("ai_system_governance_preset_assignment_diagnostic_reports")

@@ -74,7 +74,7 @@ def upgrade() -> None:
         sa.Column("cancellation_request_id", postgresql.UUID(as_uuid=True), nullable=True),
     )
     op.create_foreign_key(
-        "fk_framework_review_batch_assignment_runs_cancellation_request_id",
+        "fk_fr_batch_runs_cancel_req_id",
         "framework_review_batch_assignment_runs",
         "framework_review_batch_cancellation_requests",
         ["cancellation_request_id"],
@@ -85,7 +85,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_constraint(
-        "fk_framework_review_batch_assignment_runs_cancellation_request_id",
+        "fk_fr_batch_runs_cancel_req_id",
         "framework_review_batch_assignment_runs",
         type_="foreignkey",
     )

@@ -183,9 +183,8 @@ class EUAIActClassificationService:
         framework = self.db.execute(
             select(Framework).where(
                 or_(
-                    Framework.code.ilike("%EU_AI_ACT%"),
-                    Framework.name.ilike("%eu%ai%act%"),
-                    Framework.name.ilike("%ai act%"),
+                    Framework.code.ilike("EU_AI_ACT"),
+                    Framework.name.ilike("EU AI Act"),
                 )
             )
         ).scalar_one_or_none()

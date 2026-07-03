@@ -14,12 +14,12 @@ class AISystemGovernancePolicyDiffGatingComparePreset(UUIDPrimaryKeyMixin, Times
         Index("ix_ai_sys_gov_policy_diff_gating_cmp_preset_org_status", "organization_id", "status"),
         Index("ix_ai_sys_gov_policy_diff_gating_cmp_preset_org_created", "organization_id", "created_at"),
         Index(
-            "ix_ai_sys_gov_policy_diff_gating_cmp_preset_org_baseline_report",
+            "ix_ai_sys_gov_pol_diff_gating_cmp_pst_org_baseline_rp_d9113c7f",
             "organization_id",
             "baseline_gating_report_id",
         ),
         Index(
-            "ix_ai_sys_gov_policy_diff_gating_cmp_preset_org_baseline_profile",
+            "ix_ai_sys_gov_pol_diff_gating_cmp_pst_org_baseline_pr_c28c8478",
             "organization_id",
             "baseline_gating_profile_id",
         ),
@@ -60,7 +60,7 @@ class AISystemGovernancePolicyDiffGatingComparePreset(UUIDPrimaryKeyMixin, Times
     active_version_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey(
-            "ai_system_governance_policy_diff_gating_compare_preset_versions.id",
+            "ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b.id",
             ondelete="SET NULL",
             use_alter=True,
             name="fk_ai_sys_gov_policy_diff_gating_cmp_presets_active_version_id",
@@ -70,7 +70,7 @@ class AISystemGovernancePolicyDiffGatingComparePreset(UUIDPrimaryKeyMixin, Times
     pinned_version_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey(
-            "ai_system_governance_policy_diff_gating_compare_preset_versions.id",
+            "ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b.id",
             ondelete="SET NULL",
             use_alter=True,
             name="fk_ai_sys_gov_policy_diff_gating_cmp_presets_pinned_version_id",

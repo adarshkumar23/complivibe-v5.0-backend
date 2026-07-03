@@ -20,6 +20,10 @@ class AuditSchedule(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin,
             name="ck_audit_schedules_recurrence_pattern",
         ),
         CheckConstraint(
+            "recurrence IN ('monthly', 'quarterly', 'semi_annual', 'annual')",
+            name="ck_audit_sched_recur",
+        ),
+        CheckConstraint(
             "status IN ('active', 'paused', 'cancelled')",
             name="ck_audit_schedules_status",
         ),
@@ -33,12 +37,22 @@ class AuditSchedule(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin,
     )
 
     title: Mapped[str] = mapped_column(String(255), nullable=False)
-    audit_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    framework_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("frameworks.id", ondelete="RESTRICT"), nullable=False)
+    audit_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    framework_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("frameworks.id", ondelete="RESTRICT"), nullable=True)
     recurrence_pattern: Mapped[str] = mapped_column(String(50), nullable=False)
+    recurrence: Mapped[str] = mapped_column(String(20), nullable=False, default="annual")
     next_audit_date: Mapped[date] = mapped_column(Date, nullable=False)
+    next_due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     preparation_reminder_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    lead_time_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    assigned_lead_auditor_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
     last_reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_audit_engagement_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey("audit_engagements.id", ondelete="SET NULL"),

@@ -21,6 +21,7 @@ scope_type_enum = postgresql.ENUM(
     "org",
     "business_unit",
     name="risk_appetite_scope_type_enum",
+    create_type=False,
 )
 
 risk_category_enum = postgresql.ENUM(
@@ -31,6 +32,7 @@ risk_category_enum = postgresql.ENUM(
     "technology",
     "vendor",
     name="risk_appetite_category_enum",
+    create_type=False,
 )
 
 

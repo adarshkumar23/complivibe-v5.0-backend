@@ -105,7 +105,7 @@ class CommonControlsService:
         org_id: uuid.UUID,
         created_by_user_id: uuid.UUID,
     ) -> CommonControlMapping:
-        self.require_control_in_org(org_id, control_id)
+        control = self.require_control_in_org(org_id, control_id)
         framework = self.require_framework(framework_id)
         obligation = self.require_obligation(obligation_id)
         self.require_active_framework_for_org(org_id, framework_id)
@@ -148,6 +148,12 @@ class CommonControlsService:
             created_by_user_id=created_by_user_id,
         )
         self.db.add(row)
+        self.db.flush()
+
+        # Keep denormalized common-control fields aligned for fast filtering/listing.
+        control.is_common_control = True
+        if not control.common_control_tag:
+            control.common_control_tag = framework.code.lower()
         self.db.flush()
 
         AuditService(self.db).write_audit_log(

@@ -167,3 +167,47 @@ class CompliancePolicyService:
     @staticmethod
     def utcnow() -> datetime:
         return datetime.now(UTC)
+
+    def create_policy(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        title: str,
+        description: str | None,
+        policy_type: str,
+        owner_user_id: uuid.UUID,
+        policy_status: str = "draft",
+        version: str = "1.0",
+        content_url: str | None = None,
+        tags_json: dict | list | None = None,
+        notes: str | None = None,
+        effective_date=None,
+        review_due_date=None,
+        business_unit_id: uuid.UUID | None = None,
+        ai_drafted: bool = False,
+        source_ai_draft_id: uuid.UUID | None = None,
+    ) -> CompliancePolicy:
+        self.ensure_owner_is_active_member(organization_id, owner_user_id)
+        if policy_status != "draft":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New policies must start in draft status")
+
+        row = CompliancePolicy(
+            organization_id=organization_id,
+            title=title,
+            description=description,
+            policy_type=policy_type,
+            status=policy_status,
+            owner_user_id=owner_user_id,
+            effective_date=effective_date,
+            review_due_date=review_due_date,
+            version=version,
+            content_url=content_url,
+            tags_json=tags_json,
+            notes=notes,
+            business_unit_id=business_unit_id,
+            ai_drafted=ai_drafted,
+            source_ai_draft_id=source_ai_draft_id,
+        )
+        self.db.add(row)
+        self.db.flush()
+        return row

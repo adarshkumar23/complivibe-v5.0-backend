@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text, Uuid
+from sqlalchemy import CheckConstraint, Float, Integer, JSON, DateTime, ForeignKey, Index, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -22,6 +22,18 @@ except Exception:  # pragma: no cover - fallback for test environments without p
 class AISystem(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, Base):
     __tablename__ = "ai_systems"
     __table_args__ = (
+        CheckConstraint(
+            "bias_assessment_status IS NULL OR bias_assessment_status IN ('not_started', 'in_progress', 'completed', 'remediation_needed')",
+            name="ck_ai_systems_bias_assessment_status",
+        ),
+        CheckConstraint(
+            "explainability_method IS NULL OR explainability_method IN ('shap', 'lime', 'integrated_gradients', 'counterfactual', 'rule_based', 'none')",
+            name="ck_ai_systems_explainability_method",
+        ),
+        CheckConstraint(
+            "human_oversight_level IS NULL OR human_oversight_level IN ('full_automation', 'human_on_loop', 'human_in_loop', 'human_in_command')",
+            name="ck_ai_systems_human_oversight_level",
+        ),
         Index("ix_ai_systems_org_lifecycle", "organization_id", "lifecycle_status"),
         Index("ix_ai_systems_org_system_type", "organization_id", "system_type"),
         Index("ix_ai_systems_org_deployment_status", "organization_id", "deployment_status"),
@@ -69,6 +81,12 @@ class AISystem(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, Base
     geography_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     tags_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bias_assessment_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_bias_assessment_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    explainability_method: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    human_oversight_level: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    data_governance_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    atlas_risk_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     description_embedding: Mapped[list[float] | None] = mapped_column(
         Vector(384).with_variant(JSON(), "sqlite"),
         nullable=True,
@@ -95,3 +113,8 @@ class AISystem(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, Base
         nullable=True,
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    business_unit_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("business_units.id", ondelete="SET NULL"),
+        nullable=True,
+    )

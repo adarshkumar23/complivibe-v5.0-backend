@@ -388,26 +388,26 @@ class ControlExceptionService:
         )
         return row
 
-    def check_and_expire(self, org_id: uuid.UUID) -> int:
+    def check_and_expire(self, org_id: uuid.UUID | None = None) -> int:
         today = self.utcdate()
         now = self.utcnow()
+        filters = [
+            ControlException.status == "active",
+            ControlException.expiry_date.is_not(None),
+            ControlException.expiry_date < today,
+            ControlException.auto_expired_at.is_(None),
+        ]
+        if org_id is not None:
+            filters.append(ControlException.organization_id == org_id)
 
-        rows = self.db.execute(
-            select(ControlException).where(
-                ControlException.organization_id == org_id,
-                ControlException.status == "active",
-                ControlException.expiry_date.is_not(None),
-                ControlException.expiry_date < today,
-                ControlException.auto_expired_at.is_(None),
-            )
-        ).scalars().all()
+        rows = self.db.execute(select(ControlException).where(*filters)).scalars().all()
 
         for row in rows:
             row.status = "expired"
             row.auto_expired_at = now
 
             alert = ControlMonitoringAlert(
-                organization_id=org_id,
+                organization_id=row.organization_id,
                 rule_id=None,
                 definition_id=None,
                 control_id=row.control_id,
@@ -433,7 +433,7 @@ class ControlExceptionService:
                 action="control_exception.expired",
                 entity_type="control_exception",
                 entity_id=row.id,
-                organization_id=org_id,
+                organization_id=row.organization_id,
                 actor_user_id=None,
                 after_json={"status": row.status, "auto_expired_at": row.auto_expired_at.isoformat()},
                 metadata_json={"source": "system"},
@@ -560,3 +560,8 @@ class ControlExceptionService:
             )
             .order_by(ControlExceptionApproval.sequence.asc(), ControlExceptionApproval.created_at.asc())
         ).scalars().all()
+
+
+def run_daily_control_exception_expiry_sweep(db: Session) -> dict:
+    expired_count = ControlExceptionService(db).check_and_expire(org_id=None)
+    return {"expired_count": expired_count, "records_processed": expired_count}

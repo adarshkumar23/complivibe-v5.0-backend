@@ -27,6 +27,7 @@ metric_type_enum = postgresql.ENUM(
     "policy_overdue_review",
     "custom",
     name="risk_indicator_metric_type_enum",
+    create_type=False,
 )
 
 status_enum = postgresql.ENUM(
@@ -35,6 +36,7 @@ status_enum = postgresql.ENUM(
     "red",
     "not_calculated",
     name="risk_indicator_status_enum",
+    create_type=False,
 )
 
 

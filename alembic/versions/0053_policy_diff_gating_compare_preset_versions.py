@@ -20,7 +20,7 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.create_table(
-        "ai_system_governance_policy_diff_gating_compare_preset_versions",
+        "ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("organization_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("preset_id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -45,26 +45,26 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_policy_diff_gating_compare_preset_versions_organization_id",
-        "ai_system_governance_policy_diff_gating_compare_preset_versions",
+        "ix_ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3_e68d8871",
+        "ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b",
         ["organization_id"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_policy_diff_gating_cmp_preset_ver_org_preset",
-        "ai_system_governance_policy_diff_gating_compare_preset_versions",
+        "ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b",
         ["organization_id", "preset_id"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_policy_diff_gating_cmp_preset_ver_org_status",
-        "ai_system_governance_policy_diff_gating_compare_preset_versions",
+        "ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b",
         ["organization_id", "status"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_policy_diff_gating_cmp_preset_ver_org_preset_num",
-        "ai_system_governance_policy_diff_gating_compare_preset_versions",
+        "ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b",
         ["organization_id", "preset_id", "version_number"],
         unique=False,
     )
@@ -76,7 +76,7 @@ def upgrade() -> None:
     op.create_foreign_key(
         "fk_ai_sys_gov_policy_diff_gating_cmp_presets_active_version_id",
         "ai_system_governance_policy_diff_gating_compare_presets",
-        "ai_system_governance_policy_diff_gating_compare_preset_versions",
+        "ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b",
         ["active_version_id"],
         ["id"],
         ondelete="SET NULL",
@@ -103,7 +103,7 @@ def upgrade() -> None:
     op.create_foreign_key(
         "fk_ai_sys_gov_policy_diff_gating_cmp_preset_rep_version_id",
         "ai_system_governance_policy_diff_gating_compare_preset_reports",
-        "ai_system_governance_policy_diff_gating_compare_preset_versions",
+        "ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b",
         ["preset_version_id"],
         ["id"],
         ondelete="SET NULL",
@@ -143,18 +143,18 @@ def downgrade() -> None:
 
     op.drop_index(
         "ix_ai_sys_gov_policy_diff_gating_cmp_preset_ver_org_preset_num",
-        table_name="ai_system_governance_policy_diff_gating_compare_preset_versions",
+        table_name="ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b",
     )
     op.drop_index(
         "ix_ai_sys_gov_policy_diff_gating_cmp_preset_ver_org_status",
-        table_name="ai_system_governance_policy_diff_gating_compare_preset_versions",
+        table_name="ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b",
     )
     op.drop_index(
         "ix_ai_sys_gov_policy_diff_gating_cmp_preset_ver_org_preset",
-        table_name="ai_system_governance_policy_diff_gating_compare_preset_versions",
+        table_name="ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b",
     )
     op.drop_index(
-        "ix_ai_system_governance_policy_diff_gating_compare_preset_versions_organization_id",
-        table_name="ai_system_governance_policy_diff_gating_compare_preset_versions",
+        "ix_ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3_e68d8871",
+        table_name="ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b",
     )
-    op.drop_table("ai_system_governance_policy_diff_gating_compare_preset_versions")
+    op.drop_table("ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b")

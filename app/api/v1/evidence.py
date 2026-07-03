@@ -474,12 +474,15 @@ def review_evidence(
     if payload.review_status == "rejected" and not (payload.review_notes and payload.review_notes.strip()):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="review_notes is required when review_status is rejected")
 
-    before_status = evidence.review_status
-    evidence.review_status = payload.review_status
-    evidence.review_notes = payload.review_notes
-    evidence.reviewed_by_user_id = current_user.id
-    evidence.reviewed_at = datetime.now(UTC)
-    db.flush()
+    service = EvidenceService(db)
+    evidence, before_status = service.set_review_status_and_emit(
+        organization.id,
+        evidence.id,
+        review_status=payload.review_status,
+        review_notes=payload.review_notes,
+        reviewed_by_user_id=current_user.id,
+        triggered_by="user_action",
+    )
 
     AuditService(db).write_audit_log(
         action="evidence.reviewed",
@@ -495,19 +498,5 @@ def review_evidence(
     )
 
     db.commit()
-    if before_status != evidence.review_status:
-        EventBus.get_instance().emit(
-            EventType.EVIDENCE_STATUS_CHANGED,
-            EventPayload(
-                org_id=organization.id,
-                entity_type="evidence",
-                entity_id=evidence.id,
-                event_type=EventType.EVIDENCE_STATUS_CHANGED,
-                previous_value=before_status,
-                new_value=evidence.review_status,
-                triggered_by="user_action",
-                db=db,
-            ),
-        )
     db.refresh(evidence)
     return _evidence_read(evidence)

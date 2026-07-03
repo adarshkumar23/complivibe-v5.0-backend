@@ -14,12 +14,12 @@ class AISystemGovernanceDiagnosticExportDiffGatingComparePresetVersion(
     OrganizationOwnedMixin,
     Base,
 ):
-    __tablename__ = "ai_system_governance_diagnostic_export_diff_gating_compare_preset_versions"
+    __tablename__ = "ai_system_gov_diag_export_diff_gating_cmp_pst_vers_e1cd192c"
     __table_args__ = (
-        Index("ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_ver_org_preset", "organization_id", "preset_id"),
-        Index("ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_ver_org_status", "organization_id", "status"),
+        Index("ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_ver_org_808bfd21", "organization_id", "preset_id"),
+        Index("ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_ver_org_c0d13057", "organization_id", "status"),
         Index(
-            "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_ver_org_preset_num",
+            "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_ver_org_3d2e08a6",
             "organization_id",
             "preset_id",
             "version_number",
@@ -28,7 +28,7 @@ class AISystemGovernanceDiagnosticExportDiffGatingComparePresetVersion(
 
     preset_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
-        ForeignKey("ai_system_governance_diagnostic_export_diff_gating_compare_presets.id", ondelete="CASCADE"),
+        ForeignKey("ai_system_gov_diag_export_diff_gating_cmp_presets_ac16f85a.id", ondelete="CASCADE"),
         nullable=False,
     )
     version_number: Mapped[int] = mapped_column(nullable=False)

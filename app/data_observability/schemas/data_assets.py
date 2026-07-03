@@ -24,6 +24,8 @@ class DataAssetCreate(BaseModel):
     data_volume_estimate: str | None = Field(default=None, max_length=100)
     source_system: str | None = Field(default=None, max_length=255)
     tags: list[str] = Field(default_factory=list)
+    is_phi: bool = False
+    hipaa_safeguard_required: str | None = Field(default=None, max_length=20)
     status: str = "active"
 
 
@@ -46,6 +48,8 @@ class DataAssetUpdate(BaseModel):
     data_volume_estimate: str | None = Field(default=None, max_length=100)
     source_system: str | None = Field(default=None, max_length=255)
     tags: list[str] | None = None
+    is_phi: bool | None = None
+    hipaa_safeguard_required: str | None = Field(default=None, max_length=20)
     status: str | None = None
 
 
@@ -82,6 +86,8 @@ class DataAssetRead(BaseModel):
     data_volume_estimate: str | None
     source_system: str | None
     tags: list
+    is_phi: bool
+    hipaa_safeguard_required: str | None
     status: str
     created_by: uuid.UUID
     created_at: datetime

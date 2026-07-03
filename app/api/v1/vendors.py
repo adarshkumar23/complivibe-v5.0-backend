@@ -1,12 +1,10 @@
 import uuid
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
-from app.core.event_bus import EventBus, EventPayload, EventType
 from app.ai_governance.schemas.third_party_model_card_aibom import (
     ThirdPartyAIAssessmentCreate,
     ThirdPartyAIAssessmentRead,
@@ -224,6 +222,7 @@ def list_vendors(
     risk_tier: str | None = Query(default=None),
     vendor_type: str | None = Query(default=None),
     data_access: bool | None = Query(default=None),
+    business_unit_id: uuid.UUID | None = Query(default=None),
     include_archived: bool = Query(default=False),
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
@@ -239,6 +238,8 @@ def list_vendors(
         stmt = stmt.where(Vendor.vendor_type == vendor_type)
     if data_access is not None:
         stmt = stmt.where(Vendor.data_access == data_access)
+    if business_unit_id is not None:
+        stmt = stmt.where(Vendor.business_unit_id == business_unit_id)
     if not include_archived:
         stmt = stmt.where(Vendor.status != "archived")
 
@@ -796,41 +797,16 @@ def create_vendor_risk_score(
     _: Membership = Depends(require_permission("vendors:write")),
 ) -> VendorRiskScoreRead:
     service = VendorRiskService(db)
-    _ = service.require_vendor_in_org(organization.id, vendor_id)
-    if payload.assessment_id is not None:
-        _ = service.require_assessment_in_org(organization.id, vendor_id, payload.assessment_id)
-
-    previous_score_row = db.execute(
-        select(VendorRiskScore)
-        .where(
-            VendorRiskScore.organization_id == organization.id,
-            VendorRiskScore.vendor_id == vendor_id,
-        )
-        .order_by(VendorRiskScore.created_at.desc(), VendorRiskScore.id.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-    previous_score = previous_score_row.inherent_risk_score if previous_score_row is not None else None
-
-    inherent_risk_score, risk_level, explanation = service.compute_score_payload(
-        likelihood=payload.likelihood,
-        impact=payload.impact,
-    )
-
-    row = VendorRiskScore(
+    row, _ = service.create_risk_score(
         organization_id=organization.id,
         vendor_id=vendor_id,
         assessment_id=payload.assessment_id,
         likelihood=payload.likelihood,
         impact=payload.impact,
-        inherent_risk_score=inherent_risk_score,
-        risk_level=risk_level,
-        score_explanation_json=explanation,
-        scored_by_user_id=current_user.id,
         notes=payload.notes,
-        created_at=datetime.now(UTC),
+        scored_by_user_id=current_user.id,
+        triggered_by="user_action",
     )
-    db.add(row)
-    db.flush()
 
     AuditService(db).write_audit_log(
         action="vendor_risk_score.created",
@@ -849,19 +825,6 @@ def create_vendor_risk_score(
         user_agent=request.headers.get("user-agent"),
     )
     db.commit()
-    EventBus.get_instance().emit(
-        EventType.VENDOR_SCORE_UPDATED,
-        EventPayload(
-            org_id=organization.id,
-            entity_type="vendor",
-            entity_id=vendor_id,
-            event_type=EventType.VENDOR_SCORE_UPDATED,
-            previous_value=previous_score,
-            new_value=row.inherent_risk_score,
-            triggered_by="user_action",
-            db=db,
-        ),
-    )
     db.refresh(row)
     return _risk_score_read(row)
 

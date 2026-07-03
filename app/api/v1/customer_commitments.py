@@ -33,6 +33,7 @@ def _commitment_read(row: CustomerCommitment) -> CustomerCommitmentRead:
         title=row.title,
         description=row.description,
         trigger_condition=row.trigger_condition,
+        triggering_incident_type=row.triggering_incident_type,
         trigger_date=row.trigger_date,
         notification_days_before=row.notification_days_before,
         sla_hours=row.sla_hours,

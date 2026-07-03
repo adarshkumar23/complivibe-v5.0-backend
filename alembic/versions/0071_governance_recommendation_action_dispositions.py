@@ -52,7 +52,7 @@ def upgrade() -> None:
     )
 
     op.create_index(
-        "ix_governance_recommendation_action_dispositions_organization_id",
+        "ix_gov_rec_action_disp_org_id_3a936372",
         "governance_recommendation_action_dispositions",
         ["organization_id"],
         unique=False,
@@ -109,5 +109,5 @@ def downgrade() -> None:
     op.drop_index("ix_governance_reco_action_disp_org_snapshot", table_name="governance_recommendation_action_dispositions")
     op.drop_index("ix_governance_reco_action_disp_org_status", table_name="governance_recommendation_action_dispositions")
     op.drop_index("ux_governance_reco_action_disp_org_snapshot_action", table_name="governance_recommendation_action_dispositions")
-    op.drop_index("ix_governance_recommendation_action_dispositions_organization_id", table_name="governance_recommendation_action_dispositions")
+    op.drop_index("ix_gov_rec_action_disp_org_id_3a936372", table_name="governance_recommendation_action_dispositions")
     op.drop_table("governance_recommendation_action_dispositions")

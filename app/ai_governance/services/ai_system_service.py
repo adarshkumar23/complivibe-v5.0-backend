@@ -129,6 +129,7 @@ class AISystemService:
         system_type: str | None = None,
         deployment_status: str | None = None,
         risk_tier: str | None = None,
+        business_unit_id: uuid.UUID | None = None,
         skip: int = 0,
         limit: int = 50,
     ) -> list[AISystem]:
@@ -142,6 +143,8 @@ class AISystemService:
             stmt = stmt.where(AISystem.deployment_status == deployment_status)
         if risk_tier is not None:
             stmt = stmt.where(AISystem.risk_tier == risk_tier)
+        if business_unit_id is not None:
+            stmt = stmt.where(AISystem.business_unit_id == business_unit_id)
 
         return (
             self.db.execute(stmt.order_by(AISystem.created_at.desc()).offset(skip).limit(limit))

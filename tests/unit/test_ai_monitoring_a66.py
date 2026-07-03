@@ -68,11 +68,11 @@ def test_a66_monitoring_mode_b(client):
         api_key="a66-key-123456789",
     )
 
-    # Within threshold (above): value <= threshold
+    # Within threshold (above): value >= threshold
     within = client.post(
         f"{MONITORING_BASE}/readings",
         headers=org["org_headers"],
-        json={"config_id": config_id, "value": 120.0, "source_tool": "manual_runner"},
+        json={"config_id": config_id, "value": 250.0, "source_tool": "manual_runner"},
     )
     assert within.status_code == 201
     assert within.json()["within_threshold"] is True
@@ -81,11 +81,11 @@ def test_a66_monitoring_mode_b(client):
     assert alerts_after_within.status_code == 200
     assert alerts_after_within.json() == []
 
-    # Breach (above): value > threshold
+    # Breach (above): value < threshold
     breach_above = client.post(
         f"{MONITORING_BASE}/readings",
         headers=org["org_headers"],
-        json={"config_id": config_id, "value": 250.0, "source_tool": "manual_runner"},
+        json={"config_id": config_id, "value": 120.0, "source_tool": "manual_runner"},
     )
     assert breach_above.status_code == 201
     assert breach_above.json()["within_threshold"] is False
@@ -94,7 +94,7 @@ def test_a66_monitoring_mode_b(client):
     assert alerts_after_breach.status_code == 200
     assert len(alerts_after_breach.json()) >= 1
 
-    # Breach (below): value < threshold
+    # Breach (below): value > threshold
     below_config_id = _create_config(
         client,
         org["org_headers"],
@@ -107,7 +107,7 @@ def test_a66_monitoring_mode_b(client):
     breach_below = client.post(
         f"{MONITORING_BASE}/readings",
         headers=org["org_headers"],
-        json={"config_id": below_config_id, "value": 0.8, "source_tool": "manual_runner"},
+        json={"config_id": below_config_id, "value": 0.95, "source_tool": "manual_runner"},
     )
     assert breach_below.status_code == 201
     assert breach_below.json()["within_threshold"] is False
@@ -117,7 +117,7 @@ def test_a66_monitoring_mode_b(client):
     assert configs.status_code == 200
     by_id = {row["id"]: row for row in configs.json()}
     assert by_id[config_id]["last_checked_at"] is not None
-    assert float(by_id[config_id]["last_reading_value"]) == 250.0
+    assert float(by_id[config_id]["last_reading_value"]) == 120.0
 
     # Monitoring dashboard returns config states and recent breaches.
     dashboard = client.get(f"{SYSTEMS_BASE}/{system_id}/monitoring-dashboard", headers=org["org_headers"])

@@ -34,7 +34,7 @@ from app.services.audit_service import AuditService
 from app.services.compliance_policy_service import CompliancePolicyService
 from app.services.rbac_service import RBACService
 from app.compliance.services.issue_policy_link_service import IssuePolicyLinkService
-from app.schemas.issue_links import PolicyAssociatedIssueRead, PolicyViolationRateRead
+from app.schemas.issue_links import PolicyAssociatedIssueRead
 
 router = APIRouter(prefix="/compliance/policies", tags=["compliance_policies"])
 
@@ -125,18 +125,13 @@ def create_policy(
     _: Membership = Depends(require_permission("compliance_policies:write")),
 ) -> CompliancePolicyRead:
     service = CompliancePolicyService(db)
-    service.ensure_owner_is_active_member(organization.id, payload.owner_user_id)
-
-    if payload.status != "draft":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New policies must start in draft status")
-
-    row = CompliancePolicy(
+    row = service.create_policy(
         organization_id=organization.id,
         title=payload.title,
         description=payload.description,
         policy_type=payload.policy_type,
-        status=payload.status,
         owner_user_id=payload.owner_user_id,
+        policy_status=payload.status,
         effective_date=payload.effective_date,
         review_due_date=payload.review_due_date,
         version=payload.version,
@@ -144,8 +139,6 @@ def create_policy(
         tags_json=payload.tags_json,
         notes=payload.notes,
     )
-    db.add(row)
-    db.flush()
 
     AuditService(db).write_audit_log(
         action="compliance_policy.created",
@@ -183,6 +176,7 @@ def list_policies(
     status_filter: str | None = Query(default=None, alias="status"),
     policy_type: str | None = Query(default=None),
     owner_user_id: uuid.UUID | None = Query(default=None, alias="owner"),
+    business_unit_id: uuid.UUID | None = Query(default=None),
     include_archived: bool = Query(default=False),
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
@@ -196,6 +190,8 @@ def list_policies(
         stmt = stmt.where(CompliancePolicy.policy_type == policy_type)
     if owner_user_id is not None:
         stmt = stmt.where(CompliancePolicy.owner_user_id == owner_user_id)
+    if business_unit_id is not None:
+        stmt = stmt.where(CompliancePolicy.business_unit_id == business_unit_id)
     if not include_archived:
         stmt = stmt.where(CompliancePolicy.status != "archived")
 
@@ -226,17 +222,6 @@ def get_policy_associated_issues(
 ) -> list[PolicyAssociatedIssueRead]:
     payload = IssuePolicyLinkService(db).get_policy_associated_issues(organization.id, policy_id, link_type=link_type)
     return [PolicyAssociatedIssueRead(**row) for row in payload]
-
-
-@router.get("/{policy_id}/violation-rate", response_model=PolicyViolationRateRead)
-def get_policy_violation_rate(
-    policy_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("issues:read")),
-) -> PolicyViolationRateRead:
-    payload = IssuePolicyLinkService(db).get_policy_violation_rate(organization.id, policy_id)
-    return PolicyViolationRateRead(**payload)
 
 
 @router.patch("/{policy_id}", response_model=CompliancePolicyRead)

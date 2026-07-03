@@ -55,7 +55,7 @@ class AISystemGovernancePolicyDiffGatingComparePresetReport(UUIDPrimaryKeyMixin,
     )
     preset_version_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
-        ForeignKey("ai_system_governance_policy_diff_gating_compare_preset_versions.id", ondelete="SET NULL"),
+        ForeignKey("ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b.id", ondelete="SET NULL"),
         nullable=True,
     )
     preset_version_number: Mapped[int | None] = mapped_column(nullable=True)

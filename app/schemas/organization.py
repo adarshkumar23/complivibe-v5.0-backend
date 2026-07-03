@@ -11,6 +11,10 @@ class OrganizationRead(UUIDTimestampSchema):
     name: str
     slug: str | None = None
     is_active: bool
+    is_significant_data_fiduciary: bool
+    sdf_category: str | None = None
+    dpdp_registration_number: str | None = None
+    consent_manager_registered: bool
 
 
 class OrganizationSummary(BaseModel):
@@ -22,6 +26,10 @@ class OrganizationSummary(BaseModel):
 class OrganizationUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=255)
     is_active: bool | None = None
+    is_significant_data_fiduciary: bool | None = None
+    sdf_category: str | None = Field(default=None, max_length=100)
+    dpdp_registration_number: str | None = Field(default=None, max_length=100)
+    consent_manager_registered: bool | None = None
 
 
 class OrganizationUpdateResponse(BaseModel):

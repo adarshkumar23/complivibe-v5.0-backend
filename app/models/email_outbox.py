@@ -59,6 +59,8 @@ class EmailOutbox(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     provider: Mapped[str | None] = mapped_column(String(120), nullable=True)
     provider_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ses_message_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    retry_count: Mapped[int] = mapped_column(nullable=False, default=0)
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     worker_metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(

@@ -19,6 +19,10 @@ class DPAAgreement(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
             "status IN ('pending', 'active', 'expired', 'under_review', 'terminated')",
             name="ck_dpa_agreements_status",
         ),
+        CheckConstraint(
+            "hipaa_covered_entity_type IS NULL OR hipaa_covered_entity_type IN ('covered_entity', 'business_associate', 'subcontractor')",
+            name="ck_dpa_agreements_hipaa_covered_entity_type",
+        ),
         Index("ix_dpa_agreements_org_status", "organization_id", "status"),
         Index("ix_dpa_agreements_org_counterparty_type", "organization_id", "counterparty_type"),
         Index("ix_dpa_agreements_expiry_status", "expiry_date", "status"),
@@ -43,6 +47,12 @@ class DPAAgreement(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
     bcrs_included: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     data_transfer_countries: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     processing_activity_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    is_baa: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    baa_effective_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    baa_includes_phi: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    baa_subcontractor_clause: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    baa_breach_notification_days: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    hipaa_covered_entity_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
     review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)

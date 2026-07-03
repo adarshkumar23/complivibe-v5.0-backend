@@ -21,6 +21,7 @@ class RiskRepository:
         category: str | None = None,
         severity: str | None = None,
         owner_user_id: uuid.UUID | None = None,
+        business_unit_id: uuid.UUID | None = None,
         treatment_strategy: str | None = None,
         search: str | None = None,
         limit: int = 50,
@@ -35,6 +36,8 @@ class RiskRepository:
             stmt = stmt.where(Risk.severity == severity)
         if owner_user_id:
             stmt = stmt.where(Risk.owner_user_id == owner_user_id)
+        if business_unit_id:
+            stmt = stmt.where(Risk.business_unit_id == business_unit_id)
         if treatment_strategy:
             stmt = stmt.where(Risk.treatment_strategy == treatment_strategy)
         if search:

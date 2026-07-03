@@ -9,6 +9,7 @@ from app.models.compliance_policy import CompliancePolicy
 from app.models.policy_template import PolicyTemplate
 from app.models.policy_template_clone import PolicyTemplateClone
 from app.schemas.policy_template import PolicyTemplateCloneRequest
+from app.services.compliance_policy_service import CompliancePolicyService
 from app.services.audit_service import AuditService
 
 
@@ -49,6 +50,12 @@ class PolicyTemplateService:
     def list_templates(
         self,
         *,
+        org_id: uuid.UUID | None = None,
+        policy_type: str | None = None,
+        include_system: bool = True,
+        include_org_custom: bool = True,
+        page: int = 1,
+        page_size: int = 20,
         category: str | None = None,
         framework_tag: str | None = None,
         search: str | None = None,
@@ -57,13 +64,34 @@ class PolicyTemplateService:
         stmt = select(PolicyTemplate)
         if is_active:
             stmt = stmt.where(PolicyTemplate.is_active.is_(True))
+        if org_id is not None:
+            clauses = []
+            if include_system:
+                clauses.append(or_(PolicyTemplate.is_system.is_(True), PolicyTemplate.organization_id.is_(None)))
+            if include_org_custom:
+                clauses.append(PolicyTemplate.organization_id == org_id)
+            if not clauses:
+                return []
+            stmt = stmt.where(or_(*clauses))
+        if policy_type is not None:
+            stmt = stmt.where(PolicyTemplate.policy_type == policy_type)
         if category is not None:
             stmt = stmt.where(PolicyTemplate.category == category)
         if search is not None and search.strip():
             like = f"%{search.strip()}%"
-            stmt = stmt.where(or_(PolicyTemplate.name.ilike(like), PolicyTemplate.description.ilike(like)))
+            stmt = stmt.where(
+                or_(
+                    PolicyTemplate.name.ilike(like),
+                    PolicyTemplate.title.ilike(like),
+                    PolicyTemplate.description.ilike(like),
+                )
+            )
 
-        rows = self.db.execute(stmt.order_by(PolicyTemplate.name.asc())).scalars().all()
+        rows = self.db.execute(
+            stmt.order_by(PolicyTemplate.is_system.desc(), PolicyTemplate.name.asc())
+            .offset(max(page - 1, 0) * page_size)
+            .limit(page_size)
+        ).scalars().all()
 
         normalized_framework = framework_tag.lower().strip() if framework_tag else None
         if normalized_framework:
@@ -88,9 +116,13 @@ class PolicyTemplateService:
             {
                 "id": row.id,
                 "slug": row.slug,
+                "title": row.title or row.name,
                 "name": row.name,
                 "description": row.description,
                 "category": row.category,
+                "policy_type": row.policy_type,
+                "organization_id": row.organization_id,
+                "is_system": row.is_system,
                 "framework_tags": list(row.framework_tags or []),
                 "version": row.version,
                 "is_active": row.is_active,
@@ -134,9 +166,13 @@ class PolicyTemplateService:
         return {
             "id": row.id,
             "slug": row.slug,
+            "title": row.title or row.name,
             "name": row.name,
             "description": row.description,
             "category": row.category,
+            "policy_type": row.policy_type,
+            "organization_id": row.organization_id,
+            "is_system": row.is_system,
             "framework_tags": list(row.framework_tags or []),
             "version": row.version,
             "is_active": row.is_active,
@@ -148,6 +184,107 @@ class PolicyTemplateService:
     def get_template_by_slug(self, slug: str) -> dict:
         row = self._get_template_by_slug(slug, active_only=True)
         return self.get_template(row.id)
+
+    def get_template_for_org(self, template_id: uuid.UUID, org_id: uuid.UUID) -> PolicyTemplate:
+        row = self.db.execute(
+            select(PolicyTemplate).where(
+                PolicyTemplate.id == template_id,
+                PolicyTemplate.is_active.is_(True),
+                or_(
+                    PolicyTemplate.is_system.is_(True),
+                    PolicyTemplate.organization_id.is_(None),
+                    PolicyTemplate.organization_id == org_id,
+                ),
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Policy template not found")
+        return row
+
+    def apply_template(
+        self,
+        *,
+        template_id: uuid.UUID,
+        org_id: uuid.UUID,
+        applied_by: uuid.UUID,
+        override_title: str | None = None,
+    ) -> CompliancePolicy:
+        template = self.get_template_for_org(template_id, org_id)
+        policy = CompliancePolicyService(self.db).create_policy(
+            organization_id=org_id,
+            title=(override_title or f"{(template.title or template.name)} (from template)"),
+            description=template.description,
+            policy_type=(template.policy_type or self._policy_type_for_template(template.slug)),
+            owner_user_id=applied_by,
+            policy_status="draft",
+            version=template.version,
+            content_url=None,
+            tags_json={
+                "template_id": str(template.id),
+                "template_slug": template.slug,
+                "template_title": template.title or template.name,
+                "framework_tags": template.framework_tags or [],
+            },
+            notes=template.content,
+        )
+        self.db.flush()
+        AuditService(self.db).write_audit_log(
+            action="policy_template.applied",
+            entity_type="compliance_policy",
+            entity_id=policy.id,
+            organization_id=org_id,
+            actor_user_id=applied_by,
+            metadata_json={
+                "template_id": str(template.id),
+                "template_title": template.title or template.name,
+                "new_policy_id": str(policy.id),
+            },
+        )
+        return policy
+
+    def create_org_template(
+        self,
+        *,
+        org_id: uuid.UUID,
+        title: str,
+        description: str | None,
+        policy_type: str | None,
+        content: str,
+        created_by: uuid.UUID,
+    ) -> PolicyTemplate:
+        slug_base = "".join(ch if ch.isalnum() else "-" for ch in title.lower()).strip("-")
+        slug_base = "-".join(part for part in slug_base.split("-") if part) or "template"
+        slug = slug_base
+        seq = 1
+        while self.db.execute(select(PolicyTemplate.id).where(PolicyTemplate.slug == slug)).scalar_one_or_none() is not None:
+            seq += 1
+            slug = f"{slug_base}-{seq}"
+
+        row = PolicyTemplate(
+            organization_id=org_id,
+            slug=slug,
+            title=title,
+            name=title,
+            description=description or "",
+            category="Compliance",
+            policy_type=policy_type,
+            framework_tags=[],
+            content=content,
+            version="1.0",
+            is_system=False,
+            is_active=True,
+        )
+        self.db.add(row)
+        self.db.flush()
+        AuditService(self.db).write_audit_log(
+            action="policy_template.created",
+            entity_type="policy_template",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=created_by,
+            metadata_json={"policy_type": policy_type},
+        )
+        return row
 
     def clone_template(
         self,

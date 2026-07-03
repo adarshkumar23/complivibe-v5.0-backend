@@ -5,6 +5,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
+from app.models.control_monitoring_alert import ControlMonitoringAlert
 from app.models.control_monitoring_definition import ControlMonitoringDefinition
 from app.models.control_monitoring_result import ControlMonitoringResult
 from app.models.control_monitoring_rule import ControlMonitoringRule
@@ -294,6 +295,7 @@ class ControlMonitoringRuleService:
         matches = self._definition_matches(organization_id, rule)
 
         existing_keys = self._existing_action_keys_for_today(organization_id, rule.id, now)
+        created_alert_ids: list[str] = []
         created_task_ids: list[str] = []
         queued_outbox_ids: list[str] = []
         action_keys: list[str] = []
@@ -331,15 +333,36 @@ class ControlMonitoringRuleService:
                     event_type="control_monitoring.rule_reminder",
                 )
                 queued_outbox_ids.append(str(outbox_id))
+            elif rule.action_type == "create_alert":
+                alert = ControlMonitoringAlert(
+                    organization_id=organization_id,
+                    rule_id=rule.id,
+                    definition_id=definition.id,
+                    control_id=definition.control_id,
+                    alert_type="rule_generated",
+                    severity=str(action_config.get("severity") or "medium"),
+                    status="open",
+                    title=str(action_config.get("title") or f"Monitoring Alert: {definition.name}"),
+                    description=str(action_config.get("description") or f"Rule {rule.name} matched {definition.name}"),
+                    alert_context_json={
+                        "source": "control_monitoring_rule",
+                        "rule_id": str(rule.id),
+                        "rule_type": rule.rule_type,
+                        "match_reason": match.get("reason"),
+                    },
+                    assigned_to_user_id=owner_user.id,
+                )
+                self.db.add(alert)
+                self.db.flush()
+                created_alert_ids.append(str(alert.id))
             else:
-                title_prefix = "Monitoring Alert" if rule.action_type == "create_alert" else "Monitoring Task"
                 task = Task(
                     organization_id=organization_id,
-                    title=str(action_config.get("title") or f"{title_prefix}: {definition.name}"),
+                    title=str(action_config.get("title") or f"Monitoring Task: {definition.name}"),
                     description=str(action_config.get("description") or f"Rule {rule.name} matched {definition.name}"),
                     status="open",
-                    priority=str(action_config.get("priority") or ("urgent" if rule.action_type == "create_alert" else "normal")),
-                    task_type="alert" if rule.action_type == "create_alert" else str(action_config.get("task_type") or "general"),
+                    priority=str(action_config.get("priority") or "normal"),
+                    task_type=str(action_config.get("task_type") or "general"),
                     owner_user_id=owner_user.id,
                     created_by_user_id=actor_user_id,
                     due_date=None,
@@ -383,6 +406,7 @@ class ControlMonitoringRuleService:
                 "would_act": action_count,
                 "matched_definition_ids": [str(m["definition"].id) for m in matches],
                 "action_keys": action_keys,
+                "created_alert_ids": created_alert_ids,
                 "created_task_ids": created_task_ids,
                 "queued_outbox_ids": queued_outbox_ids,
                 "skipped_duplicates": skipped_duplicates,

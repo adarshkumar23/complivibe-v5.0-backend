@@ -14,7 +14,7 @@ class GovernanceAutopilotExecutionApprovalVote(UUIDPrimaryKeyMixin, TimestampMix
             "organization_id",
             "approval_id",
             "voter_user_id",
-            name="uq_governance_autopilot_execution_approval_votes_org_approval_voter",
+            name="uq_gov_ap_exec_appr_votes_org_appr_voter_a0fb2387",
         ),
         Index("ix_governance_autopilot_execution_approval_votes_org_approval", "organization_id", "approval_id"),
         Index("ix_governance_autopilot_execution_approval_votes_org_intent", "organization_id", "execution_intent_id"),

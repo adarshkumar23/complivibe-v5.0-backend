@@ -12,7 +12,7 @@ class DataSubjectRequest(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
     __tablename__ = "data_subject_requests"
     __table_args__ = (
         CheckConstraint(
-            "request_type IN ('access', 'erasure', 'portability', 'rectification', 'restriction', 'objection')",
+            "request_type IN ('access', 'erasure', 'portability', 'rectification', 'restriction', 'objection', 'opt_out_of_sale', 'limit_sensitive', 'know', 'correct')",
             name="ck_data_subject_requests_request_type",
         ),
         CheckConstraint(

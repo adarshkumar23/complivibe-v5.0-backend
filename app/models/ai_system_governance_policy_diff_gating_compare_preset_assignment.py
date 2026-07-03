@@ -11,7 +11,7 @@ from app.db.mixins import OrganizationOwnedMixin, TimestampMixin, UUIDPrimaryKey
 class AISystemGovernancePolicyDiffGatingComparePresetAssignment(
     UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, Base
 ):
-    __tablename__ = "ai_system_governance_policy_diff_gating_compare_preset_assignments"
+    __tablename__ = "ai_system_gov_pol_diff_gating_cmp_pst_assigns_8aba1d54"
     __table_args__ = (
         Index("ix_ai_sys_gov_policy_diff_cmp_preset_assign_org_status", "organization_id", "status"),
         Index("ix_ai_sys_gov_policy_diff_cmp_preset_assign_org_scope", "organization_id", "scope_type"),

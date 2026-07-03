@@ -62,8 +62,8 @@ class DataQualityService:
     @staticmethod
     def check_threshold(config: DataQualityConfig, value: Decimal) -> bool:
         if config.comparison_direction == "above":
-            return value <= config.threshold_value
-        return value >= config.threshold_value
+            return value >= config.threshold_value
+        return value <= config.threshold_value
 
     def _derive_severity(self, config: DataQualityConfig, asset: DataAsset) -> str:
         if config.metric_type in {"completeness", "freshness"} and asset.classification_type == "personal_data":

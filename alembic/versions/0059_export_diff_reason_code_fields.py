@@ -19,18 +19,18 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.add_column(
-        "ai_system_governance_preset_assignment_diagnostic_export_diff_reports",
+        "ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83",
         sa.Column("reason_code_summary_json", sa.JSON(), nullable=True),
     )
     op.add_column(
-        "ai_system_governance_preset_assignment_diagnostic_export_diff_reports",
+        "ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83",
         sa.Column("reason_code_count", sa.Integer(), nullable=False, server_default="0"),
     )
 
 
 def downgrade() -> None:
-    op.drop_column("ai_system_governance_preset_assignment_diagnostic_export_diff_reports", "reason_code_count")
+    op.drop_column("ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83", "reason_code_count")
     op.drop_column(
-        "ai_system_governance_preset_assignment_diagnostic_export_diff_reports",
+        "ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83",
         "reason_code_summary_json",
     )

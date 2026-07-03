@@ -16,7 +16,7 @@ class BreachNotification(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedM
             name="ck_breach_notifications_breach_type",
         ),
         CheckConstraint(
-            "regulatory_framework IN ('gdpr', 'hipaa', 'ccpa', 'dpdp', 'pci_dss', 'custom')",
+            "regulatory_framework IN ('gdpr', 'dora', 'nis2', 'hipaa', 'ccpa', 'dpdp') OR regulatory_framework IS NULL",
             name="ck_breach_notifications_regulatory_framework",
         ),
         CheckConstraint(
@@ -33,7 +33,7 @@ class BreachNotification(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedM
     personal_data_affected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     estimated_affected_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     regulatory_notification_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    regulatory_framework: Mapped[str] = mapped_column(String(50), nullable=False, default="gdpr")
+    regulatory_framework: Mapped[str | None] = mapped_column(String(50), nullable=True, default="gdpr")
     regulatory_notification_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=72)
     regulatory_notification_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     supervisory_authority: Mapped[str | None] = mapped_column(String(255), nullable=True)

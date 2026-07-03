@@ -5,6 +5,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.event_bus import EventBus, EventPayload, EventType
 from app.models.control import Control
 from app.models.evidence_control_link import EvidenceControlLink
 from app.models.evidence_item import EvidenceItem
@@ -42,6 +43,52 @@ class EvidenceService:
         if control is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Control not found")
         return control
+
+    def require_evidence_in_org(self, organization_id: uuid.UUID, evidence_id: uuid.UUID) -> EvidenceItem:
+        evidence = self.db.execute(
+            select(EvidenceItem).where(
+                EvidenceItem.id == evidence_id,
+                EvidenceItem.organization_id == organization_id,
+            )
+        ).scalar_one_or_none()
+        if evidence is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence not found")
+        return evidence
+
+    def set_review_status_and_emit(
+        self,
+        organization_id: uuid.UUID,
+        evidence_id: uuid.UUID,
+        *,
+        review_status: str,
+        review_notes: str | None,
+        reviewed_by_user_id: uuid.UUID,
+        triggered_by: str = "user_action",
+    ) -> tuple[EvidenceItem, str]:
+        evidence = self.require_evidence_in_org(organization_id, evidence_id)
+        previous_status = evidence.review_status
+        evidence.review_status = review_status
+        evidence.review_notes = review_notes
+        evidence.reviewed_by_user_id = reviewed_by_user_id
+        evidence.reviewed_at = self.now()
+        self.db.flush()
+
+        if previous_status != evidence.review_status:
+            EventBus.get_instance().emit(
+                EventType.EVIDENCE_STATUS_CHANGED,
+                EventPayload(
+                    org_id=organization_id,
+                    entity_type="evidence",
+                    entity_id=evidence.id,
+                    event_type=EventType.EVIDENCE_STATUS_CHANGED,
+                    previous_value=previous_status,
+                    new_value=evidence.review_status,
+                    triggered_by=triggered_by,
+                    db=self.db,
+                ),
+            )
+
+        return evidence, previous_status
 
     def readiness_summary(self, organization_id: uuid.UUID) -> dict[str, int]:
         total_evidence_items = int(

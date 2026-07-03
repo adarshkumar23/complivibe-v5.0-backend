@@ -4,7 +4,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 BREACH_TYPE_PATTERN = "^(personal_data|financial|health|confidential)$"
-BREACH_FRAMEWORK_PATTERN = "^(gdpr|hipaa|ccpa|dpdp|pci_dss|custom)$"
+BREACH_FRAMEWORK_PATTERN = "^(gdpr|dora|nis2|hipaa|ccpa|dpdp)$"
 BREACH_STATUS_PATTERN = "^(assessing|notification_due|regulator_notified|subjects_notified|closed)$"
 
 
@@ -13,7 +13,7 @@ class BreachNotificationCreate(BaseModel):
     personal_data_affected: bool = False
     estimated_affected_count: int | None = Field(default=None, ge=0)
     regulatory_notification_required: bool = False
-    regulatory_framework: str = Field(default="gdpr", pattern=BREACH_FRAMEWORK_PATTERN)
+    regulatory_framework: str | None = Field(default="gdpr", pattern=BREACH_FRAMEWORK_PATTERN)
     regulatory_notification_hours: int = Field(default=72, ge=1)
     supervisory_authority: str | None = Field(default=None, max_length=255)
     subject_notification_required: bool = False
@@ -27,7 +27,7 @@ class BreachNotificationRead(BaseModel):
     personal_data_affected: bool
     estimated_affected_count: int | None = None
     regulatory_notification_required: bool
-    regulatory_framework: str = Field(pattern=BREACH_FRAMEWORK_PATTERN)
+    regulatory_framework: str | None = Field(default=None, pattern=BREACH_FRAMEWORK_PATTERN)
     regulatory_notification_hours: int
     regulatory_notification_deadline: datetime | None = None
     supervisory_authority: str | None = None

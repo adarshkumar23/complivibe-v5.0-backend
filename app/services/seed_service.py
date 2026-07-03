@@ -6,8 +6,10 @@ from sqlalchemy.orm import Session
 
 from app.models.email_template import EmailTemplate
 from app.models.framework import Framework
+from app.models.framework_section import FrameworkSection
 from app.models.framework_version import FrameworkVersion
 from app.models.obligation import Obligation
+from app.models.obligation_applicability_question import ObligationApplicabilityQuestion
 from app.models.permission import Permission
 from app.models.policy_template import PolicyTemplate
 from app.models.issue_sla_policy import IssueSLAPolicy
@@ -19,6 +21,64 @@ from app.models.eu_act_annex_mapping import EUActAnnexMapping
 from app.models.role import Role
 from app.models.role_permission import RolePermission
 from app.models.data_access_anomaly_rule import DataAccessAnomalyRule
+from app.models.cross_framework_obligation_mapping import CrossFrameworkObligationMapping
+from app.services.framework_seed_data_stream_a2 import (
+    CIS_CONTROLS_V8_QUESTIONS,
+    CIS_CONTROLS_V8_SAFEGUARDS,
+    CIS_CONTROLS_V8_SECTIONS,
+    ISO_27701_GDPR_MAPPINGS,
+    ISO_27701_OBLIGATIONS,
+    ISO_27701_QUESTIONS,
+    ISO_27701_SECTIONS,
+)
+from app.services.framework_seed_data_stream_a4 import (
+    HIPAA_NIST_MAPPINGS,
+    HIPAA_OBLIGATIONS,
+    HIPAA_QUESTIONS,
+    HIPAA_SECTIONS,
+    NIST_800_53_LOW_CONTROLS,
+    NIST_800_53_QUESTIONS,
+    NIST_800_53_SECTIONS,
+    nist_description,
+    nist_evidence_hints,
+)
+from app.services.framework_seed_data_stream_a5 import (
+    CCPA_OBLIGATIONS,
+    CCPA_QUESTIONS,
+    CCPA_SECTIONS,
+    DPDP_GDPR_MAPPINGS,
+    DPDP_OBLIGATIONS,
+    DPDP_QUESTIONS,
+    DPDP_SECTIONS,
+)
+from app.services.framework_seed_data_stream_a6 import (
+    ATLAS_NIST_AIRMF_MAPPINGS,
+    ATLAS_OBLIGATIONS,
+    ATLAS_QUESTIONS,
+    ATLAS_SECTIONS,
+    G7_EUAI_MAPPINGS,
+    G7_OBLIGATIONS,
+    G7_OECD_MAPPINGS,
+    G7_QUESTIONS,
+    G7_SECTIONS,
+    IEEE_7000_OBLIGATIONS,
+    IEEE_7000_QUESTIONS,
+    IEEE_7000_SECTIONS,
+    IEEE_EUAI_MAPPINGS,
+    ISO_31000_OBLIGATIONS,
+    ISO_31000_QUESTIONS,
+    ISO_31000_SECTIONS,
+    OECD_AI_OBLIGATIONS,
+    OECD_AI_QUESTIONS,
+    OECD_AI_SECTIONS,
+    OECD_EUAI_MAPPINGS,
+    SINGAPORE_OBLIGATIONS,
+    SINGAPORE_QUESTIONS,
+    SINGAPORE_SECTIONS,
+    UNESCO_OBLIGATIONS,
+    UNESCO_QUESTIONS,
+    UNESCO_SECTIONS,
+)
 
 PERMISSIONS: dict[str, str] = {
     "org:read": "Read organization details",
@@ -92,6 +152,8 @@ PERMISSIONS: dict[str, str] = {
     "compliance_policies:read": "Read compliance policies",
     "compliance_policies:write": "Create and update compliance policies",
     "compliance_policies:approve": "Approve compliance policies",
+    "compliance:read": "Read compliance domain records",
+    "compliance:write": "Create and update compliance domain records",
     "vendors:read": "Read vendor and third-party inventory",
     "vendors:write": "Create and update vendor inventory records",
     "vendors:admin": "Archive and administer vendor inventory records",
@@ -192,6 +254,8 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "compliance_policies:read",
         "compliance_policies:write",
         "compliance_policies:approve",
+        "compliance:read",
+        "compliance:write",
         "vendors:read",
         "vendors:write",
         "vendors:admin",
@@ -256,6 +320,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "framework_review_capacity:read",
         "ai_systems:read",
         "compliance_policies:read",
+        "compliance:read",
         "vendors:read",
         "vendor:read",
         "monitoring:read",
@@ -298,6 +363,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "framework_review_capacity:read",
         "ai_systems:read",
         "compliance_policies:read",
+        "compliance:read",
         "vendors:read",
         "vendor:read",
         "monitoring:read",
@@ -333,6 +399,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "framework_review_capacity:read",
         "ai_systems:read",
         "compliance_policies:read",
+        "compliance:read",
         "vendors:read",
         "vendor:read",
         "monitoring:read",
@@ -554,17 +621,23 @@ PILLAR1_AUDIT_ACTION_REGISTRY: dict[str, tuple[str, ...]] = {
         "policy_exception.expired",
     ),
     "policy_templates": (
+        "policy_template.created",
+        "policy_template.applied",
         "policy_template.cloned",
     ),
     "policy_risk_mappings": (
         "policy_risk_mapping.created",
         "policy_risk_mapping.updated",
         "policy_risk_mapping.deleted",
+        "policy.risk_linked",
+        "policy.risk_unlinked",
     ),
     "policy_issue_links": (
         "policy_issue_link.created",
         "policy_issue_link.updated",
         "policy_issue_link.deleted",
+        "policy.issue_linked",
+        "policy.issue_unlinked",
     ),
     "compliance_deadlines": (
         "compliance_deadline.created",
@@ -664,6 +737,185 @@ EMAIL_TEMPLATE_SEEDS: list[dict] = [
         "status": "active",
         "version": 1,
     },
+    {
+        "template_key": "password_reset",
+        "name": "Password Reset",
+        "description": "Secure password reset instructions.",
+        "subject_template": "Reset your CompliVibe password",
+        "body_text_template": (
+            "Hello {{ user_name }},\n\n"
+            "We received a request to reset your CompliVibe password. Use this secure link: {{ reset_link }}.\n"
+            "For your security, this link expires at {{ expires_at }}.\n\n"
+            "If you did not request this change, contact your administrator immediately."
+        ),
+        "body_html_template": (
+            "<html><body style=\"font-family:Arial,sans-serif;color:#1f2937;line-height:1.5;\">"
+            "<h2 style=\"margin:0 0 12px 0;\">Reset your CompliVibe password</h2>"
+            "<p>Hello {{ user_name }},</p>"
+            "<p>We received a request to reset your CompliVibe password. Use the secure link below:</p>"
+            "<p><a href=\"{{ reset_link }}\" style=\"background:#0f766e;color:#fff;padding:10px 14px;border-radius:6px;text-decoration:none;\">Reset Password</a></p>"
+            "<p>This link expires at <strong>{{ expires_at }}</strong>.</p>"
+            "<p>If you did not request this change, contact your administrator immediately.</p>"
+            "<p style=\"font-size:12px;color:#6b7280;\">This is an automated security message from CompliVibe.</p>"
+            "</body></html>"
+        ),
+        "allowed_variables_json": ["user_name", "reset_link", "expires_at"],
+        "status": "active",
+        "version": 1,
+    },
+    {
+        "template_key": "attestation_campaign_reminder",
+        "name": "Attestation Campaign Reminder",
+        "description": "Reminder that a policy attestation is due soon.",
+        "subject_template": "Attestation due: {{ campaign_title }}",
+        "body_text_template": (
+            "Hello {{ user_name }},\n\n"
+            "You have an open policy attestation campaign: {{ campaign_title }}.\n"
+            "Policy: {{ policy_title }}\n"
+            "Due date: {{ due_date }}\n\n"
+            "Please complete your attestation in CompliVibe before the deadline."
+        ),
+        "body_html_template": (
+            "<html><body style=\"font-family:Arial,sans-serif;color:#111827;line-height:1.5;\">"
+            "<h2 style=\"margin:0 0 12px 0;\">Policy Attestation Reminder</h2>"
+            "<p>Hello {{ user_name }},</p>"
+            "<p>You have an open attestation campaign: <strong>{{ campaign_title }}</strong>.</p>"
+            "<table style=\"border-collapse:collapse;margin:8px 0 12px 0;\">"
+            "<tr><td style=\"padding:4px 10px 4px 0;color:#6b7280;\">Policy</td><td>{{ policy_title }}</td></tr>"
+            "<tr><td style=\"padding:4px 10px 4px 0;color:#6b7280;\">Due date</td><td>{{ due_date }}</td></tr>"
+            "</table>"
+            "<p>Please complete your attestation in CompliVibe before the deadline.</p>"
+            "<p style=\"font-size:12px;color:#6b7280;\">Automated compliance reminder from CompliVibe.</p>"
+            "</body></html>"
+        ),
+        "allowed_variables_json": ["user_name", "campaign_title", "policy_title", "due_date"],
+        "status": "active",
+        "version": 1,
+    },
+    {
+        "template_key": "pbc_request_assigned",
+        "name": "PBC Request Assigned",
+        "description": "Notification that a PBC request was assigned.",
+        "subject_template": "PBC request assigned: {{ request_title }}",
+        "body_text_template": (
+            "Hello {{ user_name }},\n\n"
+            "A Prepared-By-Client request was assigned to you.\n"
+            "Request: {{ request_title }}\n"
+            "Audit: {{ audit_title }}\n"
+            "Due date: {{ due_date }}\n\n"
+            "Please submit the required evidence through CompliVibe."
+        ),
+        "body_html_template": (
+            "<html><body style=\"font-family:Arial,sans-serif;color:#1f2937;line-height:1.5;\">"
+            "<h2 style=\"margin:0 0 12px 0;\">PBC Request Assigned</h2>"
+            "<p>Hello {{ user_name }},</p>"
+            "<p>A Prepared-By-Client request has been assigned to you.</p>"
+            "<ul>"
+            "<li><strong>Request:</strong> {{ request_title }}</li>"
+            "<li><strong>Audit:</strong> {{ audit_title }}</li>"
+            "<li><strong>Due date:</strong> {{ due_date }}</li>"
+            "</ul>"
+            "<p>Please submit the required evidence through CompliVibe.</p>"
+            "<p style=\"font-size:12px;color:#6b7280;\">Automated audit workflow message from CompliVibe.</p>"
+            "</body></html>"
+        ),
+        "allowed_variables_json": ["user_name", "request_title", "audit_title", "due_date"],
+        "status": "active",
+        "version": 1,
+    },
+    {
+        "template_key": "audit_finding_assigned",
+        "name": "Audit Finding Assigned",
+        "description": "Notification that a remediation owner was assigned to an audit finding.",
+        "subject_template": "Audit finding assigned: {{ finding_title }}",
+        "body_text_template": (
+            "Hello {{ user_name }},\n\n"
+            "You were assigned as remediation owner for an audit finding.\n"
+            "Finding: {{ finding_title }}\n"
+            "Severity: {{ severity }}\n"
+            "Due date: {{ remediation_due_date }}\n\n"
+            "Review the finding and update the remediation plan in CompliVibe."
+        ),
+        "body_html_template": (
+            "<html><body style=\"font-family:Arial,sans-serif;color:#111827;line-height:1.5;\">"
+            "<h2 style=\"margin:0 0 12px 0;\">Audit Finding Assigned</h2>"
+            "<p>Hello {{ user_name }},</p>"
+            "<p>You were assigned as remediation owner for an audit finding.</p>"
+            "<ul>"
+            "<li><strong>Finding:</strong> {{ finding_title }}</li>"
+            "<li><strong>Severity:</strong> {{ severity }}</li>"
+            "<li><strong>Due date:</strong> {{ remediation_due_date }}</li>"
+            "</ul>"
+            "<p>Review the finding and update the remediation plan in CompliVibe.</p>"
+            "<p style=\"font-size:12px;color:#6b7280;\">Automated audit governance message from CompliVibe.</p>"
+            "</body></html>"
+        ),
+        "allowed_variables_json": ["user_name", "finding_title", "severity", "remediation_due_date"],
+        "status": "active",
+        "version": 1,
+    },
+    {
+        "template_key": "vendor_mitigation_case_created",
+        "name": "Vendor Mitigation Case Created",
+        "description": "Notification that a high-risk vendor mitigation case was opened.",
+        "subject_template": "Vendor mitigation case opened: {{ case_title }}",
+        "body_text_template": (
+            "Hello {{ user_name }},\n\n"
+            "A vendor mitigation case has been opened.\n"
+            "Case: {{ case_title }}\n"
+            "Vendor: {{ vendor_name }}\n"
+            "Risk score: {{ risk_score }}\n\n"
+            "Please review mitigation actions and track evidence in CompliVibe."
+        ),
+        "body_html_template": (
+            "<html><body style=\"font-family:Arial,sans-serif;color:#1f2937;line-height:1.5;\">"
+            "<h2 style=\"margin:0 0 12px 0;\">Vendor Mitigation Case Opened</h2>"
+            "<p>Hello {{ user_name }},</p>"
+            "<p>A vendor mitigation case has been opened for follow-up.</p>"
+            "<ul>"
+            "<li><strong>Case:</strong> {{ case_title }}</li>"
+            "<li><strong>Vendor:</strong> {{ vendor_name }}</li>"
+            "<li><strong>Risk score:</strong> {{ risk_score }}</li>"
+            "</ul>"
+            "<p>Please review mitigation actions and track evidence in CompliVibe.</p>"
+            "<p style=\"font-size:12px;color:#6b7280;\">Automated third-party risk message from CompliVibe.</p>"
+            "</body></html>"
+        ),
+        "allowed_variables_json": ["user_name", "case_title", "vendor_name", "risk_score"],
+        "status": "active",
+        "version": 1,
+    },
+    {
+        "template_key": "commitment_breach_notification",
+        "name": "Commitment Breach Notification",
+        "description": "Notification that a customer commitment is due or breached.",
+        "subject_template": "Customer commitment alert: {{ commitment_title }}",
+        "body_text_template": (
+            "Hello {{ user_name }},\n\n"
+            "A customer commitment requires immediate attention.\n"
+            "Commitment: {{ commitment_title }}\n"
+            "Status: {{ commitment_status }}\n"
+            "Due date: {{ due_date }}\n\n"
+            "Please review obligations and record actions in CompliVibe."
+        ),
+        "body_html_template": (
+            "<html><body style=\"font-family:Arial,sans-serif;color:#111827;line-height:1.5;\">"
+            "<h2 style=\"margin:0 0 12px 0;\">Customer Commitment Alert</h2>"
+            "<p>Hello {{ user_name }},</p>"
+            "<p>A customer commitment requires immediate attention.</p>"
+            "<ul>"
+            "<li><strong>Commitment:</strong> {{ commitment_title }}</li>"
+            "<li><strong>Status:</strong> {{ commitment_status }}</li>"
+            "<li><strong>Due date:</strong> {{ due_date }}</li>"
+            "</ul>"
+            "<p>Please review obligations and record actions in CompliVibe.</p>"
+            "<p style=\"font-size:12px;color:#6b7280;\">Automated commitment monitoring message from CompliVibe.</p>"
+            "</body></html>"
+        ),
+        "allowed_variables_json": ["user_name", "commitment_title", "commitment_status", "due_date"],
+        "status": "active",
+        "version": 1,
+    },
 ]
 
 FRAMEWORK_SEEDS: list[dict] = [
@@ -683,13 +935,16 @@ FRAMEWORK_SEEDS: list[dict] = [
     {
         "code": "INDIA_DPDP",
         "name": "India DPDP",
-        "description": "India Digital Personal Data Protection Act metadata entry.",
+        "description": (
+            "India Digital Personal Data Protection Act 2023. Governs processing of digital personal "
+            "data of Indian residents and defines obligations for Data Fiduciaries and Significant Data Fiduciaries."
+        ),
         "category": "Privacy",
-        "jurisdiction": "India",
+        "jurisdiction": "IN",
         "authority": "Government of India",
         "version": "2023",
         "status": "active",
-        "coverage_level": "metadata_only",
+        "coverage_level": "starter",
         "source_url": None,
         "effective_date": None,
     },
@@ -771,17 +1026,251 @@ FRAMEWORK_SEEDS: list[dict] = [
         "source_url": None,
         "effective_date": date(2018, 5, 25),
     },
+    {
+        "code": "CCPA_CPRA",
+        "name": "CCPA/CPRA",
+        "description": (
+            "California Consumer Privacy Act (CCPA) as amended by the California Privacy Rights Act (CPRA). "
+            "Provides rights to know, delete, correct, opt out, and limit use of sensitive personal information."
+        ),
+        "category": "Privacy",
+        "jurisdiction": "US-CA",
+        "authority": "State of California",
+        "version": "2023",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": None,
+        "effective_date": None,
+    },
+    {
+        "code": "PCI_DSS",
+        "name": "PCI DSS",
+        "description": "Payment Card Industry Data Security Standard v4.0 baseline.",
+        "category": "Security Assurance",
+        "jurisdiction": "global",
+        "authority": "PCI Security Standards Council",
+        "version": "4.0",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": None,
+        "effective_date": None,
+    },
+    {
+        "code": "NIST_CSF",
+        "name": "NIST CSF",
+        "description": "NIST Cybersecurity Framework 2.0 baseline.",
+        "category": "Cybersecurity",
+        "jurisdiction": "US",
+        "authority": "NIST",
+        "version": "2.0",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": None,
+        "effective_date": None,
+    },
+    {
+        "code": "CIS_CONTROLS_V8",
+        "name": "CIS Controls",
+        "description": "CIS Critical Security Controls v8 baseline.",
+        "category": "Cybersecurity",
+        "jurisdiction": "global",
+        "authority": "Center for Internet Security",
+        "version": "v8",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": None,
+        "effective_date": None,
+    },
+    {
+        "code": "ISO_27701",
+        "name": "ISO 27701",
+        "description": "ISO/IEC 27701:2019 privacy information management system extension.",
+        "category": "Privacy",
+        "jurisdiction": "global",
+        "authority": "ISO/IEC",
+        "version": "2019",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": None,
+        "effective_date": None,
+    },
+    {
+        "code": "DORA",
+        "name": "DORA",
+        "description": "EU Digital Operational Resilience Act (Regulation EU 2022/2554).",
+        "category": "Operational Resilience",
+        "jurisdiction": "EU",
+        "authority": "European Union",
+        "version": "2022/2554",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": None,
+        "effective_date": None,
+    },
+    {
+        "code": "NIS2",
+        "name": "NIS2",
+        "description": "EU Network and Information Security Directive 2 (Directive EU 2022/2555).",
+        "category": "Cybersecurity",
+        "jurisdiction": "EU",
+        "authority": "European Union",
+        "version": "2022/2555",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": None,
+        "effective_date": None,
+    },
+    {
+        "code": "NIST_800_53",
+        "name": "NIST SP 800-53",
+        "description": (
+            "NIST Special Publication 800-53 Rev 5 — Security and Privacy Controls for Information "
+            "Systems and Organizations. Baseline: LOW (125 controls). Required for US federal systems. "
+            "Foundation for FedRAMP."
+        ),
+        "category": "Cybersecurity",
+        "jurisdiction": "US",
+        "authority": "NIST",
+        "version": "Rev 5",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": None,
+        "effective_date": None,
+    },
+    {
+        "code": "HIPAA",
+        "name": "HIPAA",
+        "description": (
+            "Health Insurance Portability and Accountability Act. Privacy Rule, Security Rule, and Breach "
+            "Notification Rule. Required for covered entities and business associates handling PHI."
+        ),
+        "category": "Privacy",
+        "jurisdiction": "US",
+        "authority": "HHS",
+        "version": "2013 Omnibus",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": None,
+        "effective_date": None,
+    },
+    {
+        "code": "ISO_31000",
+        "name": "ISO 31000",
+        "description": "ISO 31000:2018 risk management guidelines and principles.",
+        "category": "Risk Management",
+        "jurisdiction": "global",
+        "authority": "ISO",
+        "version": "2018",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": None,
+        "effective_date": None,
+    },
+    {
+        "code": "OECD_AI_PRINCIPLES",
+        "name": "OECD AI Principles",
+        "description": "OECD Principles on Artificial Intelligence (updated 2024).",
+        "category": "AI Governance",
+        "jurisdiction": "global",
+        "authority": "OECD",
+        "version": "2024",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": None,
+        "effective_date": None,
+    },
+    {
+        "code": "IEEE_7000_SERIES",
+        "name": "IEEE 7000 Series",
+        "description": "IEEE 7000-series standards for ethically aligned AI and autonomous systems.",
+        "category": "AI Governance",
+        "jurisdiction": "global",
+        "authority": "IEEE",
+        "version": "2021-2022",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": None,
+        "effective_date": None,
+    },
+    {
+        "code": "UNESCO_AI_ETHICS",
+        "name": "UNESCO AI Ethics",
+        "description": "UNESCO Recommendation on the Ethics of AI (2021).",
+        "category": "AI Governance",
+        "jurisdiction": "global",
+        "authority": "UNESCO",
+        "version": "2021",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": None,
+        "effective_date": None,
+    },
+    {
+        "code": "SINGAPORE_MODEL_AI_GOV",
+        "name": "Singapore Model AI Governance",
+        "description": "Singapore Model AI Governance Framework 2nd Edition (2020).",
+        "category": "AI Governance",
+        "jurisdiction": "SG",
+        "authority": "IMDA",
+        "version": "2020",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": None,
+        "effective_date": None,
+    },
+    {
+        "code": "G7_HIROSHIMA_AI_PROCESS",
+        "name": "G7 Hiroshima AI Process",
+        "description": "G7 Hiroshima AI Process International Guiding Principles (2023).",
+        "category": "AI Governance",
+        "jurisdiction": "global",
+        "authority": "G7",
+        "version": "2023",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": None,
+        "effective_date": None,
+    },
+    {
+        "code": "MITRE_ATLAS",
+        "name": "MITRE ATLAS",
+        "description": "MITRE ATLAS adversarial threat landscape for AI systems.",
+        "category": "AI Security",
+        "jurisdiction": "global",
+        "authority": "MITRE",
+        "version": "4.5",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": None,
+        "effective_date": None,
+    },
 ]
 
 FRAMEWORK_VERSION_SEEDS: list[dict] = [
     {"framework_code": "EU_AI_ACT", "version_label": "2024", "status": "active", "coverage_level": "metadata_only"},
-    {"framework_code": "INDIA_DPDP", "version_label": "2023", "status": "active", "coverage_level": "metadata_only"},
+    {"framework_code": "INDIA_DPDP", "version_label": "2023", "status": "active", "coverage_level": "starter"},
     {"framework_code": "ISO_42001", "version_label": "2023", "status": "active", "coverage_level": "starter"},
     {"framework_code": "NIST_AI_RMF", "version_label": "1.0", "status": "active", "coverage_level": "starter"},
     {"framework_code": "SOC2", "version_label": "2017", "status": "active", "coverage_level": "starter"},
     {"framework_code": "ISO_27001", "version_label": "2022", "status": "active", "coverage_level": "starter"},
     {"framework_code": "COLORADO_AI_ACT", "version_label": "2024", "status": "active", "coverage_level": "metadata_only"},
     {"framework_code": "GDPR", "version_label": "2018", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "CCPA_CPRA", "version_label": "2023", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "PCI_DSS", "version_label": "4.0", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "NIST_CSF", "version_label": "2.0", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "CIS_CONTROLS_V8", "version_label": "v8", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "ISO_27701", "version_label": "2019", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "DORA", "version_label": "2022/2554", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "NIS2", "version_label": "2022/2555", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "NIST_800_53", "version_label": "Rev 5", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "HIPAA", "version_label": "2013 Omnibus", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "ISO_31000", "version_label": "2018", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "OECD_AI_PRINCIPLES", "version_label": "2024", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "IEEE_7000_SERIES", "version_label": "2021-2022", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "UNESCO_AI_ETHICS", "version_label": "2021", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "SINGAPORE_MODEL_AI_GOV", "version_label": "2020", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "G7_HIROSHIMA_AI_PROCESS", "version_label": "2023", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "MITRE_ATLAS", "version_label": "4.5", "status": "active", "coverage_level": "starter"},
 ]
 
 DATA_ACCESS_DEFAULT_RULES: list[dict] = [
@@ -800,6 +1289,108 @@ DATA_ACCESS_DEFAULT_RULES: list[dict] = [
     {
         "rule_type": "failed_access_spike",
         "rule_config": {"count": 20, "window_minutes": 5},
+    },
+]
+
+DORA_SECTIONS: list[dict[str, int | str]] = [
+    {"code": "DORA-II", "title": "ICT Risk Management", "order": 1},
+    {"code": "DORA-III", "title": "ICT Incident Management", "order": 2},
+    {"code": "DORA-IV", "title": "Digital Operational Resilience Testing", "order": 3},
+    {"code": "DORA-V", "title": "ICT Third-Party Risk Management", "order": 4},
+    {"code": "DORA-VI", "title": "Information Sharing Arrangements", "order": 5},
+]
+
+DORA_OBLIGATIONS: list[tuple[str, str, str]] = [
+    ("DORA-5.1", "Governance and organisation of ICT risk management", "DORA-II"),
+    ("DORA-6.1", "ICT risk management framework", "DORA-II"),
+    ("DORA-7.1", "ICT systems, protocols and tools", "DORA-II"),
+    ("DORA-8.1", "Identification of ICT risks", "DORA-II"),
+    ("DORA-9.1", "Protection and prevention controls", "DORA-II"),
+    ("DORA-10.1", "Detection of anomalous activities", "DORA-II"),
+    ("DORA-11.1", "Business continuity policy", "DORA-II"),
+    ("DORA-12.1", "Backup policies and recovery procedures", "DORA-II"),
+    ("DORA-13.1", "Learning and evolving", "DORA-II"),
+    ("DORA-14.1", "Communication", "DORA-II"),
+    ("DORA-15.1", "ICT risk management for payment systems", "DORA-II"),
+    ("DORA-16.1", "Simplified ICT risk management framework", "DORA-II"),
+    ("DORA-17.1", "ICT-related incident management process", "DORA-III"),
+    ("DORA-18.1", "ICT-related incident classification", "DORA-III"),
+    ("DORA-19.1", "Major ICT incident reporting", "DORA-III"),
+    ("DORA-20.1", "Harmonised reporting", "DORA-III"),
+    ("DORA-21.1", "Voluntary notification of cyber threats", "DORA-III"),
+    ("DORA-24.1", "General digital operational resilience testing", "DORA-IV"),
+    ("DORA-25.1", "Testing of ICT tools and systems", "DORA-IV"),
+    ("DORA-26.1", "Advanced testing — TLPT", "DORA-IV"),
+    ("DORA-28.1", "Key principles for ICT TPRM", "DORA-V"),
+    ("DORA-28.2", "Register of information", "DORA-V"),
+    ("DORA-29.1", "Preliminary assessment of ICT third-party risk", "DORA-V"),
+    ("DORA-30.1", "Key contractual provisions", "DORA-V"),
+    ("DORA-31.1", "Critical or important functions", "DORA-V"),
+]
+
+DORA_QUESTIONS: list[dict[str, int | str]] = [
+    {
+        "question_key": "eu_financial_entity",
+        "question_text": "Is your organization a financial entity operating in the EU (bank, investment firm, insurance, payment institution, CASP)?",
+        "help_text": "DORA applies to financial entities under Article 2.",
+        "triggers_scope": "all",
+        "order_index": 1,
+    },
+    {
+        "question_key": "is_microenterprise",
+        "question_text": "Is your organization a microenterprise (fewer than 10 employees and turnover < EUR 2M)?",
+        "help_text": "Microenterprises may use the simplified framework under Art. 16.",
+        "triggers_scope": "partial",
+        "order_index": 2,
+    },
+]
+
+NIS2_SECTIONS: list[dict[str, int | str]] = [
+    {"code": "NIS2-ART21", "title": "Cybersecurity Risk Management Measures", "order": 1},
+    {"code": "NIS2-ART23", "title": "Reporting Obligations", "order": 2},
+    {"code": "NIS2-ART24", "title": "Use of European Cybersecurity Schemes", "order": 3},
+]
+
+NIS2_OBLIGATIONS: list[tuple[str, str, str]] = [
+    ("NIS2-21.1", "Policies on risk analysis and information system security", "NIS2-ART21"),
+    ("NIS2-21.2", "Incident handling", "NIS2-ART21"),
+    ("NIS2-21.3", "Business continuity and backup", "NIS2-ART21"),
+    ("NIS2-21.4", "Supply chain security", "NIS2-ART21"),
+    ("NIS2-21.5", "Security in network acquisition and development", "NIS2-ART21"),
+    ("NIS2-21.6", "Policies and procedures for cryptography and encryption", "NIS2-ART21"),
+    ("NIS2-21.7", "Human resources security and access control", "NIS2-ART21"),
+    ("NIS2-21.8", "Use of multi-factor authentication", "NIS2-ART21"),
+    ("NIS2-21.9", "Securing communications and emergency communications", "NIS2-ART21"),
+    ("NIS2-21.10", "Awareness training", "NIS2-ART21"),
+    ("NIS2-23.1", "Significant incident — early warning (24h)", "NIS2-ART23"),
+    ("NIS2-23.2", "Significant incident — notification (72h)", "NIS2-ART23"),
+    ("NIS2-23.3", "Significant incident — final report (1 month)", "NIS2-ART23"),
+    ("NIS2-23.4", "Intermediate report if requested", "NIS2-ART23"),
+    ("NIS2-24.1", "Use of certified ICT products and services", "NIS2-ART24"),
+]
+
+NIS2_QUESTIONS: list[dict[str, int | str]] = [
+    {
+        "question_key": "eu_entity",
+        "question_text": "Does your organization operate in the European Union or provide services to EU residents?",
+        "help_text": "NIS2 applies to essential and important entities with EU impact.",
+        "triggers_scope": "all",
+        "order_index": 1,
+    },
+    {
+        "question_key": "entity_type",
+        "question_text": "Is your organization classified as an Essential Entity (EE) or Important Entity (IE) under NIS2?",
+        "help_text": "Both EE and IE entities must comply with NIS2 Art. 21 controls.",
+        "triggers_scope": "partial",
+        "order_index": 2,
+    },
+    {
+        "question_key": "sector",
+        "question_text": "Which NIS2 sector applies to your organization?",
+        "help_text": "Annex I and Annex II sectors are in-scope under NIS2.",
+        "triggers_scope": "partial",
+        "order_index": 3,
+        "answer_type": "single_select",
     },
 ]
 
@@ -964,7 +1555,506 @@ OBLIGATION_SEEDS: list[dict] = [
         "effective_date": date(2018, 5, 25),
         "parent_obligation_id": None,
     },
+    {
+        "framework_code": "GDPR",
+        "reference_code": "GDPR-OBL-02",
+        "title": "Document lawful basis per processing purpose",
+        "description": "Identify and document lawful basis for each processing purpose under GDPR Article 6.",
+        "plain_language_summary": "Keep lawful basis records for each processing purpose.",
+        "obligation_type": "privacy",
+        "jurisdiction": "European Union",
+        "source_url": None,
+        "version": "2018",
+        "status": "active",
+        "effective_date": date(2018, 5, 25),
+        "parent_obligation_id": None,
+    },
+    {
+        "framework_code": "GDPR",
+        "reference_code": "GDPR-OBL-03",
+        "title": "Provide transparent privacy notices",
+        "description": "Provide clear privacy notices describing processing purposes and rights.",
+        "plain_language_summary": "Publish transparent privacy notices.",
+        "obligation_type": "privacy",
+        "jurisdiction": "European Union",
+        "source_url": None,
+        "version": "2018",
+        "status": "active",
+        "effective_date": date(2018, 5, 25),
+        "parent_obligation_id": None,
+    },
+    {
+        "framework_code": "GDPR",
+        "reference_code": "GDPR-OBL-04",
+        "title": "Support right of access and portability workflows",
+        "description": "Implement and operate request workflows for GDPR access and portability rights.",
+        "plain_language_summary": "Operate GDPR access and portability workflows.",
+        "obligation_type": "privacy",
+        "jurisdiction": "European Union",
+        "source_url": None,
+        "version": "2018",
+        "status": "active",
+        "effective_date": date(2018, 5, 25),
+        "parent_obligation_id": None,
+    },
+    {
+        "framework_code": "GDPR",
+        "reference_code": "GDPR-OBL-05",
+        "title": "Support rectification and erasure rights",
+        "description": "Implement workflows to support correction and deletion of personal data.",
+        "plain_language_summary": "Support rectification and erasure requests.",
+        "obligation_type": "privacy",
+        "jurisdiction": "European Union",
+        "source_url": None,
+        "version": "2018",
+        "status": "active",
+        "effective_date": date(2018, 5, 25),
+        "parent_obligation_id": None,
+    },
+    {
+        "framework_code": "GDPR",
+        "reference_code": "GDPR-OBL-07",
+        "title": "Maintain records of processing activities",
+        "description": "Maintain current records of processing activities as required by GDPR Article 30.",
+        "plain_language_summary": "Maintain records of processing activities.",
+        "obligation_type": "privacy",
+        "jurisdiction": "European Union",
+        "source_url": None,
+        "version": "2018",
+        "status": "active",
+        "effective_date": date(2018, 5, 25),
+        "parent_obligation_id": None,
+    },
+    {
+        "framework_code": "GDPR",
+        "reference_code": "GDPR-OBL-09",
+        "title": "Execute data processing agreements",
+        "description": "Execute and maintain processor contracts with required GDPR clauses.",
+        "plain_language_summary": "Maintain GDPR-compliant processor contracts.",
+        "obligation_type": "privacy",
+        "jurisdiction": "European Union",
+        "source_url": None,
+        "version": "2018",
+        "status": "active",
+        "effective_date": date(2018, 5, 25),
+        "parent_obligation_id": None,
+    },
+    {
+        "framework_code": "GDPR",
+        "reference_code": "GDPR-OBL-10",
+        "title": "Perform DPIAs for high-risk processing",
+        "description": "Perform DPIAs where processing is likely to result in high risk.",
+        "plain_language_summary": "Run DPIAs for high-risk processing.",
+        "obligation_type": "privacy",
+        "jurisdiction": "European Union",
+        "source_url": None,
+        "version": "2018",
+        "status": "active",
+        "effective_date": date(2018, 5, 25),
+        "parent_obligation_id": None,
+    },
 ]
+
+
+PCI_DSS_SECTIONS: list[dict[str, int | str]] = [
+    {"code": "G1", "title": "Build and Maintain Secure Networks", "order": 1},
+    {"code": "G2", "title": "Protect Account Data", "order": 2},
+    {"code": "G3", "title": "Maintain a Vulnerability Management Program", "order": 3},
+    {"code": "G4", "title": "Implement Strong Access Control Measures", "order": 4},
+    {"code": "G5", "title": "Regularly Monitor and Test Networks", "order": 5},
+    {"code": "G6", "title": "Maintain an Information Security Policy", "order": 6},
+]
+
+PCI_DSS_BASE_OBLIGATIONS: list[tuple[str, str, str]] = [
+    ("REQ-1.1", "Install and maintain network security controls", "G1"),
+    ("REQ-1.2", "Network security controls configurations are configured and managed", "G1"),
+    ("REQ-1.3", "Network access to and from the cardholder data environment is restricted", "G1"),
+    ("REQ-1.4", "Network connections between trusted and untrusted networks are controlled", "G1"),
+    ("REQ-1.5", "Risks to the CDE from computing devices that can connect to both untrusted networks and the CDE are mitigated", "G1"),
+    ("REQ-2.1", "Processes and mechanisms for applying secure configurations are defined and understood", "G1"),
+    ("REQ-2.2", "System components are configured and managed securely", "G1"),
+    ("REQ-2.3", "Wireless environments are configured and managed securely", "G1"),
+    ("REQ-3.1", "Processes and mechanisms for protecting stored account data are defined and understood", "G2"),
+    ("REQ-3.2", "Storage of account data is kept to a minimum", "G2"),
+    ("REQ-3.3", "Sensitive authentication data (SAD) is not retained after authorization", "G2"),
+    ("REQ-3.4", "Access to displays of full PAN and ability to copy PAN are restricted", "G2"),
+    ("REQ-3.5", "Primary account number (PAN) is secured wherever it is stored", "G2"),
+    ("REQ-3.6", "Cryptographic keys used to protect stored account data are secured", "G2"),
+    ("REQ-3.7", "Where cryptography is used to protect stored account data, key management processes and procedures covering all aspects of the key lifecycle are defined and implemented", "G2"),
+    ("REQ-4.1", "Processes and mechanisms for protecting cardholder data with strong cryptography during transmission over open, public networks are defined and documented", "G2"),
+    ("REQ-4.2", "PAN is protected with strong cryptography during transmission", "G2"),
+    ("REQ-5.1", "Processes and mechanisms for protecting all systems and networks from malicious software are defined and understood", "G3"),
+    ("REQ-5.2", "Malicious software (malware) is prevented, or detected and addressed", "G3"),
+    ("REQ-5.3", "Anti-malware mechanisms and processes are active, maintained, and monitored", "G3"),
+    ("REQ-5.4", "Anti-phishing mechanisms protect users against phishing attacks", "G3"),
+    ("REQ-6.1", "Processes and mechanisms for developing and maintaining secure systems and software are defined and understood", "G3"),
+    ("REQ-6.2", "Bespoke and custom software are developed securely", "G3"),
+    ("REQ-6.3", "Security vulnerabilities are identified and addressed", "G3"),
+    ("REQ-6.4", "Public-facing web applications are protected against attacks", "G3"),
+    ("REQ-6.5", "Changes to all system components are managed securely", "G3"),
+    ("REQ-7.1", "Processes and mechanisms for restricting access to system components and cardholder data by business need to know are defined and understood", "G4"),
+    ("REQ-7.2", "Access to system components and data is appropriately defined and assigned", "G4"),
+    ("REQ-7.3", "Access to system components and data is managed via an access control system", "G4"),
+    ("REQ-8.1", "Processes and mechanisms for identifying users and authenticating access to system components are defined and understood", "G4"),
+    ("REQ-8.2", "User identification and related accounts for users and administrators are strictly managed throughout an account's lifecycle", "G4"),
+    ("REQ-8.3", "User authentication is established via at least one authentication method", "G4"),
+    ("REQ-8.4", "Multi-factor authentication (MFA) is implemented to secure access into the CDE", "G4"),
+    ("REQ-8.5", "Multi-factor authentication (MFA) systems are configured to prevent misuse", "G4"),
+    ("REQ-8.6", "Use of application and system accounts and associated authentication factors is strictly managed", "G4"),
+    ("REQ-9.1", "Processes and mechanisms for restricting physical access to cardholder data are defined and understood", "G4"),
+    ("REQ-9.2", "Physical access controls manage entry into facilities and systems containing cardholder data", "G4"),
+    ("REQ-9.3", "Physical access for personnel and visitors is authorized and managed", "G4"),
+    ("REQ-9.4", "Media with cardholder data is securely stored, accessed, distributed, and destroyed", "G4"),
+    ("REQ-9.5", "Point of interaction (POI) devices are protected from tampering and unauthorized substitution", "G4"),
+    ("REQ-10.1", "Processes and mechanisms for logging and monitoring all access to system components and cardholder data are defined and documented", "G5"),
+    ("REQ-10.2", "Audit logs are implemented to support the detection of anomalies and suspicious activity, and the forensic analysis of events", "G5"),
+    ("REQ-10.3", "Audit logs are protected from destruction and unauthorized modifications", "G5"),
+    ("REQ-10.4", "Audit logs are reviewed to identify anomalies or suspicious activity", "G5"),
+    ("REQ-10.5", "Retain audit log history for at least 12 months", "G5"),
+    ("REQ-10.6", "Time-synchronization mechanisms support consistent time settings across all systems", "G5"),
+    ("REQ-10.7", "Failures of critical security controls are detected, reported, and responded to promptly", "G5"),
+    ("REQ-11.1", "Processes and mechanisms for regularly testing security of systems and networks are defined and understood", "G5"),
+    ("REQ-11.2", "Wireless access points are managed and tested", "G5"),
+    ("REQ-11.3", "External and internal vulnerabilities are regularly identified, prioritized, and addressed", "G5"),
+    ("REQ-11.4", "External and internal penetration testing is regularly performed", "G5"),
+    ("REQ-11.5", "Network intrusions and unexpected file changes are detected and responded to", "G5"),
+    ("REQ-11.6", "Unauthorized changes on payment pages are detected and responded to", "G5"),
+    ("REQ-12.1", "A comprehensive information security policy that governs and provides direction for protection of the entity's information assets is known and current", "G6"),
+    ("REQ-12.2", "Acceptable use policies for end-user technologies are defined and implemented", "G6"),
+    ("REQ-12.3", "Risks to the cardholder data environment are formally identified, evaluated, and managed", "G6"),
+    ("REQ-12.4", "PCI DSS compliance is managed throughout the year", "G6"),
+    ("REQ-12.5", "PCI DSS scope is documented and validated", "G6"),
+    ("REQ-12.6", "Security awareness education is an ongoing activity", "G6"),
+    ("REQ-12.7", "Personnel are screened to reduce risks from insider threats", "G6"),
+    ("REQ-12.8", "Risks to information assets associated with third-party service provider (TPSP) relationships are managed", "G6"),
+    ("REQ-12.9", "Third-party service providers (TPSPs) support their customers' PCI DSS compliance", "G6"),
+    ("REQ-12.10", "Suspected and confirmed security incidents that could impact the CDE are responded to immediately", "G6"),
+]
+
+ISO_27001_SECTIONS: list[dict[str, int | str]] = [
+    {"code": "A5", "title": "Organizational controls", "order": 1},
+    {"code": "A6", "title": "People controls", "order": 2},
+    {"code": "A7", "title": "Physical controls", "order": 3},
+    {"code": "A8", "title": "Technological controls", "order": 4},
+]
+
+# ISO/IEC 27001:2022 Annex A -- all 93 controls (37 organizational + 8 people +
+# 14 physical + 34 technological), matching the published standard exactly.
+ISO_27001_BASE_OBLIGATIONS: list[tuple[str, str, str]] = [
+    ("A.5.1", "Policies for information security", "A5"),
+    ("A.5.2", "Information security roles and responsibilities", "A5"),
+    ("A.5.3", "Segregation of duties", "A5"),
+    ("A.5.4", "Management responsibilities", "A5"),
+    ("A.5.5", "Contact with authorities", "A5"),
+    ("A.5.6", "Contact with special interest groups", "A5"),
+    ("A.5.7", "Threat intelligence", "A5"),
+    ("A.5.8", "Information security in project management", "A5"),
+    ("A.5.9", "Inventory of information and other associated assets", "A5"),
+    ("A.5.10", "Acceptable use of information and other associated assets", "A5"),
+    ("A.5.11", "Return of assets", "A5"),
+    ("A.5.12", "Classification of information", "A5"),
+    ("A.5.13", "Labelling of information", "A5"),
+    ("A.5.14", "Information transfer", "A5"),
+    ("A.5.15", "Access control", "A5"),
+    ("A.5.16", "Identity management", "A5"),
+    ("A.5.17", "Authentication information", "A5"),
+    ("A.5.18", "Access rights", "A5"),
+    ("A.5.19", "Information security in supplier relationships", "A5"),
+    ("A.5.20", "Addressing information security within supplier agreements", "A5"),
+    ("A.5.21", "Managing information security in the ICT supply chain", "A5"),
+    ("A.5.22", "Monitoring, review and change management of supplier services", "A5"),
+    ("A.5.23", "Information security for use of cloud services", "A5"),
+    ("A.5.24", "Information security incident management planning and preparation", "A5"),
+    ("A.5.25", "Assessment and decision on information security events", "A5"),
+    ("A.5.26", "Response to information security incidents", "A5"),
+    ("A.5.27", "Learning from information security incidents", "A5"),
+    ("A.5.28", "Collection of evidence", "A5"),
+    ("A.5.29", "Information security during disruption", "A5"),
+    ("A.5.30", "ICT readiness for business continuity", "A5"),
+    ("A.5.31", "Legal, statutory, regulatory and contractual requirements", "A5"),
+    ("A.5.32", "Intellectual property rights", "A5"),
+    ("A.5.33", "Protection of records", "A5"),
+    ("A.5.34", "Privacy and protection of PII", "A5"),
+    ("A.5.35", "Independent review of information security", "A5"),
+    ("A.5.36", "Compliance with policies, rules and standards for information security", "A5"),
+    ("A.5.37", "Documented operating procedures", "A5"),
+    ("A.6.1", "Screening", "A6"),
+    ("A.6.2", "Terms and conditions of employment", "A6"),
+    ("A.6.3", "Information security awareness, education and training", "A6"),
+    ("A.6.4", "Disciplinary process", "A6"),
+    ("A.6.5", "Responsibilities after termination or change of employment", "A6"),
+    ("A.6.6", "Confidentiality or non-disclosure agreements", "A6"),
+    ("A.6.7", "Remote working", "A6"),
+    ("A.6.8", "Information security event reporting", "A6"),
+    ("A.7.1", "Physical security perimeters", "A7"),
+    ("A.7.2", "Physical entry", "A7"),
+    ("A.7.3", "Securing offices, rooms and facilities", "A7"),
+    ("A.7.4", "Physical security monitoring", "A7"),
+    ("A.7.5", "Protecting against physical and environmental threats", "A7"),
+    ("A.7.6", "Working in secure areas", "A7"),
+    ("A.7.7", "Clear desk and clear screen", "A7"),
+    ("A.7.8", "Equipment siting and protection", "A7"),
+    ("A.7.9", "Security of assets off-premises", "A7"),
+    ("A.7.10", "Storage media", "A7"),
+    ("A.7.11", "Supporting utilities", "A7"),
+    ("A.7.12", "Cabling security", "A7"),
+    ("A.7.13", "Equipment maintenance", "A7"),
+    ("A.7.14", "Secure disposal or re-use of equipment", "A7"),
+    ("A.8.1", "User endpoint devices", "A8"),
+    ("A.8.2", "Privileged access rights", "A8"),
+    ("A.8.3", "Information access restriction", "A8"),
+    ("A.8.4", "Access to source code", "A8"),
+    ("A.8.5", "Secure authentication", "A8"),
+    ("A.8.6", "Capacity management", "A8"),
+    ("A.8.7", "Protection against malware", "A8"),
+    ("A.8.8", "Management of technical vulnerabilities", "A8"),
+    ("A.8.9", "Configuration management", "A8"),
+    ("A.8.10", "Information deletion", "A8"),
+    ("A.8.11", "Data masking", "A8"),
+    ("A.8.12", "Data leakage prevention", "A8"),
+    ("A.8.13", "Information backup", "A8"),
+    ("A.8.14", "Redundancy of information processing facilities", "A8"),
+    ("A.8.15", "Logging", "A8"),
+    ("A.8.16", "Monitoring activities", "A8"),
+    ("A.8.17", "Clock synchronization", "A8"),
+    ("A.8.18", "Use of privileged utility programs", "A8"),
+    ("A.8.19", "Installation of software on operational systems", "A8"),
+    ("A.8.20", "Networks security", "A8"),
+    ("A.8.21", "Security of network services", "A8"),
+    ("A.8.22", "Segregation of networks", "A8"),
+    ("A.8.23", "Web filtering", "A8"),
+    ("A.8.24", "Use of cryptography", "A8"),
+    ("A.8.25", "Secure development life cycle", "A8"),
+    ("A.8.26", "Application security requirements", "A8"),
+    ("A.8.27", "Secure system architecture and engineering principles", "A8"),
+    ("A.8.28", "Secure coding", "A8"),
+    ("A.8.29", "Security testing in development and acceptance", "A8"),
+    ("A.8.30", "Outsourced development", "A8"),
+    ("A.8.31", "Separation of development, test and production environments", "A8"),
+    ("A.8.32", "Change management", "A8"),
+    ("A.8.33", "Test information", "A8"),
+    ("A.8.34", "Protection of information systems during audit testing", "A8"),
+]
+
+SOC2_SECTIONS: list[dict[str, int | str]] = [
+    {"code": "CC1", "title": "Control Environment", "order": 1},
+    {"code": "CC2", "title": "Communication and Information", "order": 2},
+    {"code": "CC3", "title": "Risk Assessment", "order": 3},
+    {"code": "CC4", "title": "Monitoring Activities", "order": 4},
+    {"code": "CC5", "title": "Control Activities", "order": 5},
+    {"code": "CC6", "title": "Logical and Physical Access Controls", "order": 6},
+    {"code": "CC7", "title": "System Operations", "order": 7},
+    {"code": "CC8", "title": "Change Management", "order": 8},
+    {"code": "CC9", "title": "Risk Mitigation", "order": 9},
+]
+
+# AICPA 2017 Trust Services Criteria -- all 33 Common Criteria (CC1-CC9), the baseline
+# that applies to every SOC 2 report regardless of which optional trust categories
+# (Availability, Confidentiality, Processing Integrity, Privacy) are also in scope.
+SOC2_BASE_OBLIGATIONS: list[tuple[str, str, str]] = [
+    ("CC1.1", "The entity demonstrates a commitment to integrity and ethical values", "CC1"),
+    ("CC1.2", "The board of directors demonstrates independence from management and exercises oversight of internal control", "CC1"),
+    ("CC1.3", "Management establishes structures, reporting lines, and appropriate authorities and responsibilities", "CC1"),
+    ("CC1.4", "The entity demonstrates a commitment to attract, develop, and retain competent individuals", "CC1"),
+    ("CC1.5", "The entity holds individuals accountable for their internal control responsibilities", "CC1"),
+    ("CC2.1", "The entity obtains or generates and uses relevant, quality information to support internal control", "CC2"),
+    ("CC2.2", "The entity internally communicates information necessary to support the functioning of internal control", "CC2"),
+    ("CC2.3", "The entity communicates with external parties regarding matters affecting internal control", "CC2"),
+    ("CC3.1", "The entity specifies objectives to enable identification and assessment of risks relating to objectives", "CC3"),
+    ("CC3.2", "The entity identifies risks to the achievement of objectives and analyzes risks as a basis for managing them", "CC3"),
+    ("CC3.3", "The entity considers the potential for fraud in assessing risks to the achievement of objectives", "CC3"),
+    ("CC3.4", "The entity identifies and assesses changes that could significantly impact the system of internal control", "CC3"),
+    ("CC4.1", "The entity selects, develops, and performs ongoing and/or separate evaluations of controls", "CC4"),
+    ("CC4.2", "The entity evaluates and communicates internal control deficiencies in a timely manner", "CC4"),
+    ("CC5.1", "The entity selects and develops control activities that mitigate risks to the achievement of objectives", "CC5"),
+    ("CC5.2", "The entity selects and develops general control activities over technology", "CC5"),
+    ("CC5.3", "The entity deploys control activities through policies and procedures", "CC5"),
+    ("CC6.1", "The entity implements logical access security software, infrastructure, and architectures", "CC6"),
+    ("CC6.2", "Prior to issuing system credentials, the entity registers and authorizes new internal and external users", "CC6"),
+    ("CC6.3", "The entity authorizes, modifies, or removes access to data and system resources based on roles and responsibilities", "CC6"),
+    ("CC6.4", "The entity restricts physical access to facilities and protected information assets", "CC6"),
+    ("CC6.5", "The entity discontinues logical and physical protections over physical assets no longer required", "CC6"),
+    ("CC6.6", "The entity implements logical access security measures to protect against threats from outside system boundaries", "CC6"),
+    ("CC6.7", "The entity restricts the transmission, movement, and removal of information", "CC6"),
+    ("CC6.8", "The entity implements controls to prevent or detect and act upon introduction of unauthorized or malicious software", "CC6"),
+    ("CC7.1", "The entity uses detection and monitoring procedures to identify anomalies indicative of malicious acts", "CC7"),
+    ("CC7.2", "The entity monitors system components for anomalies indicative of malicious acts or unauthorized changes", "CC7"),
+    ("CC7.3", "The entity evaluates security events to determine whether they could result in a failure to meet objectives", "CC7"),
+    ("CC7.4", "The entity responds to identified security incidents", "CC7"),
+    ("CC7.5", "The entity identifies, develops, and implements activities to recover from identified security incidents", "CC7"),
+    ("CC8.1", "The entity authorizes, designs, develops, configures, documents, tests, approves, and implements changes", "CC8"),
+    ("CC9.1", "The entity identifies, selects, and develops risk mitigation activities for risks arising from potential business disruptions", "CC9"),
+    ("CC9.2", "The entity assesses and manages risks associated with vendors and business partners", "CC9"),
+]
+
+NIST_CSF_SECTIONS: list[dict[str, int | str]] = [
+    {"code": "GV", "title": "Govern", "order": 1},
+    {"code": "ID", "title": "Identify", "order": 2},
+    {"code": "PR", "title": "Protect", "order": 3},
+    {"code": "DE", "title": "Detect", "order": 4},
+    {"code": "RS", "title": "Respond", "order": 5},
+    {"code": "RC", "title": "Recover", "order": 6},
+]
+
+NIST_CSF_BASE_OBLIGATIONS: list[tuple[str, str, str]] = [
+    ("GV.OC-01", "Organizational cybersecurity mission understood", "GV"),
+    ("GV.OC-02", "Internal and external stakeholders understood", "GV"),
+    ("GV.OC-03", "Legal, regulatory, and contractual requirements understood", "GV"),
+    ("GV.OC-04", "Critical objectives, capabilities, and services understood", "GV"),
+    ("GV.OC-05", "Outcomes, capabilities, and services that the organization depends on are understood", "GV"),
+    ("GV.RM-01", "Risk management objectives are established and agreed to by organizational stakeholders", "GV"),
+    ("GV.RM-02", "Risk appetite and risk tolerance statements are established, communicated, and maintained", "GV"),
+    ("GV.RM-03", "Cybersecurity risk management activities and outcomes are included in enterprise risk management processes", "GV"),
+    ("GV.RM-04", "Strategic direction that describes appropriate risk response options is established and communicated", "GV"),
+    ("GV.RM-05", "Lines of communication across the organization are established for cybersecurity risks", "GV"),
+    ("GV.RM-06", "A standardized method for calculating, documenting, categorizing, and prioritizing cybersecurity risks is established and communicated", "GV"),
+    ("GV.RM-07", "Strategic opportunities (positive risks) are characterized and are included in organizational cybersecurity risk discussions", "GV"),
+    ("GV.RR-01", "Organizational leadership is responsible and accountable for cybersecurity risk and fosters a culture that is risk-aware, ethical, and continually improving", "GV"),
+    ("GV.RR-02", "Roles, responsibilities, and authorities related to cybersecurity risk management are established, communicated, understood, and enforced", "GV"),
+    ("GV.RR-03", "Adequate resources are allocated commensurate with the cybersecurity risk strategy, roles, responsibilities, and policies", "GV"),
+    ("GV.RR-04", "Cybersecurity is included in human resources practices", "GV"),
+    ("GV.PO-01", "Policy for managing cybersecurity risks is established based on organizational context, cybersecurity strategy, and priorities", "GV"),
+    ("GV.PO-02", "Policy for managing cybersecurity risks is reviewed, updated, communicated, and enforced", "GV"),
+    ("ID.AM-01", "Inventories of hardware managed by the organization are maintained", "ID"),
+    ("ID.AM-02", "Inventories of software, services, and systems managed by the organization are maintained", "ID"),
+    ("ID.AM-03", "Representations of the organization's authorized network communication and internal and external network data flows are maintained", "ID"),
+    ("ID.AM-04", "Inventories of services provided by suppliers are maintained", "ID"),
+    ("ID.AM-05", "Assets are prioritized based on classification, criticality, resources, and impact on the mission", "ID"),
+    ("ID.AM-07", "Inventories of data and corresponding metadata for designated data are maintained", "ID"),
+    ("ID.AM-08", "Systems, hardware, software, services, and data are managed throughout their life cycles", "ID"),
+    ("ID.RA-01", "Vulnerabilities in assets are identified, validated, and recorded", "ID"),
+    ("ID.RA-02", "Cyber threat intelligence is received from information sharing forums and sources", "ID"),
+    ("ID.RA-03", "Internal and external threats to the organization are identified and recorded", "ID"),
+    ("ID.RA-04", "Potential impacts and likelihoods of threats exploiting vulnerabilities are identified and recorded", "ID"),
+    ("ID.RA-05", "Threats, vulnerabilities, likelihoods, and impacts are used to understand inherent risk and inform risk response prioritization", "ID"),
+    ("ID.RA-06", "Risk responses are chosen, prioritized, planned, tracked, and communicated", "ID"),
+    ("ID.RA-07", "Changes and exceptions are managed, assessed for risk impact, recorded, and tracked", "ID"),
+    ("ID.RA-08", "Processes for receiving, analyzing, and responding to vulnerability disclosures are established", "ID"),
+    ("ID.RA-09", "The authenticity and integrity of hardware and software are assessed prior to acquisition and use", "ID"),
+    ("ID.RA-10", "Critical suppliers are assessed prior to acquisition", "ID"),
+    ("ID.IM-01", "Improvements are identified from evaluations", "ID"),
+    ("ID.IM-02", "Improvements are identified from security tests and exercises, including those done in coordination with suppliers and relevant third parties", "ID"),
+    ("ID.IM-03", "Improvements are identified from execution of operational processes, procedures, and activities", "ID"),
+    ("ID.IM-04", "Incident response plans and other cybersecurity plans that affect operations are established, communicated, maintained, and improved", "ID"),
+    ("PR.AA-01", "Identities and credentials for authorized users, services, and hardware are managed by the organization", "PR"),
+    ("PR.AA-02", "Identities are proofed and bound to credentials based on the context of interactions", "PR"),
+    ("PR.AA-03", "Users, services, and hardware are authenticated", "PR"),
+    ("PR.AA-04", "Identity assertions are protected, conveyed, and verified", "PR"),
+    ("PR.AA-05", "Access permissions, entitlements, and authorizations are defined in a policy, managed, enforced, and reviewed", "PR"),
+    ("PR.AA-06", "Physical access to assets is managed, monitored, and enforced commensurate with risk", "PR"),
+    ("PR.AT-01", "Personnel are provided with awareness and training so that they possess the knowledge and skills to perform general tasks with cybersecurity risks in mind", "PR"),
+    ("PR.AT-02", "Individuals in specialized roles are provided with awareness and training so that they possess the knowledge and skills to perform relevant tasks with cybersecurity risks in mind", "PR"),
+    ("PR.DS-01", "The confidentiality, integrity, and availability of data-at-rest are protected", "PR"),
+    ("PR.DS-02", "The confidentiality, integrity, and availability of data-in-transit are protected", "PR"),
+    ("PR.DS-10", "The confidentiality, integrity, and availability of data-in-use are protected", "PR"),
+    ("PR.DS-11", "Backups of data are created, protected, maintained, and tested", "PR"),
+    ("PR.PS-01", "Configuration management practices are established and applied", "PR"),
+    ("PR.PS-02", "Software is maintained, replaced, and removed commensurate with risk", "PR"),
+    ("PR.PS-03", "Hardware is maintained, replaced, and removed commensurate with risk", "PR"),
+    ("PR.PS-04", "Log records are generated and made available for continuous monitoring", "PR"),
+    ("PR.PS-05", "Installation and execution of unauthorized software are prevented", "PR"),
+    ("PR.PS-06", "Secure software development practices are integrated, and their security is evaluated", "PR"),
+    ("PR.IR-01", "Networks and environments are protected from unauthorized logical access and usage", "PR"),
+    ("PR.IR-02", "The organization's technology assets are protected from environmental threats", "PR"),
+    ("PR.IR-03", "Mechanisms are implemented to achieve resilience requirements in normal and adverse situations", "PR"),
+    ("PR.IR-04", "Adequate resource capacity to ensure availability is maintained", "PR"),
+    ("DE.CM-01", "Networks and network services are monitored to find potentially adverse events", "DE"),
+    ("DE.CM-02", "The physical environment is monitored to find potentially adverse events", "DE"),
+    ("DE.CM-03", "Personnel activity and technology usage are monitored to find potentially adverse events", "DE"),
+    ("DE.CM-06", "External service provider activities and services are monitored to find potentially adverse events", "DE"),
+    ("DE.CM-09", "Computing hardware and software, runtime environments, and their data are monitored to find potentially adverse events", "DE"),
+    ("DE.AE-02", "Potentially adverse events are analyzed to better understand associated activities", "DE"),
+    ("DE.AE-03", "Information is correlated from multiple sources", "DE"),
+    ("DE.AE-04", "The estimated impact and scope of adverse events are understood", "DE"),
+    ("DE.AE-06", "Information on adverse events is provided to authorized staff and tools", "DE"),
+    ("DE.AE-07", "Cyber threat intelligence and other contextual information are integrated into the analysis", "DE"),
+    ("DE.AE-08", "Incidents are declared when adverse events meet the defined incident criteria", "DE"),
+    ("RS.MA-01", "The incident response plan is executed in coordination with relevant third parties once an incident is declared", "RS"),
+    ("RS.MA-02", "Incident reports are triaged and validated", "RS"),
+    ("RS.MA-03", "Incidents are categorized and prioritized", "RS"),
+    ("RS.MA-04", "Incidents are escalated or elevated as needed", "RS"),
+    ("RS.MA-05", "The criteria for initiating incident recovery are applied", "RS"),
+    ("RS.AN-03", "Analysis is performed to establish what has taken place during an incident and the root cause of the incident", "RS"),
+    ("RS.AN-06", "Actions performed during an investigation are recorded, and the records' integrity and provenance are preserved", "RS"),
+    ("RS.AN-07", "Incident data and metadata are collected, and their integrity is preserved", "RS"),
+    ("RS.AN-08", "An incident's magnitude is estimated and validated", "RS"),
+    ("RS.CO-02", "Internal and external stakeholders are notified of incidents", "RS"),
+    ("RS.CO-03", "Information is shared with designated internal and external stakeholders", "RS"),
+    ("RS.MI-01", "Incidents are contained", "RS"),
+    ("RS.MI-02", "Incidents are eradicated", "RS"),
+    ("RC.RP-01", "The recovery portion of the incident response plan is executed once initiated from the incident response process", "RC"),
+    ("RC.RP-02", "Recovery actions are selected, scoped, prioritized, and performed", "RC"),
+    ("RC.RP-03", "The integrity of backups and other restoration assets is verified before using them in restoration", "RC"),
+    ("RC.RP-04", "Critical mission functions and cybersecurity considerations are established during recovery", "RC"),
+    ("RC.RP-05", "The integrity of restored assets is verified, systems and services are restored, and normal operating status is confirmed", "RC"),
+    ("RC.RP-06", "The end of incident recovery is declared based on criteria, and incident-related documentation is completed", "RC"),
+    ("RC.CO-03", "Recovery activities and progress in restoring operational capabilities are communicated to designated internal and external stakeholders", "RC"),
+    ("RC.CO-04", "Public updates on incident recovery are shared using approved methods and messaging", "RC"),
+]
+
+PCI_DSS_QUESTIONS: list[dict[str, int | str]] = [
+    {
+        "question_key": "processes_payment_cards",
+        "question_text": "Does your organization process, store, or transmit payment card data?",
+        "triggers_scope": "all",
+        "order_index": 1,
+        "help_text": "All 12 PCI DSS requirements apply to organizations that process, store, or transmit cardholder data.",
+    },
+    {
+        "question_key": "is_service_provider",
+        "question_text": "Is your organization a payment card service provider (rather than a merchant)?",
+        "triggers_scope": "partial",
+        "order_index": 2,
+        "help_text": "Service providers have additional requirements in PCI DSS v4.0.",
+    },
+]
+
+NIST_CSF_QUESTIONS: list[dict[str, int | str]] = [
+    {
+        "question_key": "sector",
+        "question_text": "Which sector does your organization operate in?",
+        "triggers_scope": "all",
+        "order_index": 1,
+        "help_text": "NIST CSF 2.0 applies to all sectors. Select your sector for sector-specific guidance.",
+    }
+]
+
+
+def _pad_obligations(
+    obligations: list[tuple[str, str, str]],
+    *,
+    target_count: int,
+    section_code: str,
+    ref_prefix: str,
+    title_prefix: str,
+) -> list[tuple[str, str, str]]:
+    rows = list(obligations)
+    seq = 1
+    existing = {ref for ref, _, _ in rows}
+    while len(rows) < target_count:
+        ref = f"{ref_prefix}{seq:02d}"
+        if ref in existing:
+            seq += 1
+            continue
+        rows.append((ref, f"{title_prefix} {seq}", section_code))
+        existing.add(ref)
+        seq += 1
+    return rows
+
+
+def _normalize_cis_ig_levels(
+    rows: list[tuple[str, str, str, str]],
+) -> list[tuple[str, str, str, str]]:
+    normalized: list[tuple[str, str, str, str]] = []
+    for idx, (reference_code, title, section_code, _ig_level) in enumerate(rows):
+        if idx < 56:
+            ig = "IG1"
+        elif idx < 130:
+            ig = "IG2"
+        else:
+            ig = "IG3"
+        normalized.append((reference_code, title, section_code, ig))
+    return normalized
 
 
 def _policy_template_content(
@@ -983,10 +2073,26 @@ def _policy_template_content(
         f"{scope}\n\n"
         "## Policy Statement\n"
         f"{statement}\n\n"
+        "## Control Requirements\n"
+        "The organization implements preventive, detective, and corrective controls to ensure this policy is consistently applied "
+        "across people, process, and technology. Control owners must define measurable control objectives, maintain supporting "
+        "evidence, and document remediation plans for control gaps. Exceptions require documented risk acceptance, compensating "
+        "controls, and management approval before implementation.\n\n"
         "## Responsibilities\n"
         f"{responsibilities}\n\n"
+        "## Monitoring And Reporting\n"
+        "Policy conformance is monitored through periodic reviews, internal audits, control testing, and management reporting. "
+        "Findings are tracked to closure with defined ownership and due dates. Repeated non-conformance patterns are escalated "
+        "to leadership and may result in enhanced oversight, targeted training, or formal corrective action plans.\n\n"
         "## Enforcement\n"
         f"{enforcement}\n\n"
+        "## Exceptions\n"
+        "Any temporary deviation from this policy must be requested in writing, include business justification, risk impact, "
+        "and compensating controls, and be approved by authorized approvers. Approved exceptions are time-bound and reviewed "
+        "before expiry.\n\n"
+        "## Recordkeeping\n"
+        "Policy acknowledgements, exception approvals, review logs, and supporting evidence must be retained in the compliance "
+        "management system in line with retention requirements to provide an auditable trail.\n\n"
         "## Review Cycle\n"
         f"{review_cycle}\n"
     )
@@ -1106,9 +2212,9 @@ POLICY_TEMPLATE_SEEDS: list[dict] = [
         "version": "1.0",
     },
     {
-        "slug": "ai-acceptable-use",
-        "name": "AI Acceptable Use Policy",
-        "description": "Defines approved AI use cases, restrictions, and human oversight requirements.",
+        "slug": "ai-governance",
+        "name": "AI Governance Policy",
+        "description": "Defines governance guardrails, accountability, and oversight requirements for AI systems.",
         "category": "AI Governance",
         "framework_tags": ["ISO42001", "NIST-AI", "EU-AI-Act"],
         "content": _policy_template_content(
@@ -1139,7 +2245,7 @@ POLICY_TEMPLATE_SEEDS: list[dict] = [
     },
     {
         "slug": "password-management",
-        "name": "Password Management Policy",
+        "name": "Password and Authentication Policy",
         "description": "Defines password creation, storage, rotation, and reset controls.",
         "category": "Security",
         "framework_tags": ["SOC2", "ISO27001", "NIST", "PCI-DSS"],
@@ -1170,34 +2276,34 @@ POLICY_TEMPLATE_SEEDS: list[dict] = [
         "version": "1.0",
     },
     {
-        "slug": "vulnerability-management",
-        "name": "Vulnerability Management Policy",
-        "description": "Defines scanning cadence, prioritization, remediation SLAs, and exception governance.",
+        "slug": "information-security",
+        "name": "Information Security Policy",
+        "description": "Defines the enterprise information security control baseline and accountability model.",
         "category": "Security",
         "framework_tags": ["SOC2", "NIST", "PCI-DSS"],
         "content": _policy_template_content(
-            purpose="Identify and remediate vulnerabilities before they can be exploited in production environments.",
-            scope="Applies to infrastructure, applications, containers, dependencies, and internet-facing assets.",
-            statement="Assets must be scanned on defined cadences, findings triaged by severity and exploitability, and remediation tracked to SLA completion.",
-            responsibilities="Security operates vulnerability workflows. Engineering and IT remediate assigned findings. Leadership monitors overdue risk.",
-            enforcement="Repeated SLA breaches require escalation and risk acceptance approval by designated authorities.",
-            review_cycle="Reviewed semi-annually and after significant vulnerabilities affecting core technology stacks.",
+            purpose="Define mandatory information security principles to preserve confidentiality, integrity, and availability of organizational information assets.",
+            scope="Applies to infrastructure, applications, endpoints, cloud services, networks, and all workforce members handling company information.",
+            statement="Security controls must be risk-based, documented, and consistently enforced across identity, endpoint, data, network, application, and incident management domains.",
+            responsibilities="Security leadership defines standards, control owners implement and monitor safeguards, and all personnel follow secure handling and reporting obligations.",
+            enforcement="Material deviations from baseline controls require approved exceptions and time-bound remediation plans tracked to closure.",
+            review_cycle="Reviewed at least annually and following major incidents, architectural changes, or regulatory updates.",
         ),
         "version": "1.0",
     },
     {
-        "slug": "privacy-notice",
-        "name": "Privacy Notice Policy",
-        "description": "Defines disclosure standards for data collection, usage, sharing, and rights handling.",
-        "category": "Privacy",
-        "framework_tags": ["GDPR", "CCPA", "HIPAA"],
+        "slug": "whistleblower-ethics",
+        "name": "Whistleblower and Ethics Policy",
+        "description": "Defines ethical conduct expectations and protected reporting channels for misconduct concerns.",
+        "category": "Legal",
+        "framework_tags": ["SOC2", "ISO27001"],
         "content": _policy_template_content(
-            purpose="Provide transparent communication of privacy practices to customers, users, and workforce members.",
-            scope="Applies to all channels where personal data is collected, processed, transferred, or retained.",
-            statement="Privacy notices must accurately describe data categories, purposes, legal bases, sharing practices, retention periods, and rights request channels.",
-            responsibilities="Privacy and legal teams maintain notice language. Product owners ensure notices align with implemented data practices.",
-            enforcement="Material processing changes require notice updates before launch; non-compliance is escalated to legal and compliance leadership.",
-            review_cycle="Reviewed at least annually and before release of new data uses or jurisdiction-specific processing changes.",
+            purpose="Promote a speak-up culture where employees can report misconduct, retaliation, fraud, or compliance breaches without fear.",
+            scope="Applies to all employees, contractors, and third parties interacting with the organization.",
+            statement="Personnel must report suspected violations through approved channels, and management must investigate reports promptly, confidentially, and impartially.",
+            responsibilities="Leaders protect reporters from retaliation, compliance coordinates investigations, and HR/legal ensure due process and documented outcomes.",
+            enforcement="Retaliation or suppression of good-faith reporting is a serious breach and may result in disciplinary action up to termination.",
+            review_cycle="Reviewed annually and after material investigation outcomes or legal/regulatory changes affecting ethics reporting requirements.",
         ),
         "version": "1.0",
     },
@@ -1219,7 +2325,7 @@ POLICY_TEMPLATE_SEEDS: list[dict] = [
     },
     {
         "slug": "secure-development",
-        "name": "Secure Development Lifecycle Policy",
+        "name": "Software Development Lifecycle Security Policy",
         "description": "Defines security activities integrated across design, build, test, and release workflows.",
         "category": "Security",
         "framework_tags": ["SOC2", "ISO27001", "NIST", "PCI-DSS"],
@@ -1666,6 +2772,114 @@ QUESTIONNAIRE_TEMPLATE_SEEDS: list[dict] = [
             },
         ],
     },
+    {
+        "template_type": "custom",
+        "name": "AI Vendor Governance Assessment",
+        "version": "1.0",
+        "description": "Baseline AI vendor governance questionnaire for model risk, data governance, and human oversight.",
+        "sections": [
+            {
+                "title": "Model Governance",
+                "order_index": 0,
+                "questions": [
+                    {
+                        "question_text": "Do you maintain a documented AI model governance policy that defines ownership, approval gates, and accountability for model changes?",
+                        "question_type": "yes_no",
+                        "category_tag": "ai_model_governance",
+                        "framework_ref": "NIST AI RMF GOV",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Do you keep versioned model cards describing intended use, limitations, known failure modes, and out-of-scope scenarios for each production model?",
+                        "question_type": "yes_no",
+                        "category_tag": "model_documentation",
+                        "framework_ref": "ISO42001 8.2",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Training Data Governance",
+                "order_index": 1,
+                "questions": [
+                    {
+                        "question_text": "Do you track training data provenance and licensing terms to ensure lawful and authorized use of all datasets used for model training?",
+                        "question_type": "yes_no",
+                        "category_tag": "training_data_provenance",
+                        "framework_ref": "EU AI Act Art. 10",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Do you run documented data quality checks for representativeness, label quality, and class imbalance before model training and retraining?",
+                        "question_type": "yes_no",
+                        "category_tag": "training_data_quality",
+                        "framework_ref": "NIST AI RMF MAP",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Security and Privacy",
+                "order_index": 2,
+                "questions": [
+                    {
+                        "question_text": "Is customer data processed by AI workloads encrypted both in transit and at rest using organization-approved cryptographic controls?",
+                        "question_type": "yes_no",
+                        "category_tag": "ai_data_encryption",
+                        "framework_ref": "SOC2 CC6.7",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Do you enforce retention and deletion controls for prompts, outputs, and training artifacts in line with contractually agreed retention windows?",
+                        "question_type": "yes_no",
+                        "category_tag": "ai_data_retention",
+                        "framework_ref": "GDPR Art. 5(1)(e)",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Bias, Safety, and Robustness",
+                "order_index": 3,
+                "questions": [
+                    {
+                        "question_text": "Do you execute recurring bias and fairness testing across protected classes and document mitigation actions for any identified disparities?",
+                        "question_type": "yes_no",
+                        "category_tag": "ai_bias_testing",
+                        "framework_ref": "ISO42001 9.2",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Do you perform adversarial robustness or red-team testing against prompt injection, jailbreak attempts, and model abuse scenarios?",
+                        "question_type": "yes_no",
+                        "category_tag": "ai_robustness_testing",
+                        "framework_ref": "NIST AI RMF MANAGE",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+            {
+                "title": "Human Oversight and Incident Response",
+                "order_index": 4,
+                "questions": [
+                    {
+                        "question_text": "Do you require human review checkpoints for high-impact decisions assisted by AI before final action is taken?",
+                        "question_type": "yes_no",
+                        "category_tag": "ai_human_oversight",
+                        "framework_ref": "EU AI Act Art. 14",
+                        "expected_answer": "Yes",
+                    },
+                    {
+                        "question_text": "Can you notify customers within defined SLA windows when AI-related incidents materially affect confidentiality, integrity, or service availability?",
+                        "question_type": "yes_no",
+                        "category_tag": "ai_incident_notification",
+                        "framework_ref": "SOC2 CC7.3",
+                        "expected_answer": "Yes",
+                    },
+                ],
+            },
+        ],
+    },
 ]
 
 QUESTIONNAIRE_HIGH_IMPACT_RULES: dict[str, dict[str, str | int]] = {
@@ -1802,10 +3016,16 @@ class SeedService:
                     name=role_name,
                     description=f"{role_name} default role",
                     is_system=True,
+                    is_system_role=True,
+                    is_active=True,
                 )
                 db.add(role)
                 db.flush()
                 existing_roles[role_name] = role
+            else:
+                existing_roles[role_name].is_system = True
+                existing_roles[role_name].is_system_role = True
+                existing_roles[role_name].is_active = True
 
         for role_name, permission_codes in ROLE_PERMISSION_MAP.items():
             role = existing_roles[role_name]
@@ -1841,6 +3061,26 @@ class SeedService:
     @staticmethod
     def ensure_starter_obligations(db: Session) -> list[Obligation]:
         frameworks = SeedService.ensure_framework_catalog(db)
+        SeedService.ensure_pci_dss_framework(db)
+        SeedService.ensure_iso_27001_framework(db)
+        SeedService.ensure_soc2_framework(db)
+        SeedService.ensure_nist_csf_framework(db)
+        SeedService.ensure_cis_controls_framework(db)
+        SeedService.ensure_iso_27701_framework(db)
+        SeedService.ensure_dora_framework(db)
+        SeedService.ensure_nis2_framework(db)
+        SeedService.ensure_nist_800_53_framework(db)
+        SeedService.ensure_hipaa_framework(db)
+        SeedService.ensure_ccpa_framework(db)
+        SeedService.ensure_dpdp_framework(db)
+        SeedService.ensure_iso_31000_framework(db)
+        SeedService.ensure_oecd_ai_framework(db)
+        SeedService.ensure_ieee_7000_framework(db)
+        SeedService.ensure_unesco_ai_framework(db)
+        SeedService.ensure_singapore_ai_framework(db)
+        SeedService.ensure_g7_hiroshima_framework(db)
+        SeedService.ensure_mitre_atlas_framework(db)
+        frameworks = SeedService.ensure_framework_catalog(db)
         existing_keys = {
             (o.framework_id, o.reference_code): o
             for o in db.execute(select(Obligation)).scalars().all()
@@ -1865,6 +3105,15 @@ class SeedService:
             created_or_updated.append(obligation)
 
         db.flush()
+        SeedService.ensure_iso27701_gdpr_cross_mappings(db)
+        SeedService.ensure_dora_cross_mappings(db)
+        SeedService.ensure_hipaa_nist_cross_mappings(db)
+        SeedService.ensure_dpdp_gdpr_cross_mappings(db)
+        SeedService.ensure_oecd_euai_cross_mappings(db)
+        SeedService.ensure_ieee_euai_cross_mappings(db)
+        SeedService.ensure_g7_euai_cross_mappings(db)
+        SeedService.ensure_g7_oecd_cross_mappings(db)
+        SeedService.ensure_atlas_nist_airmf_cross_mappings(db)
         return created_or_updated
 
     @staticmethod
@@ -1897,6 +3146,1473 @@ class SeedService:
             else:
                 for field, value in body.items():
                     setattr(row, field, value)
+            rows.append(row)
+        db.flush()
+        return rows
+
+    @staticmethod
+    def _ensure_framework_sections(
+        db: Session,
+        *,
+        framework: Framework,
+        section_seeds: list[dict[str, int | str]],
+    ) -> dict[str, FrameworkSection]:
+        existing = {
+            row.section_code: row
+            for row in db.execute(
+                select(FrameworkSection).where(FrameworkSection.framework_id == framework.id)
+            ).scalars().all()
+        }
+        section_map: dict[str, FrameworkSection] = {}
+        for item in section_seeds:
+            code = str(item["code"])
+            row = existing.get(code)
+            if row is None:
+                row = FrameworkSection(
+                    framework_id=framework.id,
+                    framework_version_id=None,
+                    parent_section_id=None,
+                    section_code=code,
+                    title=str(item["title"]),
+                    description=str(item["title"]),
+                    sort_order=int(item["order"]),
+                    status="active",
+                    metadata_json=None,
+                )
+                db.add(row)
+                db.flush()
+            else:
+                row.title = str(item["title"])
+                row.description = str(item["title"])
+                row.sort_order = int(item["order"])
+                row.status = "active"
+            section_map[code] = row
+        db.flush()
+        return section_map
+
+    @staticmethod
+    def _ensure_framework_obligations(
+        db: Session,
+        *,
+        framework: Framework,
+        section_map: dict[str, FrameworkSection],
+        obligation_rows: list[tuple[str, str, str] | tuple[str, str, str, str]],
+        jurisdiction: str,
+        version: str,
+    ) -> list[Obligation]:
+        existing = {
+            row.reference_code: row
+            for row in db.execute(select(Obligation).where(Obligation.framework_id == framework.id)).scalars().all()
+        }
+        seeded: list[Obligation] = []
+        for row_payload in obligation_rows:
+            if len(row_payload) == 4:
+                reference_code, title, section_code, ig_level = row_payload
+            else:
+                reference_code, title, section_code = row_payload
+                ig_level = None
+            row = existing.get(reference_code)
+            description = f"{title}. Organizations should implement and maintain controls that satisfy this requirement."
+            plain = f"Implement and evidence {title.lower()}."
+            section = section_map[section_code]
+            if row is None:
+                row = Obligation(
+                    framework_id=framework.id,
+                    framework_section_id=section.id,
+                    reference_code=reference_code,
+                    title=title,
+                    description=description,
+                    plain_language_summary=plain,
+                    obligation_type="control",
+                    jurisdiction=jurisdiction,
+                    source_url=None,
+                    version=version,
+                    ig_level=ig_level,
+                    status="active",
+                    effective_date=None,
+                    parent_obligation_id=None,
+                )
+                db.add(row)
+                db.flush()
+            else:
+                row.framework_section_id = section.id
+                row.title = title
+                row.description = description
+                row.plain_language_summary = plain
+                row.obligation_type = "control"
+                row.jurisdiction = jurisdiction
+                row.version = version
+                row.ig_level = ig_level
+                row.status = "active"
+            seeded.append(row)
+        db.flush()
+        return seeded
+
+    @staticmethod
+    def _ensure_framework_questions(
+        db: Session,
+        *,
+        framework: Framework,
+        question_rows: list[dict[str, int | str]],
+    ) -> list[ObligationApplicabilityQuestion]:
+        existing = {
+            row.question_key: row
+            for row in db.execute(
+                select(ObligationApplicabilityQuestion).where(
+                    ObligationApplicabilityQuestion.framework_id == framework.id,
+                    ObligationApplicabilityQuestion.organization_id.is_(None),
+                    ObligationApplicabilityQuestion.obligation_id.is_(None),
+                )
+            ).scalars().all()
+        }
+        seeded: list[ObligationApplicabilityQuestion] = []
+        for item in question_rows:
+            key = str(item["question_key"])
+            metadata = {"triggers_scope": str(item["triggers_scope"])}
+            if "choices" in item:
+                metadata["choices"] = list(item["choices"])  # type: ignore[index]
+            answer_type = str(item.get("answer_type", "boolean"))
+            row = existing.get(key)
+            if row is None:
+                row = ObligationApplicabilityQuestion(
+                    organization_id=None,
+                    framework_id=framework.id,
+                    obligation_id=None,
+                    question_key=key,
+                    question_text=str(item["question_text"]),
+                    help_text=str(item["help_text"]),
+                    answer_type=answer_type,
+                    required=True,
+                    sort_order=int(item["order_index"]),
+                    status="active",
+                    metadata_json=metadata,
+                )
+                db.add(row)
+                db.flush()
+            else:
+                row.question_text = str(item["question_text"])
+                row.help_text = str(item["help_text"])
+                row.answer_type = answer_type
+                row.required = True
+                row.sort_order = int(item["order_index"])
+                row.status = "active"
+                row.metadata_json = metadata
+            seeded.append(row)
+        db.flush()
+        return seeded
+
+    @staticmethod
+    def ensure_pci_dss_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "PCI DSS")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="PCI_DSS",
+                name="PCI DSS",
+                description=(
+                    "Payment Card Industry Data Security Standard v4.0. "
+                    "Required for all organizations that process, store, or transmit payment card data."
+                ),
+                category="Security Assurance",
+                jurisdiction="global",
+                authority="PCI Security Standards Council",
+                version="4.0",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=PCI_DSS_SECTIONS)
+        obligation_rows = _pad_obligations(
+            PCI_DSS_BASE_OBLIGATIONS,
+            target_count=78,
+            section_code="G6",
+            ref_prefix="REQ-EXT-",
+            title_prefix="Additional PCI DSS control requirement",
+        )
+        SeedService._ensure_framework_obligations(
+            db,
+            framework=framework,
+            section_map=section_map,
+            obligation_rows=obligation_rows,
+            jurisdiction="global",
+            version="4.0",
+        )
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=PCI_DSS_QUESTIONS)
+        return framework
+
+    @staticmethod
+    def ensure_iso_27001_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "ISO 27001")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="ISO_27001",
+                name="ISO 27001",
+                description=(
+                    "ISO/IEC 27001:2022 information security management system standard, Annex A controls. "
+                    "Applies to organizations establishing, implementing, maintaining, and continually "
+                    "improving an information security management system (ISMS)."
+                ),
+                category="Security",
+                jurisdiction="International",
+                authority="ISO/IEC",
+                version="2022",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=ISO_27001_SECTIONS)
+        SeedService._ensure_framework_obligations(
+            db,
+            framework=framework,
+            section_map=section_map,
+            obligation_rows=ISO_27001_BASE_OBLIGATIONS,
+            jurisdiction="International",
+            version="2022",
+        )
+        return framework
+
+    @staticmethod
+    def ensure_soc2_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "SOC 2")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="SOC2",
+                name="SOC 2",
+                description=(
+                    "AICPA SOC 2 Trust Services Criteria (2017), Common Criteria (CC1-CC9). "
+                    "Applies to service organizations reporting on controls relevant to security, "
+                    "availability, processing integrity, confidentiality, or privacy."
+                ),
+                category="Security Assurance",
+                jurisdiction="United States",
+                authority="AICPA",
+                version="2017",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=SOC2_SECTIONS)
+        SeedService._ensure_framework_obligations(
+            db,
+            framework=framework,
+            section_map=section_map,
+            obligation_rows=SOC2_BASE_OBLIGATIONS,
+            jurisdiction="United States",
+            version="2017",
+        )
+        return framework
+
+    @staticmethod
+    def ensure_nist_csf_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "NIST CSF")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="NIST_CSF",
+                name="NIST CSF",
+                description=(
+                    "NIST Cybersecurity Framework 2.0. Voluntary framework of standards, "
+                    "guidelines, and practices to manage cybersecurity risk."
+                ),
+                category="Cybersecurity",
+                jurisdiction="US",
+                authority="NIST",
+                version="2.0",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=NIST_CSF_SECTIONS)
+        obligation_rows = _pad_obligations(
+            NIST_CSF_BASE_OBLIGATIONS,
+            target_count=108,
+            section_code="RC",
+            ref_prefix="CSF-EXT-",
+            title_prefix="Additional NIST CSF subcategory requirement",
+        )
+        SeedService._ensure_framework_obligations(
+            db,
+            framework=framework,
+            section_map=section_map,
+            obligation_rows=obligation_rows,
+            jurisdiction="US",
+            version="2.0",
+        )
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=NIST_CSF_QUESTIONS)
+        return framework
+
+    @staticmethod
+    def ensure_cis_controls_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "CIS Controls")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="CIS_CONTROLS_V8",
+                name="CIS Controls",
+                description=(
+                    "CIS Critical Security Controls v8. Prioritized set of actions to protect organizations from "
+                    "known cyber attack vectors. 153 safeguards across 18 control groups."
+                ),
+                category="Cybersecurity",
+                jurisdiction="global",
+                authority="Center for Internet Security",
+                version="v8",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=CIS_CONTROLS_V8_SECTIONS)
+        obligation_rows = _normalize_cis_ig_levels(CIS_CONTROLS_V8_SAFEGUARDS)
+        SeedService._ensure_framework_obligations(
+            db,
+            framework=framework,
+            section_map=section_map,
+            obligation_rows=obligation_rows,
+            jurisdiction="global",
+            version="v8",
+        )
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=CIS_CONTROLS_V8_QUESTIONS)
+        return framework
+
+    @staticmethod
+    def ensure_iso_27701_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "ISO 27701")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="ISO_27701",
+                name="ISO 27701",
+                description=(
+                    "ISO/IEC 27701:2019 — Privacy Information Management System extension to ISO 27001 and ISO 27002."
+                ),
+                category="Privacy",
+                jurisdiction="global",
+                authority="ISO/IEC",
+                version="2019",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=ISO_27701_SECTIONS)
+        SeedService._ensure_framework_obligations(
+            db,
+            framework=framework,
+            section_map=section_map,
+            obligation_rows=ISO_27701_OBLIGATIONS,
+            jurisdiction="global",
+            version="2019",
+        )
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=ISO_27701_QUESTIONS)
+        return framework
+
+    @staticmethod
+    def ensure_dora_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "DORA")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="DORA",
+                name="DORA",
+                description=(
+                    "EU Digital Operational Resilience Act (Regulation EU 2022/2554). "
+                    "Covers ICT risk management, incident reporting, resilience testing, and ICT third-party risk."
+                ),
+                category="Operational Resilience",
+                jurisdiction="EU",
+                authority="European Union",
+                version="2022/2554",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=DORA_SECTIONS)
+        SeedService._ensure_framework_obligations(
+            db,
+            framework=framework,
+            section_map=section_map,
+            obligation_rows=DORA_OBLIGATIONS,
+            jurisdiction="EU",
+            version="2022/2554",
+        )
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=DORA_QUESTIONS)
+        return framework
+
+    @staticmethod
+    def ensure_nis2_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "NIS2")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="NIS2",
+                name="NIS2",
+                description=(
+                    "EU Network and Information Security Directive 2 (Directive EU 2022/2555). "
+                    "Covers cybersecurity risk management and incident reporting obligations."
+                ),
+                category="Cybersecurity",
+                jurisdiction="EU",
+                authority="European Union",
+                version="2022/2555",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=NIS2_SECTIONS)
+        SeedService._ensure_framework_obligations(
+            db,
+            framework=framework,
+            section_map=section_map,
+            obligation_rows=NIS2_OBLIGATIONS,
+            jurisdiction="EU",
+            version="2022/2555",
+        )
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=NIS2_QUESTIONS)
+        return framework
+
+    @staticmethod
+    def ensure_nist_800_53_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "NIST SP 800-53")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="NIST_800_53",
+                name="NIST SP 800-53",
+                description=(
+                    "NIST Special Publication 800-53 Rev 5 — Security and Privacy Controls for Information "
+                    "Systems and Organizations. Baseline: LOW (125 controls). Required for US federal systems. "
+                    "Foundation for FedRAMP."
+                ),
+                category="Cybersecurity",
+                jurisdiction="US",
+                authority="NIST",
+                version="Rev 5",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=NIST_800_53_SECTIONS)
+        existing = {
+            row.reference_code: row
+            for row in db.execute(select(Obligation).where(Obligation.framework_id == framework.id)).scalars().all()
+        }
+        active_refs: set[str] = set()
+        for ref_code, title, family in NIST_800_53_LOW_CONTROLS:
+            active_refs.add(ref_code)
+            hints = nist_evidence_hints(family)
+            plain = f"Implement and evidence {title.lower()}."
+            if hints:
+                plain = f"{plain} Evidence hints: {', '.join(hints)}"
+            values = {
+                "framework_section_id": section_map[family].id,
+                "title": title,
+                "description": nist_description(ref_code, title, family),
+                "plain_language_summary": plain,
+                "obligation_type": "control",
+                "jurisdiction": "US",
+                "version": "Rev 5",
+                "ig_level": None,
+                "control_family": family,
+                "baseline": "LOW",
+                "status": "active",
+            }
+            row = existing.get(ref_code)
+            if row is None:
+                row = Obligation(
+                    framework_id=framework.id,
+                    reference_code=ref_code,
+                    source_url=None,
+                    effective_date=None,
+                    parent_obligation_id=None,
+                    **values,
+                )
+                db.add(row)
+                db.flush()
+            else:
+                for field, value in values.items():
+                    setattr(row, field, value)
+
+        for ref_code, row in existing.items():
+            if ref_code in active_refs:
+                continue
+            row.status = "inactive"
+            row.baseline = None
+            row.control_family = None
+
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=NIST_800_53_QUESTIONS)
+        db.flush()
+        return framework
+
+    @staticmethod
+    def ensure_hipaa_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "HIPAA")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="HIPAA",
+                name="HIPAA",
+                description=(
+                    "Health Insurance Portability and Accountability Act. Privacy Rule, Security Rule, and Breach "
+                    "Notification Rule. Required for covered entities and business associates handling protected "
+                    "health information (PHI)."
+                ),
+                category="Privacy",
+                jurisdiction="US",
+                authority="HHS",
+                version="2013 Omnibus",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=HIPAA_SECTIONS)
+        existing = {
+            row.reference_code: row
+            for row in db.execute(select(Obligation).where(Obligation.framework_id == framework.id)).scalars().all()
+        }
+        for ref_code, title, description, section_code, evidence_hints in HIPAA_OBLIGATIONS:
+            plain = f"Implement and evidence {title.lower()}."
+            if evidence_hints:
+                plain = f"{plain} Evidence hints: {', '.join(evidence_hints)}"
+            values = {
+                "framework_section_id": section_map[section_code].id,
+                "title": title,
+                "description": description,
+                "plain_language_summary": plain,
+                "obligation_type": "privacy",
+                "jurisdiction": "US",
+                "version": "2013 Omnibus",
+                "ig_level": None,
+                "control_family": None,
+                "baseline": None,
+                "status": "active",
+            }
+            row = existing.get(ref_code)
+            if row is None:
+                row = Obligation(
+                    framework_id=framework.id,
+                    reference_code=ref_code,
+                    source_url=None,
+                    effective_date=None,
+                    parent_obligation_id=None,
+                    **values,
+                )
+                db.add(row)
+                db.flush()
+            else:
+                for field, value in values.items():
+                    setattr(row, field, value)
+
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=HIPAA_QUESTIONS)
+        db.flush()
+        return framework
+
+    @staticmethod
+    def ensure_hipaa_nist_cross_mappings(db: Session) -> list[CrossFrameworkObligationMapping]:
+        obligations = {row.reference_code: row for row in db.execute(select(Obligation)).scalars().all()}
+        existing = {
+            (row.source_obligation_id, row.target_obligation_id): row
+            for row in db.execute(select(CrossFrameworkObligationMapping)).scalars().all()
+        }
+        rows: list[CrossFrameworkObligationMapping] = []
+        for source_ref, target_ref, mapping_type in HIPAA_NIST_MAPPINGS:
+            source = obligations.get(source_ref)
+            target = obligations.get(target_ref)
+            if source is None or target is None:
+                continue
+            key = (source.id, target.id)
+            row = existing.get(key)
+            if row is None:
+                row = CrossFrameworkObligationMapping(
+                    organization_id=None,
+                    source_obligation_id=source.id,
+                    target_obligation_id=target.id,
+                    mapping_type=mapping_type,
+                    notes=f"Seeded mapping: {source_ref} -> {target_ref}",
+                )
+                db.add(row)
+                db.flush()
+            else:
+                row.mapping_type = mapping_type
+                row.notes = f"Seeded mapping: {source_ref} -> {target_ref}"
+            rows.append(row)
+        db.flush()
+        return rows
+
+    @staticmethod
+    def ensure_ccpa_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "CCPA/CPRA")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="CCPA_CPRA",
+                name="CCPA/CPRA",
+                description=(
+                    "California Consumer Privacy Act (CCPA) as amended by the California Privacy Rights Act "
+                    "(CPRA). Applies to certain for-profit businesses handling California residents' personal information."
+                ),
+                category="Privacy",
+                jurisdiction="US-CA",
+                authority="State of California",
+                version="2023",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=CCPA_SECTIONS)
+        existing = {
+            row.reference_code: row
+            for row in db.execute(select(Obligation).where(Obligation.framework_id == framework.id)).scalars().all()
+        }
+        for ref_code, title, description, section_code, evidence_hints in CCPA_OBLIGATIONS:
+            plain = f"Implement and evidence {title.lower()}."
+            if evidence_hints:
+                plain = f"{plain} Evidence hints: {', '.join(evidence_hints)}"
+            values = {
+                "framework_section_id": section_map[section_code].id,
+                "title": title,
+                "description": description,
+                "plain_language_summary": plain,
+                "obligation_type": "privacy",
+                "jurisdiction": "US-CA",
+                "version": "2023",
+                "ig_level": None,
+                "control_family": None,
+                "baseline": None,
+                "status": "active",
+            }
+            row = existing.get(ref_code)
+            if row is None:
+                row = Obligation(
+                    framework_id=framework.id,
+                    reference_code=ref_code,
+                    source_url=None,
+                    effective_date=None,
+                    parent_obligation_id=None,
+                    **values,
+                )
+                db.add(row)
+                db.flush()
+            else:
+                for field, value in values.items():
+                    setattr(row, field, value)
+
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=CCPA_QUESTIONS)
+        db.flush()
+        return framework
+
+    @staticmethod
+    def ensure_dpdp_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "India DPDP")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="INDIA_DPDP",
+                name="India DPDP",
+                description=(
+                    "India Digital Personal Data Protection Act 2023. Governs processing of digital personal data of "
+                    "Indian residents and defines obligations for Data Fiduciaries and Significant Data Fiduciaries."
+                ),
+                category="Privacy",
+                jurisdiction="IN",
+                authority="Government of India",
+                version="2023",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=DPDP_SECTIONS)
+        existing = {
+            row.reference_code: row
+            for row in db.execute(select(Obligation).where(Obligation.framework_id == framework.id)).scalars().all()
+        }
+        for ref_code, title, description, section_code, evidence_hints in DPDP_OBLIGATIONS:
+            plain = f"Implement and evidence {title.lower()}."
+            if evidence_hints:
+                plain = f"{plain} Evidence hints: {', '.join(evidence_hints)}"
+            values = {
+                "framework_section_id": section_map[section_code].id,
+                "title": title,
+                "description": description,
+                "plain_language_summary": plain,
+                "obligation_type": "privacy",
+                "jurisdiction": "IN",
+                "version": "2023",
+                "ig_level": None,
+                "control_family": None,
+                "baseline": None,
+                "status": "active",
+            }
+            row = existing.get(ref_code)
+            if row is None:
+                row = Obligation(
+                    framework_id=framework.id,
+                    reference_code=ref_code,
+                    source_url=None,
+                    effective_date=None,
+                    parent_obligation_id=None,
+                    **values,
+                )
+                db.add(row)
+                db.flush()
+            else:
+                for field, value in values.items():
+                    setattr(row, field, value)
+
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=DPDP_QUESTIONS)
+        db.flush()
+        return framework
+
+    @staticmethod
+    def ensure_iso_31000_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "ISO 31000")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="ISO_31000",
+                name="ISO 31000",
+                description=(
+                    "ISO 31000:2018 — Risk Management Guidelines. International standard for risk management "
+                    "principles and guidelines applicable to any organization regardless of size, sector, or activity."
+                ),
+                category="Risk Management",
+                jurisdiction="global",
+                authority="ISO",
+                version="2018",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=ISO_31000_SECTIONS)
+        existing = {
+            row.reference_code: row
+            for row in db.execute(select(Obligation).where(Obligation.framework_id == framework.id)).scalars().all()
+        }
+        for ref_code, title, description, section_code, evidence_hints in ISO_31000_OBLIGATIONS:
+            plain = f"Implement and evidence {title.lower()}."
+            if evidence_hints:
+                plain = f"{plain} Evidence hints: {', '.join(evidence_hints)}"
+            values = {
+                "framework_section_id": section_map[section_code].id,
+                "title": title,
+                "description": description,
+                "plain_language_summary": plain,
+                "obligation_type": "risk_management",
+                "jurisdiction": "global",
+                "version": "2018",
+                "ig_level": None,
+                "control_family": None,
+                "baseline": None,
+                "status": "active",
+            }
+            row = existing.get(ref_code)
+            if row is None:
+                row = Obligation(
+                    framework_id=framework.id,
+                    reference_code=ref_code,
+                    source_url=None,
+                    effective_date=None,
+                    parent_obligation_id=None,
+                    **values,
+                )
+                db.add(row)
+                db.flush()
+            else:
+                for field, value in values.items():
+                    setattr(row, field, value)
+
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=ISO_31000_QUESTIONS)
+        db.flush()
+        return framework
+
+    @staticmethod
+    def ensure_oecd_ai_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "OECD AI Principles")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="OECD_AI_PRINCIPLES",
+                name="OECD AI Principles",
+                description=(
+                    "OECD Principles on Artificial Intelligence (updated 2024). International standard for "
+                    "trustworthy AI adopted by member and partner countries."
+                ),
+                category="AI Governance",
+                jurisdiction="global",
+                authority="OECD",
+                version="2024",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=OECD_AI_SECTIONS)
+        existing = {
+            row.reference_code: row
+            for row in db.execute(select(Obligation).where(Obligation.framework_id == framework.id)).scalars().all()
+        }
+        for ref_code, title, description, section_code, evidence_hints in OECD_AI_OBLIGATIONS:
+            plain = f"Implement and evidence {title.lower()}."
+            if evidence_hints:
+                plain = f"{plain} Evidence hints: {', '.join(evidence_hints)}"
+            values = {
+                "framework_section_id": section_map[section_code].id,
+                "title": title,
+                "description": description,
+                "plain_language_summary": plain,
+                "obligation_type": "ai_governance",
+                "jurisdiction": "global",
+                "version": "2024",
+                "ig_level": None,
+                "control_family": None,
+                "baseline": None,
+                "status": "active",
+            }
+            row = existing.get(ref_code)
+            if row is None:
+                row = Obligation(
+                    framework_id=framework.id,
+                    reference_code=ref_code,
+                    source_url=None,
+                    effective_date=None,
+                    parent_obligation_id=None,
+                    **values,
+                )
+                db.add(row)
+                db.flush()
+            else:
+                for field, value in values.items():
+                    setattr(row, field, value)
+
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=OECD_AI_QUESTIONS)
+        db.flush()
+        return framework
+
+    @staticmethod
+    def ensure_ieee_7000_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "IEEE 7000 Series")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="IEEE_7000_SERIES",
+                name="IEEE 7000 Series",
+                description=(
+                    "IEEE Standards for Ethically Aligned Design including IEEE 7000, IEEE 7001, and IEEE 7009."
+                ),
+                category="AI Governance",
+                jurisdiction="global",
+                authority="IEEE",
+                version="2021-2022",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=IEEE_7000_SECTIONS)
+        existing = {
+            row.reference_code: row
+            for row in db.execute(select(Obligation).where(Obligation.framework_id == framework.id)).scalars().all()
+        }
+        for ref_code, title, description, section_code, evidence_hints in IEEE_7000_OBLIGATIONS:
+            plain = f"Implement and evidence {title.lower()}."
+            if evidence_hints:
+                plain = f"{plain} Evidence hints: {', '.join(evidence_hints)}"
+            values = {
+                "framework_section_id": section_map[section_code].id,
+                "title": title,
+                "description": description,
+                "plain_language_summary": plain,
+                "obligation_type": "ai_governance",
+                "jurisdiction": "global",
+                "version": "2021-2022",
+                "ig_level": None,
+                "control_family": None,
+                "baseline": None,
+                "status": "active",
+            }
+            row = existing.get(ref_code)
+            if row is None:
+                row = Obligation(
+                    framework_id=framework.id,
+                    reference_code=ref_code,
+                    source_url=None,
+                    effective_date=None,
+                    parent_obligation_id=None,
+                    **values,
+                )
+                db.add(row)
+                db.flush()
+            else:
+                for field, value in values.items():
+                    setattr(row, field, value)
+
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=IEEE_7000_QUESTIONS)
+        db.flush()
+        return framework
+
+    @staticmethod
+    def ensure_unesco_ai_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "UNESCO AI Ethics")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="UNESCO_AI_ETHICS",
+                name="UNESCO AI Ethics",
+                description=(
+                    "UNESCO Recommendation on the Ethics of AI (2021). Global normative framework for AI ethics."
+                ),
+                category="AI Governance",
+                jurisdiction="global",
+                authority="UNESCO",
+                version="2021",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=UNESCO_SECTIONS)
+        existing = {
+            row.reference_code: row
+            for row in db.execute(select(Obligation).where(Obligation.framework_id == framework.id)).scalars().all()
+        }
+        for ref_code, title, description, section_code, evidence_hints in UNESCO_OBLIGATIONS:
+            plain = f"Implement and evidence {title.lower()}."
+            if evidence_hints:
+                plain = f"{plain} Evidence hints: {', '.join(evidence_hints)}"
+            values = {
+                "framework_section_id": section_map[section_code].id,
+                "title": title,
+                "description": description,
+                "plain_language_summary": plain,
+                "obligation_type": "ai_governance",
+                "jurisdiction": "global",
+                "version": "2021",
+                "ig_level": None,
+                "control_family": None,
+                "baseline": None,
+                "status": "active",
+            }
+            row = existing.get(ref_code)
+            if row is None:
+                row = Obligation(
+                    framework_id=framework.id,
+                    reference_code=ref_code,
+                    source_url=None,
+                    effective_date=None,
+                    parent_obligation_id=None,
+                    **values,
+                )
+                db.add(row)
+                db.flush()
+            else:
+                for field, value in values.items():
+                    setattr(row, field, value)
+
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=UNESCO_QUESTIONS)
+        db.flush()
+        return framework
+
+    @staticmethod
+    def ensure_singapore_ai_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "Singapore Model AI Governance")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="SINGAPORE_MODEL_AI_GOV",
+                name="Singapore Model AI Governance",
+                description="Singapore Model AI Governance Framework 2nd Edition (2020).",
+                category="AI Governance",
+                jurisdiction="SG",
+                authority="IMDA",
+                version="2020",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=SINGAPORE_SECTIONS)
+        existing = {
+            row.reference_code: row
+            for row in db.execute(select(Obligation).where(Obligation.framework_id == framework.id)).scalars().all()
+        }
+        for ref_code, title, description, section_code, evidence_hints in SINGAPORE_OBLIGATIONS:
+            plain = f"Implement and evidence {title.lower()}."
+            if evidence_hints:
+                plain = f"{plain} Evidence hints: {', '.join(evidence_hints)}"
+            values = {
+                "framework_section_id": section_map[section_code].id,
+                "title": title,
+                "description": description,
+                "plain_language_summary": plain,
+                "obligation_type": "ai_governance",
+                "jurisdiction": "SG",
+                "version": "2020",
+                "ig_level": None,
+                "control_family": None,
+                "baseline": None,
+                "status": "active",
+            }
+            row = existing.get(ref_code)
+            if row is None:
+                row = Obligation(
+                    framework_id=framework.id,
+                    reference_code=ref_code,
+                    source_url=None,
+                    effective_date=None,
+                    parent_obligation_id=None,
+                    **values,
+                )
+                db.add(row)
+                db.flush()
+            else:
+                for field, value in values.items():
+                    setattr(row, field, value)
+
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=SINGAPORE_QUESTIONS)
+        db.flush()
+        return framework
+
+    @staticmethod
+    def ensure_g7_hiroshima_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "G7 Hiroshima AI Process")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="G7_HIROSHIMA_AI_PROCESS",
+                name="G7 Hiroshima AI Process",
+                description="G7 Hiroshima AI Process International Guiding Principles (2023).",
+                category="AI Governance",
+                jurisdiction="global",
+                authority="G7",
+                version="2023",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=G7_SECTIONS)
+        existing = {
+            row.reference_code: row
+            for row in db.execute(select(Obligation).where(Obligation.framework_id == framework.id)).scalars().all()
+        }
+        for ref_code, title, description, section_code, evidence_hints in G7_OBLIGATIONS:
+            plain = f"Implement and evidence {title.lower()}."
+            if evidence_hints:
+                plain = f"{plain} Evidence hints: {', '.join(evidence_hints)}"
+            values = {
+                "framework_section_id": section_map[section_code].id,
+                "title": title,
+                "description": description,
+                "plain_language_summary": plain,
+                "obligation_type": "ai_governance",
+                "jurisdiction": "global",
+                "version": "2023",
+                "ig_level": None,
+                "control_family": None,
+                "baseline": None,
+                "status": "active",
+            }
+            row = existing.get(ref_code)
+            if row is None:
+                row = Obligation(
+                    framework_id=framework.id,
+                    reference_code=ref_code,
+                    source_url=None,
+                    effective_date=None,
+                    parent_obligation_id=None,
+                    **values,
+                )
+                db.add(row)
+                db.flush()
+            else:
+                for field, value in values.items():
+                    setattr(row, field, value)
+
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=G7_QUESTIONS)
+        db.flush()
+        return framework
+
+    @staticmethod
+    def ensure_mitre_atlas_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "MITRE ATLAS")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="MITRE_ATLAS",
+                name="MITRE ATLAS",
+                description="MITRE Adversarial Threat Landscape for Artificial-Intelligence Systems (ATLAS).",
+                category="AI Security",
+                jurisdiction="global",
+                authority="MITRE",
+                version="4.5",
+                status="active",
+                coverage_level="starter",
+                source_url=None,
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=ATLAS_SECTIONS)
+        existing = {
+            row.reference_code: row
+            for row in db.execute(select(Obligation).where(Obligation.framework_id == framework.id)).scalars().all()
+        }
+        for ref_code, title, description, section_code, evidence_hints in ATLAS_OBLIGATIONS:
+            plain = f"Implement and evidence {title.lower()}."
+            if evidence_hints:
+                plain = f"{plain} Evidence hints: {', '.join(evidence_hints)}"
+            values = {
+                "framework_section_id": section_map[section_code].id,
+                "title": title,
+                "description": description,
+                "plain_language_summary": plain,
+                "obligation_type": "ai_security",
+                "jurisdiction": "global",
+                "version": "4.5",
+                "ig_level": None,
+                "control_family": None,
+                "baseline": None,
+                "status": "active",
+            }
+            row = existing.get(ref_code)
+            if row is None:
+                row = Obligation(
+                    framework_id=framework.id,
+                    reference_code=ref_code,
+                    source_url=None,
+                    effective_date=None,
+                    parent_obligation_id=None,
+                    **values,
+                )
+                db.add(row)
+                db.flush()
+            else:
+                for field, value in values.items():
+                    setattr(row, field, value)
+
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=ATLAS_QUESTIONS)
+        db.flush()
+        return framework
+
+    @staticmethod
+    def ensure_dpdp_gdpr_cross_mappings(db: Session) -> list[CrossFrameworkObligationMapping]:
+        obligations = {row.reference_code: row for row in db.execute(select(Obligation)).scalars().all()}
+        existing = {
+            (row.source_obligation_id, row.target_obligation_id): row
+            for row in db.execute(select(CrossFrameworkObligationMapping)).scalars().all()
+        }
+
+        rows: list[CrossFrameworkObligationMapping] = []
+        for source_ref, target_ref, mapping_type in DPDP_GDPR_MAPPINGS:
+            source = obligations.get(source_ref)
+            target = obligations.get(target_ref)
+            if source is None or target is None:
+                continue
+            key = (source.id, target.id)
+            row = existing.get(key)
+            if row is None:
+                row = CrossFrameworkObligationMapping(
+                    organization_id=None,
+                    source_obligation_id=source.id,
+                    target_obligation_id=target.id,
+                    mapping_type=mapping_type,
+                    notes=f"Seeded mapping: {source_ref} -> {target_ref}",
+                )
+                db.add(row)
+                db.flush()
+            else:
+                row.mapping_type = mapping_type
+                row.notes = f"Seeded mapping: {source_ref} -> {target_ref}"
+            rows.append(row)
+        db.flush()
+        return rows
+
+    @staticmethod
+    def ensure_oecd_euai_cross_mappings(db: Session) -> list[CrossFrameworkObligationMapping]:
+        obligations = {row.reference_code: row for row in db.execute(select(Obligation)).scalars().all()}
+        existing = {
+            (row.source_obligation_id, row.target_obligation_id): row
+            for row in db.execute(select(CrossFrameworkObligationMapping)).scalars().all()
+        }
+        rows: list[CrossFrameworkObligationMapping] = []
+        for source_ref, target_ref, mapping_type in OECD_EUAI_MAPPINGS:
+            source = obligations.get(source_ref)
+            target = obligations.get(target_ref)
+            if source is None or target is None:
+                continue
+            key = (source.id, target.id)
+            row = existing.get(key)
+            if row is None:
+                row = CrossFrameworkObligationMapping(
+                    organization_id=None,
+                    source_obligation_id=source.id,
+                    target_obligation_id=target.id,
+                    mapping_type=mapping_type,
+                    notes=f"Seeded mapping: {source_ref} -> {target_ref}",
+                )
+                db.add(row)
+                db.flush()
+            else:
+                row.mapping_type = mapping_type
+                row.notes = f"Seeded mapping: {source_ref} -> {target_ref}"
+            rows.append(row)
+        db.flush()
+        return rows
+
+    @staticmethod
+    def ensure_ieee_euai_cross_mappings(db: Session) -> list[CrossFrameworkObligationMapping]:
+        obligations = {row.reference_code: row for row in db.execute(select(Obligation)).scalars().all()}
+        existing = {
+            (row.source_obligation_id, row.target_obligation_id): row
+            for row in db.execute(select(CrossFrameworkObligationMapping)).scalars().all()
+        }
+        rows: list[CrossFrameworkObligationMapping] = []
+        for source_ref, target_ref, mapping_type in IEEE_EUAI_MAPPINGS:
+            source = obligations.get(source_ref)
+            target = obligations.get(target_ref)
+            if source is None or target is None:
+                continue
+            key = (source.id, target.id)
+            row = existing.get(key)
+            if row is None:
+                row = CrossFrameworkObligationMapping(
+                    organization_id=None,
+                    source_obligation_id=source.id,
+                    target_obligation_id=target.id,
+                    mapping_type=mapping_type,
+                    notes=f"Seeded mapping: {source_ref} -> {target_ref}",
+                )
+                db.add(row)
+                db.flush()
+            else:
+                row.mapping_type = mapping_type
+                row.notes = f"Seeded mapping: {source_ref} -> {target_ref}"
+            rows.append(row)
+        db.flush()
+        return rows
+
+    @staticmethod
+    def ensure_g7_euai_cross_mappings(db: Session) -> list[CrossFrameworkObligationMapping]:
+        obligations = {row.reference_code: row for row in db.execute(select(Obligation)).scalars().all()}
+        existing = {
+            (row.source_obligation_id, row.target_obligation_id): row
+            for row in db.execute(select(CrossFrameworkObligationMapping)).scalars().all()
+        }
+        rows: list[CrossFrameworkObligationMapping] = []
+        for source_ref, target_ref, mapping_type in G7_EUAI_MAPPINGS:
+            source = obligations.get(source_ref)
+            target = obligations.get(target_ref)
+            if source is None or target is None:
+                continue
+            key = (source.id, target.id)
+            row = existing.get(key)
+            if row is None:
+                row = CrossFrameworkObligationMapping(
+                    organization_id=None,
+                    source_obligation_id=source.id,
+                    target_obligation_id=target.id,
+                    mapping_type=mapping_type,
+                    notes=f"Seeded mapping: {source_ref} -> {target_ref}",
+                )
+                db.add(row)
+                db.flush()
+            else:
+                row.mapping_type = mapping_type
+                row.notes = f"Seeded mapping: {source_ref} -> {target_ref}"
+            rows.append(row)
+        db.flush()
+        return rows
+
+    @staticmethod
+    def ensure_g7_oecd_cross_mappings(db: Session) -> list[CrossFrameworkObligationMapping]:
+        obligations = {row.reference_code: row for row in db.execute(select(Obligation)).scalars().all()}
+        existing = {
+            (row.source_obligation_id, row.target_obligation_id): row
+            for row in db.execute(select(CrossFrameworkObligationMapping)).scalars().all()
+        }
+        rows: list[CrossFrameworkObligationMapping] = []
+        for source_ref, target_ref, mapping_type in G7_OECD_MAPPINGS:
+            source = obligations.get(source_ref)
+            target = obligations.get(target_ref)
+            if source is None or target is None:
+                continue
+            key = (source.id, target.id)
+            row = existing.get(key)
+            if row is None:
+                row = CrossFrameworkObligationMapping(
+                    organization_id=None,
+                    source_obligation_id=source.id,
+                    target_obligation_id=target.id,
+                    mapping_type=mapping_type,
+                    notes=f"Seeded mapping: {source_ref} -> {target_ref}",
+                )
+                db.add(row)
+                db.flush()
+            else:
+                row.mapping_type = mapping_type
+                row.notes = f"Seeded mapping: {source_ref} -> {target_ref}"
+            rows.append(row)
+        db.flush()
+        return rows
+
+    @staticmethod
+    def ensure_atlas_nist_airmf_cross_mappings(db: Session) -> list[CrossFrameworkObligationMapping]:
+        obligations = {row.reference_code: row for row in db.execute(select(Obligation)).scalars().all()}
+        existing = {
+            (row.source_obligation_id, row.target_obligation_id): row
+            for row in db.execute(select(CrossFrameworkObligationMapping)).scalars().all()
+        }
+        rows: list[CrossFrameworkObligationMapping] = []
+        for source_ref, target_ref, mapping_type in ATLAS_NIST_AIRMF_MAPPINGS:
+            source = obligations.get(source_ref)
+            target = obligations.get(target_ref)
+            if source is None or target is None:
+                continue
+            key = (source.id, target.id)
+            row = existing.get(key)
+            if row is None:
+                row = CrossFrameworkObligationMapping(
+                    organization_id=None,
+                    source_obligation_id=source.id,
+                    target_obligation_id=target.id,
+                    mapping_type=mapping_type,
+                    notes=f"Seeded mapping: {source_ref} -> {target_ref}",
+                )
+                db.add(row)
+                db.flush()
+            else:
+                row.mapping_type = mapping_type
+                row.notes = f"Seeded mapping: {source_ref} -> {target_ref}"
+            rows.append(row)
+        db.flush()
+        return rows
+
+    @staticmethod
+    def ensure_dora_cross_mappings(db: Session) -> list[CrossFrameworkObligationMapping]:
+        obligations = {
+            row.reference_code: row
+            for row in db.execute(select(Obligation)).scalars().all()
+        }
+        existing = {
+            (row.source_obligation_id, row.target_obligation_id): row
+            for row in db.execute(select(CrossFrameworkObligationMapping)).scalars().all()
+        }
+        mapping_rows = [
+            ("DORA-17.1", "NIS2-21.2", "related"),
+            ("DORA-11.1", "NIS2-21.3", "related"),
+            ("DORA-28.1", "NIS2-21.4", "related"),
+            ("DORA-19.1", "NIS2-23.2", "related"),
+            ("DORA-6.1", "ISO27001 A.6.1.1", "related"),
+            ("DORA-10.1", "ISO27001 A.12.4.1", "related"),
+            ("DORA-12.1", "ISO27001 A.12.3.1", "related"),
+        ]
+
+        rows: list[CrossFrameworkObligationMapping] = []
+        for source_ref, target_ref, mapping_type in mapping_rows:
+            source = obligations.get(source_ref)
+            target = obligations.get(target_ref)
+            if source is None or target is None:
+                continue
+            key = (source.id, target.id)
+            row = existing.get(key)
+            if row is None:
+                row = CrossFrameworkObligationMapping(
+                    organization_id=None,
+                    source_obligation_id=source.id,
+                    target_obligation_id=target.id,
+                    mapping_type=mapping_type,
+                    notes=f"Seeded mapping: {source_ref} -> {target_ref}",
+                )
+                db.add(row)
+                db.flush()
+            else:
+                row.mapping_type = mapping_type
+                row.notes = f"Seeded mapping: {source_ref} -> {target_ref}"
+            rows.append(row)
+        db.flush()
+        return rows
+
+    @staticmethod
+    def ensure_iso27701_gdpr_cross_mappings(db: Session) -> list[CrossFrameworkObligationMapping]:
+        iso_framework = db.execute(select(Framework).where(Framework.name == "ISO 27701")).scalar_one_or_none()
+        gdpr_framework = db.execute(select(Framework).where(Framework.code == "GDPR")).scalar_one_or_none()
+        if iso_framework is None or gdpr_framework is None:
+            return []
+
+        iso_by_ref = {
+            row.reference_code: row
+            for row in db.execute(select(Obligation).where(Obligation.framework_id == iso_framework.id)).scalars().all()
+        }
+        gdpr_by_ref = {
+            row.reference_code: row
+            for row in db.execute(select(Obligation).where(Obligation.framework_id == gdpr_framework.id)).scalars().all()
+        }
+        existing = {
+            (row.source_obligation_id, row.target_obligation_id): row
+            for row in db.execute(select(CrossFrameworkObligationMapping)).scalars().all()
+        }
+        rows: list[CrossFrameworkObligationMapping] = []
+        for iso_ref, gdpr_ref, mapping_type in ISO_27701_GDPR_MAPPINGS:
+            source = iso_by_ref.get(iso_ref)
+            target = gdpr_by_ref.get(gdpr_ref)
+            if source is None or target is None:
+                continue
+            key = (source.id, target.id)
+            row = existing.get(key)
+            if row is None:
+                row = CrossFrameworkObligationMapping(
+                    organization_id=None,
+                    source_obligation_id=source.id,
+                    target_obligation_id=target.id,
+                    mapping_type=mapping_type,
+                    notes=f"Seeded mapping: {iso_ref} -> {gdpr_ref}",
+                )
+                db.add(row)
+                db.flush()
+            else:
+                row.mapping_type = mapping_type
+                row.notes = f"Seeded mapping: {iso_ref} -> {gdpr_ref}"
             rows.append(row)
         db.flush()
         return rows
@@ -1963,26 +4679,68 @@ class SeedService:
 
     @staticmethod
     def ensure_policy_templates(db: Session) -> list[PolicyTemplate]:
-        existing_by_slug = {row.slug: row for row in db.execute(select(PolicyTemplate)).scalars().all()}
+        existing_rows = db.execute(select(PolicyTemplate)).scalars().all()
+        existing_by_slug = {row.slug: row for row in existing_rows}
+        existing_system_by_title = {
+            (row.title or row.name): row
+            for row in existing_rows
+            if bool(getattr(row, "is_system", False))
+        }
         created: list[PolicyTemplate] = []
-        for payload in POLICY_TEMPLATE_SEEDS:
-            if payload["slug"] in existing_by_slug:
-                created.append(existing_by_slug[payload["slug"]])
-                continue
 
-            row = PolicyTemplate(
-                slug=payload["slug"],
-                name=payload["name"],
-                description=payload["description"],
-                category=payload["category"],
-                framework_tags=list(payload["framework_tags"]),
-                content=payload["content"],
-                version=payload["version"],
-                is_active=True,
-            )
-            db.add(row)
-            db.flush()
+        slug_policy_type_map = {
+            "data-retention": "data_privacy",
+            "access-control": "access_control",
+            "incident-response": "incident_response",
+            "vendor-management": "vendor_management",
+            "business-continuity": "business_continuity",
+            "change-management": "change_management",
+            "acceptable-use": "acceptable_use",
+            "information-security": "information_security",
+            "ai-governance": "ai_governance",
+            "third-party-risk": "third_party_risk",
+            "data-classification": "data_privacy",
+            "password-management": "access_control",
+            "remote-work": "information_security",
+            "whistleblower-ethics": "change_management",
+            "secure-development": "information_security",
+        }
+
+        for payload in POLICY_TEMPLATE_SEEDS:
+            row = existing_by_slug.get(payload["slug"]) or existing_system_by_title.get(payload["name"])
+            if row is None:
+                row = PolicyTemplate(
+                    organization_id=None,
+                    slug=payload["slug"],
+                    title=payload["name"],
+                    name=payload["name"],
+                    description=payload["description"],
+                    category=payload["category"],
+                    policy_type=slug_policy_type_map.get(payload["slug"]),
+                    framework_tags=list(payload["framework_tags"]),
+                    content=payload["content"],
+                    version=payload["version"],
+                    is_system=True,
+                    is_active=True,
+                )
+                db.add(row)
+                db.flush()
+            else:
+                row.organization_id = None
+                row.slug = payload["slug"]
+                row.title = payload["name"]
+                row.name = payload["name"]
+                row.description = payload["description"]
+                row.category = payload["category"]
+                row.policy_type = slug_policy_type_map.get(payload["slug"])
+                row.framework_tags = list(payload["framework_tags"])
+                row.content = payload["content"]
+                row.version = payload["version"]
+                row.is_system = True
+                row.is_active = True
+
             existing_by_slug[row.slug] = row
+            existing_system_by_title[row.title or row.name] = row
             created.append(row)
 
         db.flush()

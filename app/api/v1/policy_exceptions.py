@@ -123,18 +123,6 @@ def list_policy_exceptions(
     return [_read_exception(service, row) for row in rows]
 
 
-@router.get("/policy-exceptions/{exception_id}", response_model=PolicyExceptionResponse)
-def get_policy_exception(
-    exception_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("policy_exceptions:view")),
-) -> PolicyExceptionResponse:
-    service = PolicyExceptionService(db)
-    row, approval = service.get_exception(organization.id, exception_id)
-    return _read_exception(service, row, approval=approval)
-
-
 @router.patch("/policy-exceptions/{exception_id}", response_model=PolicyExceptionResponse)
 def update_policy_exception(
     exception_id: uuid.UUID,
@@ -161,50 +149,6 @@ def withdraw_policy_exception(
 ) -> PolicyExceptionResponse:
     service = PolicyExceptionService(db)
     row = service.withdraw_exception(organization.id, exception_id, current_user.id)
-    db.commit()
-    db.refresh(row)
-    return _read_exception(service, row)
-
-
-@router.post("/policy-exceptions/{exception_id}/approve", response_model=PolicyExceptionResponse)
-def approve_policy_exception(
-    exception_id: uuid.UUID,
-    payload: PolicyExceptionApprovalCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("policy_exceptions:manage")),
-) -> PolicyExceptionResponse:
-    service = PolicyExceptionService(db)
-    row = service.approve_exception(
-        organization.id,
-        exception_id,
-        decision_reason=payload.decision_reason,
-        approved_expiry_date=payload.approved_expiry_date,
-        conditions=payload.conditions,
-        actor_id=current_user.id,
-    )
-    db.commit()
-    db.refresh(row)
-    return _read_exception(service, row)
-
-
-@router.post("/policy-exceptions/{exception_id}/reject", response_model=PolicyExceptionResponse)
-def reject_policy_exception(
-    exception_id: uuid.UUID,
-    payload: PolicyExceptionRejectionCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("policy_exceptions:manage")),
-) -> PolicyExceptionResponse:
-    service = PolicyExceptionService(db)
-    row = service.reject_exception(
-        organization.id,
-        exception_id,
-        decision_reason=payload.decision_reason,
-        actor_id=current_user.id,
-    )
     db.commit()
     db.refresh(row)
     return _read_exception(service, row)

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import hashlib
 from pathlib import Path
 import uuid
@@ -6,6 +6,7 @@ import uuid
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.compliance.renderers.docx_report_renderer import DocxReportRenderer
@@ -17,6 +18,7 @@ from app.core.config import get_settings
 from app.models.compliance_report import ComplianceReport
 from app.models.compliance_report_section import ComplianceReportSection
 from app.models.membership import Membership
+from app.models.data_subject_request import DataSubjectRequest
 from app.models.organization import Organization
 from app.models.user import User
 from app.repositories.report_repository import ReportRepository
@@ -38,6 +40,7 @@ from app.compliance.services.board_scorecard_service import BoardScorecardServic
 from app.compliance.services.executive_narrative_service import ExecutiveNarrativeService
 
 router = APIRouter(prefix="/reports", tags=["reports"])
+compliance_router = APIRouter(prefix="/compliance/reports", tags=["compliance-reports"])
 
 
 class FrameworkCoverageMatrixExportRequest(BaseModel):
@@ -80,6 +83,87 @@ def _section_read(row: ComplianceReportSection) -> ComplianceReportSectionRead:
         sort_order=row.sort_order,
         created_at=row.created_at,
     )
+
+
+@compliance_router.get("/regulatory/ccpa")
+def get_ccpa_annual_report(
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("compliance:read")),
+):
+    now = datetime.now(UTC)
+    year_start = datetime(now.year, 1, 1, tzinfo=UTC)
+    year_end = datetime(now.year + 1, 1, 1, tzinfo=UTC)
+
+    base_filters = [
+        DataSubjectRequest.organization_id == organization.id,
+        DataSubjectRequest.regulatory_framework == "ccpa",
+        DataSubjectRequest.deleted_at.is_(None),
+        DataSubjectRequest.received_at >= year_start,
+        DataSubjectRequest.received_at < year_end,
+    ]
+
+    requests_received = {
+        "know": int(
+            db.execute(select(func.count(DataSubjectRequest.id)).where(*base_filters, DataSubjectRequest.request_type == "access")).scalar_one()
+            or 0
+        ),
+        "delete": int(
+            db.execute(select(func.count(DataSubjectRequest.id)).where(*base_filters, DataSubjectRequest.request_type == "erasure")).scalar_one()
+            or 0
+        ),
+        "opt_out": int(
+            db.execute(select(func.count(DataSubjectRequest.id)).where(*base_filters, DataSubjectRequest.request_type == "opt_out_of_sale")).scalar_one()
+            or 0
+        ),
+        "correct": int(
+            db.execute(
+                select(func.count(DataSubjectRequest.id)).where(*base_filters, DataSubjectRequest.request_type == "rectification")
+            ).scalar_one()
+            or 0
+        ),
+        "limit_sensitive": int(
+            db.execute(
+                select(func.count(DataSubjectRequest.id)).where(*base_filters, DataSubjectRequest.request_type == "limit_sensitive")
+            ).scalar_one()
+            or 0
+        ),
+    }
+
+    fulfilled_filters = [
+        *base_filters,
+        DataSubjectRequest.status == "fulfilled",
+        DataSubjectRequest.fulfilled_at.is_not(None),
+    ]
+    fulfilled_rows = db.execute(
+        select(
+            DataSubjectRequest.received_at,
+            DataSubjectRequest.fulfilled_at,
+            DataSubjectRequest.response_deadline,
+        ).where(*fulfilled_filters)
+    ).all()
+    total_fulfilled = len(fulfilled_rows)
+
+    within_deadline = sum(1 for row in fulfilled_rows if row.fulfilled_at <= row.response_deadline)
+    if total_fulfilled > 0:
+        avg_response_days = round(
+            sum((row.fulfilled_at - row.received_at) / timedelta(days=1) for row in fulfilled_rows) / total_fulfilled,
+            2,
+        )
+    else:
+        avg_response_days = 0.0
+
+    return {
+        "report_type": "ccpa_annual",
+        "reporting_year": now.year,
+        "requests_received": requests_received,
+        "response_metrics": {
+            "within_deadline": within_deadline,
+            "avg_response_days": avg_response_days,
+            "total_fulfilled": total_fulfilled,
+        },
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
 
 
 @router.post("/generate", response_model=ComplianceReportGenerateResponse)

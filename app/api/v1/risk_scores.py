@@ -20,7 +20,7 @@ from app.schemas.entity_risk_score import (
 
 router = APIRouter(prefix="/compliance/risk-scores", tags=["risk-scores"])
 
-ALL_ENTITY_TYPES = ["vendor", "framework", "asset", "business_unit"]
+ALL_ENTITY_TYPES = ["vendor", "framework", "asset", "data_asset", "business_unit"]
 
 
 def _as_read(row: EntityRiskScore) -> EntityRiskScoreRead:
@@ -73,7 +73,7 @@ def compute_entity_score(
 
 @router.get("/summary", response_model=EntityRiskScoreSummaryResponse)
 def get_entity_score_summary(
-    entity_type: str | None = Query(default=None, pattern="^(vendor|asset|business_unit|framework)$"),
+    entity_type: str | None = Query(default=None, pattern="^(vendor|asset|data_asset|business_unit|framework)$"),
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("risks:read")),
@@ -114,7 +114,7 @@ def get_entity_score_summary(
 
 @router.get("/by-entity", response_model=EntityRiskScoreRead | list[EntityRiskScoreRead])
 def get_scores_by_entity(
-    entity_type: str = Query(pattern="^(vendor|asset|business_unit|framework)$"),
+    entity_type: str = Query(pattern="^(vendor|asset|data_asset|business_unit|framework)$"),
     entity_id: uuid.UUID = Query(),
     include_history: bool = Query(default=False),
     db: Session = Depends(get_db),

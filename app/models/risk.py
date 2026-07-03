@@ -33,6 +33,11 @@ class Risk(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, Base):
     residual_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="identified")
     treatment_strategy: Mapped[str] = mapped_column(String(32), nullable=False, default="undecided")
+    treatment_option: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    risk_context_internal: Mapped[str | None] = mapped_column(Text, nullable=True)
+    risk_context_external: Mapped[str | None] = mapped_column(Text, nullable=True)
+    residual_risk_acceptable: Mapped[bool | None] = mapped_column(nullable=True)
+    risk_communication_plan: Mapped[str | None] = mapped_column(Text, nullable=True)
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
         "owner_id", Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -46,4 +51,9 @@ class Risk(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, Base):
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    business_unit_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("business_units.id", ondelete="SET NULL"),
+        nullable=True,
     )

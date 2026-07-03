@@ -270,6 +270,7 @@ def test_a61_assign_promotions_dashboard_delete_and_org_isolation(client, db_ses
     finding = AuditFinding(
         organization_id=uuid.UUID(org_a["organization_id"]),
         audit_engagement_id=engagement.id,
+        audit_id=engagement.id,
         finding_ref="F-2026-001",
         severity="high",
         framework_ref="SOC2 CC6.1",
@@ -281,6 +282,7 @@ def test_a61_assign_promotions_dashboard_delete_and_org_isolation(client, db_ses
         status="open",
         risk_register_entry_id=None,
         control_id=None,
+        created_by=uuid.UUID(org_a["user_id"]),
     )
     db_session.add(finding)
     db_session.commit()

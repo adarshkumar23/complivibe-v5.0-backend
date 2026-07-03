@@ -20,6 +20,7 @@ class ControlRepository:
         status: str | None = None,
         criticality: str | None = None,
         owner_user_id: uuid.UUID | None = None,
+        business_unit_id: uuid.UUID | None = None,
         search: str | None = None,
         limit: int = 50,
         offset: int = 0,
@@ -31,6 +32,8 @@ class ControlRepository:
             stmt = stmt.where(Control.criticality == criticality)
         if owner_user_id:
             stmt = stmt.where(Control.owner_user_id == owner_user_id)
+        if business_unit_id:
+            stmt = stmt.where(Control.business_unit_id == business_unit_id)
         if search:
             like = f"%{search.strip()}%"
             stmt = stmt.where(or_(Control.title.ilike(like), Control.description.ilike(like), Control.control_code.ilike(like)))

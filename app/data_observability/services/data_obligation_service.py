@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.data_asset import DataAsset
 from app.models.data_asset_obligation_link import DataAssetObligationLink
+from app.models.data_obligation_suggestion import DataObligationSuggestion
 from app.models.framework import Framework
 from app.models.obligation import Obligation
 from app.services.audit_service import AuditService
@@ -38,6 +39,17 @@ class DataObligationService:
         row = self.db.execute(select(Obligation).where(Obligation.id == obligation_id)).scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Obligation not found")
+        return row
+
+    def _require_suggestion_in_org(self, org_id: uuid.UUID, suggestion_id: uuid.UUID) -> DataObligationSuggestion:
+        row = self.db.execute(
+            select(DataObligationSuggestion).where(
+                DataObligationSuggestion.organization_id == org_id,
+                DataObligationSuggestion.id == suggestion_id,
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Data obligation suggestion not found")
         return row
 
     def link_asset_to_obligation(
@@ -294,3 +306,145 @@ class DataObligationService:
             seen.add(key)
             deduped.append(item)
         return deduped
+
+    def generate_suggestions(self, org_id: uuid.UUID, data_asset_id: uuid.UUID) -> list[DataObligationSuggestion]:
+        self._require_asset(org_id, data_asset_id)
+        computed = self.suggest_obligations(org_id, data_asset_id)
+        now = self.utcnow()
+        created_or_existing: list[DataObligationSuggestion] = []
+
+        for item in computed:
+            obligation_id = uuid.UUID(item["obligation_id"])
+            framework = self.db.execute(
+                select(Framework)
+                .join(Obligation, Obligation.framework_id == Framework.id)
+                .where(Obligation.id == obligation_id)
+            ).scalar_one()
+
+            existing = self.db.execute(
+                select(DataObligationSuggestion).where(
+                    DataObligationSuggestion.organization_id == org_id,
+                    DataObligationSuggestion.data_asset_id == data_asset_id,
+                    DataObligationSuggestion.obligation_id == obligation_id,
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                if existing.status != "dismissed":
+                    created_or_existing.append(existing)
+                    continue
+                existing.status = "pending"
+                existing.link_reason = item["reason"]
+                existing.framework_id = framework.id
+                existing.dismissed_by = None
+                existing.updated_at = now
+                self.db.flush()
+                created_or_existing.append(existing)
+                continue
+
+            row = DataObligationSuggestion(
+                organization_id=org_id,
+                data_asset_id=data_asset_id,
+                framework_id=framework.id,
+                obligation_id=obligation_id,
+                link_reason=item["reason"],
+                status="pending",
+                applied_by=None,
+                dismissed_by=None,
+                created_at=now,
+                updated_at=now,
+            )
+            self.db.add(row)
+            self.db.flush()
+            created_or_existing.append(row)
+
+        return created_or_existing
+
+    def apply_suggestion(self, org_id: uuid.UUID, suggestion_id: uuid.UUID, applied_by: uuid.UUID) -> DataObligationSuggestion:
+        row = self._require_suggestion_in_org(org_id, suggestion_id)
+        if row.status == "dismissed":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Dismissed suggestion cannot be applied")
+        if row.status != "applied":
+            self.link_asset_to_obligation(
+                org_id=org_id,
+                data_asset_id=row.data_asset_id,
+                obligation_id=row.obligation_id,
+                link_type="subject_to",
+                linked_by=applied_by,
+                justification=row.link_reason,
+            )
+
+        row.status = "applied"
+        row.applied_by = applied_by
+        row.updated_at = self.utcnow()
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="data_obligation.suggestion_applied",
+            entity_type="data_obligation_suggestion",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=applied_by,
+            after_json={"status": row.status},
+            metadata_json={"source": "api"},
+        )
+        return row
+
+    def dismiss_suggestion(self, org_id: uuid.UUID, suggestion_id: uuid.UUID, dismissed_by: uuid.UUID) -> DataObligationSuggestion:
+        row = self._require_suggestion_in_org(org_id, suggestion_id)
+        row.status = "dismissed"
+        row.dismissed_by = dismissed_by
+        row.updated_at = self.utcnow()
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="data_obligation.suggestion_dismissed",
+            entity_type="data_obligation_suggestion",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=dismissed_by,
+            after_json={"status": row.status},
+            metadata_json={"source": "api"},
+        )
+        return row
+
+    def list_suggestions(
+        self,
+        org_id: uuid.UUID,
+        *,
+        data_asset_id: uuid.UUID | None = None,
+        status: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> list[DataObligationSuggestion]:
+        stmt = select(DataObligationSuggestion).where(DataObligationSuggestion.organization_id == org_id)
+        if data_asset_id is not None:
+            stmt = stmt.where(DataObligationSuggestion.data_asset_id == data_asset_id)
+        if status is not None:
+            stmt = stmt.where(DataObligationSuggestion.status == status)
+        offset = max(page - 1, 0) * page_size
+        stmt = stmt.order_by(DataObligationSuggestion.created_at.desc()).offset(offset).limit(page_size)
+        return self.db.execute(stmt).scalars().all()
+
+    def suggestion_payload(self, row: DataObligationSuggestion) -> dict:
+        obligation, framework = self.db.execute(
+            select(Obligation, Framework)
+            .join(Framework, Framework.id == Obligation.framework_id)
+            .where(Obligation.id == row.obligation_id)
+        ).one()
+        return {
+            "id": str(row.id),
+            "organization_id": str(row.organization_id),
+            "data_asset_id": str(row.data_asset_id),
+            "framework_id": str(row.framework_id),
+            "obligation_id": str(row.obligation_id),
+            "obligation_ref": obligation.reference_code,
+            "obligation_title": obligation.title,
+            "framework_code": framework.code,
+            "framework_name": framework.name,
+            "link_reason": row.link_reason,
+            "status": row.status,
+            "applied_by": str(row.applied_by) if row.applied_by else None,
+            "dismissed_by": str(row.dismissed_by) if row.dismissed_by else None,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }

@@ -53,7 +53,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_policy_diff_gating_compare_presets_organization_id",
+        "ix_ai_system_gov_pol_diff_gating_cmp_presets_org_id_4fba5589",
         "ai_system_governance_policy_diff_gating_compare_presets",
         ["organization_id"],
         unique=False,
@@ -71,13 +71,13 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_index(
-        "ix_ai_sys_gov_policy_diff_gating_cmp_preset_org_baseline_report",
+        "ix_ai_sys_gov_pol_diff_gating_cmp_pst_org_baseline_rp_d9113c7f",
         "ai_system_governance_policy_diff_gating_compare_presets",
         ["organization_id", "baseline_gating_report_id"],
         unique=False,
     )
     op.create_index(
-        "ix_ai_sys_gov_policy_diff_gating_cmp_preset_org_baseline_profile",
+        "ix_ai_sys_gov_pol_diff_gating_cmp_pst_org_baseline_pr_c28c8478",
         "ai_system_governance_policy_diff_gating_compare_presets",
         ["organization_id", "baseline_gating_profile_id"],
         unique=False,
@@ -134,7 +134,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_policy_diff_gating_compare_preset_reports_organization_id",
+        "ix_ai_system_gov_pol_diff_gating_cmp_pst_rpts_org_id_afb79e0e",
         "ai_system_governance_policy_diff_gating_compare_preset_reports",
         ["organization_id"],
         unique=False,
@@ -213,7 +213,7 @@ def downgrade() -> None:
         table_name="ai_system_governance_policy_diff_gating_compare_preset_reports",
     )
     op.drop_index(
-        "ix_ai_system_governance_policy_diff_gating_compare_preset_reports_organization_id",
+        "ix_ai_system_gov_pol_diff_gating_cmp_pst_rpts_org_id_afb79e0e",
         table_name="ai_system_governance_policy_diff_gating_compare_preset_reports",
     )
     op.drop_table("ai_system_governance_policy_diff_gating_compare_preset_reports")
@@ -223,11 +223,11 @@ def downgrade() -> None:
         table_name="ai_system_governance_policy_diff_gating_compare_presets",
     )
     op.drop_index(
-        "ix_ai_sys_gov_policy_diff_gating_cmp_preset_org_baseline_profile",
+        "ix_ai_sys_gov_pol_diff_gating_cmp_pst_org_baseline_pr_c28c8478",
         table_name="ai_system_governance_policy_diff_gating_compare_presets",
     )
     op.drop_index(
-        "ix_ai_sys_gov_policy_diff_gating_cmp_preset_org_baseline_report",
+        "ix_ai_sys_gov_pol_diff_gating_cmp_pst_org_baseline_rp_d9113c7f",
         table_name="ai_system_governance_policy_diff_gating_compare_presets",
     )
     op.drop_index(
@@ -239,7 +239,7 @@ def downgrade() -> None:
         table_name="ai_system_governance_policy_diff_gating_compare_presets",
     )
     op.drop_index(
-        "ix_ai_system_governance_policy_diff_gating_compare_presets_organization_id",
+        "ix_ai_system_gov_pol_diff_gating_cmp_presets_org_id_4fba5589",
         table_name="ai_system_governance_policy_diff_gating_compare_presets",
     )
     op.drop_table("ai_system_governance_policy_diff_gating_compare_presets")

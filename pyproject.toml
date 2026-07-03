@@ -24,8 +24,11 @@ dependencies = [
   "email-validator>=2.3.0,<3.0.0",
   "reportlab>=4.2.2,<5.0.0",
   "python-docx>=1.1.2,<2.0.0",
+  "weasyprint>=69.0,<70.0.0",
+  "apscheduler==3.10.4",
   "openai>=1.40.0,<2.0.0",
-  "Jinja2>=3.1.2,<4.0.0"
+  "Jinja2>=3.1.2,<4.0.0",
+  "mlflow>=2.0.0,<3.0.0"
 ]
 
 [project.optional-dependencies]
@@ -40,6 +43,9 @@ minversion = "8.0"
 addopts = "-q"
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+  "postgres_smoke: runs real PostgreSQL migration smoke validation",
+]
 
 [tool.setuptools.packages.find]
 include = ["app*"]

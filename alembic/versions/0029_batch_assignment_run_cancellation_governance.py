@@ -36,7 +36,7 @@ def upgrade() -> None:
         sa.Column("cancellation_metadata_json", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
     )
     op.create_foreign_key(
-        "fk_framework_review_batch_assignment_runs_cancelled_by_user_id_users",
+        "fk_fr_batch_runs_cancelled_by_user",
         "framework_review_batch_assignment_runs",
         "users",
         ["cancelled_by_user_id"],
@@ -47,7 +47,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_constraint(
-        "fk_framework_review_batch_assignment_runs_cancelled_by_user_id_users",
+        "fk_fr_batch_runs_cancelled_by_user",
         "framework_review_batch_assignment_runs",
         type_="foreignkey",
     )

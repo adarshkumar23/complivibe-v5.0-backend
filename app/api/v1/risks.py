@@ -65,6 +65,11 @@ def _risk_read(risk: Risk) -> RiskRead:
         residual_impact=risk.residual_impact,
         residual_score=risk.residual_score,
         treatment_strategy=risk.treatment_strategy,
+        treatment_option=risk.treatment_option,
+        risk_context_internal=risk.risk_context_internal,
+        risk_context_external=risk.risk_context_external,
+        residual_risk_acceptable=risk.residual_risk_acceptable,
+        risk_communication_plan=risk.risk_communication_plan,
         owner_user_id=risk.owner_user_id,
         target_date=risk.target_date,
         accepted_by_user_id=risk.accepted_by_user_id,
@@ -117,6 +122,29 @@ def _get_risk_or_404(db: Session, organization_id: uuid.UUID, risk_id: uuid.UUID
     if risk is None or risk.organization_id != organization_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Risk not found")
     return risk
+
+
+def _recompute_residual(db: Session, organization_id: uuid.UUID, risk: Risk) -> None:
+    """Refresh residual_likelihood/impact/score from currently linked active controls.
+
+    Linking or unlinking a control is a direct trigger, distinct from the control's own
+    status changing later (which RiskRecalculationListener handles via the event bus).
+    """
+    linked_controls = list(
+        db.execute(
+            select(Control)
+            .join(RiskControlLink, RiskControlLink.control_id == Control.id)
+            .where(
+                RiskControlLink.organization_id == organization_id,
+                RiskControlLink.risk_id == risk.id,
+                RiskControlLink.status == "active",
+            )
+        ).scalars().all()
+    )
+    residual_likelihood, residual_impact, residual_score = RiskScoringService.compute_residual(risk, linked_controls)
+    risk.residual_likelihood = residual_likelihood
+    risk.residual_impact = residual_impact
+    risk.residual_score = residual_score
 
 
 def _task_read(task: Task) -> TaskRead:
@@ -190,6 +218,7 @@ def list_risks(
     category: str | None = Query(default=None),
     severity: str | None = Query(default=None),
     owner_user_id: uuid.UUID | None = Query(default=None),
+    business_unit_id: uuid.UUID | None = Query(default=None),
     treatment_strategy: str | None = Query(default=None),
     search: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
@@ -204,6 +233,7 @@ def list_risks(
         category=category,
         severity=severity,
         owner_user_id=owner_user_id,
+        business_unit_id=business_unit_id,
         treatment_strategy=treatment_strategy,
         search=search,
         limit=limit,
@@ -268,6 +298,11 @@ def create_risk(
         operational_impact=payload.operational_impact,
         composite_score_method=payload.composite_score_method,
         treatment_strategy=payload.treatment_strategy,
+        treatment_option=payload.treatment_option,
+        risk_context_internal=payload.risk_context_internal,
+        risk_context_external=payload.risk_context_external,
+        residual_risk_acceptable=payload.residual_risk_acceptable,
+        risk_communication_plan=payload.risk_communication_plan,
         owner_user_id=payload.owner_user_id,
         target_date=payload.target_date,
         metadata_json=payload.metadata_json,
@@ -276,14 +311,14 @@ def create_risk(
     settings = RiskScoringService.get_or_create_org_settings(organization.id, db)
     inherent_score = RiskScoringService.compute_score(risk, settings)
     severity = service.score_to_severity(inherent_score)
-    _, _, residual_score = service.calculate_scores(
-        likelihood=payload.likelihood,
-        impact=payload.impact,
-        residual_likelihood=None,
-        residual_impact=None,
-    )
+    # No controls can be linked yet at creation time, so residual = inherent (nothing
+    # mitigating this risk so far). It will be recomputed automatically as controls are
+    # linked and change status (see RiskRecalculationListener).
+    residual_likelihood, residual_impact, residual_score = RiskScoringService.compute_residual(risk, [])
     risk.inherent_score = inherent_score
     risk.severity = severity
+    risk.residual_likelihood = residual_likelihood
+    risk.residual_impact = residual_impact
     risk.residual_score = residual_score
 
     db.add(risk)
@@ -394,6 +429,11 @@ def update_risk(
         "residual_impact": risk.residual_impact,
         "residual_score": risk.residual_score,
         "treatment_strategy": risk.treatment_strategy,
+        "treatment_option": risk.treatment_option,
+        "risk_context_internal": risk.risk_context_internal,
+        "risk_context_external": risk.risk_context_external,
+        "residual_risk_acceptable": risk.residual_risk_acceptable,
+        "risk_communication_plan": risk.risk_communication_plan,
         "owner_user_id": str(risk.owner_user_id) if risk.owner_user_id else None,
     }
 
@@ -411,6 +451,11 @@ def update_risk(
         "residual_likelihood",
         "residual_impact",
         "treatment_strategy",
+        "treatment_option",
+        "risk_context_internal",
+        "risk_context_external",
+        "residual_risk_acceptable",
+        "risk_communication_plan",
         "owner_user_id",
         "target_date",
         "review_due_at",
@@ -455,6 +500,11 @@ def update_risk(
         "composite_score_method": risk.composite_score_method,
         "residual_score": risk.residual_score,
         "treatment_strategy": risk.treatment_strategy,
+        "treatment_option": risk.treatment_option,
+        "risk_context_internal": risk.risk_context_internal,
+        "risk_context_external": risk.risk_context_external,
+        "residual_risk_acceptable": risk.residual_risk_acceptable,
+        "risk_communication_plan": risk.risk_communication_plan,
         "owner_user_id": str(risk.owner_user_id) if risk.owner_user_id else None,
     }
 
@@ -576,6 +626,7 @@ def link_risk_to_control(
         link.linked_at = now
         link.unlinked_at = None
 
+    _recompute_residual(db, organization.id, risk)
     db.flush()
 
     AuditService(db).write_audit_log(
@@ -614,6 +665,7 @@ def unlink_risk_from_control(
     before = {"status": link.status}
     link.status = "inactive"
     link.unlinked_at = datetime.now(UTC)
+    _recompute_residual(db, organization.id, risk)
     db.flush()
 
     AuditService(db).write_audit_log(
@@ -750,6 +802,8 @@ def accept_risk(
     risk.status = "accepted"
     if risk.treatment_strategy in {None, "undecided", "mitigate", "transfer", "avoid"}:
         risk.treatment_strategy = "accept"
+    if risk.treatment_option is None:
+        risk.treatment_option = "retain"
     risk.acceptance_reason = payload.acceptance_reason
     risk.accepted_by_user_id = current_user.id
     risk.accepted_at = datetime.now(UTC)

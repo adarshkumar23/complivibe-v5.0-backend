@@ -90,11 +90,11 @@ def upgrade() -> None:
             "organization_id",
             "approval_id",
             "voter_user_id",
-            name="uq_governance_autopilot_execution_approval_votes_org_approval_voter",
+            name="uq_gov_ap_exec_appr_votes_org_appr_voter_a0fb2387",
         ),
     )
     op.create_index(
-        "ix_governance_autopilot_execution_approval_votes_organization_id",
+        "ix_gov_ap_exec_appr_votes_org_id_df06e37b",
         "governance_autopilot_execution_approval_votes",
         ["organization_id"],
         unique=False,
@@ -143,7 +143,7 @@ def downgrade() -> None:
         table_name="governance_autopilot_execution_approval_votes",
     )
     op.drop_index(
-        "ix_governance_autopilot_execution_approval_votes_organization_id",
+        "ix_gov_ap_exec_appr_votes_org_id_df06e37b",
         table_name="governance_autopilot_execution_approval_votes",
     )
     op.drop_table("governance_autopilot_execution_approval_votes")

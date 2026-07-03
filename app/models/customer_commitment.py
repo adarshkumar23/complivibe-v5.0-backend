@@ -27,6 +27,7 @@ class CustomerCommitment(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedM
         Index("ix_customer_commitments_org_type", "organization_id", "commitment_type"),
         Index("ix_customer_commitments_trigger_date_status", "trigger_date", "status"),
         Index("ix_customer_commitments_org_owner", "organization_id", "assigned_owner_id"),
+        Index("ix_customer_commitments_org_trigger_incident", "organization_id", "triggering_incident_type"),
     )
 
     customer_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -35,6 +36,7 @@ class CustomerCommitment(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedM
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     trigger_condition: Mapped[str] = mapped_column(Text, nullable=False)
+    triggering_incident_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     trigger_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     notification_days_before: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
     sla_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)

@@ -1,6 +1,7 @@
 import uuid
 from collections import Counter
 from datetime import UTC, date, datetime, timedelta
+from statistics import median
 
 from fastapi import HTTPException, status
 from sqlalchemy import cast, or_, select, String
@@ -866,6 +867,7 @@ class InboundQuestionnaireService:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Session has unreviewed items.")
 
         session.status = "completed"
+        session.completed_at = self.utcnow()
         self.db.flush()
 
         AuditService(self.db).write_audit_log(
@@ -878,6 +880,59 @@ class InboundQuestionnaireService:
             metadata_json={"source": "api"},
         )
         return session
+
+    def get_response_time_metrics(
+        self,
+        org_id: uuid.UUID,
+        *,
+        session_id: uuid.UUID | None = None,
+    ) -> dict:
+        if session_id is not None:
+            sessions = [self.require_session(org_id, session_id)]
+        else:
+            sessions = self.db.execute(
+                select(InboundQuestionnaireSession).where(
+                    InboundQuestionnaireSession.organization_id == org_id,
+                    InboundQuestionnaireSession.deleted_at.is_(None),
+                )
+            ).scalars().all()
+
+        durations_hours: list[float] = []
+        sessions_still_pending = 0
+
+        for session in sessions:
+            terminal_dt = session.completed_at
+            if terminal_dt is None and session.status == "completed":
+                # Backward compatibility for rows completed before completed_at existed.
+                terminal_dt = session.updated_at
+
+            if terminal_dt is None:
+                sessions_still_pending += 1
+                continue
+
+            delta_hours = (terminal_dt - session.created_at).total_seconds() / 3600
+            durations_hours.append(max(0.0, delta_hours))
+
+        if durations_hours:
+            avg_hours = round(sum(durations_hours) / len(durations_hours), 2)
+            median_hours = round(float(median(durations_hours)), 2)
+            fastest_hours = round(min(durations_hours), 2)
+            slowest_hours = round(max(durations_hours), 2)
+        else:
+            avg_hours = None
+            median_hours = None
+            fastest_hours = None
+            slowest_hours = None
+
+        return {
+            "session_id": session_id,
+            "avg_response_time_hours": avg_hours,
+            "median_response_time_hours": median_hours,
+            "fastest_response_time_hours": fastest_hours,
+            "slowest_response_time_hours": slowest_hours,
+            "sessions_analyzed": len(durations_hours),
+            "sessions_still_pending": sessions_still_pending,
+        }
 
     def get_session_summary(self, org_id: uuid.UUID, session_id: uuid.UUID) -> dict:
         _ = self.require_session(org_id, session_id)

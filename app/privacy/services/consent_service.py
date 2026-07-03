@@ -21,6 +21,7 @@ ALLOWED_CONSENT_MECHANISMS = {
     "verbal_recorded",
     "api_consent",
     "implied",
+    "ccpa_opt_out",
 }
 
 

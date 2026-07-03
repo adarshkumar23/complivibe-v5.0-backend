@@ -69,7 +69,7 @@ def upgrade() -> None:
     op.create_foreign_key(
         "fk_ai_sys_gov_policy_diff_gating_cmp_presets_pinned_version_id",
         "ai_system_governance_policy_diff_gating_compare_presets",
-        "ai_system_governance_policy_diff_gating_compare_preset_versions",
+        "ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b",
         ["pinned_version_id"],
         ["id"],
         ondelete="SET NULL",
@@ -83,7 +83,7 @@ def upgrade() -> None:
         ondelete="SET NULL",
     )
     op.create_foreign_key(
-        "fk_ai_sys_gov_policy_diff_gating_cmp_presets_unpinned_by_user_id",
+        "fk_ai_sys_gov_pol_diff_gating_cmp_presets_unpinned_by_fe7d8376",
         "ai_system_governance_policy_diff_gating_compare_presets",
         "users",
         ["unpinned_by_user_id"],
@@ -104,7 +104,7 @@ def downgrade() -> None:
         table_name="ai_system_governance_policy_diff_gating_compare_presets",
     )
     op.drop_constraint(
-        "fk_ai_sys_gov_policy_diff_gating_cmp_presets_unpinned_by_user_id",
+        "fk_ai_sys_gov_pol_diff_gating_cmp_presets_unpinned_by_fe7d8376",
         "ai_system_governance_policy_diff_gating_compare_presets",
         type_="foreignkey",
     )

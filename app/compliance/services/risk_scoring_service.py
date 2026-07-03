@@ -4,8 +4,12 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.control import Control
 from app.models.org_risk_settings import OrgRiskSettings
 from app.models.risk import Risk
+
+# Control statuses that don't represent an active mitigation in effect.
+_CONTROL_NOT_RELEVANT_STATUSES = {"not_applicable", "archived"}
 
 
 class RiskScoringService:
@@ -56,6 +60,40 @@ class RiskScoringService:
             + (Decimal(risk.operational_impact) * org_settings.operational_weight)
         )
         return RiskScoringService._scale_raw_score(raw_score)
+
+    @staticmethod
+    def compute_residual(risk: Risk, linked_controls: list[Control]) -> tuple[int, int, int]:
+        """Derive residual (post-control) likelihood/impact/score from currently linked controls.
+
+        inherent_score is deliberately left untouched by control state elsewhere (it's the
+        pre-control baseline, per standard risk terminology, and is covered by existing tests
+        in test_risk_recalculation_a15.py asserting it only ever re-derives from the risk's own
+        likelihood/impact). Controls are modeled here as reducing likelihood (probability of the
+        risk materializing), not impact (severity of consequence if it does) -- the conventional
+        split between preventive/detective control effect and consequence severity.
+
+        This function is always a full, deterministic recompute from current linked-control
+        state (never incremental), consistent with how inherent-score recalculation already
+        works. Any manual residual_likelihood/residual_impact set via a direct risk PATCH will
+        be overwritten the next time a linked control/evidence/vendor event fires -- this is an
+        auto-managed field, not a one-time manual override.
+        """
+        relevant = [c for c in linked_controls if c.status not in _CONTROL_NOT_RELEVANT_STATUSES]
+        implemented = [c for c in relevant if c.status == "implemented"]
+
+        if not implemented:
+            # No controls, or none of the linked controls are actually effective yet:
+            # residual mirrors inherent (nothing is currently mitigating this risk).
+            residual_likelihood = risk.likelihood
+        else:
+            reduction = min(len(implemented), 2)
+            if any(c.criticality == "critical" for c in implemented):
+                reduction += 1
+            residual_likelihood = max(1, risk.likelihood - reduction)
+
+        residual_impact = risk.impact
+        residual_score = residual_likelihood * residual_impact
+        return residual_likelihood, residual_impact, residual_score
 
     @classmethod
     def compute_breakdown(cls, risk: Risk, org_settings: OrgRiskSettings) -> dict:

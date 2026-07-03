@@ -90,13 +90,13 @@ def upgrade() -> None:
         unique=False,
     )
     op.create_index(
-        "ix_ai_system_risk_assessments_org_calculated_dimension_risk_level",
+        "ix_ai_system_risk_assessments_org_calc_dim_risk_level_b75817aa",
         "ai_system_risk_assessments",
         ["organization_id", "calculated_dimension_risk_level"],
         unique=False,
     )
     op.create_index(
-        "ix_ai_system_risk_assessments_org_calculated_residual_risk_level",
+        "ix_ai_system_risk_assessments_org_calc_resid_risk_lev_ab05b152",
         "ai_system_risk_assessments",
         ["organization_id", "calculated_residual_risk_level"],
         unique=False,
@@ -105,11 +105,11 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index(
-        "ix_ai_system_risk_assessments_org_calculated_residual_risk_level",
+        "ix_ai_system_risk_assessments_org_calc_resid_risk_lev_ab05b152",
         table_name="ai_system_risk_assessments",
     )
     op.drop_index(
-        "ix_ai_system_risk_assessments_org_calculated_dimension_risk_level",
+        "ix_ai_system_risk_assessments_org_calc_dim_risk_level_b75817aa",
         table_name="ai_system_risk_assessments",
     )
     op.drop_index("ix_ai_system_risk_assessments_org_dimension_template", table_name="ai_system_risk_assessments")

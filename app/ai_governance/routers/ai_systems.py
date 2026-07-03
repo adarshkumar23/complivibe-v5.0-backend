@@ -24,6 +24,11 @@ from app.ai_governance.schemas.ai_classification import (
     ManualClassificationRequest,
     MandatoryControlsRead,
 )
+from app.ai_governance.schemas.bias import (
+    BiasAssessmentCreate,
+    BiasAssessmentResponse,
+    OversightUpdateRequest,
+)
 from app.ai_governance.schemas.iso42001_nist_rmf import (
     NISTRMFFunctionResponseRead,
     NISTRMFImplementationDetailRead,
@@ -67,6 +72,7 @@ from app.ai_governance.schemas.signals_recommendations_diagnostics import (
 from app.ai_governance.services.ai_risk_classification_service import AIRiskClassificationService
 from app.ai_governance.services.ai_monitoring_service import AIMonitoringService
 from app.ai_governance.services.ai_recommendation_service import AIRecommendationService
+from app.ai_governance.services.ai_depth_service import AIDepthService
 from app.ai_governance.services.ai_system_service import AISystemService
 from app.ai_governance.services.ai_governance_event_service import AIGovernanceEventService
 from app.ai_governance.services.ai_use_case_service import AIUseCaseService
@@ -83,6 +89,7 @@ from app.models.organization import Organization
 from app.models.user import User
 
 router = APIRouter(prefix="/ai-governance/systems", tags=["ai-governance-systems"])
+scorecard_router = APIRouter(prefix="/ai-governance", tags=["ai-governance-systems"])
 
 
 @router.post("", response_model=AISystemRead, status_code=status.HTTP_201_CREATED)
@@ -104,6 +111,7 @@ def list_systems(
     system_type: str | None = Query(default=None),
     deployment_status: str | None = Query(default=None),
     risk_tier: str | None = Query(default=None),
+    business_unit_id: uuid.UUID | None = Query(default=None),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -115,6 +123,7 @@ def list_systems(
         system_type=system_type,
         deployment_status=deployment_status,
         risk_tier=risk_tier,
+        business_unit_id=business_unit_id,
         skip=skip,
         limit=limit,
     )
@@ -935,3 +944,101 @@ def delete_use_case(
     db.commit()
     db.refresh(updated)
     return AIUseCaseRead.model_validate(updated)
+
+
+@router.post("/{system_id}/bias-assessments", response_model=BiasAssessmentResponse, status_code=status.HTTP_201_CREATED)
+def submit_bias_assessment(
+    system_id: uuid.UUID,
+    payload: BiasAssessmentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("compliance:write")),
+) -> BiasAssessmentResponse:
+    row = AIDepthService(db).submit_bias_assessment(
+        organization.id,
+        system_id,
+        payload,
+        current_user.id,
+    )
+    db.commit()
+    db.refresh(row)
+    return BiasAssessmentResponse(
+        id=row.id,
+        system_id=row.system_id,
+        assessment_method=row.assessment_method,
+        protected_attribute=row.protected_attribute,
+        metric_name=row.metric_name,
+        metric_value=row.metric_value,
+        threshold_value=row.threshold_value,
+        passed=row.passed,
+        remediation_notes=row.remediation_notes,
+        assessed_at=row.assessed_at,
+    )
+
+
+@router.get("/{system_id}/bias-assessments", response_model=list[BiasAssessmentResponse])
+def list_bias_assessments(
+    system_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("compliance:read")),
+) -> list[BiasAssessmentResponse]:
+    rows = AIDepthService(db).get_bias_history(organization.id, system_id)
+    return [
+        BiasAssessmentResponse(
+            id=row.id,
+            system_id=row.system_id,
+            assessment_method=row.assessment_method,
+            protected_attribute=row.protected_attribute,
+            metric_name=row.metric_name,
+            metric_value=row.metric_value,
+            threshold_value=row.threshold_value,
+            passed=row.passed,
+            remediation_notes=row.remediation_notes,
+            assessed_at=row.assessed_at,
+        )
+        for row in rows
+    ]
+
+
+@router.patch("/{system_id}/oversight", response_model=AISystemRead)
+def update_oversight(
+    system_id: uuid.UUID,
+    payload: OversightUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("compliance:write")),
+) -> AISystemRead:
+    row = AIDepthService(db).update_human_oversight(
+        organization.id,
+        system_id,
+        payload.oversight_level,
+        payload.explainability_method,
+        current_user.id,
+    )
+    db.commit()
+    db.refresh(row)
+    return AISystemRead.model_validate(row)
+
+
+@router.get("/{system_id}/governance-score")
+def get_governance_score(
+    system_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("compliance:read")),
+) -> dict:
+    payload = AIDepthService(db).compute_data_governance_score(organization.id, system_id)
+    db.commit()
+    return payload
+
+
+@scorecard_router.get("/scorecard")
+def get_ai_governance_scorecard(
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("compliance:read")),
+) -> dict:
+    return AIDepthService(db).get_ai_governance_scorecard(organization.id)

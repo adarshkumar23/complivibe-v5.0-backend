@@ -15,8 +15,10 @@ from app.models.evidence_item import EvidenceItem
 from app.models.obligation import Obligation
 from app.models.risk import Risk
 from app.models.risk_control_link import RiskControlLink
+from app.models.risk_evidence_link import RiskEvidenceLink
 from app.models.vendor import Vendor
 from app.models.vendor_control_link import VendorControlLink
+from app.models.vendor_risk_score import VendorRiskScore
 
 
 class RiskGraphService:
@@ -286,6 +288,21 @@ class RiskGraphService:
                 )
             ).scalars().all()
 
+        vendor_score_map: dict[uuid.UUID, str] = {}
+        vendor_ids = [vendor.id for vendor in vendor_rows]
+        if vendor_ids:
+            latest_scores = db.execute(
+                select(VendorRiskScore)
+                .where(
+                    VendorRiskScore.organization_id == org_id,
+                    VendorRiskScore.vendor_id.in_(vendor_ids),
+                )
+                .order_by(VendorRiskScore.vendor_id, VendorRiskScore.created_at.desc(), VendorRiskScore.id.desc())
+            ).scalars().all()
+            for score_row in latest_scores:
+                if score_row.vendor_id not in vendor_score_map:
+                    vendor_score_map[score_row.vendor_id] = score_row.risk_level
+
         for vendor in vendor_rows:
             health = cls.derive_node_health(
                 "vendor",
@@ -303,10 +320,13 @@ class RiskGraphService:
                 metadata={
                     "vendor_type": vendor.vendor_type,
                     "risk_tier": vendor.risk_tier,
+                    "risk_level": vendor_score_map.get(vendor.id),
                     "last_assessment_at": None,
                 },
             )
             add_edge(source_id=risk.id, target_id=vendor.id, relationship="affects")
+            if vendor.id in vendor_score_map:
+                add_edge(source_id=risk.id, target_id=vendor.id, relationship="vendor_risk_factor")
 
         # Depth-1 obligations via control mappings
         obligation_rows = []
@@ -377,6 +397,40 @@ class RiskGraphService:
                 },
             )
             add_edge(source_id=risk.id, target_id=evidence.id, relationship="evidenced_by")
+
+        # Direct risk-evidence links
+        direct_risk_evidence_rows = db.execute(
+            select(EvidenceItem)
+            .join(RiskEvidenceLink, RiskEvidenceLink.evidence_item_id == EvidenceItem.id)
+            .where(
+                RiskEvidenceLink.organization_id == org_id,
+                RiskEvidenceLink.risk_id == risk.id,
+                RiskEvidenceLink.status == "active",
+                EvidenceItem.organization_id == org_id,
+            )
+        ).scalars().all()
+        for evidence in direct_risk_evidence_rows:
+            health = cls.derive_node_health(
+                "evidence",
+                {
+                    "status": evidence.status,
+                    "expiry_date": evidence.valid_until,
+                },
+            )
+            add_node(
+                node_id=evidence.id,
+                node_type="evidence",
+                label=evidence.title,
+                status=evidence.status,
+                health=health,
+                metadata={
+                    "evidence_type": evidence.evidence_type,
+                    "submitted_by": evidence.uploaded_by_user_id,
+                    "expiry_date": evidence.valid_until,
+                    "linked_control_id": None,
+                },
+            )
+            add_edge(source_id=risk.id, target_id=evidence.id, relationship="has_evidence")
 
         # Depth-1 policies via policy-control links
         policy_rows = []

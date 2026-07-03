@@ -26,12 +26,12 @@ class AISystemRiskAssessment(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOw
             "latest_classification_id",
         ),
         Index(
-            "ix_ai_system_risk_assessments_org_calculated_dimension_risk_level",
+            "ix_ai_system_risk_assessments_org_calc_dim_risk_level_b75817aa",
             "organization_id",
             "calculated_dimension_risk_level",
         ),
         Index(
-            "ix_ai_system_risk_assessments_org_calculated_residual_risk_level",
+            "ix_ai_system_risk_assessments_org_calc_resid_risk_lev_ab05b152",
             "organization_id",
             "calculated_residual_risk_level",
         ),

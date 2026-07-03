@@ -23,6 +23,7 @@ class DataRetentionPolicy(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
     applies_to_sensitivity_tiers: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     legal_basis: Mapped[str | None] = mapped_column(Text, nullable=True)
     action_on_expiry: Mapped[str] = mapped_column(String(20), nullable=False, default="flag")
+    legal_hold: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

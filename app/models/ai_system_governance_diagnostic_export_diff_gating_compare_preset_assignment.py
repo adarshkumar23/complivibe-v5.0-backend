@@ -14,25 +14,25 @@ class AISystemGovernanceDiagnosticExportDiffGatingComparePresetAssignment(
     OrganizationOwnedMixin,
     Base,
 ):
-    __tablename__ = "ai_system_governance_diagnostic_export_diff_gating_compare_preset_assignments"
+    __tablename__ = "ai_system_gov_diag_export_diff_gating_cmp_pst_assigns_4644e2cb"
     __table_args__ = (
         Index(
-            "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_assign_org_status",
+            "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_65278498",
             "organization_id",
             "status",
         ),
         Index(
-            "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_assign_org_scope",
+            "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_6af4dddb",
             "organization_id",
             "scope_type",
         ),
         Index(
-            "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_assign_org_preset",
+            "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_93fa4c13",
             "organization_id",
             "preset_id",
         ),
         Index(
-            "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_assign_org_priority",
+            "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_assign_baf4b87e",
             "organization_id",
             "priority",
         ),
@@ -40,7 +40,7 @@ class AISystemGovernanceDiagnosticExportDiffGatingComparePresetAssignment(
 
     preset_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
-        ForeignKey("ai_system_governance_diagnostic_export_diff_gating_compare_presets.id", ondelete="CASCADE"),
+        ForeignKey("ai_system_gov_diag_export_diff_gating_cmp_presets_ac16f85a.id", ondelete="CASCADE"),
         nullable=False,
     )
     scope_type: Mapped[str] = mapped_column(String(64), nullable=False)

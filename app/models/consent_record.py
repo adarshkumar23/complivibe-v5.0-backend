@@ -12,7 +12,7 @@ class ConsentRecord(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
     __tablename__ = "consent_records"
     __table_args__ = (
         CheckConstraint(
-            "consent_mechanism IN ('explicit_checkbox', 'cookie_banner', 'written_form', 'verbal_recorded', 'api_consent', 'implied')",
+            "consent_mechanism IN ('explicit_checkbox', 'cookie_banner', 'written_form', 'verbal_recorded', 'api_consent', 'implied', 'ccpa_opt_out')",
             name="ck_consent_records_mechanism",
         ),
         Index("ix_consent_records_org_activity", "organization_id", "processing_activity_id"),

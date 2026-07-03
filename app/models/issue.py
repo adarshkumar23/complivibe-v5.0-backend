@@ -20,7 +20,8 @@ class Issue(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, Base):
             name="ck_issues_severity",
         ),
         CheckConstraint(
-            "source_type IN ('manual', 'monitoring_alert', 'audit_finding', 'vendor_assessment', 'external_report', 'data_incident')",
+            # Keep in sync with ISSUE_SOURCE_TYPES in app/schemas/issue.py.
+            "source_type IN ('manual', 'monitoring_alert', 'audit_finding', 'vendor_assessment', 'external_report', 'data_incident', 'risk_assessment')",
             name="ck_issues_source_type",
         ),
         CheckConstraint(

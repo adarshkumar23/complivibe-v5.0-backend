@@ -283,14 +283,17 @@ def test_c78_retention_policy_enforcement(client, db_session):
         assert applied.status_code == 200
         assert applied.json()["retention_policy_days"] == 30
 
+    # The sweep is driven by retention_review_date (the field actually exposed for editing
+    # via the asset API, auto-set by apply-to-asset above) rather than created_at, so
+    # backdate that instead of created_at to simulate an overdue/upcoming review.
     now = datetime.now(UTC)
-    old_dt = now - timedelta(days=45)
-    recent_dt = now - timedelta(days=10)
+    old_review_date = (now - timedelta(days=15)).date()
+    upcoming_review_date = (now + timedelta(days=20)).date()
 
-    for asset_id, created_at in ((asset_1, old_dt), (asset_2, recent_dt), (asset_3, old_dt)):
+    for asset_id, review_date in ((asset_1, old_review_date), (asset_2, upcoming_review_date), (asset_3, old_review_date)):
         row = db_session.get(DataAsset, uuid.UUID(asset_id))
         assert row is not None
-        row.created_at = created_at
+        row.retention_review_date = review_date
     db_session.commit()
 
     sweep_1 = client.post(f"{RETENTION_BASE}/trigger-sweep", headers=org["org_headers"])

@@ -12,13 +12,13 @@ class OrganizationGovernanceManifestVerificationEvent(UUIDPrimaryKeyMixin, Organ
     __tablename__ = "organization_governance_manifest_verification_events"
     __table_args__ = (
         Index(
-            "ix_org_governance_manifest_verification_events_org_manifest_verified",
+            "ix_org_gov_mnfst_verif_events_org_mnfst_verified_09dcc7c1",
             "organization_id",
             "manifest_id",
             "verified_at",
         ),
         Index(
-            "ix_org_governance_manifest_verification_events_org_trusted_verified",
+            "ix_org_gov_mnfst_verif_events_org_trusted_verified_3c5ac2ab",
             "organization_id",
             "trusted",
             "verified_at",

@@ -20,7 +20,7 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.create_table(
-        "ai_system_governance_preset_assignment_diagnostic_export_diff_reports",
+        "ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("organization_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("base_export_id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -61,38 +61,38 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_preset_assignment_diagnostic_export_diff_reports_organization_id",
-        "ai_system_governance_preset_assignment_diagnostic_export_diff_reports",
+        "ix_ai_system_gov_pst_assign_diag_export_diff_rpts_29e_7a807fd3",
+        "ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83",
         ["organization_id"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_preset_assign_diag_export_diff_org_status",
-        "ai_system_governance_preset_assignment_diagnostic_export_diff_reports",
+        "ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83",
         ["organization_id", "status"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_preset_assign_diag_export_diff_org_type",
-        "ai_system_governance_preset_assignment_diagnostic_export_diff_reports",
+        "ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83",
         ["organization_id", "export_type"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_preset_assign_diag_export_diff_org_base",
-        "ai_system_governance_preset_assignment_diagnostic_export_diff_reports",
+        "ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83",
         ["organization_id", "base_export_id"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_preset_assign_diag_export_diff_org_compare",
-        "ai_system_governance_preset_assignment_diagnostic_export_diff_reports",
+        "ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83",
         ["organization_id", "compare_export_id"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_preset_assign_diag_export_diff_org_created",
-        "ai_system_governance_preset_assignment_diagnostic_export_diff_reports",
+        "ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83",
         ["organization_id", "created_at"],
         unique=False,
     )
@@ -101,26 +101,26 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index(
         "ix_ai_sys_gov_preset_assign_diag_export_diff_org_created",
-        table_name="ai_system_governance_preset_assignment_diagnostic_export_diff_reports",
+        table_name="ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83",
     )
     op.drop_index(
         "ix_ai_sys_gov_preset_assign_diag_export_diff_org_compare",
-        table_name="ai_system_governance_preset_assignment_diagnostic_export_diff_reports",
+        table_name="ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83",
     )
     op.drop_index(
         "ix_ai_sys_gov_preset_assign_diag_export_diff_org_base",
-        table_name="ai_system_governance_preset_assignment_diagnostic_export_diff_reports",
+        table_name="ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83",
     )
     op.drop_index(
         "ix_ai_sys_gov_preset_assign_diag_export_diff_org_type",
-        table_name="ai_system_governance_preset_assignment_diagnostic_export_diff_reports",
+        table_name="ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83",
     )
     op.drop_index(
         "ix_ai_sys_gov_preset_assign_diag_export_diff_org_status",
-        table_name="ai_system_governance_preset_assignment_diagnostic_export_diff_reports",
+        table_name="ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83",
     )
     op.drop_index(
-        "ix_ai_system_governance_preset_assignment_diagnostic_export_diff_reports_organization_id",
-        table_name="ai_system_governance_preset_assignment_diagnostic_export_diff_reports",
+        "ix_ai_system_gov_pst_assign_diag_export_diff_rpts_29e_7a807fd3",
+        table_name="ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83",
     )
-    op.drop_table("ai_system_governance_preset_assignment_diagnostic_export_diff_reports")
+    op.drop_table("ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83")

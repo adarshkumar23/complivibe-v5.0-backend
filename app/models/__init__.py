@@ -1,7 +1,11 @@
 from app.models.audit_log import AuditLog
+from app.models.atlas_technique import AtlasTechnique
 from app.models.applicability_evaluation_result import ApplicabilityEvaluationResult
 from app.models.applicability_evaluation_run import ApplicabilityEvaluationRun
 from app.models.ai_system import AISystem
+from app.models.ai_content_draft import AIContentDraft
+from app.models.ai_draft_revision import AIDraftRevision
+from app.models.ai_inline_suggestion import AIInlineSuggestion
 from app.models.ai_governance_event import AIGovernanceEvent
 from app.models.ai_governance_review import AIGovernanceReview
 from app.models.ai_review_criteria_response import AIReviewCriteriaResponse
@@ -116,6 +120,12 @@ from app.models.export_job_event import ExportJobEvent
 from app.models.export_attestation import ExportAttestation
 from app.models.evidence_control_link import EvidenceControlLink
 from app.models.control_obligation_mapping import ControlObligationMapping
+from app.models.cross_framework_obligation_mapping import CrossFrameworkObligationMapping
+from app.models.compliance_risk_recommendation import ComplianceRiskRecommendation
+from app.models.billing_event import BillingEvent
+from app.models.business_unit import BusinessUnit
+from app.models.board_scorecard_snapshot import BoardScorecardSnapshot
+from app.models.ai_governance_diagnostic_snapshot import AIGovernanceDiagnosticSnapshot
 from app.models.evidence_item import EvidenceItem
 from app.models.email_delivery_event import EmailDeliveryEvent
 from app.models.email_outbox import EmailOutbox
@@ -162,6 +172,17 @@ from app.models.organization_governance_manifest_verification_event import Organ
 from app.models.organization_governance_setting_history import OrganizationGovernanceSettingHistory
 from app.models.organization_internal_signing_key import OrganizationInternalSigningKey
 from app.models.organization import Organization
+from app.models.organization_ai_configuration import OrganizationAIConfiguration
+from app.models.subscription_plan import SubscriptionPlan
+from app.models.openscap_rule_mapping import OpenSCAPRuleMapping
+from app.models.rate_limit_config import RateLimitConfig
+from app.models.siem_export_config import SiemExportConfig
+from app.models.siem_export_run import SiemExportRun
+from app.models.scim_token import ScimToken
+from app.models.security_scan_job import SecurityScanJob
+from app.models.sso_config import SSOConfig
+from app.models.shared_report_link import SharedReportLink
+from app.models.team_invitation import TeamInvitation
 from app.models.permission import Permission
 from app.models.risk import Risk
 from app.models.org_risk_settings import OrgRiskSettings
@@ -190,6 +211,7 @@ from app.models.role_permission import RolePermission
 from app.models.score_snapshot import ScoreSnapshot
 from app.models.task import Task
 from app.models.user import User
+from app.models.user_session import UserSession
 from app.models.vendor import Vendor
 from app.models.vendor_assessment import VendorAssessment
 from app.models.vendor_assessment_question import VendorAssessmentQuestion
@@ -238,10 +260,12 @@ from app.models.technical_control_agent import TechnicalControlAgent
 from app.models.technical_control_rule import TechnicalControlRule
 from app.models.technical_control_result import TechnicalControlResult
 from app.models.policy_attestation_campaign import PolicyAttestationCampaign
+from app.models.policy_attestation import PolicyAttestation
 from app.models.policy_attestation_record import PolicyAttestationRecord
 from app.models.policy_exception import PolicyException
 from app.models.policy_exception_approval import PolicyExceptionApproval
 from app.models.policy_risk_mapping import PolicyRiskMapping
+from app.models.policy_risk_link import PolicyRiskLink
 from app.models.policy_template import PolicyTemplate
 from app.models.policy_template_clone import PolicyTemplateClone
 from app.models.policy_issue_link import PolicyIssueLink
@@ -258,10 +282,12 @@ from app.models.issue_sla_tracking import IssueSLATracking
 from app.models.escalation_policy import EscalationPolicy
 from app.models.escalation_event import EscalationEvent
 from app.models.breach_notification import BreachNotification
+from app.models.dora_ict_register import DORAICTRegister
 from app.models.shadow_ai_detection import ShadowAIDetection
 from app.models.ai_risk_assessment import AIRiskAssessment
 from app.models.ai_risk_assessment_question import AIRiskAssessmentQuestion
 from app.models.ai_risk_assessment_response import AIRiskAssessmentResponse
+from app.models.ai_bias_assessment import AIBiasAssessment
 from app.models.iso42001_conformity_tracker import ISO42001ConformityTracker
 from app.models.nist_ai_rmf_implementation import NISTAIRMFImplementation
 from app.models.ai_rmf_function_response import AIRMFFunctionResponse
@@ -278,7 +304,11 @@ from app.models.ai_monitoring_reading import AIMonitoringReading
 from app.models.ai_risk_signal import AIRiskSignal
 from app.models.ai_risk_recommendation import AIRiskRecommendation
 from app.models.mlops_integration import MLOpsIntegration
+from app.models.mlflow_connection import MLflowConnection
+from app.models.mlflow_model_registration import MLflowModelRegistration
+from app.models.mlflow_drift_event import MLflowDriftEvent
 from app.models.data_asset import DataAsset
+from app.models.data_asset_risk_link import DataAssetRiskLink
 from app.models.data_lineage_node import DataLineageNode
 from app.models.data_lineage_edge import DataLineageEdge
 from app.models.openmetadata_integration import OpenMetadataIntegration
@@ -290,9 +320,12 @@ from app.models.data_retention_policy import DataRetentionPolicy
 from app.models.data_retention_review import DataRetentionReview
 from app.models.data_incident import DataIncident
 from app.models.data_asset_obligation_link import DataAssetObligationLink
+from app.models.data_obligation_suggestion import DataObligationSuggestion
 from app.models.data_residency_policy import DataResidencyPolicy
 from app.models.data_residency_violation import DataResidencyViolation
 from app.models.org_email_config import OrgEmailConfig
+from app.models.org_ip_allowlist import OrgIPAllowlist
+from app.models.organization_export_setting import OrganizationExportSetting
 from app.models.processing_activity import ProcessingActivity
 from app.models.ropa_framework_link import RopaFrameworkLink
 from app.models.dpia import DPIA
@@ -317,6 +350,7 @@ from app.models.offboarding_record import OffboardingRecord
 from app.models.scheduler_run_log import SchedulerRunLog
 from app.models.audit_engagement import AuditEngagement
 from app.models.pbc_item import PbcItem
+from app.models.pbc_request import PBCRequest
 from app.models.auditor_portal_invitation import AuditorPortalInvitation
 from app.models.audit_finding import AuditFinding
 from app.models.audit_schedule import AuditSchedule
@@ -525,6 +559,7 @@ __all__ = [
     "PolicyException",
     "PolicyExceptionApproval",
     "PolicyRiskMapping",
+    "PolicyRiskLink",
     "PolicyIssueLink",
     "Issue",
     "IssueTransition",
@@ -543,6 +578,7 @@ __all__ = [
     "AIRiskAssessment",
     "AIRiskAssessmentQuestion",
     "AIRiskAssessmentResponse",
+    "AIBiasAssessment",
     "ISO42001ConformityTracker",
     "NISTAIRMFImplementation",
     "AIRMFFunctionResponse",
@@ -558,6 +594,7 @@ __all__ = [
     "AIMonitoringReading",
     "AIRiskSignal",
     "AIRiskRecommendation",
+    "ComplianceRiskRecommendation",
     "MLOpsIntegration",
     "DataAsset",
     "DataLineageNode",
@@ -571,6 +608,7 @@ __all__ = [
     "DataRetentionReview",
     "DataIncident",
     "DataAssetObligationLink",
+    "DataObligationSuggestion",
     "DataResidencyPolicy",
     "DataResidencyViolation",
     "OrgEmailConfig",
@@ -595,10 +633,14 @@ __all__ = [
     "OffboardingConfiguration",
     "OffboardingRecord",
     "SchedulerRunLog",
+    "ScimToken",
+    "SecurityScanJob",
+    "OpenSCAPRuleMapping",
     "PolicyTemplate",
     "PolicyTemplateClone",
     "AuditEngagement",
     "PbcItem",
+    "PBCRequest",
     "AuditorPortalInvitation",
     "AuditFinding",
     "AuditSchedule",

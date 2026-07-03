@@ -1,10 +1,14 @@
 import re
+import uuid
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.deps import get_current_active_user, get_current_organization, get_db
+from app.core.rate_limiter import rate_limiter
 from app.core.security import create_access_token, get_password_hash, verify_password
 from app.models.membership import Membership
 from app.models.organization import Organization
@@ -13,6 +17,9 @@ from app.schemas.activation import ActivateInviteRequest, ActivateInviteResponse
 from app.schemas.auth import AuthUser, CurrentUserPermissionsResponse, LoginRequest, RegisterRequest, Token
 from app.services.activation_token_service import ActivationTokenService
 from app.services.audit_service import AuditService
+from app.platform.services.billing_service import BillingService
+from app.platform.services.ip_allowlist_service import IPAllowlistService
+from app.platform.services.session_service import SessionService
 from app.services.rbac_service import RBACService
 from app.services.seed_service import SeedService
 
@@ -52,6 +59,7 @@ def _validate_password_strength(password: str) -> None:
 
 
 @router.post("/register", response_model=Token)
+@rate_limiter.limiter.limit("10/minute")
 def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)) -> Token:
     existing = db.execute(select(User).where(User.email == payload.email)).scalar_one_or_none()
     if existing is not None:
@@ -94,6 +102,7 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
         )
         db.add(membership)
         db.flush()
+        BillingService(db).start_trial(organization.id)
 
         audit_service = AuditService(db)
         audit_service.write_audit_log(
@@ -125,7 +134,8 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
 
 
 @router.post("/login", response_model=Token)
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> Token:
+@rate_limiter.limiter.limit("10/minute")
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> Token:
     user = db.execute(select(User).where(User.email == payload.email)).scalar_one_or_none()
     if user is None or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
@@ -133,11 +143,42 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> Token:
     if not user.is_active or user.status != "active":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Inactive user")
 
-    return Token(access_token=create_access_token(subject=user.id))
+    requested_org_id: uuid.UUID | None = None
+    org_header = request.headers.get("X-Organization-ID")
+    if org_header:
+        try:
+            requested_org_id = uuid.UUID(org_header)
+        except ValueError:
+            requested_org_id = None
+
+    session_service = SessionService(db)
+    session_org_id = session_service.resolve_login_org_id(user.id, requested_org_id)
+    if session_org_id is None:
+        # Keep compatibility for users with no active membership by issuing a legacy stateless token.
+        return Token(access_token=create_access_token(subject=user.id))
+
+    token_id = str(uuid.uuid4())
+    settings = get_settings()
+    expires_at = datetime.now(UTC) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(subject=user.id, extra={"jti": token_id})
+    session_service.create_session(
+        org_id=session_org_id,
+        user_id=user.id,
+        token_id=token_id,
+        ip_address=IPAllowlistService.extract_request_ip(
+            x_forwarded_for=request.headers.get("X-Forwarded-For"),
+            client_host=request.client.host if request.client else None,
+        ),
+        user_agent=request.headers.get("user-agent"),
+        expires_at=expires_at,
+    )
+    db.commit()
+    return Token(access_token=access_token)
 
 
 @router.post("/activate-invite", response_model=ActivateInviteResponse)
-def activate_invite(payload: ActivateInviteRequest, db: Session = Depends(get_db)) -> ActivateInviteResponse:
+@rate_limiter.limiter.limit("10/minute")
+def activate_invite(payload: ActivateInviteRequest, request: Request, db: Session = Depends(get_db)) -> ActivateInviteResponse:
     try:
         _validate_password_strength(payload.password)
     except PasswordValidationError as exc:

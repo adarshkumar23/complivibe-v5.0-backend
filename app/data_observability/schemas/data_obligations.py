@@ -40,6 +40,24 @@ class DataObligationSuggestionRead(BaseModel):
     reason: str
 
 
+class DataObligationSuggestionPersistedRead(BaseModel):
+    id: str
+    organization_id: str
+    data_asset_id: str
+    framework_id: str
+    obligation_id: str
+    obligation_ref: str
+    obligation_title: str
+    framework_code: str
+    framework_name: str
+    link_reason: str
+    status: str
+    applied_by: str | None
+    dismissed_by: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
 class ObligationAssetRead(BaseModel):
     asset_id: str
     asset_name: str

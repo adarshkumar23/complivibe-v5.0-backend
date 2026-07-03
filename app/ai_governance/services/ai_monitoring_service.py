@@ -78,8 +78,8 @@ class AIMonitoringService:
     @staticmethod
     def check_threshold(config: AIMonitoringConfig, value: Decimal) -> bool:
         if config.comparison_direction == "above":
-            return value <= config.threshold_value
-        return value >= config.threshold_value
+            return value >= config.threshold_value
+        return value <= config.threshold_value
 
     @staticmethod
     def _severity_for_metric(metric_type: str) -> str:

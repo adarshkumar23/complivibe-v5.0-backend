@@ -57,7 +57,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_policy_resolution_simulation_diff_reports_organization_id",
+        "ix_ai_system_gov_pol_resolution_simulation_diff_rpts_0f711ee6",
         "ai_system_governance_policy_resolution_simulation_diff_reports",
         ["organization_id"],
         unique=False,
@@ -106,7 +106,7 @@ def downgrade() -> None:
         table_name="ai_system_governance_policy_resolution_simulation_diff_reports",
     )
     op.drop_index(
-        "ix_ai_system_governance_policy_resolution_simulation_diff_reports_organization_id",
+        "ix_ai_system_gov_pol_resolution_simulation_diff_rpts_0f711ee6",
         table_name="ai_system_governance_policy_resolution_simulation_diff_reports",
     )
     op.drop_table("ai_system_governance_policy_resolution_simulation_diff_reports")

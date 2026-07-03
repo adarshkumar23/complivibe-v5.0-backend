@@ -276,17 +276,6 @@ def link_issue_to_policy(
     return _policy_link_read(row)
 
 
-@router.get("/{issue_id}/policy-links", response_model=list[IssuePolicyLinkRead])
-def get_issue_policy_links(
-    issue_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("issues:read")),
-) -> list[IssuePolicyLinkRead]:
-    rows = IssuePolicyLinkService(db).get_issue_policy_links(organization.id, issue_id)
-    return [_policy_link_read(row) for row in rows]
-
-
 @router.delete("/{issue_id}/policy-links/{policy_id}", status_code=status.HTTP_204_NO_CONTENT)
 def unlink_issue_from_policy(
     issue_id: uuid.UUID,

@@ -3,9 +3,12 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import inspect, select, text
+from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
+from app.compliance.services.risk_scoring_service import RiskScoringService
+from app.models.data_asset import DataAsset
+from app.models.data_asset_risk_link import DataAssetRiskLink
 from app.models.entity_risk_score import EntityRiskScore
 from app.models.framework import Framework
 from app.models.obligation import Obligation
@@ -19,7 +22,7 @@ from app.services.audit_service import AuditService
 
 
 class EntityRiskScoreService:
-    ENTITY_TYPES = ("vendor", "asset", "business_unit", "framework")
+    ENTITY_TYPES = ("vendor", "asset", "data_asset", "business_unit", "framework")
     SCORE_METHODS = ("equal_weight", "max_score", "weighted_avg")
 
     @staticmethod
@@ -78,24 +81,17 @@ class EntityRiskScoreService:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found")
             return framework.name or framework.code, None
 
-        if entity_type == "asset":
-            if not cls._table_exists(db, "assets"):
-                return str(entity_id), "Asset model not yet implemented. Entity label uses raw UUID."
-
+        if entity_type in {"asset", "data_asset"}:
             row = db.execute(
-                text(
-                    """
-                    SELECT name
-                    FROM assets
-                    WHERE id = :entity_id AND organization_id = :org_id
-                    LIMIT 1
-                    """
-                ),
-                {"entity_id": str(entity_id), "org_id": str(org_id)},
-            ).first()
+                select(DataAsset).where(
+                    DataAsset.id == entity_id,
+                    DataAsset.organization_id == org_id,
+                    DataAsset.deleted_at.is_(None),
+                )
+            ).scalar_one_or_none()
             if row is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found")
-            return str(row[0]), None
+            return row.name, None
 
         if entity_type == "business_unit":
             return str(entity_id), "Business unit model not yet implemented. Entity label uses raw UUID."
@@ -158,33 +154,17 @@ class EntityRiskScoreService:
             ).scalars().all()
             return rows, None
 
-        if entity_type == "asset":
-            if not cls._table_exists(db, "risk_asset_links"):
-                return [], "Asset risk links not yet implemented. Score based on 0 linked risks."
-
-            rows = db.execute(
-                text(
-                    """
-                    SELECT r.*
-                    FROM risks r
-                    WHERE r.id IN (
-                        SELECT DISTINCT ral.risk_id
-                        FROM risk_asset_links ral
-                        WHERE ral.asset_id = :entity_id
-                          AND ral.organization_id = :org_id
-                          AND ral.status = 'active'
-                    )
-                    AND r.organization_id = :org_id
-                    AND r.status NOT IN ('closed', 'archived')
-                    """
-                ),
-                {"entity_id": str(entity_id), "org_id": str(org_id)},
-            )
-            risk_ids = [uuid.UUID(str(row.id)) for row in rows]
-            if not risk_ids:
-                return [], None
+        if entity_type in {"asset", "data_asset"}:
             risks = db.execute(
-                select(Risk).where(Risk.organization_id == org_id, Risk.id.in_(risk_ids))
+                select(Risk)
+                .join(DataAssetRiskLink, DataAssetRiskLink.risk_id == Risk.id)
+                .where(
+                    DataAssetRiskLink.organization_id == org_id,
+                    DataAssetRiskLink.data_asset_id == entity_id,
+                    Risk.organization_id == org_id,
+                    Risk.status.not_in(["closed", "archived"]),
+                )
+                .distinct()
             ).scalars().all()
             return risks, None
 
@@ -226,6 +206,9 @@ class EntityRiskScoreService:
         )
 
         risks, link_note = cls._get_linked_risks_with_notes(entity_type, entity_id, org_id, db)
+        org_settings = None
+        if score_method == "weighted_avg":
+            org_settings = RiskScoringService.get_or_create_org_settings(org_id, db)
         notes: list[str] = [n for n in [label_note, link_note] if n]
 
         component_risks_json: list[dict] = []
@@ -249,24 +232,33 @@ class EntityRiskScoreService:
                 )
             score_band = cls._score_band(composite_score)
         else:
-            effective_method = score_method
-            if score_method == "weighted_avg":
-                notes.append(
-                    "weighted_avg requested; equal weights applied (custom weights not yet configured)"
-                )
-                effective_method = "equal_weight"
-
             weight = 1.0 / float(risk_count)
             weighted_sum = 0.0
             for r in risks:
-                raw_score = cls._to_float(r.inherent_score)
+                if score_method == "weighted_avg" and org_settings is not None:
+                    if (
+                        r.financial_impact is not None
+                        and r.brand_impact is not None
+                        and r.operational_impact is not None
+                    ):
+                        weighted_raw = (
+                            (float(r.financial_impact) * float(org_settings.financial_weight))
+                            + (float(r.brand_impact) * float(org_settings.brand_weight))
+                            + (float(r.operational_impact) * float(org_settings.operational_weight))
+                        )
+                        raw_score = float(RiskScoringService._scale_raw_score(Decimal(str(weighted_raw))))
+                    else:
+                        raw_score = cls._to_float(r.inherent_score)
+                else:
+                    raw_score = cls._to_float(r.inherent_score)
+
                 contribution = raw_score * weight
                 weighted_sum += contribution
                 component_risks_json.append(
                     {
                         "risk_id": str(r.id),
                         "risk_name": r.title,
-                        "score": int(r.inherent_score) if r.inherent_score is not None else None,
+                        "score": int(raw_score) if raw_score else 0,
                         "weight": round(weight, 6),
                         "weighted_contribution": round(contribution, 4),
                     }
@@ -274,7 +266,6 @@ class EntityRiskScoreService:
 
             composite_score = (weighted_sum / 25.0) * 100.0
             score_band = cls._score_band(composite_score)
-            score_method = "weighted_avg" if score_method == "weighted_avg" else effective_method
 
         composite_score = round(max(0.0, min(100.0, composite_score)), 2)
         score_band = cls._score_band(composite_score)

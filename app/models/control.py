@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import ForeignKey, Index, String, Text, Uuid
+from sqlalchemy import Boolean, ForeignKey, Index, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -38,3 +38,10 @@ class Control(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, Base)
         nullable=True,
         index=True,
     )
+    business_unit_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("business_units.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    is_common_control: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    common_control_tag: Mapped[str | None] = mapped_column(String(100), nullable=True)

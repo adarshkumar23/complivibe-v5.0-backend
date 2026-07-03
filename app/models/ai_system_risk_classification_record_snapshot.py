@@ -31,7 +31,7 @@ class AISystemRiskClassificationRecordSnapshot(UUIDPrimaryKeyMixin, TimestampMix
             "snapshot_type",
         ),
         Index(
-            "ix_ai_risk_classification_record_snapshots_org_classification_version",
+            "ix_ai_risk_class_record_snaps_org_class_ver_7933f4bd",
             "organization_id",
             "classification_id",
             "snapshot_version",

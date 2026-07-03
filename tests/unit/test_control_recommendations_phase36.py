@@ -171,7 +171,10 @@ def test_recommendation_generation_dry_run_live_and_duplicate_skip(client):
     assert live.json()["dry_run"] is False
     assert live.json()["run_id"] is not None
 
-    listed_after_live = client.get("/api/v1/control-recommendations", headers=_headers(owner, org))
+    listed_after_live = client.get(
+        "/api/v1/control-recommendations?recommendation_type=create_control&limit=200",
+        headers=_headers(owner, org),
+    )
     assert listed_after_live.status_code == 200
     assert any(item["recommendation_type"] == "create_control" for item in listed_after_live.json())
 

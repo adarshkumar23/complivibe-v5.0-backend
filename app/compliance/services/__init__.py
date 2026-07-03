@@ -18,6 +18,7 @@ from app.compliance.services.policy_risk_mapping_service import PolicyRiskMappin
 from app.compliance.services.policy_template_service import PolicyTemplateService
 from app.compliance.services.audit_engagement_service import AuditEngagementService
 from app.compliance.services.pbc_service import PbcService
+from app.compliance.services.pbc_request_service import PBCRequestService
 from app.compliance.services.auditor_portal_service import AuditorPortalService
 from app.compliance.services.audit_finding_service import AuditFindingService
 from app.compliance.services.audit_schedule_service import AuditScheduleService
@@ -59,6 +60,7 @@ __all__ = [
     "PolicyTemplateService",
     "AuditEngagementService",
     "PbcService",
+    "PBCRequestService",
     "AuditorPortalService",
     "AuditFindingService",
     "AuditScheduleService",

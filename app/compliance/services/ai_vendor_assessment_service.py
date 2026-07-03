@@ -1,17 +1,23 @@
 import uuid
 from collections import Counter
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.compliance.services.questionnaire_template_service import QuestionnaireTemplateService
 from app.models.ai_vendor_assessment import AIVendorAssessment
+from app.models.questionnaire_template import QuestionnaireTemplate
 from app.models.vendor import Vendor
 from app.services.audit_service import AuditService
+from app.services.seed_service import SeedService
 
 
 class AIVendorAssessmentService:
+    AI_VENDOR_TEMPLATE_NAME = "AI Vendor Governance Assessment"
+
     def __init__(self, db: Session) -> None:
         self.db = db
 
@@ -73,6 +79,45 @@ class AIVendorAssessmentService:
         )
         self.db.add(row)
         self.db.flush()
+
+        SeedService.ensure_questionnaire_templates(self.db)
+        template = self.db.execute(
+            select(QuestionnaireTemplate).where(
+                QuestionnaireTemplate.organization_id.is_(None),
+                QuestionnaireTemplate.is_system_template.is_(True),
+                QuestionnaireTemplate.is_active.is_(True),
+                QuestionnaireTemplate.name == self.AI_VENDOR_TEMPLATE_NAME,
+                QuestionnaireTemplate.deleted_at.is_(None),
+            )
+        ).scalar_one_or_none()
+
+        if template is not None:
+            response_payload = SimpleNamespace(
+                title=f"{self.AI_VENDOR_TEMPLATE_NAME} - {row.id}",
+                due_date=None,
+            )
+            response = QuestionnaireTemplateService(self.db).create_response(
+                org_id,
+                vendor_id,
+                template.id,
+                response_payload,
+                assessor_id,
+            )
+            self.db.flush()
+
+            AuditService(self.db).write_audit_log(
+                action="ai_vendor_assessment.template_auto_applied",
+                entity_type="ai_vendor_assessment",
+                entity_id=row.id,
+                organization_id=org_id,
+                actor_user_id=assessor_id,
+                after_json={
+                    "template_id": str(template.id),
+                    "template_name": template.name,
+                    "questionnaire_response_id": str(response.id),
+                },
+                metadata_json={"source": "service_hook"},
+            )
 
         AuditService(self.db).write_audit_log(
             action="ai_vendor_assessment.created",

@@ -23,7 +23,7 @@ class AISystemGovernanceDiagnosticExportDiffGatingReport(
 
     export_diff_report_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
-        ForeignKey("ai_system_governance_preset_assignment_diagnostic_export_diff_reports.id", ondelete="CASCADE"),
+        ForeignKey("ai_system_gov_pst_assign_diag_export_diff_rpts_29e68c83.id", ondelete="CASCADE"),
         nullable=False,
     )
     gating_profile_id: Mapped[uuid.UUID] = mapped_column(

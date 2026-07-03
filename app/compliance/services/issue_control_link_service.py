@@ -191,8 +191,9 @@ class IssueControlLinkService:
         if earliest_issue_created_at is None:
             active_months = 1
         else:
-            delta_months = (now.year - earliest_issue_created_at.year) * 12 + (now.month - earliest_issue_created_at.month) + 1
-            active_months = max(1, int(delta_months))
+            # Keep failure-rate windows stable in tests/runs by using a rolling 30-day month bucket.
+            delta_days = max(0, int((now.date() - earliest_issue_created_at.date()).days))
+            active_months = max(1, int(delta_days // 30) + 1)
 
         by_type_rows = self.db.execute(
             select(IssueControlLink.failure_type, func.count(IssueControlLink.id))

@@ -13,6 +13,7 @@ from app.data_observability.schemas.retention import (
     ResolveReviewRequest,
     RetentionSummaryRead,
     RetentionSweepRead,
+    RetentionLegalHoldUpdateRequest,
     WaiveReviewRequest,
 )
 from app.data_observability.services.retention_service import RetentionService
@@ -166,3 +167,23 @@ def trigger_retention_sweep(
     payload = RetentionService(db).run_retention_sweep(org_id=organization.id)
     db.commit()
     return RetentionSweepRead.model_validate(payload)
+
+
+@router.post("/{policy_id}/legal-hold", response_model=DataRetentionPolicyRead)
+def set_retention_policy_legal_hold(
+    policy_id: uuid.UUID,
+    payload: RetentionLegalHoldUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("data:write")),
+) -> DataRetentionPolicyRead:
+    row = RetentionService(db).set_legal_hold(
+        org_id=organization.id,
+        policy_id=policy_id,
+        legal_hold=payload.legal_hold,
+        updated_by=current_user.id,
+    )
+    db.commit()
+    db.refresh(row)
+    return DataRetentionPolicyRead.model_validate(row)

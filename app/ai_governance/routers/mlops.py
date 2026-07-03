@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.ai_governance.schemas.mlops import (
@@ -90,9 +90,19 @@ def sync_mlops_integration(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("integrations:write")),
 ) -> MLOpsSyncResult:
-    result = MLOPSSyncService(db).sync(organization.id, integration_id, current_user.id)
-    db.commit()
-    return MLOpsSyncResult(**result)
+    try:
+        result = MLOPSSyncService(db).sync(organization.id, integration_id, current_user.id)
+        db.commit()
+        return MLOpsSyncResult(**result)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"MLOps sync failed: {exc}",
+        ) from exc
 
 
 @router.get("/{integration_id}/sync-log", response_model=MLOpsSyncLogRead)

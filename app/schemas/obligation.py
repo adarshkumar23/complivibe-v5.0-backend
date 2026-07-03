@@ -116,6 +116,7 @@ class ObligationRead(BaseModel):
     jurisdiction: str
     source_url: str | None = None
     version: str | None = None
+    ig_level: str | None = None
     status: str
     effective_date: date | None = None
     parent_obligation_id: UUID | None = None

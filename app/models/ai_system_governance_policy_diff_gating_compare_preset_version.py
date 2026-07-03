@@ -9,7 +9,7 @@ from app.db.mixins import OrganizationOwnedMixin, TimestampMixin, UUIDPrimaryKey
 
 
 class AISystemGovernancePolicyDiffGatingComparePresetVersion(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, Base):
-    __tablename__ = "ai_system_governance_policy_diff_gating_compare_preset_versions"
+    __tablename__ = "ai_system_gov_pol_diff_gating_cmp_pst_vers_d4acbc3b"
     __table_args__ = (
         Index("ix_ai_sys_gov_policy_diff_gating_cmp_preset_ver_org_preset", "organization_id", "preset_id"),
         Index("ix_ai_sys_gov_policy_diff_gating_cmp_preset_ver_org_status", "organization_id", "status"),

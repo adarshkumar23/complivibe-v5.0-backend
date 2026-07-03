@@ -59,21 +59,6 @@ def _record_read(
     )
 
 
-@router.post("/attestation-campaigns", response_model=AttestationCampaignCreateResponse, status_code=status.HTTP_201_CREATED)
-def create_attestation_campaign(
-    payload: AttestationCampaignCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-    organization: Organization = Depends(get_current_organization),
-    _=Depends(require_permission("attestations:manage")),
-) -> AttestationCampaignCreateResponse:
-    service = AttestationCampaignService(db)
-    campaign, count = service.create_campaign(organization.id, payload, current_user.id)
-    db.commit()
-    db.refresh(campaign)
-    return AttestationCampaignCreateResponse(campaign=_campaign_read(service, campaign), record_count_created=count)
-
-
 @router.get("/attestation-campaigns/dashboard", response_model=AttestationDashboardResponse)
 def attestation_dashboard(
     db: Session = Depends(get_db),
@@ -83,33 +68,6 @@ def attestation_dashboard(
     service = AttestationCampaignService(db)
     payload = service.get_dashboard(organization.id)
     return AttestationDashboardResponse(**payload)
-
-
-@router.get("/attestation-campaigns", response_model=list[AttestationCampaignResponse])
-def list_attestation_campaigns(
-    policy_id: uuid.UUID | None = Query(default=None),
-    status_filter: str | None = Query(default=None, alias="status"),
-    db: Session = Depends(get_db),
-    organization: Organization = Depends(get_current_organization),
-    _=Depends(require_permission("attestations:view")),
-) -> list[AttestationCampaignResponse]:
-    service = AttestationCampaignService(db)
-    rows = service.list_campaigns(organization.id, policy_id=policy_id, status_value=status_filter)
-    return [_campaign_read(service, row) for row in rows]
-
-
-@router.get("/attestation-campaigns/{campaign_id}", response_model=AttestationCampaignResponse)
-def get_attestation_campaign(
-    campaign_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    organization: Organization = Depends(get_current_organization),
-    _=Depends(require_permission("attestations:view")),
-) -> AttestationCampaignResponse:
-    service = AttestationCampaignService(db)
-    row = service.get_campaign(organization.id, campaign_id)
-    db.commit()
-    db.refresh(row)
-    return _campaign_read(service, row)
 
 
 @router.patch("/attestation-campaigns/{campaign_id}", response_model=AttestationCampaignResponse)
@@ -165,23 +123,6 @@ def send_attestation_bulk_reminders(
     count = AttestationRecordService(db).send_bulk_reminders(organization.id, campaign_id, current_user.id)
     db.commit()
     return AttestationReminderResponse(reminders_queued=count)
-
-
-@router.post("/attestation-campaigns/{campaign_id}/attest", response_model=AttestationRecordResponse)
-def submit_my_attestation(
-    campaign_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-    organization: Organization = Depends(get_current_organization),
-    _=Depends(require_permission("attestations:submit")),
-) -> AttestationRecordResponse:
-    service = AttestationRecordService(db)
-    row = service.submit_attestation(organization.id, campaign_id, current_user.id, current_user.id)
-    campaign = service.campaign_service.require_campaign(organization.id, campaign_id)
-    policy_name = service.campaign_service.require_policy_in_org(organization.id, campaign.policy_id).title
-    db.commit()
-    db.refresh(row)
-    return _record_read(row, campaign, policy_name=policy_name)
 
 
 @router.post("/attestation-campaigns/{campaign_id}/exempt/{user_id}", response_model=AttestationRecordResponse)

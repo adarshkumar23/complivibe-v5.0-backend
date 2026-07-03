@@ -58,6 +58,8 @@ def test_phase911_dashboard_endpoint_shapes(client):
         "controls_with_open_monitoring_alerts",
         "controls_with_overdue_checks",
         "controls_mapped_to_0_obligations",
+        "open_high_critical_findings",
+        "health_flag",
     }
 
     heatmap = client.get(f"{BASE}/risk-heatmap", headers=org["org_headers"])

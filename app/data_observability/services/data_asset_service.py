@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.data_observability.services.classification_service import classify_metadata, classify_sample
 from app.models.data_asset import DataAsset
+from app.models.organization import Organization
 from app.services.audit_service import AuditService
 
 ALLOWED_ASSET_TYPES = {
@@ -32,8 +33,10 @@ ALLOWED_CLASSIFICATION_TYPES = {
     "public_data",
     "unclassified",
 }
-ALLOWED_CLASSIFICATION_SOURCES = {"metadata_rules", "presidio_sample", "manual"}
+ALLOWED_CLASSIFICATION_SOURCES = {"metadata_rules", "presidio_sample", "manual", "fides", "openmetadata", "mlflow"}
 ALLOWED_STATUS = {"active", "archived", "under_review", "decommissioned"}
+ALLOWED_HIPAA_SAFEGUARDS = {"administrative", "physical", "technical", "all"}
+DPDP_LOCALIZATION_CLASSIFICATIONS = {"health_data", "financial_data", "sensitive_personal_data"}
 
 try:
     from prometheus_client import Counter
@@ -86,6 +89,8 @@ class DataAssetService:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid classification_source")
         if payload.get("status") is not None and payload["status"] not in ALLOWED_STATUS:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status")
+        if payload.get("hipaa_safeguard_required") is not None and payload["hipaa_safeguard_required"] not in ALLOWED_HIPAA_SAFEGUARDS:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid hipaa_safeguard_required")
         confidence = payload.get("classification_confidence")
         if confidence is not None and not (Decimal("0") <= Decimal(confidence) <= Decimal("1")):
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="classification_confidence must be between 0 and 1")
@@ -106,6 +111,18 @@ class DataAssetService:
         row.classification_confidence = result.get("confidence")
         row.classification_source = "metadata_rules"
         row.classification_confirmed = False
+
+    def suggest_residency_policy(self, org_id: uuid.UUID, classification_type: str | None, permitted_regions: list | None) -> list:
+        org = self.db.execute(select(Organization).where(Organization.id == org_id)).scalar_one_or_none()
+        regions = list(permitted_regions or [])
+        if (
+            org is not None
+            and bool(org.is_significant_data_fiduciary)
+            and classification_type in DPDP_LOCALIZATION_CLASSIFICATIONS
+            and "IN" not in regions
+        ):
+            regions.append("IN")
+        return regions
 
     def create_asset(self, org_id: uuid.UUID, data, created_by: uuid.UUID) -> DataAsset:
         payload = data.model_dump()
@@ -132,6 +149,8 @@ class DataAssetService:
             data_volume_estimate=payload.get("data_volume_estimate"),
             source_system=payload.get("source_system"),
             tags=self._normalize_json_list(payload.get("tags")),
+            is_phi=bool(payload.get("is_phi", False)),
+            hipaa_safeguard_required=payload.get("hipaa_safeguard_required"),
             status=payload.get("status") or "active",
             created_by=created_by,
             created_at=now,
@@ -146,6 +165,7 @@ class DataAssetService:
         except Exception:
             # Classification is best-effort and must not block asset creation.
             pass
+        row.permitted_regions = self.suggest_residency_policy(org_id, row.classification_type, row.permitted_regions)
 
         self.db.flush()
         AuditService(self.db).write_audit_log(
@@ -221,6 +241,7 @@ class DataAssetService:
                 self._run_tier1_classification(row)
             except Exception:
                 pass
+        row.permitted_regions = self.suggest_residency_policy(org_id, row.classification_type, row.permitted_regions)
 
         row.updated_at = self.utcnow()
         self.db.flush()
@@ -264,6 +285,7 @@ class DataAssetService:
             row.classification_source = "manual"
         elif row.classification_source is None:
             row.classification_source = "manual"
+        row.permitted_regions = self.suggest_residency_policy(org_id, row.classification_type, row.permitted_regions)
         row.updated_at = self.utcnow()
         self.db.flush()
 

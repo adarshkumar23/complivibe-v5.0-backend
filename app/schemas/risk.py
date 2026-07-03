@@ -66,6 +66,11 @@ class RiskCreate(BaseModel):
     operational_impact: int | None = Field(default=None, ge=1, le=5)
     composite_score_method: str = Field(default="standard", pattern="^(standard|factor_based)$")
     treatment_strategy: str = Field(default="undecided", pattern="^(mitigate|accept|transfer|avoid|undecided)$")
+    treatment_option: str | None = Field(default=None, pattern="^(avoid|reduce|share|retain)$")
+    risk_context_internal: str | None = None
+    risk_context_external: str | None = None
+    residual_risk_acceptable: bool | None = None
+    risk_communication_plan: str | None = None
     owner_user_id: UUID | None = None
     target_date: datetime | None = None
     metadata_json: dict | None = None
@@ -85,6 +90,11 @@ class RiskUpdate(BaseModel):
     residual_likelihood: int | None = Field(default=None, ge=1, le=5)
     residual_impact: int | None = Field(default=None, ge=1, le=5)
     treatment_strategy: str | None = Field(default=None, pattern="^(mitigate|accept|transfer|avoid|undecided)$")
+    treatment_option: str | None = Field(default=None, pattern="^(avoid|reduce|share|retain)$")
+    risk_context_internal: str | None = None
+    risk_context_external: str | None = None
+    residual_risk_acceptable: bool | None = None
+    risk_communication_plan: str | None = None
     owner_user_id: UUID | None = None
     target_date: datetime | None = None
     review_due_at: datetime | None = None
@@ -109,6 +119,11 @@ class RiskRead(UUIDTimestampSchema):
     residual_impact: int | None = None
     residual_score: int | None = None
     treatment_strategy: str
+    treatment_option: str | None = None
+    risk_context_internal: str | None = None
+    risk_context_external: str | None = None
+    residual_risk_acceptable: bool | None = None
+    risk_communication_plan: str | None = None
     owner_user_id: UUID | None = None
     target_date: datetime | None = None
     accepted_by_user_id: UUID | None = None

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
+from app.core.rate_limiter import rate_limiter
 from app.models.membership import Membership
 from app.models.organization import Organization
 from app.models.user import User
@@ -44,6 +45,7 @@ def _check_public_rate_limit(client_ip: str) -> None:
 
 
 @router.post("/submit", response_model=PublicDSRSubmitResponse, status_code=status.HTTP_201_CREATED)
+@rate_limiter.limiter.limit("120/minute")
 def submit_public_dsr(
     payload: PublicDSRSubmit,
     request: Request,

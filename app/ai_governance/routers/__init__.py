@@ -1,6 +1,7 @@
 """Pillar 2 routers."""
 
 from app.ai_governance.routers import (
+    atlas,
     approval_envelopes,
     ai_reviews,
     ai_risk_assessments,
@@ -11,15 +12,19 @@ from app.ai_governance.routers import (
     risk_signals,
     recommendations,
     diagnostics,
+    ai_governance_diagnostics,
     contracts,
     monitoring,
     mlops,
+    mlops_ingest,
+    mlops_management,
     nist_rmf,
     shadow_ai,
     third_party_ai,
 )
 
 __all__ = [
+    "atlas",
     "approval_envelopes",
     "ai_reviews",
     "ai_risk_assessments",
@@ -30,9 +35,12 @@ __all__ = [
     "risk_signals",
     "recommendations",
     "diagnostics",
+    "ai_governance_diagnostics",
     "contracts",
     "monitoring",
     "mlops",
+    "mlops_ingest",
+    "mlops_management",
     "nist_rmf",
     "shadow_ai",
     "third_party_ai",

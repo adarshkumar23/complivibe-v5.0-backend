@@ -144,14 +144,23 @@ def test_a45_link_engagement_advances_next_audit_date_for_patterns(client):
     engagement = _create_engagement(client, org["org_headers"], framework_id, org["user_id"])
     base_date = date.today() + timedelta(days=10)
 
-    offsets = {
-        "annual": 365,
-        "semi_annual": 182,
-        "quarterly": 91,
-        "monthly": 30,
-    }
+    def _expected_next_date(pattern: str) -> date:
+        if pattern == "annual":
+            return base_date + timedelta(days=365)
+        if pattern == "semi_annual":
+            return base_date + timedelta(days=182)
+        if pattern == "quarterly":
+            month = base_date.month + 3
+            year = base_date.year
+            while month > 12:
+                month -= 12
+                year += 1
+            return date(year, month, 1)
+        year = base_date.year + (1 if base_date.month == 12 else 0)
+        month = 1 if base_date.month == 12 else base_date.month + 1
+        return date(year, month, 1)
 
-    for pattern, days in offsets.items():
+    for pattern in ["annual", "semi_annual", "quarterly", "monthly"]:
         schedule = _create_schedule(
             client,
             org["org_headers"],
@@ -167,7 +176,7 @@ def test_a45_link_engagement_advances_next_audit_date_for_patterns(client):
         )
         assert linked.status_code == 200
         assert linked.json()["last_audit_engagement_id"] == engagement["id"]
-        assert linked.json()["next_audit_date"] == (base_date + timedelta(days=days)).isoformat()
+        assert linked.json()["next_audit_date"] == _expected_next_date(pattern).isoformat()
 
 
 def test_a45_reminder_sweep_window_calendar_and_skip_rules(client, db_session):

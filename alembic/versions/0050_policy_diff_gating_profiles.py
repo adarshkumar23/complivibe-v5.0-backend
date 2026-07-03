@@ -40,7 +40,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_policy_diff_gating_profiles_organization_id",
+        "ix_ai_system_gov_pol_diff_gating_profs_org_id_48612a51",
         "ai_system_governance_policy_diff_gating_profiles",
         ["organization_id"],
         unique=False,
@@ -90,7 +90,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_policy_diff_gating_reports_organization_id",
+        "ix_ai_system_gov_pol_diff_gating_rpts_org_id_8d87021d",
         "ai_system_governance_policy_diff_gating_reports",
         ["organization_id"],
         unique=False,
@@ -159,7 +159,7 @@ def downgrade() -> None:
         table_name="ai_system_governance_policy_diff_gating_reports",
     )
     op.drop_index(
-        "ix_ai_system_governance_policy_diff_gating_reports_organization_id",
+        "ix_ai_system_gov_pol_diff_gating_rpts_org_id_8d87021d",
         table_name="ai_system_governance_policy_diff_gating_reports",
     )
     op.drop_table("ai_system_governance_policy_diff_gating_reports")
@@ -173,7 +173,7 @@ def downgrade() -> None:
         table_name="ai_system_governance_policy_diff_gating_profiles",
     )
     op.drop_index(
-        "ix_ai_system_governance_policy_diff_gating_profiles_organization_id",
+        "ix_ai_system_gov_pol_diff_gating_profs_org_id_48612a51",
         table_name="ai_system_governance_policy_diff_gating_profiles",
     )
     op.drop_table("ai_system_governance_policy_diff_gating_profiles")

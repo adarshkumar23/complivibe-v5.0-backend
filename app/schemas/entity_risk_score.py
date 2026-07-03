@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ENTITY_TYPE_PATTERN = "^(vendor|asset|business_unit|framework)$"
+ENTITY_TYPE_PATTERN = "^(vendor|asset|data_asset|business_unit|framework)$"
 SCORE_METHOD_PATTERN = "^(equal_weight|max_score|weighted_avg)$"
 SCORE_BAND_PATTERN = "^(critical|high|medium|low|none)$"
 

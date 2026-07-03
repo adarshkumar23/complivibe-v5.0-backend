@@ -2342,16 +2342,40 @@ def update_organization(
     if current_org.id != organization_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Path organization_id must match X-Organization-ID")
 
-    before = {"name": current_org.name, "slug": current_org.slug, "is_active": current_org.is_active}
+    before = {
+        "name": current_org.name,
+        "slug": current_org.slug,
+        "is_active": current_org.is_active,
+        "is_significant_data_fiduciary": current_org.is_significant_data_fiduciary,
+        "sdf_category": current_org.sdf_category,
+        "dpdp_registration_number": current_org.dpdp_registration_number,
+        "consent_manager_registered": current_org.consent_manager_registered,
+    }
 
     if payload.name is not None:
         current_org.name = payload.name
     if payload.is_active is not None:
         current_org.is_active = payload.is_active
+    if payload.is_significant_data_fiduciary is not None:
+        current_org.is_significant_data_fiduciary = payload.is_significant_data_fiduciary
+    if payload.sdf_category is not None:
+        current_org.sdf_category = payload.sdf_category
+    if payload.dpdp_registration_number is not None:
+        current_org.dpdp_registration_number = payload.dpdp_registration_number
+    if payload.consent_manager_registered is not None:
+        current_org.consent_manager_registered = payload.consent_manager_registered
 
     db.flush()
 
-    after = {"name": current_org.name, "slug": current_org.slug, "is_active": current_org.is_active}
+    after = {
+        "name": current_org.name,
+        "slug": current_org.slug,
+        "is_active": current_org.is_active,
+        "is_significant_data_fiduciary": current_org.is_significant_data_fiduciary,
+        "sdf_category": current_org.sdf_category,
+        "dpdp_registration_number": current_org.dpdp_registration_number,
+        "consent_manager_registered": current_org.consent_manager_registered,
+    }
     audit = AuditService(db).write_audit_log(
         action="organization.updated",
         entity_type="organization",

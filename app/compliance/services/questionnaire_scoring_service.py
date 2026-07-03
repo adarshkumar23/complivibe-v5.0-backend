@@ -1,19 +1,26 @@
 import uuid
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.compliance.services.vendor_mitigation_service import VendorMitigationService
 from app.models.questionnaire_scoring_rule import QuestionnaireScoringRule
 from app.models.questionnaire_template_question import QuestionnaireTemplateQuestion
+from app.models.vendor import Vendor
+from app.models.vendor_assessment import VendorAssessment
+from app.models.vendor_mitigation_case import VendorMitigationCase
 from app.models.vendor_questionnaire_answer import VendorQuestionnaireAnswer
 from app.models.vendor_questionnaire_response import VendorQuestionnaireResponse
 from app.services.audit_service import AuditService
 
 
 class QuestionnaireScoringService:
+    HIGH_RISK_THRESHOLD = 70
+
     def __init__(self, db: Session) -> None:
         self.db = db
 
@@ -68,6 +75,11 @@ class QuestionnaireScoringService:
         return effective
 
     @staticmethod
+    def _effective_answer_text(answer: VendorQuestionnaireAnswer) -> str | None:
+        """Prefer the documented answer_text field, falling back to answer_value."""
+        return answer.answer_text or answer.answer_value
+
+    @staticmethod
     def _matches_rule(answer_value: str | None, rule: QuestionnaireScoringRule) -> bool:
         value = (answer_value or "").strip()
         condition = (rule.condition_value or "").strip()
@@ -117,8 +129,9 @@ class QuestionnaireScoringService:
                 continue
 
             contribution = 0
+            answer_text_for_scoring = self._effective_answer_text(row)
             for rule in effective_rules.get(row.question_id, []):
-                if self._matches_rule(row.answer_value, rule):
+                if self._matches_rule(answer_text_for_scoring, rule):
                     contribution += int(rule.score_delta)
 
             row.score_contribution = contribution
@@ -143,7 +156,122 @@ class QuestionnaireScoringService:
             },
             metadata_json={"source": "api"},
         )
+        self._auto_create_mitigation_case_on_threshold_breach(
+            response=response,
+            score=final_score,
+            actor_user_id=actor_user_id,
+        )
         return final_score
+
+    def _auto_create_mitigation_case_on_threshold_breach(
+        self,
+        *,
+        response: VendorQuestionnaireResponse,
+        score: int,
+        actor_user_id: uuid.UUID | None,
+    ) -> None:
+        # Threshold defaults to 70 when no org-configured vendor threshold exists.
+        if score < self.HIGH_RISK_THRESHOLD:
+            return
+
+        marker = f"[auto_response_id:{response.id}]"
+        existing = self.db.execute(
+            select(VendorMitigationCase).where(
+                VendorMitigationCase.organization_id == response.organization_id,
+                VendorMitigationCase.vendor_id == response.vendor_id,
+                VendorMitigationCase.deleted_at.is_(None),
+                VendorMitigationCase.status.not_in(["closed", "cancelled"]),
+                VendorMitigationCase.description.ilike(f"%{marker}%"),
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return
+
+        vendor = self.db.execute(
+            select(Vendor).where(
+                Vendor.id == response.vendor_id,
+                Vendor.organization_id == response.organization_id,
+            )
+        ).scalar_one_or_none()
+        if vendor is None:
+            return
+
+        created_by = actor_user_id or response.created_by
+
+        vendor_assessment = self.db.execute(
+            select(VendorAssessment).where(
+                VendorAssessment.organization_id == response.organization_id,
+                VendorAssessment.vendor_id == response.vendor_id,
+                VendorAssessment.status != "cancelled",
+            ).order_by(VendorAssessment.created_at.desc())
+        ).scalars().first()
+        if vendor_assessment is None:
+            # A mitigation case must be anchored to a VendorAssessment (DB CHECK constraint).
+            # Rather than silently no-op when the vendor has no prior assessment on record,
+            # auto-create a minimal "triggered" one anchored to this exact questionnaire
+            # response -- the questionnaire response itself already represents completed
+            # assessment work, it just wasn't captured as a formal VendorAssessment row.
+            vendor_assessment = VendorAssessment(
+                organization_id=response.organization_id,
+                vendor_id=response.vendor_id,
+                title=f"Auto-generated from questionnaire response {response.id}",
+                assessment_type="triggered",
+                status="completed",
+                completed_at=self.utcnow(),
+                findings_summary=(
+                    f"Auto-generated when questionnaire response {response.id} scored "
+                    f"{score}/100, breaching the high-risk threshold of {self.HIGH_RISK_THRESHOLD}, "
+                    "with no prior vendor assessment on record for this vendor."
+                ),
+                created_by_user_id=created_by,
+            )
+            self.db.add(vendor_assessment)
+            self.db.flush()
+
+            AuditService(self.db).write_audit_log(
+                action="vendor_assessment.auto_created_from_questionnaire",
+                entity_type="vendor_assessment",
+                entity_id=vendor_assessment.id,
+                organization_id=response.organization_id,
+                actor_user_id=actor_user_id,
+                after_json={"vendor_id": str(response.vendor_id), "response_id": str(response.id)},
+                metadata_json={"source": "questionnaire_threshold_breach"},
+            )
+        case_payload = SimpleNamespace(
+            vendor_id=response.vendor_id,
+            assessment_id=vendor_assessment.id,
+            ai_assessment_id=None,
+            title=f"Auto Mitigation: Questionnaire risk score {score}",
+            description=(
+                f"Automatically created from questionnaire response threshold breach. "
+                f"Response {response.id} scored {score}/{self.HIGH_RISK_THRESHOLD}. {marker}"
+            ),
+            severity="critical" if score >= 85 else "high",
+            assigned_owner_id=vendor.owner_user_id,
+            due_date=date.today() + timedelta(days=14),
+        )
+
+        row = VendorMitigationService(self.db).create_case(
+            response.organization_id,
+            case_payload,
+            created_by=created_by,
+        )
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="vendor_mitigation.auto_created_threshold_breach",
+            entity_type="vendor_mitigation_case",
+            entity_id=row.id,
+            organization_id=response.organization_id,
+            actor_user_id=actor_user_id,
+            after_json={
+                "vendor_id": str(response.vendor_id),
+                "questionnaire_response_id": str(response.id),
+                "score": int(score),
+                "threshold": self.HIGH_RISK_THRESHOLD,
+            },
+            metadata_json={"source": "questionnaire_scoring_hook"},
+        )
 
     def get_score_breakdown(self, org_id: uuid.UUID, response_id: uuid.UUID) -> dict:
         response = self.require_response_in_org(org_id, response_id)
@@ -166,8 +294,9 @@ class QuestionnaireScoringService:
         for answer, question in answered_pairs:
             matched_rules: list[dict] = []
             contribution = 0
+            answer_text_for_scoring = self._effective_answer_text(answer)
             for rule in effective_rules.get(answer.question_id, []):
-                if self._matches_rule(answer.answer_value, rule):
+                if self._matches_rule(answer_text_for_scoring, rule):
                     contribution += int(rule.score_delta)
                     matched_rules.append(
                         {

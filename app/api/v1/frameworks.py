@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,7 @@ from app.models.framework_section import FrameworkSection
 from app.models.framework_version import FrameworkVersion
 from app.models.membership import Membership
 from app.models.obligation import Obligation
+from app.models.cross_framework_obligation_mapping import CrossFrameworkObligationMapping
 from app.models.obligation_applicability_question import ObligationApplicabilityQuestion
 from app.models.obligation_content_version import ObligationContentVersion
 from app.models.obligation_control_suggestion import ObligationControlSuggestion
@@ -34,6 +36,8 @@ from app.schemas.framework import (
     FrameworkCoverageReportRequest,
     FrameworkContentSummary,
     FrameworkDetail,
+    FrameworkApplicabilityAssessmentRequest,
+    FrameworkApplicabilityAssessmentResponse,
     FrameworkRead,
     FrameworkSectionCreate,
     FrameworkSectionRead,
@@ -59,8 +63,16 @@ from app.services.framework_content_service import FrameworkContentService
 from app.services.framework_content_pack_service import FrameworkContentPackService
 from app.services.rbac_service import RBACService
 from app.services.seed_service import SeedService
+from app.ai_governance.services.semantic_mapping_service import SemanticMappingService
 
 router = APIRouter(prefix="/frameworks", tags=["frameworks"])
+compliance_router = APIRouter(prefix="/compliance/frameworks", tags=["frameworks"])
+semantic_router = APIRouter(prefix="/compliance/semantic", tags=["frameworks"])
+
+
+class SemanticDiscoverRequest(BaseModel):
+    target_framework_id: uuid.UUID
+    min_score: float = Field(default=0.75, ge=0.0, le=1.0)
 
 
 def _framework_read(framework: Framework) -> FrameworkRead:
@@ -598,6 +610,131 @@ def list_applicability_questions(
     return [_question_read(row) for row in rows]
 
 
+@compliance_router.get("/{framework_id}/applicability-questions", response_model=list[ApplicabilityQuestionRead])
+def list_applicability_questions_compliance(
+    framework_id: uuid.UUID,
+    obligation_id: uuid.UUID | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _: Membership = Depends(require_permission("frameworks:read")),
+) -> list[ApplicabilityQuestionRead]:
+    FrameworkContentService(db).require_framework(framework_id)
+    stmt = select(ObligationApplicabilityQuestion).where(ObligationApplicabilityQuestion.framework_id == framework_id)
+    if obligation_id is not None:
+        stmt = stmt.where(ObligationApplicabilityQuestion.obligation_id == obligation_id)
+    rows = db.execute(stmt.order_by(ObligationApplicabilityQuestion.sort_order.asc())).scalars().all()
+    return [_question_read(row) for row in rows]
+
+
+@compliance_router.post("/{framework_id}/assess-applicability", response_model=FrameworkApplicabilityAssessmentResponse)
+def assess_framework_applicability(
+    framework_id: uuid.UUID,
+    payload: FrameworkApplicabilityAssessmentRequest,
+    db: Session = Depends(get_db),
+    _: Membership = Depends(require_permission("frameworks:read")),
+) -> FrameworkApplicabilityAssessmentResponse:
+    framework = FrameworkContentService(db).require_framework(framework_id)
+    questions = db.execute(
+        select(ObligationApplicabilityQuestion).where(
+            ObligationApplicabilityQuestion.framework_id == framework_id,
+            ObligationApplicabilityQuestion.organization_id.is_(None),
+            ObligationApplicabilityQuestion.status == "active",
+        )
+    ).scalars().all()
+    active_obligations = db.execute(
+        select(Obligation).where(
+            Obligation.framework_id == framework_id,
+            Obligation.status == "active",
+        ).order_by(Obligation.reference_code.asc())
+    ).scalars().all()
+    section_by_id = {
+        row.id: row.section_code
+        for row in db.execute(select(FrameworkSection).where(FrameworkSection.framework_id == framework_id)).scalars().all()
+    }
+
+    applies = True
+    ig_scope = None
+    pii_role = None
+    for question in questions:
+        answer = payload.answers.get(question.question_key)
+        if answer is None:
+            continue
+        triggers_scope = (question.metadata_json or {}).get("triggers_scope", "all")
+        if question.question_key == "implementation_group" and isinstance(answer, str):
+            candidate = answer.strip().upper()
+            if candidate in {"IG1", "IG2", "IG3"}:
+                ig_scope = candidate
+                continue
+        if question.question_key == "pii_role" and isinstance(answer, str):
+            candidate = answer.strip().lower()
+            if candidate in {"controller", "processor", "both"}:
+                pii_role = candidate
+                continue
+        if triggers_scope == "all" and isinstance(answer, bool) and answer is False:
+            applies = False
+            break
+    obligations_payload: list[dict] = []
+    if applies:
+        filtered = list(active_obligations)
+        if framework.name == "CIS Controls" and ig_scope is not None:
+            if ig_scope == "IG1":
+                filtered = [row for row in filtered if row.ig_level == "IG1"]
+            elif ig_scope == "IG2":
+                filtered = [row for row in filtered if row.ig_level in {"IG1", "IG2"}]
+        if framework.name == "ISO 27701" and pii_role is not None:
+            if pii_role == "controller":
+                filtered = [row for row in filtered if row.reference_code.startswith("27701-7.")]
+            elif pii_role == "processor":
+                filtered = [row for row in filtered if row.reference_code.startswith("27701-8.")]
+        obligations_payload = [
+            {
+                "id": str(item.id),
+                "reference_code": item.reference_code,
+                "title": item.title,
+                "section_code": section_by_id.get(item.framework_section_id),
+            }
+            for item in filtered
+        ]
+    return FrameworkApplicabilityAssessmentResponse(
+        framework_id=framework_id,
+        applicable_obligation_count=len(obligations_payload),
+        obligations=obligations_payload,
+    )
+
+
+@compliance_router.get("/{framework_id}/cross-mappings", response_model=list[dict])
+def list_framework_cross_mappings(
+    framework_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: Membership = Depends(require_permission("frameworks:read")),
+) -> list[dict]:
+    FrameworkContentService(db).require_framework(framework_id)
+    mappings = db.execute(select(CrossFrameworkObligationMapping)).scalars().all()
+    obligations = {
+        row.id: row
+        for row in db.execute(select(Obligation)).scalars().all()
+    }
+    payload: list[dict] = []
+    for mapping in mappings:
+        source = obligations.get(mapping.source_obligation_id)
+        target = obligations.get(mapping.target_obligation_id)
+        if source is None or target is None:
+            continue
+        if source.framework_id != framework_id:
+            continue
+        payload.append(
+            {
+                "id": str(mapping.id),
+                "source_obligation_id": str(mapping.source_obligation_id),
+                "source_reference_code": source.reference_code,
+                "target_obligation_id": str(mapping.target_obligation_id),
+                "target_reference_code": target.reference_code,
+                "mapping_type": mapping.mapping_type,
+                "notes": mapping.notes,
+            }
+        )
+    return payload
+
+
 @router.post("/{framework_id}/applicability-answers", response_model=list[OrganizationApplicabilityAnswerRead], status_code=status.HTTP_201_CREATED)
 def submit_applicability_answers(
     framework_id: uuid.UUID,
@@ -973,3 +1110,59 @@ def list_framework_obligations(
         response.append(row)
 
     return response
+
+
+@compliance_router.post("/{source_framework_id}/discover-mappings")
+def discover_semantic_mappings(
+    source_framework_id: uuid.UUID,
+    payload: SemanticDiscoverRequest,
+    db: Session = Depends(get_db),
+    _: Membership = Depends(require_permission("compliance:write")),
+) -> dict[str, object]:
+    source_exists = db.execute(select(Framework).where(Framework.id == source_framework_id)).scalar_one_or_none()
+    if source_exists is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source framework not found")
+
+    target_exists = db.execute(select(Framework).where(Framework.id == payload.target_framework_id)).scalar_one_or_none()
+    if target_exists is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target framework not found")
+
+    result = SemanticMappingService().auto_discover_mappings(
+        source_framework_id=source_framework_id,
+        target_framework_id=payload.target_framework_id,
+        db=db,
+        min_score=payload.min_score,
+        mapping_type_label="semantic",
+    )
+    db.commit()
+    return result
+
+
+@compliance_router.post("/{framework_id}/embed")
+def embed_framework_obligations(
+    framework_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: Membership = Depends(require_permission("compliance:write")),
+) -> dict[str, object]:
+    framework = db.execute(select(Framework).where(Framework.id == framework_id)).scalar_one_or_none()
+    if framework is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Framework not found")
+
+    result = SemanticMappingService().batch_embed_framework(framework_id=framework_id, db=db)
+    db.commit()
+    return result
+
+
+@semantic_router.get("/status")
+def get_semantic_status(
+    db: Session = Depends(get_db),
+    _: Membership = Depends(require_permission("compliance:read")),
+) -> dict[str, object]:
+    status_payload = SemanticMappingService().status(db)
+    return {
+        "pgvector_available": status_payload.pgvector_available,
+        "embedding_model": status_payload.embedding_model,
+        "total_embedded": status_payload.total_embedded,
+        "total_obligations": status_payload.total_obligations,
+        "coverage_pct": status_payload.coverage_pct,
+    }

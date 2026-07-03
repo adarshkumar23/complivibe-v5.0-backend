@@ -5,6 +5,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.audit_log import AuditLog
+from app.models.audit_finding import AuditFinding
 from app.models.compliance_deadline import ComplianceDeadline
 from app.models.compliance_policy import CompliancePolicy
 from app.models.control import Control
@@ -406,6 +407,16 @@ class ComplianceDashboardService:
                 )
             ).scalar_one()
         )
+        open_high_critical_findings = int(
+            self.db.execute(
+                select(func.count(AuditFinding.id)).where(
+                    AuditFinding.organization_id == organization_id,
+                    AuditFinding.deleted_at.is_(None),
+                    AuditFinding.severity.in_(["high", "critical"]),
+                    AuditFinding.status.not_in(["resolved", "closed", "accepted_risk", "risk_accepted"]),
+                )
+            ).scalar_one()
+        )
 
         return {
             "total_controls_by_status": {str(key): int(value) for key, value in by_status_rows},
@@ -414,6 +425,8 @@ class ComplianceDashboardService:
             "controls_with_open_monitoring_alerts": controls_with_open_monitoring_alerts,
             "controls_with_overdue_checks": controls_with_overdue_checks,
             "controls_mapped_to_0_obligations": max(0, active_controls - mapped_controls),
+            "open_high_critical_findings": open_high_critical_findings,
+            "health_flag": "at_risk" if open_high_critical_findings > 0 else "normal",
         }
 
     def risk_heatmap(self, organization_id: uuid.UUID) -> dict:

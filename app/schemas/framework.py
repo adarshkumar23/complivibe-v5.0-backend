@@ -233,3 +233,13 @@ class GlobalFrameworkCoverageItem(BaseModel):
     total_obligations: int
     coverage_percent_estimate: float
     caveat: str
+
+
+class FrameworkApplicabilityAssessmentRequest(BaseModel):
+    answers: dict[str, str | bool]
+
+
+class FrameworkApplicabilityAssessmentResponse(BaseModel):
+    framework_id: UUID
+    applicable_obligation_count: int
+    obligations: list[dict]

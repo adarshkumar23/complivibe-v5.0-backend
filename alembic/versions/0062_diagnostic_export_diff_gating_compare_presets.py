@@ -20,7 +20,7 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.create_table(
-        "ai_system_governance_diagnostic_export_diff_gating_compare_presets",
+        "ai_system_gov_diag_export_diff_gating_cmp_presets_ac16f85a",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("organization_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("name", sa.String(length=255), nullable=False),
@@ -41,32 +41,32 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_diag_export_diff_gating_cmp_presets_organization_id",
-        "ai_system_governance_diagnostic_export_diff_gating_compare_presets",
+        "ix_ai_system_gov_diag_export_diff_gating_cmp_presets_a33c3c29",
+        "ai_system_gov_diag_export_diff_gating_cmp_presets_ac16f85a",
         ["organization_id"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_org_status",
-        "ai_system_governance_diagnostic_export_diff_gating_compare_presets",
+        "ai_system_gov_diag_export_diff_gating_cmp_presets_ac16f85a",
         ["organization_id", "status"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_org_created",
-        "ai_system_governance_diagnostic_export_diff_gating_compare_presets",
+        "ai_system_gov_diag_export_diff_gating_cmp_presets_ac16f85a",
         ["organization_id", "created_at"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_org_band",
-        "ai_system_governance_diagnostic_export_diff_gating_compare_presets",
+        "ai_system_gov_diag_export_diff_gating_cmp_presets_ac16f85a",
         ["organization_id", "default_interpretation_band"],
         unique=False,
     )
 
     op.create_table(
-        "ai_system_governance_diagnostic_export_diff_gating_compare_preset_reports",
+        "ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_97fb99df",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("organization_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("compare_report_id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -83,12 +83,12 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.ForeignKeyConstraint(
             ["compare_report_id"],
-            ["ai_system_governance_diagnostic_export_diff_gating_compare_reports.id"],
+            ["ai_system_gov_diag_export_diff_gating_cmp_rpts_884d7a31.id"],
             ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
             ["preset_id"],
-            ["ai_system_governance_diagnostic_export_diff_gating_compare_presets.id"],
+            ["ai_system_gov_diag_export_diff_gating_cmp_presets_ac16f85a.id"],
             ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(["organization_id"], ["organizations.id"], ondelete="CASCADE"),
@@ -97,44 +97,44 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_ai_system_governance_diag_export_diff_gating_cmp_preset_reports_organization_id",
-        "ai_system_governance_diagnostic_export_diff_gating_compare_preset_reports",
+        "ix_ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_27131653",
+        "ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_97fb99df",
         ["organization_id"],
         unique=False,
     )
     op.create_index(
-        "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_rep_org_status",
-        "ai_system_governance_diagnostic_export_diff_gating_compare_preset_reports",
+        "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_rep_org_a53f6679",
+        "ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_97fb99df",
         ["organization_id", "status"],
         unique=False,
     )
     op.create_index(
-        "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_rep_org_created",
-        "ai_system_governance_diagnostic_export_diff_gating_compare_preset_reports",
+        "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_rep_org_b246ded0",
+        "ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_97fb99df",
         ["organization_id", "created_at"],
         unique=False,
     )
     op.create_index(
-        "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_rep_org_compare",
-        "ai_system_governance_diagnostic_export_diff_gating_compare_preset_reports",
+        "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_rep_org_dc134d31",
+        "ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_97fb99df",
         ["organization_id", "compare_report_id"],
         unique=False,
     )
     op.create_index(
-        "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_rep_org_preset",
-        "ai_system_governance_diagnostic_export_diff_gating_compare_preset_reports",
+        "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_rep_org_d64984da",
+        "ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_97fb99df",
         ["organization_id", "preset_id"],
         unique=False,
     )
     op.create_index(
         "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_rep_org_band",
-        "ai_system_governance_diagnostic_export_diff_gating_compare_preset_reports",
+        "ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_97fb99df",
         ["organization_id", "interpretation_band"],
         unique=False,
     )
     op.create_index(
-        "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_rep_org_review_req",
-        "ai_system_governance_diagnostic_export_diff_gating_compare_preset_reports",
+        "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_rep_org_8c01536c",
+        "ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_97fb99df",
         ["organization_id", "review_required"],
         unique=False,
     )
@@ -142,49 +142,49 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index(
-        "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_rep_org_review_req",
-        table_name="ai_system_governance_diagnostic_export_diff_gating_compare_preset_reports",
+        "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_rep_org_8c01536c",
+        table_name="ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_97fb99df",
     )
     op.drop_index(
         "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_rep_org_band",
-        table_name="ai_system_governance_diagnostic_export_diff_gating_compare_preset_reports",
+        table_name="ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_97fb99df",
     )
     op.drop_index(
-        "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_rep_org_preset",
-        table_name="ai_system_governance_diagnostic_export_diff_gating_compare_preset_reports",
+        "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_rep_org_d64984da",
+        table_name="ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_97fb99df",
     )
     op.drop_index(
-        "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_rep_org_compare",
-        table_name="ai_system_governance_diagnostic_export_diff_gating_compare_preset_reports",
+        "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_rep_org_dc134d31",
+        table_name="ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_97fb99df",
     )
     op.drop_index(
-        "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_rep_org_created",
-        table_name="ai_system_governance_diagnostic_export_diff_gating_compare_preset_reports",
+        "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_rep_org_b246ded0",
+        table_name="ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_97fb99df",
     )
     op.drop_index(
-        "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_rep_org_status",
-        table_name="ai_system_governance_diagnostic_export_diff_gating_compare_preset_reports",
+        "ix_ai_sys_gov_diag_export_diff_gating_cmp_pst_rep_org_a53f6679",
+        table_name="ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_97fb99df",
     )
     op.drop_index(
-        "ix_ai_system_governance_diag_export_diff_gating_cmp_preset_reports_organization_id",
-        table_name="ai_system_governance_diagnostic_export_diff_gating_compare_preset_reports",
+        "ix_ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_27131653",
+        table_name="ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_97fb99df",
     )
-    op.drop_table("ai_system_governance_diagnostic_export_diff_gating_compare_preset_reports")
+    op.drop_table("ai_system_gov_diag_export_diff_gating_cmp_pst_rpts_97fb99df")
 
     op.drop_index(
         "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_org_band",
-        table_name="ai_system_governance_diagnostic_export_diff_gating_compare_presets",
+        table_name="ai_system_gov_diag_export_diff_gating_cmp_presets_ac16f85a",
     )
     op.drop_index(
         "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_org_created",
-        table_name="ai_system_governance_diagnostic_export_diff_gating_compare_presets",
+        table_name="ai_system_gov_diag_export_diff_gating_cmp_presets_ac16f85a",
     )
     op.drop_index(
         "ix_ai_sys_gov_diag_export_diff_gating_cmp_preset_org_status",
-        table_name="ai_system_governance_diagnostic_export_diff_gating_compare_presets",
+        table_name="ai_system_gov_diag_export_diff_gating_cmp_presets_ac16f85a",
     )
     op.drop_index(
-        "ix_ai_system_governance_diag_export_diff_gating_cmp_presets_organization_id",
-        table_name="ai_system_governance_diagnostic_export_diff_gating_compare_presets",
+        "ix_ai_system_gov_diag_export_diff_gating_cmp_presets_a33c3c29",
+        table_name="ai_system_gov_diag_export_diff_gating_cmp_presets_ac16f85a",
     )
-    op.drop_table("ai_system_governance_diagnostic_export_diff_gating_compare_presets")
+    op.drop_table("ai_system_gov_diag_export_diff_gating_cmp_presets_ac16f85a")
