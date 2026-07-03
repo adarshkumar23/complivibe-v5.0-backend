@@ -621,6 +621,7 @@ class AuditScheduleService:
                 schedule.organization_id,
                 engagement_payload,
                 created_by=schedule.created_by,
+                source_schedule_id=schedule.id,
             )
 
             self.db.add(
@@ -669,6 +670,7 @@ class AuditScheduleService:
             select(AuditEngagement)
             .where(
                 AuditEngagement.organization_id == org_id,
+                AuditEngagement.source_schedule_id == schedule_id,
                 AuditEngagement.deleted_at.is_(None),
             )
             .order_by(AuditEngagement.start_date.desc(), AuditEngagement.created_at.desc())

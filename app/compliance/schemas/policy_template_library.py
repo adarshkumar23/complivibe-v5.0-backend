@@ -32,3 +32,4 @@ class PolicyTemplateApplyResponse(BaseModel):
     policy_id: UUID
     title: str
     status: str
+    policy_version_id: UUID

@@ -93,7 +93,14 @@ class AuditEngagementService:
                 detail="end_date must be on or after start_date",
             )
 
-    def create_engagement(self, org_id: uuid.UUID, data: AuditEngagementCreate, created_by: uuid.UUID) -> AuditEngagement:
+    def create_engagement(
+        self,
+        org_id: uuid.UUID,
+        data: AuditEngagementCreate,
+        created_by: uuid.UUID,
+        *,
+        source_schedule_id: uuid.UUID | None = None,
+    ) -> AuditEngagement:
         self._ensure_date_range(data.start_date, data.end_date)
         self._validate_framework_ids(data.scope_framework_ids)
         self._validate_assigned_auditors(org_id, data.assigned_auditor_ids)
@@ -112,6 +119,7 @@ class AuditEngagementService:
             audit_firm=data.audit_firm,
             notes=data.notes,
             created_by=created_by,
+            source_schedule_id=source_schedule_id,
         )
         self.db.add(row)
         self.db.flush()

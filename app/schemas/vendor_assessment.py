@@ -39,6 +39,11 @@ class VendorAssessmentCancelRequest(BaseModel):
     cancellation_reason: str = Field(min_length=1, max_length=2000)
 
 
+class VendorAssessmentCompleteRequest(BaseModel):
+    overall_rating: str | None = Field(default=None, pattern=ASSESSMENT_RATING_PATTERN)
+    findings_summary: str | None = None
+
+
 class VendorAssessmentRead(UUIDTimestampSchema):
     organization_id: UUID
     vendor_id: UUID

@@ -38,3 +38,6 @@ class AuditEngagement(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixi
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_schedule_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("audit_schedules.id", ondelete="SET NULL"), nullable=True
+    )

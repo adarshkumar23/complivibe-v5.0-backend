@@ -537,6 +537,8 @@ class PolicyExceptionService:
         row = self.require_exception(org_id, exception_id)
         if row.status != "pending":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only pending exceptions can be rejected")
+        if row.requested_by == rejected_by:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Rejector cannot be requester")
 
         row.status = "rejected"
         row.rejected_by = rejected_by

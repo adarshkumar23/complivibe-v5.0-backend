@@ -184,14 +184,14 @@ def test_a32_approval_rejection_flow_and_immutability(client, db_session):
     pending_reject = _create_exception(client, org["org_headers"], policy_id=policy["id"], title="reject me")
     rejected = client.post(
         f"{BASE}/{pending_reject['id']}/reject",
-        headers=org["org_headers"],
+        headers=approver_headers,
     )
     assert rejected.status_code == 200
     assert rejected.json()["status"] == "rejected"
 
     reject_again = client.post(
         f"{BASE}/{pending_reject['id']}/reject",
-        headers=org["org_headers"],
+        headers=approver_headers,
     )
     assert reject_again.status_code == 400
 
@@ -307,7 +307,7 @@ def test_a32_dashboard_and_policy_summary_metrics(client, db_session):
     second = _create_exception(client, org["org_headers"], policy_id=second_policy["id"], title="other")
     rejected = client.post(
         f"{BASE}/{second['id']}/reject",
-        headers=org["org_headers"],
+        headers=approver_headers,
     )
     assert rejected.status_code == 200
 
@@ -359,3 +359,19 @@ def test_a32_tenant_isolation_for_approval(client):
         json={"expiry_date": (date.today() + timedelta(days=5)).isoformat()},
     )
     assert approve_cross.status_code == 404
+
+
+def test_verify_sod_applies_symmetrically_to_reject_not_just_approve(client):
+    """Regression: reject previously had no segregation-of-duties check at all, while
+    approve correctly rejected the requester approving their own exception. A requester
+    must not be able to reject (i.e. unilaterally close out) their own exception either."""
+    org = bootstrap_org_user(client, email_prefix="a32-sod-reject")
+    policy = _create_policy(client, org["org_headers"], owner_user_id=org["user_id"], title="SoD Reject Policy")
+    exception = _create_exception(client, org["org_headers"], policy_id=policy["id"], title="self-reject")
+
+    self_reject = client.post(f"{BASE}/{exception['id']}/reject", headers=org["org_headers"])
+    print("SELF REJECT:", self_reject.status_code, self_reject.json())
+    assert self_reject.status_code == 409, "BUG: requester was able to reject their own exception (no SoD check)"
+
+    row_after = self_reject if self_reject.status_code == 200 else None
+    assert row_after is None, "exception must remain pending after a blocked self-reject attempt"

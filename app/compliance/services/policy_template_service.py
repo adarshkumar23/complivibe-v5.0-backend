@@ -6,6 +6,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.compliance_policy import CompliancePolicy
+from app.models.compliance_policy_version import CompliancePolicyVersion
 from app.models.policy_template import PolicyTemplate
 from app.models.policy_template_clone import PolicyTemplateClone
 from app.schemas.policy_template import PolicyTemplateCloneRequest
@@ -208,9 +209,10 @@ class PolicyTemplateService:
         org_id: uuid.UUID,
         applied_by: uuid.UUID,
         override_title: str | None = None,
-    ) -> CompliancePolicy:
+    ) -> tuple[CompliancePolicy, uuid.UUID]:
         template = self.get_template_for_org(template_id, org_id)
-        policy = CompliancePolicyService(self.db).create_policy(
+        policy_service = CompliancePolicyService(self.db)
+        policy = policy_service.create_policy(
             organization_id=org_id,
             title=(override_title or f"{(template.title or template.name)} (from template)"),
             description=template.description,
@@ -227,7 +229,27 @@ class PolicyTemplateService:
             },
             notes=template.content,
         )
+
+        # The template body must be persisted through the real versioning system, not just
+        # the notes field, so template-applied policies get a proper CompliancePolicyVersion
+        # like every other policy-content-creation path (AI drafts, manual version creation).
+        content_snapshot = {
+            "content": template.content,
+            "source": "policy_template",
+            "source_template_id": str(template.id),
+        }
+        version = CompliancePolicyVersion(
+            organization_id=org_id,
+            policy_id=policy.id,
+            version_number=template.version or "1.0",
+            content_snapshot_json=content_snapshot,
+            change_summary=f"Applied from template: {template.title or template.name}",
+            status="draft",
+            content_sha256=policy_service.content_sha256_hexdigest(content_snapshot),
+        )
+        self.db.add(version)
         self.db.flush()
+
         AuditService(self.db).write_audit_log(
             action="policy_template.applied",
             entity_type="compliance_policy",
@@ -238,9 +260,10 @@ class PolicyTemplateService:
                 "template_id": str(template.id),
                 "template_title": template.title or template.name,
                 "new_policy_id": str(policy.id),
+                "policy_version_id": str(version.id),
             },
         )
-        return policy
+        return policy, version.id
 
     def create_org_template(
         self,

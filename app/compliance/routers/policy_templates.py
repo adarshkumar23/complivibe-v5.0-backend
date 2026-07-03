@@ -215,7 +215,7 @@ def apply_template(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("compliance_policies:write")),
 ) -> PolicyTemplateApplyResponse:
-    row = PolicyTemplateService(db).apply_template(
+    row, version_id = PolicyTemplateService(db).apply_template(
         template_id=template_id,
         org_id=organization.id,
         applied_by=current_user.id,
@@ -223,7 +223,7 @@ def apply_template(
     )
     db.commit()
     db.refresh(row)
-    return PolicyTemplateApplyResponse(policy_id=row.id, title=row.title, status=row.status)
+    return PolicyTemplateApplyResponse(policy_id=row.id, title=row.title, status=row.status, policy_version_id=version_id)
 
 
 @router.post("", response_model=PolicyTemplateResponse, status_code=status.HTTP_201_CREATED)

@@ -20,6 +20,7 @@ from app.models.vendor_assessment import VendorAssessment
 from app.models.vendor_assessment_question import VendorAssessmentQuestion
 from app.schemas.vendor_assessment import (
     VendorAssessmentCancelRequest,
+    VendorAssessmentCompleteRequest,
     VendorAssessmentCreate,
     VendorAssessmentQuestionAnswerRequest,
     VendorAssessmentQuestionCreate,
@@ -597,6 +598,7 @@ def complete_vendor_assessment(
     vendor_id: uuid.UUID,
     assessment_id: uuid.UUID,
     request: Request,
+    payload: VendorAssessmentCompleteRequest | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
@@ -611,6 +613,11 @@ def complete_vendor_assessment(
             detail="Only in_progress or under_review assessments can be completed",
         )
 
+    if payload is not None:
+        if payload.overall_rating is not None:
+            row.overall_rating = payload.overall_rating
+        if payload.findings_summary is not None:
+            row.findings_summary = payload.findings_summary
     row.status = "completed"
     row.completed_at = service.utcnow()
     db.flush()
@@ -621,7 +628,13 @@ def complete_vendor_assessment(
         entity_id=row.id,
         organization_id=organization.id,
         actor_user_id=current_user.id,
-        after_json={"vendor_id": str(vendor_id), "status": row.status, "completed_at": row.completed_at.isoformat()},
+        after_json={
+            "vendor_id": str(vendor_id),
+            "status": row.status,
+            "completed_at": row.completed_at.isoformat(),
+            "overall_rating": row.overall_rating,
+            "findings_summary": row.findings_summary,
+        },
         metadata_json={"source": "api"},
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
