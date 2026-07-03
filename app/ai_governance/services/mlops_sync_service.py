@@ -13,6 +13,7 @@ from app.ai_governance.services.ai_system_service import AISystemService
 from app.models.ai_system import AISystem
 from app.models.mlops_integration import MLOpsIntegration
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_INTEGRATION_TYPES = {"mlflow", "databricks", "sagemaker", "vertex_ai"}
 ALLOWED_SYNC_STATUSES = {"success", "failed", "in_progress"}
@@ -40,8 +41,7 @@ class MLOPSSyncService:
 
     def create_integration(self, org_id: uuid.UUID, data, created_by: uuid.UUID) -> MLOpsIntegration:
         payload = data.model_dump()
-        if payload["integration_type"] not in ALLOWED_INTEGRATION_TYPES:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid integration_type")
+        payload["integration_type"] = validate_choice(payload["integration_type"], ALLOWED_INTEGRATION_TYPES, "integration_type")
         now = self.utcnow()
         row = MLOpsIntegration(
             organization_id=org_id,
@@ -104,8 +104,7 @@ class MLOPSSyncService:
         row = self._require_integration(org_id, integration_id)
         payload = data.model_dump(exclude_unset=True)
         if "integration_type" in payload:
-            if payload["integration_type"] not in ALLOWED_INTEGRATION_TYPES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid integration_type")
+            payload["integration_type"] = validate_choice(payload["integration_type"], ALLOWED_INTEGRATION_TYPES, "integration_type")
             row.integration_type = payload["integration_type"]
         if "name" in payload and payload["name"] is not None:
             row.name = payload["name"]

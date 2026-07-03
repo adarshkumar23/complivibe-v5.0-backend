@@ -14,6 +14,7 @@ from app.models.obligation_applicability_question import ObligationApplicability
 from app.models.obligation_content_version import ObligationContentVersion
 from app.models.obligation_control_suggestion import ObligationControlSuggestion
 from app.models.obligation_evidence_requirement import ObligationEvidenceRequirement
+from app.core.validation import validate_choice
 
 FRAMEWORK_COVERAGE_LEVELS = {"metadata_only", "starter", "partial", "reviewed", "full_verified"}
 FRAMEWORK_VERSION_STATUSES = {"draft", "active", "superseded", "archived"}
@@ -49,39 +50,25 @@ class FrameworkContentService:
 
     @staticmethod
     def validate_coverage_level(coverage_level: str) -> None:
-        if coverage_level not in FRAMEWORK_COVERAGE_LEVELS:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid coverage_level")
-
+        coverage_level = validate_choice(coverage_level, FRAMEWORK_COVERAGE_LEVELS, "coverage_level", status_code=status.HTTP_400_BAD_REQUEST)
     @staticmethod
     def validate_version_status(status_value: str) -> None:
-        if status_value not in FRAMEWORK_VERSION_STATUSES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid framework version status")
-
+        status_value = validate_choice(status_value, FRAMEWORK_VERSION_STATUSES, "framework version status", status_code=status.HTTP_400_BAD_REQUEST)
     @staticmethod
     def validate_section_status(status_value: str) -> None:
-        if status_value not in FRAMEWORK_SECTION_STATUSES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid section status")
-
+        status_value = validate_choice(status_value, FRAMEWORK_SECTION_STATUSES, "section status", status_code=status.HTTP_400_BAD_REQUEST)
     @staticmethod
     def validate_answer_type(answer_type: str) -> None:
-        if answer_type not in QUESTION_ANSWER_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid answer_type")
-
+        answer_type = validate_choice(answer_type, QUESTION_ANSWER_TYPES, "answer_type", status_code=status.HTTP_400_BAD_REQUEST)
     @staticmethod
     def validate_review_status(review_status: str) -> None:
-        if review_status not in REVIEW_STATUSES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid review_status")
-
+        review_status = validate_choice(review_status, REVIEW_STATUSES, "review_status", status_code=status.HTTP_400_BAD_REQUEST)
     @staticmethod
     def validate_evidence_type(evidence_type: str) -> None:
-        if evidence_type not in EVIDENCE_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid evidence_type")
-
+        evidence_type = validate_choice(evidence_type, EVIDENCE_TYPES, "evidence_type", status_code=status.HTTP_400_BAD_REQUEST)
     @staticmethod
     def validate_priority(priority: str) -> None:
-        if priority not in PRIORITIES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid priority")
-
+        priority = validate_choice(priority, PRIORITIES, "priority", status_code=status.HTTP_400_BAD_REQUEST)
     def require_framework(self, framework_id: uuid.UUID) -> Framework:
         row = self.db.execute(select(Framework).where(Framework.id == framework_id)).scalar_one_or_none()
         if row is None:

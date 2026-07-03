@@ -11,6 +11,7 @@ from app.models.aibom_component import AIBOMComponent
 from app.models.aibom_record import AIBOMRecord
 from app.models.ai_system import AISystem
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_COMPONENT_TYPES = {
     "training_data",
@@ -127,9 +128,7 @@ class AIBOMService:
 
     def add_component(self, org_id: uuid.UUID, aibom_id: uuid.UUID, data, user_id: uuid.UUID) -> AIBOMComponent:
         aibom = self._require_aibom(org_id, aibom_id)
-        if data.component_type not in ALLOWED_COMPONENT_TYPES:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid component_type")
-
+        data.component_type = validate_choice(data.component_type, ALLOWED_COMPONENT_TYPES, "component_type")
         existing = self.db.execute(
             select(AIBOMComponent).where(
                 AIBOMComponent.organization_id == org_id,

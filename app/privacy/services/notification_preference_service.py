@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.user_notification_preference import UserNotificationPreference
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 KNOWN_NOTIFICATION_TYPES = [
     "task_assigned",
@@ -87,11 +88,9 @@ class NotificationPreferenceService:
         is_enabled: bool,
         min_severity: str | None,
     ) -> UserNotificationPreference:
-        if channel not in ALLOWED_CHANNELS:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid channel")
-        if min_severity is not None and min_severity not in ALLOWED_SEVERITIES:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid min_severity")
-
+        channel = validate_choice(channel, ALLOWED_CHANNELS, "channel")
+        if min_severity is not None:
+            min_severity = validate_choice(min_severity, ALLOWED_SEVERITIES, "min_severity")
         self.get_or_create_preferences(org_id, user_id)
         row = self.get_preference(org_id, user_id, notification_type)
         if row is None:

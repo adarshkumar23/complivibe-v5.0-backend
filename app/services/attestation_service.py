@@ -13,6 +13,7 @@ from app.models.export_attestation import ExportAttestation
 from app.models.export_job import ExportJob
 from app.repositories.attestation_repository import AttestationRepository
 from app.services.export_service import INTEGRITY_ALGORITHM, SIGNING_KEY_ID
+from app.core.validation import validate_choice
 
 ALLOWED_ATTESTATION_TYPES = {
     "internal_review",
@@ -33,9 +34,7 @@ class AttestationService:
 
     @staticmethod
     def validate_attestation_type(attestation_type: str) -> None:
-        if attestation_type not in ALLOWED_ATTESTATION_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid attestation_type")
-
+        attestation_type = validate_choice(attestation_type, ALLOWED_ATTESTATION_TYPES, "attestation_type", status_code=status.HTTP_400_BAD_REQUEST)
     @staticmethod
     def canonical_json(payload: dict[str, Any]) -> str:
         return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)

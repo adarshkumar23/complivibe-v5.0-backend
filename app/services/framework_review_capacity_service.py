@@ -25,6 +25,7 @@ from app.models.role import Role
 from app.models.role_permission import RolePermission
 from app.repositories.framework_review_capacity_repository import FrameworkReviewCapacityRepository
 from app.services.framework_pack_review_service import FrameworkPackReviewService
+from app.core.validation import validate_choice
 
 CAPACITY_POLICY_STATUSES = {"active", "inactive", "archived"}
 _OPEN_ASSIGNMENT_STATUSES = {"assigned", "accepted", "overdue"}
@@ -74,9 +75,7 @@ class FrameworkReviewCapacityService:
 
     @staticmethod
     def _validate_policy_status(value: str) -> None:
-        if value not in CAPACITY_POLICY_STATUSES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid capacity policy status")
-
+        value = validate_choice(value, CAPACITY_POLICY_STATUSES, "capacity policy status", status_code=status.HTTP_400_BAD_REQUEST)
     @staticmethod
     def _normalize_optional_list(value: list[str] | None) -> list[str] | None:
         if value is None:

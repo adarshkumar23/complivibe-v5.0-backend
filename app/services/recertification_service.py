@@ -18,6 +18,7 @@ from app.models.task import Task
 from app.models.user import User
 from app.services.seed_service import SeedService
 from app.services.task_service import TaskService
+from app.core.validation import validate_choice
 
 ALLOWED_SCOPE_TYPES = {"all_evidence", "evidence_type", "evidence_item", "control"}
 ALLOWED_CADENCE = {"monthly", "quarterly", "semi_annual", "annual"}
@@ -42,14 +43,10 @@ class RecertificationService:
 
     @staticmethod
     def validate_scope_type(scope_type: str) -> None:
-        if scope_type not in ALLOWED_SCOPE_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid scope_type")
-
+        scope_type = validate_choice(scope_type, ALLOWED_SCOPE_TYPES, "scope_type", status_code=status.HTTP_400_BAD_REQUEST)
     @staticmethod
     def validate_cadence(cadence: str) -> None:
-        if cadence not in ALLOWED_CADENCE:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid cadence")
-
+        cadence = validate_choice(cadence, ALLOWED_CADENCE, "cadence", status_code=status.HTTP_400_BAD_REQUEST)
     def ensure_owner_is_active_member(self, organization_id: uuid.UUID, owner_user_id: uuid.UUID | None) -> None:
         if owner_user_id is None:
             return
@@ -256,9 +253,7 @@ class RecertificationService:
         dry_run: bool,
         created_by_user_id: uuid.UUID,
     ) -> RecertificationRun:
-        if run_type not in ALLOWED_RUN_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid run_type")
-
+        run_type = validate_choice(run_type, ALLOWED_RUN_TYPES, "run_type", status_code=status.HTTP_400_BAD_REQUEST)
         run = RecertificationRun(
             organization_id=organization_id,
             policy_id=policy_id,

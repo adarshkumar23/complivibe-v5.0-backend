@@ -17,6 +17,7 @@ from app.models.user import User
 from app.schemas.audit_engagement import AuditEngagementCreate
 from app.schemas.audit_schedule import AuditScheduleCreate, AuditScheduleUpdate
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 
 class AuditScheduleService:
@@ -42,8 +43,7 @@ class AuditScheduleService:
     def _normalize_recurrence(recurrence: str) -> str:
         value = recurrence.strip().lower()
         allowed = {"monthly", "quarterly", "semi_annual", "annual"}
-        if value not in allowed:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid recurrence")
+        value = validate_choice(value, allowed, "recurrence")
         return value
 
     @staticmethod
@@ -54,8 +54,7 @@ class AuditScheduleService:
             "quarterly": 91,
             "monthly": 30,
         }
-        if recurrence_pattern not in offset_days:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid recurrence_pattern")
+        recurrence_pattern = validate_choice(recurrence_pattern, offset_days, "recurrence_pattern")
         return current_date + timedelta(days=offset_days[recurrence_pattern])
 
     def _compute_initial_due_date(self, recurrence: str, anchor: date | None = None) -> date:

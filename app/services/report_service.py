@@ -26,6 +26,7 @@ from app.services.evidence_service import EvidenceService
 from app.services.risk_service import RiskService
 from app.services.scoring_service import ScoringService
 from app.services.task_service import TaskService
+from app.core.validation import validate_choice
 
 ALLOWED_REPORT_TYPES = {
     "executive_summary",
@@ -61,9 +62,7 @@ class ReportService:
 
     @staticmethod
     def validate_report_type(report_type: str) -> None:
-        if report_type not in ALLOWED_REPORT_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid report_type")
-
+        report_type = validate_choice(report_type, ALLOWED_REPORT_TYPES, "report_type", status_code=status.HTTP_400_BAD_REQUEST)
     def require_active_framework(self, organization_id: uuid.UUID, framework_id: uuid.UUID) -> Framework:
         framework = self.db.execute(select(Framework).where(Framework.id == framework_id)).scalar_one_or_none()
         if framework is None:

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.models.lawful_basis_record import LawfulBasisRecord
 from app.models.processing_activity import ProcessingActivity
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_LAWFUL_BASIS = {
     "consent",
@@ -47,8 +48,7 @@ class LawfulBasisService:
         return row
 
     def _validate_lia(self, lawful_basis: str, legitimate_interest_assessment: str | None) -> None:
-        if lawful_basis not in ALLOWED_LAWFUL_BASIS:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid lawful_basis")
+        lawful_basis = validate_choice(lawful_basis, ALLOWED_LAWFUL_BASIS, "lawful_basis")
         if lawful_basis == "legitimate_interests" and not legitimate_interest_assessment:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="legitimate_interest_assessment is required")
 
@@ -119,8 +119,7 @@ class LawfulBasisService:
     ) -> list[LawfulBasisRecord]:
         stmt = select(LawfulBasisRecord).where(LawfulBasisRecord.organization_id == org_id)
         if lawful_basis is not None:
-            if lawful_basis not in ALLOWED_LAWFUL_BASIS:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid lawful_basis filter")
+            lawful_basis = validate_choice(lawful_basis, ALLOWED_LAWFUL_BASIS, "lawful_basis")
             stmt = stmt.where(LawfulBasisRecord.lawful_basis == lawful_basis)
         if is_active is not None:
             stmt = stmt.where(LawfulBasisRecord.is_active.is_(is_active))

@@ -20,6 +20,7 @@ from app.models.role import Role
 from app.repositories.governance_override_repository import GovernanceOverrideRepository
 from app.services.attestation_service import AttestationService
 from app.services.export_service import ExportService
+from app.core.validation import validate_choice
 
 ALLOWED_OVERRIDE_TYPES = {
     "export_lock_exception",
@@ -95,12 +96,9 @@ class GovernanceOverrideService:
 
     @staticmethod
     def validate_allowlist(override_type: str, target_entity_type: str, requested_action: str) -> None:
-        if override_type not in ALLOWED_OVERRIDE_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid override_type")
-        if target_entity_type not in ALLOWED_TARGET_ENTITY_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid target_entity_type")
-        if requested_action not in ALLOWED_REQUESTED_ACTIONS:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid requested_action")
+        override_type = validate_choice(override_type, ALLOWED_OVERRIDE_TYPES, "override_type", status_code=status.HTTP_400_BAD_REQUEST)
+        target_entity_type = validate_choice(target_entity_type, ALLOWED_TARGET_ENTITY_TYPES, "target_entity_type", status_code=status.HTTP_400_BAD_REQUEST)
+        requested_action = validate_choice(requested_action, ALLOWED_REQUESTED_ACTIONS, "requested_action", status_code=status.HTTP_400_BAD_REQUEST)
         allowed_targets = ACTION_TARGET_MAP.get(requested_action, set())
         if target_entity_type not in allowed_targets:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="requested_action is not valid for target_entity_type")

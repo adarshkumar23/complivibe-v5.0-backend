@@ -12,6 +12,7 @@ from app.models.control_test_run import ControlTestRun
 from app.models.evidence_control_link import EvidenceControlLink
 from app.models.evidence_item import EvidenceItem
 from app.models.membership import Membership
+from app.core.validation import validate_choice
 
 ALLOWED_TEST_TYPES = {"manual_attestation", "internal_metadata_check", "evidence_review_check"}
 ALLOWED_CHECK_KEYS = {
@@ -44,10 +45,8 @@ class ControlTestService:
 
     @classmethod
     def validate_test_type_and_check_key(cls, test_type: str, check_key: str) -> None:
-        if test_type not in ALLOWED_TEST_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid test_type")
-        if check_key not in ALLOWED_CHECK_KEYS:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid check_key")
+        test_type = validate_choice(test_type, ALLOWED_TEST_TYPES, "test_type", status_code=status.HTTP_400_BAD_REQUEST)
+        check_key = validate_choice(check_key, ALLOWED_CHECK_KEYS, "check_key", status_code=status.HTTP_400_BAD_REQUEST)
         if test_type == "manual_attestation" and check_key != "manual_attestation":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -56,9 +55,7 @@ class ControlTestService:
 
     @classmethod
     def validate_cadence(cls, cadence: str) -> None:
-        if cadence not in ALLOWED_CADENCE:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid cadence")
-
+        cadence = validate_choice(cadence, ALLOWED_CADENCE, "cadence", status_code=status.HTTP_400_BAD_REQUEST)
     def require_control_in_org(self, organization_id: uuid.UUID, control_id: uuid.UUID) -> Control:
         control = self.db.execute(
             select(Control).where(

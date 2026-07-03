@@ -9,6 +9,7 @@ from app.models.dpia import DPIA
 from app.models.dpia_checklist_item import DPIAChecklistItem
 from app.models.processing_activity import ProcessingActivity
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_DPIA_STATUS = {"draft", "in_progress", "under_review", "approved", "rejected", "archived"}
 ALLOWED_RESIDUAL_RISK = {"low", "medium", "high", "unacceptable"}
@@ -164,14 +165,12 @@ class DPIAService:
             DPIA.deleted_at.is_(None),
         )
         if status_filter is not None:
-            if status_filter not in ALLOWED_DPIA_STATUS:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status filter")
+            status_filter = validate_choice(status_filter, ALLOWED_DPIA_STATUS, "status")
             stmt = stmt.where(DPIA.status == status_filter)
         if processing_activity_id is not None:
             stmt = stmt.where(DPIA.processing_activity_id == processing_activity_id)
         if residual_risk_level is not None:
-            if residual_risk_level not in ALLOWED_RESIDUAL_RISK:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid residual_risk_level filter")
+            residual_risk_level = validate_choice(residual_risk_level, ALLOWED_RESIDUAL_RISK, "residual_risk_level")
             stmt = stmt.where(DPIA.residual_risk_level == residual_risk_level)
 
         return self.db.execute(stmt.order_by(DPIA.created_at.desc())).scalars().all()
@@ -214,8 +213,7 @@ class DPIAService:
             if item is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Checklist criterion not found: {key}")
             value = response.get("response")
-            if value not in ALLOWED_CHECKLIST_RESPONSE:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid checklist response")
+            value = validate_choice(value, ALLOWED_CHECKLIST_RESPONSE, "checklist response")
             item.response = value
             item.notes = response.get("notes")
             item.updated_at = now

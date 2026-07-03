@@ -13,6 +13,7 @@ from app.models.data_access_anomaly_rule import DataAccessAnomalyRule
 from app.models.data_access_log import DataAccessLog
 from app.models.data_asset import DataAsset
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_ACCESS_TYPES = {"read", "write", "delete", "export", "query"}
 ALLOWED_ACCESS_RESULTS = {"success", "failed", "partial"}
@@ -167,12 +168,10 @@ class AccessMonitoringService:
         if actor_id is not None:
             stmt = stmt.where(DataAccessLog.actor_id == actor_id)
         if access_type is not None:
-            if access_type not in ALLOWED_ACCESS_TYPES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid access_type filter")
+            access_type = validate_choice(access_type, ALLOWED_ACCESS_TYPES, "access_type")
             stmt = stmt.where(DataAccessLog.access_type == access_type)
         if access_result is not None:
-            if access_result not in ALLOWED_ACCESS_RESULTS:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid access_result filter")
+            access_result = validate_choice(access_result, ALLOWED_ACCESS_RESULTS, "access_result")
             stmt = stmt.where(DataAccessLog.access_result == access_result)
         if from_time is not None:
             stmt = stmt.where(DataAccessLog.access_time >= from_time)
@@ -238,8 +237,7 @@ class AccessMonitoringService:
 
     def create_anomaly_rule(self, org_id: uuid.UUID, data, created_by: uuid.UUID) -> DataAccessAnomalyRule:
         payload = data.model_dump()
-        if payload["rule_type"] not in ALLOWED_RULE_TYPES:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid rule_type")
+        payload["rule_type"] = validate_choice(payload["rule_type"], ALLOWED_RULE_TYPES, "rule_type")
         if payload.get("data_asset_id") is not None:
             self._require_asset(org_id, payload["data_asset_id"])
 

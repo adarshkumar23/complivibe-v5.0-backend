@@ -12,6 +12,7 @@ from app.models.data_quality_config import DataQualityConfig
 from app.models.data_quality_reading import DataQualityReading
 from app.data_observability.services.incident_detection_service import DataIncidentService
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_METRIC_TYPES = {"completeness", "accuracy", "freshness", "consistency", "uniqueness"}
 ALLOWED_DIRECTIONS = {"above", "below"}
@@ -131,8 +132,7 @@ class DataQualityService:
         if data_asset_id is not None:
             stmt = stmt.where(DataQualityConfig.data_asset_id == data_asset_id)
         if metric_type is not None:
-            if metric_type not in ALLOWED_METRIC_TYPES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid metric_type filter")
+            metric_type = validate_choice(metric_type, ALLOWED_METRIC_TYPES, "metric_type")
             stmt = stmt.where(DataQualityConfig.metric_type == metric_type)
         if is_active is not None:
             stmt = stmt.where(DataQualityConfig.is_active.is_(is_active))
@@ -219,9 +219,7 @@ class DataQualityService:
         source_tool: str | None,
         notes: str | None,
     ) -> DataQualityReading:
-        if reading_source not in ALLOWED_READING_SOURCES:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid reading_source")
-
+        reading_source = validate_choice(reading_source, ALLOWED_READING_SOURCES, "reading_source")
         config = self._require_config(org_id, config_id)
         if not config.is_active:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Data quality config is inactive")

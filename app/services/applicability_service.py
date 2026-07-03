@@ -16,6 +16,7 @@ from app.models.organization_applicability_answer import OrganizationApplicabili
 from app.models.organization_framework import OrganizationFramework
 from app.models.organization_obligation_state import OrganizationObligationState
 from app.repositories.applicability_repository import ApplicabilityRepository
+from app.core.validation import validate_choice
 
 ALLOWED_RULE_OPERATORS = {
     "equals",
@@ -52,14 +53,10 @@ class ApplicabilityService:
 
     @staticmethod
     def validate_operator(operator: str) -> None:
-        if operator not in ALLOWED_RULE_OPERATORS:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid operator")
-
+        operator = validate_choice(operator, ALLOWED_RULE_OPERATORS, "operator", status_code=status.HTTP_400_BAD_REQUEST)
     @staticmethod
     def validate_result_applicability(value: str) -> None:
-        if value not in ALLOWED_RESULT_APPLICABILITY:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid result_applicability")
-
+        value = validate_choice(value, ALLOWED_RESULT_APPLICABILITY, "result_applicability", status_code=status.HTTP_400_BAD_REQUEST)
     @staticmethod
     def evaluate_operator(operator: str, answer_value: Any, expected_value: Any) -> bool:
         if operator == "equals":

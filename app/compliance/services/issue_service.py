@@ -243,6 +243,11 @@ class IssueService:
                         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                         detail="RCA required before closing this issue.",
                     )
+
+        # resolution_note is only *required* on the resolved->closed transition (enforced
+        # above), but it must be persisted whenever the caller supplies it on ANY transition
+        # -- previously it was silently dropped on every transition except that one.
+        if resolution_note is not None and resolution_note.strip():
             row.resolution_note = resolution_note.strip()
 
         row.status = new_status

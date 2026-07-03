@@ -38,6 +38,7 @@ from app.models.control import Control
 from app.models.evidence_item import EvidenceItem
 from app.models.risk import Risk
 from app.services.ai_system_service import AISystemService
+from app.core.validation import validate_choice
 
 AI_RISK_ASSESSMENT_CAVEAT = (
     "AI risk assessments are manual governance records. CompliVibe does not make legal determinations "
@@ -1379,8 +1380,7 @@ class AISystemRiskAssessmentService:
         status_value: str,
         actor_user_id: uuid.UUID,
     ) -> AISystemRiskScoringProfile:
-        if status_value not in PROFILE_STATUSES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid scoring profile status")
+        status_value = validate_choice(status_value, PROFILE_STATUSES, "scoring profile status", status_code=status.HTTP_400_BAD_REQUEST)
         if is_default and status_value != "active":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Default scoring profile must be active")
         likelihood_weights, impact_weights, thresholds = self.normalize_scoring_profile_inputs(
@@ -1443,8 +1443,7 @@ class AISystemRiskAssessmentService:
         new_is_default = bool(updates.get("is_default", row.is_default))
         if new_status == "archived":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Use archive endpoint for scoring profiles")
-        if new_status not in PROFILE_STATUSES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid scoring profile status")
+        new_status = validate_choice(new_status, PROFILE_STATUSES, "scoring profile status", status_code=status.HTTP_400_BAD_REQUEST)
         if new_is_default and new_status != "active":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Default scoring profile must be active")
 
@@ -1583,8 +1582,7 @@ class AISystemRiskAssessmentService:
         status_value: str,
         actor_user_id: uuid.UUID,
     ) -> AISystemRiskDimensionTemplate:
-        if status_value not in DIMENSION_TEMPLATE_STATUSES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid dimension template status")
+        status_value = validate_choice(status_value, DIMENSION_TEMPLATE_STATUSES, "dimension template status", status_code=status.HTTP_400_BAD_REQUEST)
         if is_default and status_value != "active":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Default dimension template must be active")
         weights, thresholds = self.normalize_dimension_template_inputs(
@@ -1645,8 +1643,7 @@ class AISystemRiskAssessmentService:
         new_is_default = bool(updates.get("is_default", row.is_default))
         if new_status == "archived":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Use archive endpoint for dimension templates")
-        if new_status not in DIMENSION_TEMPLATE_STATUSES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid dimension template status")
+        new_status = validate_choice(new_status, DIMENSION_TEMPLATE_STATUSES, "dimension template status", status_code=status.HTTP_400_BAD_REQUEST)
         if new_is_default and new_status != "active":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Default dimension template must be active")
 
@@ -1711,8 +1708,7 @@ class AISystemRiskAssessmentService:
         status_value: str,
         actor_user_id: uuid.UUID,
     ) -> AISystemRiskClassificationTaxonomyTemplate:
-        if status_value not in CLASSIFICATION_TAXONOMY_STATUSES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid classification taxonomy status")
+        status_value = validate_choice(status_value, CLASSIFICATION_TAXONOMY_STATUSES, "classification taxonomy status", status_code=status.HTTP_400_BAD_REQUEST)
         if is_default and status_value != "active":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Default taxonomy template must be active")
         normalized_taxonomy = self.normalize_classification_taxonomy_json(taxonomy_json)
@@ -1772,8 +1768,7 @@ class AISystemRiskAssessmentService:
         new_is_default = bool(updates.get("is_default", row.is_default))
         if new_status == "archived":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Use archive endpoint for classification taxonomies")
-        if new_status not in CLASSIFICATION_TAXONOMY_STATUSES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid classification taxonomy status")
+        new_status = validate_choice(new_status, CLASSIFICATION_TAXONOMY_STATUSES, "classification taxonomy status", status_code=status.HTTP_400_BAD_REQUEST)
         if new_is_default and new_status != "active":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Default taxonomy template must be active")
 
@@ -2024,11 +2019,9 @@ class AISystemRiskAssessmentService:
         if assessment.status == "archived":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Archived risk assessments cannot accept classifications")
 
-        if confidence_level not in CLASSIFICATION_CONFIDENCE_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid confidence_level")
-        if source_type is not None and source_type not in CLASSIFICATION_SOURCE_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid source_type")
-
+        confidence_level = validate_choice(confidence_level, CLASSIFICATION_CONFIDENCE_VALUES, "confidence_level", status_code=status.HTTP_400_BAD_REQUEST)
+        if source_type is not None:
+            source_type = validate_choice(source_type, CLASSIFICATION_SOURCE_TYPES, "source_type", status_code=status.HTTP_400_BAD_REQUEST)
         normalized_classification_json = self.normalize_classification_json(classification_json)
         normalized_evidence_ids, normalized_control_ids, normalized_risk_ids = self._validate_classification_ids(
             organization_id=assessment.organization_id,
@@ -2276,8 +2269,7 @@ class AISystemRiskAssessmentService:
         snapshot_type: str,
         actor_user_id: uuid.UUID,
     ) -> AISystemRiskClassificationRecordSnapshot:
-        if snapshot_type not in CLASSIFICATION_SNAPSHOT_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid classification snapshot_type")
+        snapshot_type = validate_choice(snapshot_type, CLASSIFICATION_SNAPSHOT_TYPES, "classification snapshot_type", status_code=status.HTTP_400_BAD_REQUEST)
         generated_at = self.now()
         snapshot_version = self._next_classification_snapshot_version(
             organization_id=row.organization_id,
@@ -2354,10 +2346,8 @@ class AISystemRiskAssessmentService:
         message: str,
         source_json: dict,
     ) -> GovernanceSignal:
-        if entity_type not in GOVERNANCE_SIGNAL_ENTITY_TYPE_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid governance signal entity_type")
-        if severity not in GOVERNANCE_SIGNAL_SEVERITY_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid governance signal severity")
+        entity_type = validate_choice(entity_type, GOVERNANCE_SIGNAL_ENTITY_TYPE_VALUES, "governance signal entity_type", status_code=status.HTTP_400_BAD_REQUEST)
+        severity = validate_choice(severity, GOVERNANCE_SIGNAL_SEVERITY_VALUES, "governance signal severity", status_code=status.HTTP_400_BAD_REQUEST)
         row = GovernanceSignal(
             organization_id=organization_id,
             domain="ai_risk",
@@ -3637,8 +3627,7 @@ class AISystemRiskAssessmentService:
         scope_type: str,
         scope_id: uuid.UUID | None,
     ) -> tuple[uuid.UUID | None, uuid.UUID | None]:
-        if scope_type not in GOVERNANCE_RECOMMENDATION_SCOPE_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid scope_type")
+        scope_type = validate_choice(scope_type, GOVERNANCE_RECOMMENDATION_SCOPE_TYPES, "scope_type", status_code=status.HTTP_400_BAD_REQUEST)
         if scope_type == "organization":
             if scope_id is not None:
                 raise HTTPException(
@@ -3901,8 +3890,7 @@ class AISystemRiskAssessmentService:
             GovernanceRecommendationSnapshot.organization_id == organization_id
         )
         if scope_type is not None:
-            if scope_type not in GOVERNANCE_RECOMMENDATION_SCOPE_TYPES:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid scope_type")
+            scope_type = validate_choice(scope_type, GOVERNANCE_RECOMMENDATION_SCOPE_TYPES, "scope_type", status_code=status.HTTP_400_BAD_REQUEST)
             query = query.where(GovernanceRecommendationSnapshot.scope_type == scope_type)
         if scope_id is not None:
             query = query.where(GovernanceRecommendationSnapshot.scope_id == scope_id)
@@ -4168,8 +4156,7 @@ class AISystemRiskAssessmentService:
         deferred_until: datetime | None,
         actor_user_id: uuid.UUID | None,
     ) -> GovernanceRecommendationActionDisposition:
-        if disposition_status not in GOVERNANCE_RECOMMENDATION_DISPOSITION_STATUS_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid disposition_status")
+        disposition_status = validate_choice(disposition_status, GOVERNANCE_RECOMMENDATION_DISPOSITION_STATUS_VALUES, "disposition_status", status_code=status.HTTP_400_BAD_REQUEST)
         _, action = self._require_snapshot_action(
             organization_id=organization_id,
             snapshot_id=snapshot_id,
@@ -4231,8 +4218,8 @@ class AISystemRiskAssessmentService:
     ) -> list[GovernanceRecommendationActionDisposition]:
         if snapshot_id is not None:
             self.require_recommendation_snapshot(organization_id=organization_id, snapshot_id=snapshot_id)
-        if disposition_status is not None and disposition_status not in GOVERNANCE_RECOMMENDATION_DISPOSITION_STATUS_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid disposition_status")
+        if disposition_status is not None:
+            disposition_status = validate_choice(disposition_status, GOVERNANCE_RECOMMENDATION_DISPOSITION_STATUS_VALUES, "disposition_status", status_code=status.HTTP_400_BAD_REQUEST)
         query = select(GovernanceRecommendationActionDisposition).where(
             GovernanceRecommendationActionDisposition.organization_id == organization_id
         )
@@ -5156,8 +5143,7 @@ class AISystemRiskAssessmentService:
         require_quorum_for_source_types_json: Any,
         policy_json: Any,
     ) -> dict[str, Any]:
-        if status_value not in AUTOPILOT_APPROVAL_POLICY_STATUS_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid approval policy status")
+        status_value = validate_choice(status_value, AUTOPILOT_APPROVAL_POLICY_STATUS_VALUES, "approval policy status", status_code=status.HTTP_400_BAD_REQUEST)
         if minimum_approvals < 1:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="minimum_approvals must be >= 1")
         if rejection_threshold < 1:
@@ -5231,13 +5217,9 @@ class AISystemRiskAssessmentService:
         source_record_mutation_allowed: bool,
         policy_json: Any,
     ) -> dict[str, Any]:
-        if status_value not in AUTOPILOT_POLICY_STATUS_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid policy status")
-        if mode not in AUTOPILOT_POLICY_MODE_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid policy mode")
-        if max_allowed_priority_band_for_auto not in AUTOPILOT_PRIORITY_BANDS:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid max_allowed_priority_band_for_auto")
-
+        status_value = validate_choice(status_value, AUTOPILOT_POLICY_STATUS_VALUES, "policy status", status_code=status.HTTP_400_BAD_REQUEST)
+        mode = validate_choice(mode, AUTOPILOT_POLICY_MODE_VALUES, "policy mode", status_code=status.HTTP_400_BAD_REQUEST)
+        max_allowed_priority_band_for_auto = validate_choice(max_allowed_priority_band_for_auto, AUTOPILOT_PRIORITY_BANDS, "max_allowed_priority_band_for_auto", status_code=status.HTTP_400_BAD_REQUEST)
         action_types = {str(item["action_type"]) for item in GOVERNANCE_CANDIDATE_ACTION_TEMPLATES}
         draft_types = {
             "ai_system_attention_brief",
@@ -5385,8 +5367,8 @@ class AISystemRiskAssessmentService:
         limit: int,
         offset: int,
     ) -> list[GovernanceAutopilotPolicy]:
-        if status_value is not None and status_value not in AUTOPILOT_POLICY_STATUS_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid policy status")
+        if status_value is not None:
+            status_value = validate_choice(status_value, AUTOPILOT_POLICY_STATUS_VALUES, "policy status", status_code=status.HTTP_400_BAD_REQUEST)
         query = select(GovernanceAutopilotPolicy).where(
             GovernanceAutopilotPolicy.organization_id == organization_id
         )
@@ -5574,8 +5556,8 @@ class AISystemRiskAssessmentService:
         limit: int,
         offset: int,
     ) -> list[GovernanceAutopilotApprovalPolicy]:
-        if status_value is not None and status_value not in AUTOPILOT_APPROVAL_POLICY_STATUS_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid approval policy status")
+        if status_value is not None:
+            status_value = validate_choice(status_value, AUTOPILOT_APPROVAL_POLICY_STATUS_VALUES, "approval policy status", status_code=status.HTTP_400_BAD_REQUEST)
         query = select(GovernanceAutopilotApprovalPolicy).where(
             GovernanceAutopilotApprovalPolicy.organization_id == organization_id
         )
@@ -6259,8 +6241,7 @@ class AISystemRiskAssessmentService:
         policy_id: uuid.UUID | None,
         actor_user_id: uuid.UUID | None,
     ) -> GovernanceAutopilotExecutionIntent:
-        if source_type not in AUTOPILOT_EXECUTION_INTENT_SOURCE_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid source_type")
+        source_type = validate_choice(source_type, AUTOPILOT_EXECUTION_INTENT_SOURCE_TYPES, "source_type", status_code=status.HTTP_400_BAD_REQUEST)
         if source_type == "candidate_action":
             if candidate_action_json is None:
                 raise HTTPException(
@@ -6348,10 +6329,10 @@ class AISystemRiskAssessmentService:
         limit: int,
         offset: int,
     ) -> list[GovernanceAutopilotExecutionIntent]:
-        if source_type is not None and source_type not in AUTOPILOT_EXECUTION_INTENT_SOURCE_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid source_type")
-        if intent_status is not None and intent_status not in AUTOPILOT_EXECUTION_INTENT_STATUS_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid intent_status")
+        if source_type is not None:
+            source_type = validate_choice(source_type, AUTOPILOT_EXECUTION_INTENT_SOURCE_TYPES, "source_type", status_code=status.HTTP_400_BAD_REQUEST)
+        if intent_status is not None:
+            intent_status = validate_choice(intent_status, AUTOPILOT_EXECUTION_INTENT_STATUS_VALUES, "intent_status", status_code=status.HTTP_400_BAD_REQUEST)
         if policy_id is not None:
             self.require_autopilot_policy(organization_id=organization_id, policy_id=policy_id)
         query = select(GovernanceAutopilotExecutionIntent).where(
@@ -6770,9 +6751,8 @@ class AISystemRiskAssessmentService:
     ) -> list[GovernanceAutopilotRunnerSimulation]:
         if execution_intent_id is not None:
             self.require_execution_intent(organization_id=organization_id, intent_id=execution_intent_id)
-        if simulation_status is not None and simulation_status not in AUTOPILOT_RUNNER_SIMULATION_STATUS_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid simulation_status")
-
+        if simulation_status is not None:
+            simulation_status = validate_choice(simulation_status, AUTOPILOT_RUNNER_SIMULATION_STATUS_VALUES, "simulation_status", status_code=status.HTTP_400_BAD_REQUEST)
         query = select(GovernanceAutopilotRunnerSimulation).where(
             GovernanceAutopilotRunnerSimulation.organization_id == organization_id
         )
@@ -7197,9 +7177,8 @@ class AISystemRiskAssessmentService:
             self.require_runner_simulation(organization_id=organization_id, simulation_id=runner_simulation_id)
         if execution_intent_id is not None:
             self.require_execution_intent(organization_id=organization_id, intent_id=execution_intent_id)
-        if admission_status is not None and admission_status not in AUTOPILOT_RUNNER_ADMISSION_STATUS_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid admission_status")
-
+        if admission_status is not None:
+            admission_status = validate_choice(admission_status, AUTOPILOT_RUNNER_ADMISSION_STATUS_VALUES, "admission_status", status_code=status.HTTP_400_BAD_REQUEST)
         query = select(GovernanceAutopilotRunnerAdmission).where(
             GovernanceAutopilotRunnerAdmission.organization_id == organization_id
         )
@@ -7509,9 +7488,8 @@ class AISystemRiskAssessmentService:
             self.require_runner_simulation(organization_id=organization_id, simulation_id=runner_simulation_id)
         if execution_intent_id is not None:
             self.require_execution_intent(organization_id=organization_id, intent_id=execution_intent_id)
-        if session_status is not None and session_status not in AUTOPILOT_RUNNER_SESSION_STATUS_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid session_status")
-
+        if session_status is not None:
+            session_status = validate_choice(session_status, AUTOPILOT_RUNNER_SESSION_STATUS_VALUES, "session_status", status_code=status.HTTP_400_BAD_REQUEST)
         query = select(GovernanceAutopilotRunnerSession).where(
             GovernanceAutopilotRunnerSession.organization_id == organization_id
         )
@@ -8114,9 +8092,8 @@ class AISystemRiskAssessmentService:
             self.require_runner_simulation(organization_id=organization_id, simulation_id=runner_simulation_id)
         if execution_intent_id is not None:
             self.require_execution_intent(organization_id=organization_id, intent_id=execution_intent_id)
-        if handshake_status is not None and handshake_status not in AUTOPILOT_RUNNER_HANDSHAKE_STATUS_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid handshake_status")
-
+        if handshake_status is not None:
+            handshake_status = validate_choice(handshake_status, AUTOPILOT_RUNNER_HANDSHAKE_STATUS_VALUES, "handshake_status", status_code=status.HTTP_400_BAD_REQUEST)
         query = select(GovernanceAutopilotRunnerHandshake).where(
             GovernanceAutopilotRunnerHandshake.organization_id == organization_id
         )
@@ -8755,8 +8732,8 @@ class AISystemRiskAssessmentService:
     @staticmethod
     def autopilot_noop_runner_field_docs(*, report_type: str | None) -> dict[str, Any]:
         allowed = set(AUTOPILOT_NOOP_RUNNER_REPORT_TYPES) | {"bounded_export", "checksum"}
-        if report_type is not None and report_type not in allowed:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid report_type")
+        if report_type is not None:
+            report_type = validate_choice(report_type, allowed, "report_type", status_code=status.HTTP_400_BAD_REQUEST)
         catalog = AISystemRiskAssessmentService._noop_runner_field_docs_catalog()
         return {
             "field_docs_version": AUTOPILOT_NOOP_RUNNER_FIELD_DOCS_VERSION,
@@ -8771,8 +8748,8 @@ class AISystemRiskAssessmentService:
     @staticmethod
     def autopilot_noop_runner_display_metadata(*, report_type: str | None) -> dict[str, Any]:
         allowed = set(AUTOPILOT_NOOP_RUNNER_REPORT_TYPES) | {"bounded_export", "checksum"}
-        if report_type is not None and report_type not in allowed:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid report_type")
+        if report_type is not None:
+            report_type = validate_choice(report_type, allowed, "report_type", status_code=status.HTTP_400_BAD_REQUEST)
         display_catalog: dict[str, dict[str, Any]] = {
             "ledger": {
                 "table_columns": ["event_status", "event_type", "execution_intent_id", "blocked_reasons", "created_at"],
@@ -9025,8 +9002,7 @@ class AISystemRiskAssessmentService:
         execution_intent_id: uuid.UUID | None,
         runner_handshake_id: uuid.UUID | None,
     ) -> dict[str, Any]:
-        if report_type not in AUTOPILOT_NOOP_RUNNER_REPORT_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid report_type")
+        report_type = validate_choice(report_type, AUTOPILOT_NOOP_RUNNER_REPORT_TYPES, "report_type", status_code=status.HTTP_400_BAD_REQUEST)
         bounded_limit = min(max(int(limit), 1), AUTOPILOT_NOOP_RUNNER_MAX_LIMIT)
         bounded_offset = max(int(offset), 0)
         query_payload = self.to_json_compatible(
@@ -9372,9 +9348,8 @@ class AISystemRiskAssessmentService:
             self.require_runner_handshake(organization_id=organization_id, handshake_id=runner_handshake_id)
         if execution_intent_id is not None:
             self.require_execution_intent(organization_id=organization_id, intent_id=execution_intent_id)
-        if event_status is not None and event_status not in AUTOPILOT_NOOP_RUNNER_EVENT_STATUS_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid event_status")
-
+        if event_status is not None:
+            event_status = validate_choice(event_status, AUTOPILOT_NOOP_RUNNER_EVENT_STATUS_VALUES, "event_status", status_code=status.HTTP_400_BAD_REQUEST)
         query = select(GovernanceAutopilotNoopRunnerEvent).where(
             GovernanceAutopilotNoopRunnerEvent.organization_id == organization_id
         )
@@ -9404,8 +9379,8 @@ class AISystemRiskAssessmentService:
         limit: int,
         offset: int,
     ) -> list[dict[str, Any]]:
-        if event_status is not None and event_status not in AUTOPILOT_NOOP_RUNNER_EVENT_STATUS_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid event_status")
+        if event_status is not None:
+            event_status = validate_choice(event_status, AUTOPILOT_NOOP_RUNNER_EVENT_STATUS_VALUES, "event_status", status_code=status.HTTP_400_BAD_REQUEST)
         if runner_handshake_id is not None:
             self.require_runner_handshake(organization_id=organization_id, handshake_id=runner_handshake_id)
         if runner_session_id is not None:
@@ -9477,8 +9452,8 @@ class AISystemRiskAssessmentService:
         event_status: str | None,
         days: int,
     ) -> dict[str, Any]:
-        if event_status is not None and event_status not in AUTOPILOT_NOOP_RUNNER_EVENT_STATUS_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid event_status")
+        if event_status is not None:
+            event_status = validate_choice(event_status, AUTOPILOT_NOOP_RUNNER_EVENT_STATUS_VALUES, "event_status", status_code=status.HTTP_400_BAD_REQUEST)
         bounded_days = min(max(int(days), 1), 365)
         start_date = self.now().date() - timedelta(days=bounded_days - 1)
         start_at = datetime.combine(start_date, datetime.min.time(), tzinfo=UTC)
@@ -10437,8 +10412,8 @@ class AISystemRiskAssessmentService:
         limit: int,
         offset: int,
     ) -> list[GovernanceAutopilotExecutionApproval]:
-        if approval_status is not None and approval_status not in AUTOPILOT_EXECUTION_APPROVAL_STATUS_VALUES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid approval_status")
+        if approval_status is not None:
+            approval_status = validate_choice(approval_status, AUTOPILOT_EXECUTION_APPROVAL_STATUS_VALUES, "approval_status", status_code=status.HTTP_400_BAD_REQUEST)
         if execution_intent_id is not None:
             self.require_execution_intent(organization_id=organization_id, intent_id=execution_intent_id)
         query = select(GovernanceAutopilotExecutionApproval).where(

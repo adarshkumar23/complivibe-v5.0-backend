@@ -28,6 +28,7 @@ from app.services.export_service import INTEGRITY_ALGORITHM, SIGNING_KEY_ID
 from app.services.framework_content_pack_service import FrameworkContentPackService
 from app.services.framework_content_service import FRAMEWORK_COVERAGE_LEVELS
 from app.services.seed_service import SeedService
+from app.core.validation import validate_choice
 
 REVIEW_CAVEAT = (
     "Framework pack review and promotion are internal CompliVibe content-governance signals. "
@@ -81,19 +82,13 @@ class FrameworkPackReviewService:
 
     @staticmethod
     def _require_coverage_level(value: str) -> None:
-        if value not in FRAMEWORK_COVERAGE_LEVELS:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid coverage_level")
-
+        value = validate_choice(value, FRAMEWORK_COVERAGE_LEVELS, "coverage_level", status_code=status.HTTP_400_BAD_REQUEST)
     @staticmethod
     def _require_review_type(value: str) -> None:
-        if value not in REVIEW_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid review_type")
-
+        value = validate_choice(value, REVIEW_TYPES, "review_type", status_code=status.HTTP_400_BAD_REQUEST)
     @staticmethod
     def _require_outcome(value: str) -> None:
-        if value not in REVIEW_OUTCOMES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid outcome")
-
+        value = validate_choice(value, REVIEW_OUTCOMES, "outcome", status_code=status.HTTP_400_BAD_REQUEST)
     @staticmethod
     def _next_level(level: str) -> str | None:
         if level not in _COVERAGE_ORDER:
@@ -320,9 +315,7 @@ class FrameworkPackReviewService:
     ) -> FrameworkPackReviewSignoff:
         if row.status != "completed":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Review must be completed before signoff")
-        if decision not in SIGNOFF_DECISIONS:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid decision")
-
+        decision = validate_choice(decision, SIGNOFF_DECISIONS, "decision", status_code=status.HTTP_400_BAD_REQUEST)
         existing = self.repo.get_signoff_by_signer(
             organization_id=row.organization_id,
             review_run_id=row.id,
@@ -704,9 +697,7 @@ class FrameworkPackReviewService:
         self._validate_non_negative("due_days", due_days)
         self._validate_non_negative("escalation_after_days", escalation_after_days)
         self._validate_non_negative("reminder_before_days", reminder_before_days)
-        if status_value not in SLA_POLICY_STATUSES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid SLA policy status")
-
+        status_value = validate_choice(status_value, SLA_POLICY_STATUSES, "SLA policy status", status_code=status.HTTP_400_BAD_REQUEST)
         row = FrameworkReviewSLAPolicy(
             organization_id=organization_id,
             name=name.strip(),
@@ -752,8 +743,7 @@ class FrameworkPackReviewService:
             self._validate_non_negative("reminder_before_days", reminder_before_days)
             row.reminder_before_days = reminder_before_days
         if status_value is not None:
-            if status_value not in SLA_POLICY_STATUSES:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid SLA policy status")
+            status_value = validate_choice(status_value, SLA_POLICY_STATUSES, "SLA policy status", status_code=status.HTTP_400_BAD_REQUEST)
             row.status = status_value
         self.db.flush()
         return row
@@ -815,8 +805,7 @@ class FrameworkPackReviewService:
         event_type: str,
         details_json: dict | None,
     ) -> FrameworkReviewEscalationEvent:
-        if event_type not in ESCALATION_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid escalation event type")
+        event_type = validate_choice(event_type, ESCALATION_TYPES, "escalation event type", status_code=status.HTTP_400_BAD_REQUEST)
         existing = self._find_open_escalation(
             organization_id=organization_id,
             review_run_id=review_run_id,

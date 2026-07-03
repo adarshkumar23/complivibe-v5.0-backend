@@ -11,6 +11,7 @@ from app.models.data_incident import DataIncident
 from app.models.issue import Issue
 from app.compliance.services.customer_commitment_service import CustomerCommitmentService
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_DETECTOR_TYPES = {"anomaly_rule", "quality_breach", "retention_violation", "residency_violation", "manual"}
 ALLOWED_SEVERITIES = {"critical", "high", "medium", "low"}
@@ -138,13 +139,9 @@ class DataIncidentService:
         detected_by: str = "rule_engine",
         actor_user_id: uuid.UUID | None = None,
     ) -> DataIncident | None:
-        if detector_type not in ALLOWED_DETECTOR_TYPES:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid detector_type")
-        if severity not in ALLOWED_SEVERITIES:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid severity")
-        if detected_by not in ALLOWED_DETECTED_BY:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid detected_by")
-
+        detector_type = validate_choice(detector_type, ALLOWED_DETECTOR_TYPES, "detector_type")
+        severity = validate_choice(severity, ALLOWED_SEVERITIES, "severity")
+        detected_by = validate_choice(detected_by, ALLOWED_DETECTED_BY, "detected_by")
         asset = self._require_asset(org_id, data_asset_id)
 
         existing = self._check_dedup(org_id, data_asset_id, detector_type, rule_type)
@@ -233,16 +230,13 @@ class DataIncidentService:
         if data_asset_id is not None:
             stmt = stmt.where(DataIncident.data_asset_id == data_asset_id)
         if severity is not None:
-            if severity not in ALLOWED_SEVERITIES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid severity filter")
+            severity = validate_choice(severity, ALLOWED_SEVERITIES, "severity")
             stmt = stmt.where(DataIncident.severity == severity)
         if status_filter is not None:
-            if status_filter not in ALLOWED_STATUS:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status filter")
+            status_filter = validate_choice(status_filter, ALLOWED_STATUS, "status")
             stmt = stmt.where(DataIncident.status == status_filter)
         if detector_type is not None:
-            if detector_type not in ALLOWED_DETECTOR_TYPES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid detector_type filter")
+            detector_type = validate_choice(detector_type, ALLOWED_DETECTOR_TYPES, "detector_type")
             stmt = stmt.where(DataIncident.detector_type == detector_type)
 
         return self.db.execute(

@@ -12,6 +12,7 @@ from app.models.processing_activity import ProcessingActivity
 from app.models.subprocessor import Subprocessor
 from app.models.user import User
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_COUNTERPARTY_TYPES = {"processor", "sub_processor", "joint_controller", "controller"}
 ALLOWED_STATUSES = {"pending", "active", "expired", "under_review", "terminated"}
@@ -166,12 +167,10 @@ class DPAService:
             DPAAgreement.deleted_at.is_(None),
         )
         if status_filter is not None:
-            if status_filter not in ALLOWED_STATUSES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status filter")
+            status_filter = validate_choice(status_filter, ALLOWED_STATUSES, "status")
             stmt = stmt.where(DPAAgreement.status == status_filter)
         if counterparty_type is not None:
-            if counterparty_type not in ALLOWED_COUNTERPARTY_TYPES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid counterparty_type filter")
+            counterparty_type = validate_choice(counterparty_type, ALLOWED_COUNTERPARTY_TYPES, "counterparty_type")
             stmt = stmt.where(DPAAgreement.counterparty_type == counterparty_type)
         if vendor_id is not None:
             stmt = stmt.where(DPAAgreement.vendor_id == vendor_id)
@@ -207,9 +206,7 @@ class DPAService:
 
     def transition_status(self, org_id: uuid.UUID, dpa_id: uuid.UUID, new_status: str, user_id: uuid.UUID) -> DPAAgreement:
         row = self._require_dpa(org_id, dpa_id)
-        if new_status not in ALLOWED_STATUSES:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status")
-
+        new_status = validate_choice(new_status, ALLOWED_STATUSES, "status")
         allowed = STATUS_TRANSITIONS.get(row.status, set())
         if new_status not in allowed:
             raise HTTPException(

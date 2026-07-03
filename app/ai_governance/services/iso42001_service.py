@@ -12,6 +12,7 @@ from app.models.iso42001_conformity_tracker import ISO42001ConformityTracker
 from app.models.obligation import Obligation
 from app.services.audit_service import AuditService
 from app.services.seed_service import ISO42001_OBLIGATIONS, SeedService
+from app.core.validation import validate_choice
 
 ALLOWED_TRACKER_STATUS = {"not_started", "in_progress", "implemented", "verified"}
 
@@ -97,9 +98,7 @@ class ISO42001Service:
         evidence_id: uuid.UUID | None,
         user_id: uuid.UUID,
     ) -> ISO42001ConformityTracker:
-        if status_value not in ALLOWED_TRACKER_STATUS:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid implementation status")
-
+        status_value = validate_choice(status_value, ALLOWED_TRACKER_STATUS, "implementation status")
         clause_refs = {row.reference_code for row in self._iso_obligations()}
         if clause_ref not in clause_refs:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ISO 42001 clause not found")

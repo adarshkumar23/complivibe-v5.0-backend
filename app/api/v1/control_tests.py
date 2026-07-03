@@ -23,6 +23,7 @@ from app.schemas.control_test import (
 )
 from app.services.audit_service import AuditService
 from app.services.control_test_service import ALLOWED_RESULTS, ControlTestService
+from app.core.validation import validate_choice
 
 router = APIRouter(tags=["control-tests"])
 
@@ -248,8 +249,7 @@ def run_control_test(
     if definition.test_type == "manual_attestation":
         if payload.manual_result is None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="manual_result is required for manual_attestation")
-        if payload.manual_result not in ALLOWED_RESULTS:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid manual_result")
+        payload.manual_result = validate_choice(payload.manual_result, ALLOWED_RESULTS, "manual_result", status_code=status.HTTP_400_BAD_REQUEST)
         result = payload.manual_result
         result_reason = payload.result_reason or "Manual attestation result"
     else:

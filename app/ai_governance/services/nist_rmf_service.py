@@ -12,6 +12,7 @@ from app.models.ai_system import AISystem
 from app.models.nist_ai_rmf_implementation import NISTAIRMFImplementation
 from app.services.audit_service import AuditService
 from app.services.seed_service import NIST_AI_RMF_SUBCATEGORIES, SeedService
+from app.core.validation import validate_choice
 
 ALLOWED_RESPONSE_STATUS = {"not_addressed", "partial", "implemented"}
 FUNCTIONS = ("govern", "map", "measure", "manage")
@@ -201,9 +202,7 @@ class NISTRMFService:
         evidence_id: uuid.UUID | None,
         user_id: uuid.UUID,
     ) -> AIRMFFunctionResponse:
-        if response_status not in ALLOWED_RESPONSE_STATUS:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid response status")
-
+        response_status = validate_choice(response_status, ALLOWED_RESPONSE_STATUS, "response status")
         implementation = self.db.execute(
             select(NISTAIRMFImplementation).where(
                 NISTAIRMFImplementation.id == implementation_id,

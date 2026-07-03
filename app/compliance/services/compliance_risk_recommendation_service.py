@@ -17,6 +17,7 @@ from app.compliance.services.risk_scoring_service import RiskScoringService
 from app.services.audit_service import AuditService
 from app.services.compliance_dashboard_service import ComplianceDashboardService
 from app.services.risk_service import RiskService
+from app.core.validation import validate_choice
 
 
 ALLOWED_RECOMMENDATION_TYPES = {
@@ -430,8 +431,7 @@ class ComplianceRiskRecommendationService:
 
         now = self.utcnow()
         if status_filter:
-            if status_filter not in ALLOWED_LIST_STATUS:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status filter")
+            status_filter = validate_choice(status_filter, ALLOWED_LIST_STATUS, "status")
             if status_filter == "pending":
                 stmt = stmt.where(
                     or_(

@@ -10,6 +10,7 @@ from app.models.ai_system import AISystem
 from app.models.third_party_ai_assessment import ThirdPartyAIAssessment
 from app.models.vendor import Vendor
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_DATA_EGRESS = {"none", "anonymized", "identified"}
 ALLOWED_EXPLAINABILITY = {"full", "partial", "none", "not_required"}
@@ -146,12 +147,10 @@ class ThirdPartyAIService:
         if vendor_id is not None:
             stmt = stmt.where(ThirdPartyAIAssessment.vendor_id == vendor_id)
         if status_filter is not None:
-            if status_filter not in ALLOWED_STATUS:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status filter")
+            status_filter = validate_choice(status_filter, ALLOWED_STATUS, "status")
             stmt = stmt.where(ThirdPartyAIAssessment.status == status_filter)
         if risk_level is not None:
-            if risk_level not in ALLOWED_RISK_LEVEL:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid risk_level filter")
+            risk_level = validate_choice(risk_level, ALLOWED_RISK_LEVEL, "risk_level")
             stmt = stmt.where(ThirdPartyAIAssessment.overall_risk_level == risk_level)
         return self.db.execute(stmt.order_by(ThirdPartyAIAssessment.created_at.desc())).scalars().all()
 

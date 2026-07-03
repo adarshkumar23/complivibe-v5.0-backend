@@ -15,6 +15,7 @@ from app.models.ai_risk_assessment_response import AIRiskAssessmentResponse
 from app.models.ai_system import AISystem
 from app.models.risk import Risk
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 RESPONSE_SCORES = {
     "low_risk": Decimal("1"),
@@ -218,8 +219,7 @@ class AIRiskAssessmentService:
             question_id = uuid.UUID(str(item.get("question_id")))
             response_value = item.get("response")
             notes = item.get("notes")
-            if response_value not in RESPONSE_SCORES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid response")
+            response_value = validate_choice(response_value, RESPONSE_SCORES, "response")
             row = resp_by_question.get(question_id)
             if row is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assessment question response row not found")

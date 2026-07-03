@@ -13,6 +13,7 @@ from app.models.email_outbox import EmailOutbox
 from app.models.processing_activity import ProcessingActivity
 from app.models.user import User
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_CONSENT_MECHANISMS = {
     "explicit_checkbox",
@@ -135,9 +136,7 @@ class ConsentService:
         payload = data.model_dump() if hasattr(data, "model_dump") else dict(data)
 
         mechanism = payload.get("consent_mechanism")
-        if mechanism not in ALLOWED_CONSENT_MECHANISMS:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid consent_mechanism")
-
+        mechanism = validate_choice(mechanism, ALLOWED_CONSENT_MECHANISMS, "consent_mechanism")
         subject_identifier = payload["subject_identifier"]
         subject_hash = self.hash_subject_identifier(subject_identifier)
         stored_identifier = "hashed"

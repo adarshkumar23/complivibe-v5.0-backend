@@ -11,6 +11,7 @@ from app.models.export_job import ExportJob
 from app.models.export_job_event import ExportJobEvent
 from app.models.retention_policy import RetentionPolicy
 from app.repositories.retention_repository import RetentionRepository
+from app.core.validation import validate_choice
 
 ALLOWED_RETENTION_ENTITY_TYPES = {
     "export_job",
@@ -38,9 +39,7 @@ class RetentionService:
 
     @staticmethod
     def validate_entity_type(entity_type: str) -> None:
-        if entity_type not in ALLOWED_RETENTION_ENTITY_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid entity_type")
-
+        entity_type = validate_choice(entity_type, ALLOWED_RETENTION_ENTITY_TYPES, "entity_type", status_code=status.HTTP_400_BAD_REQUEST)
     def require_policy(self, organization_id: uuid.UUID, policy_id: uuid.UUID) -> RetentionPolicy:
         policy = self.repo.get_policy(policy_id)
         if policy is None or policy.organization_id != organization_id:

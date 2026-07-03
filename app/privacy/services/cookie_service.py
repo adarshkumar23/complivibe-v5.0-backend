@@ -10,6 +10,7 @@ from app.models.consent_banner_config import ConsentBannerConfig
 from app.models.cookie_registry import CookieRegistry
 from app.models.organization import Organization
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_COOKIE_CATEGORIES = {"strictly_necessary", "functional", "analytics", "marketing", "unknown"}
 
@@ -34,9 +35,7 @@ class CookieService:
         return row
 
     def _validate_category(self, category: str) -> None:
-        if category not in ALLOWED_COOKIE_CATEGORIES:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid cookie category")
-
+        category = validate_choice(category, ALLOWED_COOKIE_CATEGORIES, "cookie category")
     def create_cookie(self, org_id: uuid.UUID, data, created_by: uuid.UUID) -> CookieRegistry:
         payload = data.model_dump() if hasattr(data, "model_dump") else dict(data)
         self._validate_category(payload["category"])

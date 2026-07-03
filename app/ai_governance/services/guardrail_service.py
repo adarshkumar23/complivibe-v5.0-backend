@@ -11,6 +11,7 @@ from app.models.ai_policy_guardrail import AIPolicyGuardrail
 from app.models.ai_system import AISystem
 from app.platform.policy_engine.builtin_engine import get_policy_engine
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_GUARDRAIL_TYPES = {
     "data_scope",
@@ -124,8 +125,7 @@ class GuardrailService:
         if is_active is not None:
             stmt = stmt.where(AIPolicyGuardrail.is_active.is_(is_active))
         if guardrail_type is not None:
-            if guardrail_type not in ALLOWED_GUARDRAIL_TYPES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid guardrail_type filter")
+            guardrail_type = validate_choice(guardrail_type, ALLOWED_GUARDRAIL_TYPES, "guardrail_type")
             stmt = stmt.where(AIPolicyGuardrail.guardrail_type == guardrail_type)
         return self.db.execute(stmt.order_by(AIPolicyGuardrail.created_at.desc())).scalars().all()
 
@@ -281,8 +281,7 @@ class GuardrailService:
         if guardrail_id is not None:
             stmt = stmt.where(AIGuardrailEvent.guardrail_id == guardrail_id)
         if event_type is not None:
-            if event_type not in ALLOWED_EVENT_TYPES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid event_type")
+            event_type = validate_choice(event_type, ALLOWED_EVENT_TYPES, "event_type")
             stmt = stmt.where(AIGuardrailEvent.event_type == event_type)
 
         safe_limit = max(1, min(int(limit), 200))

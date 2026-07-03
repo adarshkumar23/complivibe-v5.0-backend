@@ -10,6 +10,7 @@ from app.data_observability.services.classification_service import classify_meta
 from app.models.data_asset import DataAsset
 from app.models.organization import Organization
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_ASSET_TYPES = {
     "database",
@@ -203,22 +204,18 @@ class DataAssetService:
             DataAsset.deleted_at.is_(None),
         )
         if asset_type is not None:
-            if asset_type not in ALLOWED_ASSET_TYPES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid asset_type filter")
+            asset_type = validate_choice(asset_type, ALLOWED_ASSET_TYPES, "asset_type")
             stmt = stmt.where(DataAsset.asset_type == asset_type)
         if sensitivity_tier is not None:
-            if sensitivity_tier not in ALLOWED_SENSITIVITY_TIERS:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid sensitivity_tier filter")
+            sensitivity_tier = validate_choice(sensitivity_tier, ALLOWED_SENSITIVITY_TIERS, "sensitivity_tier")
             stmt = stmt.where(DataAsset.sensitivity_tier == sensitivity_tier)
         if classification_type is not None:
-            if classification_type not in ALLOWED_CLASSIFICATION_TYPES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid classification_type filter")
+            classification_type = validate_choice(classification_type, ALLOWED_CLASSIFICATION_TYPES, "classification_type")
             stmt = stmt.where(DataAsset.classification_type == classification_type)
         if classification_confirmed is not None:
             stmt = stmt.where(DataAsset.classification_confirmed.is_(classification_confirmed))
         if status_filter is not None:
-            if status_filter not in ALLOWED_STATUS:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status filter")
+            status_filter = validate_choice(status_filter, ALLOWED_STATUS, "status")
             stmt = stmt.where(DataAsset.status == status_filter)
         return self.db.execute(
             stmt.order_by(DataAsset.created_at.desc()).offset(max(0, int(skip))).limit(max(1, min(int(limit), 500)))
@@ -270,11 +267,8 @@ class DataAssetService:
         sensitivity_tier: str,
         user_id: uuid.UUID,
     ) -> DataAsset:
-        if classification_type not in ALLOWED_CLASSIFICATION_TYPES:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid classification_type")
-        if sensitivity_tier not in ALLOWED_SENSITIVITY_TIERS:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid sensitivity_tier")
-
+        classification_type = validate_choice(classification_type, ALLOWED_CLASSIFICATION_TYPES, "classification_type")
+        sensitivity_tier = validate_choice(sensitivity_tier, ALLOWED_SENSITIVITY_TIERS, "sensitivity_tier")
         row = self._require_asset(org_id, asset_id)
         overriding = row.classification_type != classification_type or row.sensitivity_tier != sensitivity_tier
 

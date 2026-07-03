@@ -14,6 +14,7 @@ from app.models.membership import Membership
 from app.models.role import Role
 from app.models.user import User
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_REQUEST_TYPES = {
     "access",
@@ -338,12 +339,10 @@ class DSARService:
         )
 
         if status_filter is not None:
-            if status_filter not in ALLOWED_STATUS:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status filter")
+            status_filter = validate_choice(status_filter, ALLOWED_STATUS, "status")
             stmt = stmt.where(DataSubjectRequest.status == status_filter)
         if request_type is not None:
-            if request_type not in ALLOWED_REQUEST_TYPES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid request_type filter")
+            request_type = validate_choice(request_type, ALLOWED_REQUEST_TYPES, "request_type")
             stmt = stmt.where(DataSubjectRequest.request_type == request_type)
         if assigned_handler_id is not None:
             stmt = stmt.where(DataSubjectRequest.assigned_handler_id == assigned_handler_id)
@@ -369,9 +368,7 @@ class DSARService:
         refusal_reason: str | None = None,
     ) -> DataSubjectRequest:
         row = self._require_request(org_id, request_id)
-        if new_status not in ALLOWED_STATUS:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid new_status")
-
+        new_status = validate_choice(new_status, ALLOWED_STATUS, "new_status")
         allowed = STATUS_TRANSITIONS.get(row.status, set())
         if new_status not in allowed:
             raise HTTPException(

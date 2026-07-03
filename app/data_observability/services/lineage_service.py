@@ -20,6 +20,7 @@ from app.models.data_lineage_edge import DataLineageEdge
 from app.models.data_lineage_node import DataLineageNode
 from app.models.openmetadata_integration import OpenMetadataIntegration
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_NODE_TYPES = {
     "data_asset",
@@ -94,8 +95,7 @@ class LineageService:
 
     def create_node(self, org_id: uuid.UUID, data, actor_user_id: uuid.UUID) -> DataLineageNode:
         payload = data.model_dump()
-        if payload["node_type"] not in ALLOWED_NODE_TYPES:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid node_type")
+        payload["node_type"] = validate_choice(payload["node_type"], ALLOWED_NODE_TYPES, "node_type")
         if payload.get("data_asset_id") is not None:
             self._require_asset(org_id, payload["data_asset_id"])
 
@@ -140,8 +140,7 @@ class LineageService:
     def list_nodes(self, org_id: uuid.UUID, node_type: str | None = None, data_asset_id: uuid.UUID | None = None) -> list[DataLineageNode]:
         stmt = select(DataLineageNode).where(DataLineageNode.organization_id == org_id)
         if node_type is not None:
-            if node_type not in ALLOWED_NODE_TYPES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid node_type filter")
+            node_type = validate_choice(node_type, ALLOWED_NODE_TYPES, "node_type")
             stmt = stmt.where(DataLineageNode.node_type == node_type)
         if data_asset_id is not None:
             stmt = stmt.where(DataLineageNode.data_asset_id == data_asset_id)
@@ -191,8 +190,7 @@ class LineageService:
         source_method: str = "manual",
         actor_user_id: uuid.UUID | None = None,
     ) -> DataLineageEdge:
-        if source_method not in ALLOWED_SOURCE_METHODS:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid source_method")
+        source_method = validate_choice(source_method, ALLOWED_SOURCE_METHODS, "source_method")
         self._require_node(org_id, upstream_node_id)
         self._require_node(org_id, downstream_node_id)
 

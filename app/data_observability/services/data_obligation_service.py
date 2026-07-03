@@ -11,6 +11,7 @@ from app.models.data_obligation_suggestion import DataObligationSuggestion
 from app.models.framework import Framework
 from app.models.obligation import Obligation
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_LINK_TYPES = {"governed_by", "subject_to", "exempted_from"}
 
@@ -61,9 +62,7 @@ class DataObligationService:
         linked_by: uuid.UUID,
         justification: str | None = None,
     ) -> DataAssetObligationLink:
-        if link_type not in ALLOWED_LINK_TYPES:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid link_type")
-
+        link_type = validate_choice(link_type, ALLOWED_LINK_TYPES, "link_type")
         self._require_asset(org_id, data_asset_id)
         self._require_obligation(obligation_id)
 
@@ -142,8 +141,7 @@ class DataObligationService:
             .order_by(Framework.name.asc(), Obligation.reference_code.asc())
         )
         if link_type is not None:
-            if link_type not in ALLOWED_LINK_TYPES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid link_type filter")
+            link_type = validate_choice(link_type, ALLOWED_LINK_TYPES, "link_type")
             stmt = stmt.where(DataAssetObligationLink.link_type == link_type)
 
         rows = self.db.execute(stmt).all()

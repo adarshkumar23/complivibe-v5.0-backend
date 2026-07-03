@@ -14,6 +14,7 @@ from app.models.ai_monitoring_reading import AIMonitoringReading
 from app.models.ai_system import AISystem
 from app.models.control_monitoring_alert import ControlMonitoringAlert
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_METRIC_TYPES = {
     "accuracy",
@@ -159,8 +160,7 @@ class AIMonitoringService:
         if is_active is not None:
             stmt = stmt.where(AIMonitoringConfig.is_active.is_(is_active))
         if metric_type is not None:
-            if metric_type not in ALLOWED_METRIC_TYPES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid metric_type filter")
+            metric_type = validate_choice(metric_type, ALLOWED_METRIC_TYPES, "metric_type")
             stmt = stmt.where(AIMonitoringConfig.metric_type == metric_type)
         return self.db.execute(stmt.order_by(AIMonitoringConfig.created_at.desc())).scalars().all()
 
@@ -234,9 +234,7 @@ class AIMonitoringService:
         reading_source: str,
         source_tool: str | None,
     ) -> AIMonitoringReading:
-        if reading_source not in ALLOWED_READING_SOURCES:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid reading_source")
-
+        reading_source = validate_choice(reading_source, ALLOWED_READING_SOURCES, "reading_source")
         config = self._require_config(org_id, config_id)
         if not config.is_active:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Monitoring config is inactive")

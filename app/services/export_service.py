@@ -31,6 +31,7 @@ from app.services.evidence_service import EvidenceService
 from app.services.report_service import REPORT_CAVEAT, ReportService
 from app.services.risk_service import RiskService
 from app.services.task_service import TaskService
+from app.core.validation import validate_choice
 
 ALLOWED_EXPORT_TYPES = {
     "compliance_report_json",
@@ -71,9 +72,7 @@ class ExportService:
 
     @staticmethod
     def validate_export_type(export_type: str) -> None:
-        if export_type not in ALLOWED_EXPORT_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid export_type")
-
+        export_type = validate_choice(export_type, ALLOWED_EXPORT_TYPES, "export_type", status_code=status.HTTP_400_BAD_REQUEST)
     def _canonical_json(self, payload: dict[str, Any]) -> str:
         return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 

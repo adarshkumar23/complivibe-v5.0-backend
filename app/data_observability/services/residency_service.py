@@ -12,6 +12,7 @@ from app.models.data_incident import DataIncident
 from app.models.data_residency_policy import DataResidencyPolicy
 from app.models.data_residency_violation import DataResidencyViolation
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 EEA_COUNTRIES = set(SubprocessorService.EEA_COUNTRIES)
 ALLOWED_VIOLATION_STATUS = {"open", "acknowledged", "resolved", "waived"}
@@ -327,8 +328,7 @@ class ResidencyService:
     def list_violations(self, org_id: uuid.UUID, status_filter: str | None = None, data_asset_id: uuid.UUID | None = None) -> list[DataResidencyViolation]:
         stmt = select(DataResidencyViolation).where(DataResidencyViolation.organization_id == org_id)
         if status_filter is not None:
-            if status_filter not in ALLOWED_VIOLATION_STATUS:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status filter")
+            status_filter = validate_choice(status_filter, ALLOWED_VIOLATION_STATUS, "status")
             stmt = stmt.where(DataResidencyViolation.status == status_filter)
         if data_asset_id is not None:
             stmt = stmt.where(DataResidencyViolation.data_asset_id == data_asset_id)

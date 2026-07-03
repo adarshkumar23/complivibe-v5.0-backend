@@ -12,6 +12,7 @@ from app.models.email_outbox import EmailOutbox
 from app.models.task import Task
 from app.models.user import User
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_ACTIONS = {"flag", "archive", "delete"}
 ALLOWED_REVIEW_STATUS = {"pending", "in_review", "completed", "waived"}
@@ -79,9 +80,7 @@ class RetentionService:
 
     def create_policy(self, org_id: uuid.UUID, data, created_by: uuid.UUID) -> DataRetentionPolicy:
         payload = data.model_dump()
-        if payload["action_on_expiry"] not in ALLOWED_ACTIONS:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid action_on_expiry")
-
+        payload["action_on_expiry"] = validate_choice(payload["action_on_expiry"], ALLOWED_ACTIONS, "action_on_expiry")
         now = self.utcnow()
         row = DataRetentionPolicy(
             organization_id=org_id,
@@ -423,8 +422,7 @@ class RetentionService:
     ) -> list[DataRetentionReview]:
         stmt = select(DataRetentionReview).where(DataRetentionReview.organization_id == org_id)
         if status_filter is not None:
-            if status_filter not in ALLOWED_REVIEW_STATUS:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status filter")
+            status_filter = validate_choice(status_filter, ALLOWED_REVIEW_STATUS, "status")
             stmt = stmt.where(DataRetentionReview.status == status_filter)
         if data_asset_id is not None:
             stmt = stmt.where(DataRetentionReview.data_asset_id == data_asset_id)

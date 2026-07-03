@@ -1,8 +1,12 @@
+import re
 from contextlib import asynccontextmanager
 
 import sentry_sdk
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from jose import JWTError
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -20,7 +24,37 @@ from app.core.pbc_scheduler import register_pbc_scheduler
 from app.core.rate_limiter import build_rate_limit_exceeded_response, rate_limiter
 from app.core.security import decode_access_token
 from app.core.startup import register_event_listeners
+from app.core.validation import InvalidChoiceError
 from app.platform.routers.billing import webhook_router as billing_webhook_router
+
+# Many schema fields restrict values to a fixed set via Field(pattern="^(a|b|c)$") rather
+# than a real enum/Literal type. Pydantic's default error for these only reports the raw
+# regex, not a clean list of valid values -- this extracts that list wherever the pattern
+# is a simple alternation, so the enrichment in request_validation_error_handler below
+# applies uniformly to every such field without editing any of them individually.
+_ALTERNATION_PATTERN_RE = re.compile(r"^\^\(([A-Za-z0-9_|]+)\)\$$")
+
+
+def _extract_pattern_choices(pattern: str) -> list[str] | None:
+    match = _ALTERNATION_PATTERN_RE.match(pattern)
+    if not match:
+        return None
+    return sorted(match.group(1).split("|"))
+
+
+def _enrich_validation_errors(errors: list) -> list:
+    enriched = []
+    for err in errors:
+        err = dict(err)
+        ctx = err.get("ctx") or {}
+        if err.get("type") == "string_pattern_mismatch" and "pattern" in ctx:
+            choices = _extract_pattern_choices(ctx["pattern"])
+            if choices:
+                err["valid_options"] = choices
+        elif err.get("type") in ("enum", "literal_error") and "expected" in ctx:
+            err["valid_options"] = [v.strip().strip("'") for v in str(ctx["expected"]).split(",") if v.strip()]
+        enriched.append(err)
+    return enriched
 
 
 def _scrub_sensitive_data(event: dict) -> dict:
@@ -129,6 +163,25 @@ def create_application() -> FastAPI:
         @app.exception_handler(RateLimitExceeded)
         async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
             return build_rate_limit_exceeded_response(request, str(getattr(exc, "detail", "")))
+
+    @app.exception_handler(InvalidChoiceError)
+    async def invalid_choice_error_handler(request: Request, exc: InvalidChoiceError) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "detail": str(exc),
+                "field": exc.field,
+                "value": exc.value,
+                "valid_options": exc.allowed,
+            },
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content=jsonable_encoder({"detail": _enrich_validation_errors(exc.errors())}),
+        )
 
     @app.get("/", summary="Service metadata")
     def root() -> dict[str, str]:

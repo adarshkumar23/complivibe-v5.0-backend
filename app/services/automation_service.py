@@ -20,6 +20,7 @@ from app.models.task import Task
 from app.models.user import User
 from app.services.seed_service import SeedService
 from app.services.task_service import TaskService
+from app.core.validation import validate_choice
 
 ALLOWED_CONDITION_TYPES = {
     "risk_critical_without_control",
@@ -60,18 +61,13 @@ class AutomationService:
 
     @staticmethod
     def validate_rule_types(condition_type: str, action_type: str) -> None:
-        if condition_type not in ALLOWED_CONDITION_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid condition_type")
-        if action_type not in ALLOWED_ACTION_TYPES:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid action_type")
-
+        condition_type = validate_choice(condition_type, ALLOWED_CONDITION_TYPES, "condition_type", status_code=status.HTTP_400_BAD_REQUEST)
+        action_type = validate_choice(action_type, ALLOWED_ACTION_TYPES, "action_type", status_code=status.HTTP_400_BAD_REQUEST)
     @staticmethod
     def validate_schedule_cadence(cadence: str | None) -> None:
         if cadence is None:
             return
-        if cadence not in ALLOWED_SCHEDULE_CADENCE:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid schedule_cadence")
-
+        cadence = validate_choice(cadence, ALLOWED_SCHEDULE_CADENCE, "schedule_cadence", status_code=status.HTTP_400_BAD_REQUEST)
     @staticmethod
     def build_idempotency_key(
         *,

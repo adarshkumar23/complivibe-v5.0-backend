@@ -10,6 +10,7 @@ from app.ai_governance.services.nlp.signal_classifier import classify_signal_sev
 from app.models.ai_risk_signal import AIRiskSignal
 from app.models.ai_system import AISystem
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_SIGNAL_TYPES = {
     "new_training_data_source",
@@ -68,9 +69,7 @@ class SignalService:
         description: str,
         actor_id: uuid.UUID | None = None,
     ) -> AIRiskSignal | None:
-        if signal_type not in ALLOWED_SIGNAL_TYPES:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid signal_type")
-
+        signal_type = validate_choice(signal_type, ALLOWED_SIGNAL_TYPES, "signal_type")
         self._require_system(org_id, system_id)
         cutoff = self.utcnow() - timedelta(days=7)
         existing = self.db.execute(
@@ -147,12 +146,10 @@ class SignalService:
         if system_id is not None:
             stmt = stmt.where(AIRiskSignal.ai_system_id == system_id)
         if signal_type is not None:
-            if signal_type not in ALLOWED_SIGNAL_TYPES:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid signal_type filter")
+            signal_type = validate_choice(signal_type, ALLOWED_SIGNAL_TYPES, "signal_type")
             stmt = stmt.where(AIRiskSignal.signal_type == signal_type)
         if status_value is not None:
-            if status_value not in ALLOWED_SIGNAL_STATUS:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status filter")
+            status_value = validate_choice(status_value, ALLOWED_SIGNAL_STATUS, "status")
             stmt = stmt.where(AIRiskSignal.status == status_value)
         if severity is not None:
             if severity not in {"critical", "high", "medium", "low"}:

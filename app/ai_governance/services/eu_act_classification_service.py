@@ -13,6 +13,7 @@ from app.models.framework import Framework
 from app.models.obligation import Obligation
 from app.services.audit_service import AuditService
 from app.services.seed_service import SeedService
+from app.core.validation import validate_choice
 
 
 ARTICLE_CATEGORIES = {
@@ -68,9 +69,7 @@ class EUAIActClassificationService:
         SeedService.ensure_eu_act_annex_mappings(self.db)
 
         article_category = data.article_category
-        if article_category not in ARTICLE_CATEGORIES:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid article_category")
-
+        article_category = validate_choice(article_category, ARTICLE_CATEGORIES, "article_category")
         annex_reference = data.annex_reference
         if annex_reference is not None:
             annex_row = self.db.execute(

@@ -12,6 +12,7 @@ from app.models.notice_user_acknowledgement import NoticeUserAcknowledgement
 from app.models.privacy_notice import PrivacyNotice
 from app.models.user import User
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_NOTICE_STATUS = {"draft", "published", "archived"}
 
@@ -163,8 +164,7 @@ class NoticeService:
     def list_notices(self, org_id: uuid.UUID, status_filter: str | None = None, language: str | None = None) -> list[PrivacyNotice]:
         stmt = select(PrivacyNotice).where(PrivacyNotice.organization_id == org_id)
         if status_filter is not None:
-            if status_filter not in ALLOWED_NOTICE_STATUS:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status filter")
+            status_filter = validate_choice(status_filter, ALLOWED_NOTICE_STATUS, "status")
             stmt = stmt.where(PrivacyNotice.status == status_filter)
         if language is not None:
             stmt = stmt.where(PrivacyNotice.language == language)

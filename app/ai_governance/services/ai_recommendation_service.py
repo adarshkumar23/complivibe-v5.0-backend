@@ -12,6 +12,7 @@ from app.models.ai_risk_recommendation import AIRiskRecommendation
 from app.models.ai_system import AISystem
 from app.models.task import Task
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_SOURCE_TYPES = {"risk_assessment", "monitoring_breach", "signal", "manual"}
 ALLOWED_RECOMMENDATION_CATEGORY = {"technical_control", "process_control", "documentation", "audit", "decommission"}
@@ -162,12 +163,10 @@ class AIRecommendationService:
         if system_id is not None:
             stmt = stmt.where(AIRiskRecommendation.ai_system_id == system_id)
         if status_value is not None:
-            if status_value not in ALLOWED_STATUS:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status filter")
+            status_value = validate_choice(status_value, ALLOWED_STATUS, "status")
             stmt = stmt.where(AIRiskRecommendation.status == status_value)
         if priority is not None:
-            if priority not in ALLOWED_PRIORITY:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid priority filter")
+            priority = validate_choice(priority, ALLOWED_PRIORITY, "priority")
             stmt = stmt.where(AIRiskRecommendation.priority == priority)
         return self.db.execute(stmt.order_by(AIRiskRecommendation.created_at.desc())).scalars().all()
 

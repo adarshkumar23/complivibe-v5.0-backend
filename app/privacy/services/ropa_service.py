@@ -10,6 +10,7 @@ from app.models.obligation import Obligation
 from app.models.processing_activity import ProcessingActivity
 from app.models.ropa_framework_link import RopaFrameworkLink
 from app.services.audit_service import AuditService
+from app.core.validation import validate_choice
 
 ALLOWED_LEGAL_BASIS = {
     "consent",
@@ -65,8 +66,7 @@ class RopaService:
 
     def create_activity(self, org_id: uuid.UUID, data, created_by: uuid.UUID) -> ProcessingActivity:
         payload = data.model_dump()
-        if payload["legal_basis"] not in ALLOWED_LEGAL_BASIS:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid legal_basis")
+        payload["legal_basis"] = validate_choice(payload["legal_basis"], ALLOWED_LEGAL_BASIS, "legal_basis")
         if payload.get("status", "active") not in ALLOWED_STATUS:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status")
         if payload.get("risk_level") is not None and payload["risk_level"] not in ALLOWED_RISK_LEVEL:
@@ -143,12 +143,10 @@ class RopaService:
             ProcessingActivity.deleted_at.is_(None),
         )
         if status_filter is not None:
-            if status_filter not in ALLOWED_STATUS:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status filter")
+            status_filter = validate_choice(status_filter, ALLOWED_STATUS, "status")
             stmt = stmt.where(ProcessingActivity.status == status_filter)
         if legal_basis is not None:
-            if legal_basis not in ALLOWED_LEGAL_BASIS:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid legal_basis filter")
+            legal_basis = validate_choice(legal_basis, ALLOWED_LEGAL_BASIS, "legal_basis")
             stmt = stmt.where(ProcessingActivity.legal_basis == legal_basis)
         if requires_dpia is not None:
             stmt = stmt.where(ProcessingActivity.requires_dpia.is_(requires_dpia))
