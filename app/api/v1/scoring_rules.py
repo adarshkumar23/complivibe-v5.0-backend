@@ -15,7 +15,7 @@ from app.schemas.questionnaire import QuestionnaireRuleCreate, QuestionnaireRule
 from app.services.audit_service import AuditService
 from app.services.seed_service import SeedService
 
-router = APIRouter(prefix="/compliance/scoring-rules", tags=["questionnaire-scoring-rules"])
+router = APIRouter(prefix="/compliance/questionnaire-scoring-rules", tags=["questionnaire-scoring-rules"])
 
 
 def _rule_read(row: QuestionnaireScoringRule) -> QuestionnaireRuleRead:

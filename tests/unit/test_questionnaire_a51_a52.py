@@ -5,7 +5,7 @@ from tests.helpers.auth_org import bootstrap_org_user
 
 TEMPLATES_BASE = "/api/v1/compliance/questionnaire-templates"
 RESPONSES_BASE = "/api/v1/compliance/questionnaire-responses"
-RULES_BASE = "/api/v1/compliance/scoring-rules"
+RULES_BASE = "/api/v1/compliance/questionnaire-scoring-rules"
 VENDORS_BASE = "/api/v1/compliance/vendors"
 
 
@@ -243,6 +243,35 @@ def test_a52_submit_no_and_yes_mfa_scoring_and_score_refresh(client):
     response_after_yes = _get_response(client, org["org_headers"], response["id"])
     assert response_after_yes["calculated_risk_score"] == 0
     assert response_after_yes["score_computed_at"] is not None
+
+
+def test_a52_scoring_uses_answer_text_only_field_not_just_answer_value(client):
+    """Regression: submitting only the documented answer_text field (no answer_value)
+    must still score correctly, not silently compute 0. answer_value is a legacy/
+    alternate field; answer_text is what the schema documents as the primary answer."""
+    org = bootstrap_org_user(client, email_prefix="a52-text-only")
+    sig = _template_by_type(client, org["org_headers"], "sig_lite")
+    detail = _template_detail(client, org["org_headers"], sig["id"])
+    mfa_question_id = _question_id_by_category(detail, "access_control_mfa")
+
+    vendor = _create_vendor(client, org["org_headers"], owner_user_id=org["user_id"], name="Text-Only Vendor")
+    response = _create_response(
+        client, org["org_headers"], vendor_id=vendor["id"], template_id=sig["id"], title="Text-Only Score"
+    )
+
+    answer_resp = client.post(
+        f"{RESPONSES_BASE}/{response['id']}/answers",
+        headers=org["org_headers"],
+        json={"question_id": mfa_question_id, "answer_text": "No"},
+    )
+    assert answer_resp.status_code == 200, answer_resp.text
+    body = answer_resp.json()
+    assert body["answer_value"] is None
+    assert body["answer_text"] == "No"
+    assert body["score_contribution"] == 20, "score must reflect answer_text-only submission, not be 0"
+
+    scored = _get_response(client, org["org_headers"], response["id"])
+    assert scored["calculated_risk_score"] == 20
 
 
 def test_a52_bulk_submit_clamp_zero_and_unanswered_in_breakdown(client):
