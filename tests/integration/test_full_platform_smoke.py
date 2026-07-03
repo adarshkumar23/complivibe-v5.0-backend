@@ -1064,3 +1064,7 @@ def test_cross_migration_head():
     script = ScriptDirectory.from_config(cfg)
     heads = script.get_heads()
     assert len(heads) == 1
+<<<<<<< HEAD
+=======
+    assert heads[0] == "0199_audit_engagement_source_schedule_link"
+>>>>>>> 3253d04 (Part D items 6-10: schedule history scoping, vendor-assessment complete)
