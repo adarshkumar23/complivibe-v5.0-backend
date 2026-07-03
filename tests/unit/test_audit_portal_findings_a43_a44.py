@@ -438,3 +438,39 @@ def test_a43_non_admin_cannot_create_invitation(client, db_session):
         },
     )
     assert denied.status_code == 403
+
+
+def test_a43_scoped_framework_ids_must_be_within_engagement_scope(client, db_session):
+    """Regression: framework-based scoping must inherit and stay contained within the
+    parent engagement's own scope_framework_ids, so an invitation can never grant an
+    auditor visibility into frameworks the engagement itself was never scoped to."""
+    org = bootstrap_org_user(client, email_prefix="a43-inherit")
+    fw_in_scope, fw_out_of_scope = _framework_ids(client, org["headers"])
+    engagement = _create_engagement(client, org["org_headers"], fw_in_scope, org["user_id"])
+
+    # Explicitly requesting a framework outside the engagement's own scope is rejected.
+    rejected = client.post(
+        f"{PORTAL_BASE}/invitations?engagement_id={engagement['id']}",
+        headers=org["org_headers"],
+        json={
+            "auditor_email": "overscope@example.com",
+            "scoped_framework_ids": [fw_out_of_scope],
+            "expires_in_days": 30,
+        },
+    )
+    assert rejected.status_code == 422
+
+    # Omitting scoped_framework_ids ("default" scoping) inherits the engagement's own
+    # scope rather than defaulting to an empty/unbounded list.
+    default_scoped = _create_invitation(
+        client,
+        org["org_headers"],
+        engagement["id"],
+        {
+            "auditor_email": "default-scope@example.com",
+            "expires_in_days": 30,
+        },
+    )
+    detail = client.get(f"{PORTAL_BASE}/invitations/{default_scoped['invitation_id']}", headers=org["org_headers"])
+    assert detail.status_code == 200
+    assert detail.json()["scoped_framework_ids"] == [fw_in_scope]

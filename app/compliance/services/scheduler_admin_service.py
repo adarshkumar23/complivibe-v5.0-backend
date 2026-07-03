@@ -31,7 +31,7 @@ class SchedulerAdminService:
             payload.append(
                 {
                     "job_id": job.id,
-                    "next_run_time": job.next_run_time,
+                    "next_run_time": getattr(job, "next_run_time", None),
                     "trigger_description": str(job.trigger),
                     "last_run_at": latest.started_at if latest else None,
                     "last_status": latest.status if latest else None,

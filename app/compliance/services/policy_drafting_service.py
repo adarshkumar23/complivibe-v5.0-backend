@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.ai_governance.services.ai_provider_service import AIProviderService
 from app.models.ai_content_draft import AIContentDraft
 from app.models.business_unit import BusinessUnit
+from app.models.compliance_policy_version import CompliancePolicyVersion
 from app.models.organization_ai_configuration import OrganizationAIConfiguration
 from app.services.compliance_policy_service import CompliancePolicyService
 
@@ -115,12 +116,13 @@ class PolicyDraftingService:
         effective_date,
         policy_type: str,
         accepted_by: uuid.UUID,
-    ) -> tuple[AIContentDraft, uuid.UUID]:
+    ) -> tuple[AIContentDraft, uuid.UUID, uuid.UUID]:
         row = self.get_draft(org_id, draft_id)
         if row.status != "draft":
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only draft status can be accepted")
 
-        policy = CompliancePolicyService(self.db).create_policy(
+        policy_service = CompliancePolicyService(self.db)
+        policy = policy_service.create_policy(
             organization_id=org_id,
             title=title,
             description=description or row.draft_output,
@@ -136,12 +138,34 @@ class PolicyDraftingService:
             ai_drafted=True,
             source_ai_draft_id=row.id,
         )
+
+        # The caller-supplied `description` is only a short summary; the actual AI-drafted
+        # body must always be persisted regardless of whether a description was supplied, so
+        # it is stored as a real policy version snapshot via the existing versioning system
+        # rather than being silently discarded whenever `description` is non-empty.
+        content_snapshot = {
+            "content": row.draft_output,
+            "source": "ai_policy_draft",
+            "source_draft_id": str(row.id),
+        }
+        version = CompliancePolicyVersion(
+            organization_id=org_id,
+            policy_id=policy.id,
+            version_number="1.0",
+            content_snapshot_json=content_snapshot,
+            change_summary="Applied from AI-generated policy draft",
+            status="draft",
+            content_sha256=policy_service.content_sha256_hexdigest(content_snapshot),
+        )
+        self.db.add(version)
+        self.db.flush()
+
         now = self.utcnow()
         row.status = "accepted"
         row.linked_policy_id = policy.id
         row.updated_at = now
         self.db.flush()
-        return row, policy.id
+        return row, policy.id, version.id
 
     def discard_draft(self, *, org_id: uuid.UUID, draft_id: uuid.UUID) -> AIContentDraft:
         row = self.get_draft(org_id, draft_id)

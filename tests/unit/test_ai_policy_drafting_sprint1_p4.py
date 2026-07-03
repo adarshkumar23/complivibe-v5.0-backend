@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.models.ai_content_draft import AIContentDraft
 from app.models.audit_log import AuditLog
 from app.models.compliance_policy import CompliancePolicy
+from app.models.compliance_policy_version import CompliancePolicyVersion
 from app.models.organization import Organization
 from app.models.organization_ai_configuration import OrganizationAIConfiguration
 from app.models.subscription_plan import SubscriptionPlan
@@ -94,6 +95,14 @@ def test_policy_drafting_flow_with_plan_gating_and_audit(client, db_session, mon
     assert policy is not None
     assert policy.ai_drafted is True
     assert policy.source_ai_draft_id == draft_id
+
+    # Regression: draft content must persist as a real policy version even though a
+    # caller-supplied `description` ("Policy accepted from draft") was also provided.
+    version_id = UUID(accept_body["policy_version_id"])
+    version = db_session.get(CompliancePolicyVersion, version_id)
+    assert version is not None
+    assert version.policy_id == policy_id
+    assert "Generated policy draft" in version.content_snapshot_json["content"]
 
     draft_row = db_session.get(AIContentDraft, draft_id)
     assert draft_row is not None

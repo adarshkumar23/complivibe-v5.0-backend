@@ -149,7 +149,28 @@ class AuditorPortalService:
         if data.expires_in_days > 90:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="expires_in_days cannot exceed 90")
 
-        self._validate_framework_ids(data.scoped_framework_ids)
+        # Framework-based (default) scoping must always be contained within the parent
+        # engagement's own scope_framework_ids -- otherwise an invitation could grant an
+        # auditor visibility into frameworks the engagement was never scoped to. When no
+        # explicit scoped_framework_ids are supplied, the invitation inherits the
+        # engagement's scope rather than defaulting to an empty/unbounded list.
+        engagement_framework_ids = list(engagement.scope_framework_ids or [])
+        requested_framework_ids = [str(item) for item in data.scoped_framework_ids]
+        if requested_framework_ids:
+            out_of_scope = [fid for fid in requested_framework_ids if fid not in engagement_framework_ids]
+            if out_of_scope:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "scoped_framework_ids must be a subset of the engagement's own "
+                        f"scope_framework_ids; not part of engagement scope: {', '.join(out_of_scope)}"
+                    ),
+                )
+            resolved_framework_ids = requested_framework_ids
+        else:
+            resolved_framework_ids = engagement_framework_ids
+
+        self._validate_framework_ids([uuid.UUID(item) for item in resolved_framework_ids])
         self._validate_control_ids(org_id, data.scoped_control_ids)
         self._validate_evidence_ids(org_id, data.scoped_evidence_ids)
 
@@ -162,7 +183,7 @@ class AuditorPortalService:
             auditor_email=str(data.auditor_email),
             auditor_name=data.auditor_name,
             token_hash=token_hash,
-            scoped_framework_ids=[str(item) for item in data.scoped_framework_ids],
+            scoped_framework_ids=resolved_framework_ids,
             scoped_control_ids=[str(item) for item in data.scoped_control_ids] if data.scoped_control_ids is not None else None,
             scoped_evidence_ids=[str(item) for item in data.scoped_evidence_ids] if data.scoped_evidence_ids is not None else None,
             expires_at=self.utcnow() + timedelta(days=expires_in_days),

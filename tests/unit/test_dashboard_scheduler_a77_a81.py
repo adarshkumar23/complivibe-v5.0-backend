@@ -162,3 +162,23 @@ def test_a81_scheduler_admin_service_and_admin_endpoint_guard(client, db_session
     }
     forbidden = client.get("/api/v1/admin/scheduler/jobs", headers=non_member_headers)
     assert forbidden.status_code == 403
+
+
+def test_scheduler_admin_survives_unstarted_apscheduler_job(db_session):
+    """Regression test: a real APScheduler Job that hasn't been scheduled by a running
+    scheduler yet has no `next_run_time` attribute at all (not just None) -- accessing it
+    directly raises AttributeError. get_job_status must tolerate that instead of 500ing."""
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.cron import CronTrigger
+
+    from app.compliance.services.scheduler_admin_service import SchedulerAdminService
+
+    scheduler = BackgroundScheduler(timezone="UTC")
+    scheduler.add_job(lambda: None, trigger=CronTrigger(hour=0, minute=10), id="unstarted_job")
+    assert not hasattr(scheduler.get_jobs()[0], "next_run_time")
+
+    service = SchedulerAdminService(db_session)
+    statuses = service.get_job_status(scheduler)
+    assert statuses
+    assert statuses[0]["job_id"] == "unstarted_job"
+    assert statuses[0]["next_run_time"] is None

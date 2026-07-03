@@ -115,7 +115,7 @@ def accept_policy_draft(
     _: Membership = Depends(require_permission("compliance_policies:write")),
     __: Organization = require_feature("ai_policy_drafting"),
 ):
-    row, policy_id = PolicyDraftingService(db).accept_draft(
+    row, policy_id, version_id = PolicyDraftingService(db).accept_draft(
         org_id=organization.id,
         draft_id=draft_id,
         title=payload.title,
@@ -133,14 +133,30 @@ def accept_policy_draft(
         entity_id=row.id,
         organization_id=organization.id,
         actor_user_id=current_user.id,
-        metadata_json={"linked_policy_id": str(policy_id)},
+        metadata_json={"linked_policy_id": str(policy_id), "policy_version_id": str(version_id)},
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    AuditService(db).write_audit_log(
+        action="compliance_policy_version.created",
+        entity_type="compliance_policy_version",
+        entity_id=version_id,
+        organization_id=organization.id,
+        actor_user_id=current_user.id,
+        after_json={"policy_id": str(policy_id), "source": "ai_policy_draft"},
+        metadata_json={"source": "ai_draft_accept"},
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
 
     db.commit()
     db.refresh(row)
-    return {"draft_id": str(row.id), "status": row.status, "linked_policy_id": str(policy_id)}
+    return {
+        "draft_id": str(row.id),
+        "status": row.status,
+        "linked_policy_id": str(policy_id),
+        "policy_version_id": str(version_id),
+    }
 
 
 @router.post("/compliance/policies/draft/{draft_id}/discard")
