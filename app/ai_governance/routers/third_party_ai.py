@@ -52,11 +52,12 @@ def update_third_party_assessment(
     assessment_id: uuid.UUID,
     payload: ThirdPartyAIAssessmentUpdate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("vendors:write")),
     __: Membership = Depends(require_permission("ai_governance:write")),
 ) -> ThirdPartyAIAssessmentRead:
-    row = ThirdPartyAIService(db).update_assessment(organization.id, assessment_id, payload)
+    row = ThirdPartyAIService(db).update_assessment(organization.id, assessment_id, payload, current_user.id)
     db.commit()
     db.refresh(row)
     return ThirdPartyAIAssessmentRead.model_validate(row)

@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from uuid import UUID
+
+from sqlalchemy import select
+
+from app.models.audit_log import AuditLog
 from tests.helpers.auth_org import bootstrap_org_user
 
 VENDORS_BASE = "/api/v1/compliance/vendors"
@@ -159,6 +164,81 @@ def test_third_party_assessment_never_downgrades_system_risk_tier(client):
     assert system_after.json()["risk_tier"] == "high", (
         "low-risk vendor assessment silently downgraded an EU AI Act high-risk system"
     )
+
+
+def test_third_party_assessment_update_audits_and_validates_assessed_by(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="tpa-update-audit")
+    vendor_id = _create_vendor(client, org["org_headers"], org["user_id"], name="Update Audit Vendor")
+    created = client.post(
+        f"{VENDORS_BASE}/{vendor_id}/ai-model-assessments",
+        headers=org["org_headers"],
+        json={
+            "model_name": "Update Audit Model",
+            "data_egress_type": "none",
+            "model_card_provided": True,
+            "bias_testing_documented": True,
+            "explainability_level": "full",
+            "contractual_ai_terms_reviewed": True,
+            "eu_act_compliance_status": "compliant",
+        },
+    )
+    assert created.status_code == 201
+    assessment_id = created.json()["id"]
+
+    updated = client.patch(
+        f"{THIRD_PARTY_BASE}/{assessment_id}",
+        headers=org["org_headers"],
+        json={"model_version": "2.0", "status": "in_progress"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["model_version"] == "2.0"
+    assert updated.json()["status"] == "in_progress"
+
+    audit = db_session.execute(
+        select(AuditLog).where(
+            AuditLog.entity_id == UUID(assessment_id),
+            AuditLog.action == "third_party_ai.updated",
+        )
+    ).scalar_one()
+    assert str(audit.actor_user_id) == org["user_id"]
+    assert audit.before_json == {"model_version": None, "status": "draft"}
+    assert audit.after_json == {"model_version": "2.0", "status": "in_progress"}
+
+    other_org = bootstrap_org_user(client, email_prefix="tpa-update-foreign")
+    foreign = client.patch(
+        f"{THIRD_PARTY_BASE}/{assessment_id}",
+        headers=org["org_headers"],
+        json={"assessed_by": other_org["user_id"]},
+    )
+    assert foreign.status_code == 422
+    assert foreign.json()["detail"] == "assessed_by must be an active member of the organization"
+
+
+def test_third_party_assessment_update_rejects_null_required_fields(client):
+    org = bootstrap_org_user(client, email_prefix="tpa-null-required")
+    vendor_id = _create_vendor(client, org["org_headers"], org["user_id"], name="Null Required Vendor")
+    created = client.post(
+        f"{VENDORS_BASE}/{vendor_id}/ai-model-assessments",
+        headers=org["org_headers"],
+        json={
+            "model_name": "Null Required Model",
+            "data_egress_type": "none",
+            "model_card_provided": True,
+            "bias_testing_documented": True,
+            "explainability_level": "full",
+            "contractual_ai_terms_reviewed": True,
+            "eu_act_compliance_status": "compliant",
+        },
+    )
+    assert created.status_code == 201
+
+    rejected = client.patch(
+        f"{THIRD_PARTY_BASE}/{created.json()['id']}",
+        headers=org["org_headers"],
+        json={"data_egress_type": None},
+    )
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"] == "data_egress_type cannot be null"
 
 
 def test_a62_model_card_versioning_and_publish(client):

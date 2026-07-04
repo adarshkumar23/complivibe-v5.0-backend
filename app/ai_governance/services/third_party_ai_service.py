@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.ai_governance.services.ai_governance_event_service import AIGovernanceEventService
 from app.models.ai_system import AISystem
+from app.models.membership import Membership
 from app.models.third_party_ai_assessment import ThirdPartyAIAssessment
 from app.models.vendor import Vendor
 from app.services.audit_service import AuditService
@@ -17,6 +18,15 @@ ALLOWED_EXPLAINABILITY = {"full", "partial", "none", "not_required"}
 ALLOWED_EU_ACT = {"compliant", "non_compliant", "unknown", "not_applicable"}
 ALLOWED_RISK_LEVEL = {"low", "medium", "high", "critical"}
 ALLOWED_STATUS = {"draft", "in_progress", "completed", "archived"}
+NON_NULL_UPDATE_FIELDS = {
+    "model_name",
+    "data_egress_type",
+    "model_card_provided",
+    "bias_testing_documented",
+    "contractual_ai_terms_reviewed",
+    "status",
+    "assessed_by",
+}
 
 # Severity order for ai_system.risk_tier. A third-party model assessment may
 # escalate a linked system's tier but must never downgrade one set by a more
@@ -54,6 +64,32 @@ class ThirdPartyAIService:
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="AI system not found")
         return row
+
+    def _require_active_org_member(self, org_id: uuid.UUID, user_id: uuid.UUID) -> None:
+        row = self.db.execute(
+            select(Membership.id).where(
+                Membership.organization_id == org_id,
+                Membership.user_id == user_id,
+                Membership.status == "active",
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="assessed_by must be an active member of the organization",
+            )
+
+    def _validate_update_nulls(self, payload: dict) -> None:
+        for field in NON_NULL_UPDATE_FIELDS:
+            if field in payload and payload[field] is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"{field} cannot be null",
+                )
+
+    @staticmethod
+    def _audit_value(value):
+        return str(value) if isinstance(value, uuid.UUID) else value
 
     def _validate_enums(self, payload: dict) -> None:
         if payload.get("data_egress_type") is not None and payload["data_egress_type"] not in ALLOWED_DATA_EGRESS:
@@ -159,20 +195,41 @@ class ThirdPartyAIService:
             stmt = stmt.where(ThirdPartyAIAssessment.overall_risk_level == risk_level)
         return self.db.execute(stmt.order_by(ThirdPartyAIAssessment.created_at.desc())).scalars().all()
 
-    def update_assessment(self, org_id: uuid.UUID, assessment_id: uuid.UUID, data) -> ThirdPartyAIAssessment:
+    def update_assessment(
+        self,
+        org_id: uuid.UUID,
+        assessment_id: uuid.UUID,
+        data,
+        actor_user_id: uuid.UUID,
+    ) -> ThirdPartyAIAssessment:
         row = self._require_assessment(org_id, assessment_id)
         if row.status in {"completed", "archived"}:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Assessment cannot be updated")
 
         payload = data.model_dump(exclude_unset=True)
+        self._validate_update_nulls(payload)
         self._validate_enums(payload)
         if "ai_system_id" in payload and payload["ai_system_id"] is not None:
             self._require_ai_system(org_id, payload["ai_system_id"])
+        if "assessed_by" in payload:
+            self._require_active_org_member(org_id, payload["assessed_by"])
 
+        before_json = {key: self._audit_value(getattr(row, key)) for key in payload}
         for key, value in payload.items():
             setattr(row, key, value)
         row.updated_at = self.utcnow()
         self.db.flush()
+        after_json = {key: self._audit_value(getattr(row, key)) for key in payload}
+        AuditService(self.db).write_audit_log(
+            action="third_party_ai.updated",
+            entity_type="third_party_ai_assessment",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=actor_user_id,
+            before_json=before_json,
+            after_json=after_json,
+            metadata_json={"source": "api"},
+        )
         return row
 
     def _compute_score(self, row: ThirdPartyAIAssessment) -> int:
