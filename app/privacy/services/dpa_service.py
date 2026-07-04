@@ -11,6 +11,7 @@ from app.models.membership import Membership
 from app.models.processing_activity import ProcessingActivity
 from app.models.subprocessor import Subprocessor
 from app.models.user import User
+from app.models.vendor import Vendor
 from app.services.audit_service import AuditService
 from app.core.validation import validate_choice
 
@@ -58,6 +59,29 @@ class DPAService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Processing activity not found")
         return row
 
+    def _require_vendor(self, org_id: uuid.UUID, vendor_id: uuid.UUID) -> Vendor:
+        row = self.db.execute(
+            select(Vendor).where(
+                Vendor.organization_id == org_id,
+                Vendor.id == vendor_id,
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor not found")
+        return row
+
+    def _require_subprocessor(self, org_id: uuid.UUID, subprocessor_id: uuid.UUID) -> Subprocessor:
+        row = self.db.execute(
+            select(Subprocessor).where(
+                Subprocessor.organization_id == org_id,
+                Subprocessor.id == subprocessor_id,
+                Subprocessor.deleted_at.is_(None),
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subprocessor not found")
+        return row
+
     def _require_owner(self, org_id: uuid.UUID, owner_id: uuid.UUID) -> User:
         row = self.db.execute(
             select(User)
@@ -87,6 +111,12 @@ class DPAService:
                 normalized.append(text)
         return normalized
 
+    def _normalize_activity_ids(self, org_id: uuid.UUID, values: list | None) -> list[str]:
+        normalized = self._normalize_uuid_list(values)
+        for activity_id in normalized:
+            self._require_activity(org_id, uuid.UUID(activity_id))
+        return normalized
+
     def _validate_payload(self, payload: dict) -> None:
         if payload.get("counterparty_type") is not None and payload["counterparty_type"] not in ALLOWED_COUNTERPARTY_TYPES:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid counterparty_type")
@@ -103,6 +133,11 @@ class DPAService:
         payload = data.model_dump()
         self._validate_payload(payload)
         self._require_owner(org_id, payload["owner_id"])
+        if payload.get("vendor_id") is not None:
+            self._require_vendor(org_id, payload["vendor_id"])
+        if payload.get("subprocessor_id") is not None:
+            self._require_subprocessor(org_id, payload["subprocessor_id"])
+        processing_activity_ids = self._normalize_activity_ids(org_id, payload.get("processing_activity_ids") or [])
 
         now = self.utcnow()
         row = DPAAgreement(
@@ -123,7 +158,7 @@ class DPAService:
             sccs_included=payload.get("sccs_included"),
             bcrs_included=payload.get("bcrs_included"),
             data_transfer_countries=list(payload.get("data_transfer_countries") or []),
-            processing_activity_ids=self._normalize_uuid_list(payload.get("processing_activity_ids") or []),
+            processing_activity_ids=processing_activity_ids,
             is_baa=bool(payload.get("is_baa", False)),
             baa_effective_date=payload.get("baa_effective_date"),
             baa_includes_phi=bool(payload.get("baa_includes_phi", False)),
@@ -193,8 +228,15 @@ class DPAService:
                 )
         if payload.get("owner_id") is not None:
             self._require_owner(org_id, payload["owner_id"])
+        if payload.get("vendor_id") is not None:
+            self._require_vendor(org_id, payload["vendor_id"])
+        if payload.get("subprocessor_id") is not None:
+            self._require_subprocessor(org_id, payload["subprocessor_id"])
         if "processing_activity_ids" in payload:
-            payload["processing_activity_ids"] = self._normalize_uuid_list(payload.get("processing_activity_ids") or [])
+            payload["processing_activity_ids"] = self._normalize_activity_ids(
+                org_id,
+                payload.get("processing_activity_ids") or [],
+            )
 
         for key, value in payload.items():
             setattr(row, key, value)

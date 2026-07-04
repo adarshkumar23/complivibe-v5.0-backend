@@ -60,6 +60,23 @@ def _create_activity(client, headers: dict[str, str], owner_id: str, **overrides
     return response.json()
 
 
+def _create_vendor(client, headers: dict[str, str], owner_id: str, **overrides) -> dict:
+    payload = {
+        "name": "DPA Vendor",
+        "vendor_type": "software",
+        "owner_user_id": owner_id,
+        "risk_tier": "not_assessed",
+        "status": "active",
+        "data_access": True,
+        "processes_personal_data": True,
+        "sub_processor": False,
+    }
+    payload.update(overrides)
+    response = client.post("/api/v1/compliance/vendors", headers=headers, json=payload)
+    assert response.status_code == 201
+    return response.json()
+
+
 def _create_dpa(client, headers: dict[str, str], owner_id: str, **overrides) -> dict:
     payload = {
         "counterparty_name": "Acme Processor",
@@ -238,6 +255,48 @@ def test_d92_dpa_update_status_transition_enforced(client, db_session):
     )
     assert to_active.status_code == 200
     assert to_active.json()["status"] == "active"
+
+
+def test_d92_dpa_create_and_patch_reject_foreign_related_records(client):
+    org = bootstrap_org_user(client, email_prefix="d92-dpa-scope-a")
+    org_b = bootstrap_org_user(client, email_prefix="d92-dpa-scope-b")
+    foreign_vendor = _create_vendor(client, org_b["org_headers"], org_b["user_id"], name="Foreign DPA Vendor")
+    foreign_activity = _create_activity(client, org_b["org_headers"], org_b["user_id"], name="Foreign DPA Activity")
+
+    create_foreign_vendor = client.post(
+        DPA_BASE,
+        headers=org["org_headers"],
+        json={
+            "counterparty_name": "Foreign Vendor DPA",
+            "counterparty_type": "processor",
+            "vendor_id": foreign_vendor["id"],
+            "status": "pending",
+            "owner_id": org["user_id"],
+            "governing_regulation": ["gdpr"],
+            "renewal_notice_days": 30,
+            "processing_activity_ids": [],
+        },
+    )
+    assert create_foreign_vendor.status_code == 404
+    assert create_foreign_vendor.json()["detail"] == "Vendor not found"
+
+    dpa = _create_dpa(client, org["org_headers"], org["user_id"], counterparty_name="Scoped DPA")
+    patch_foreign_activity = client.patch(
+        f"{DPA_BASE}/{dpa['id']}",
+        headers=org["org_headers"],
+        json={"processing_activity_ids": [foreign_activity["id"]]},
+    )
+    assert patch_foreign_activity.status_code == 404
+    assert patch_foreign_activity.json()["detail"] == "Processing activity not found"
+
+    own_activity = _create_activity(client, org["org_headers"], org["user_id"], name="Own DPA Activity")
+    patch_own_activity = client.patch(
+        f"{DPA_BASE}/{dpa['id']}",
+        headers=org["org_headers"],
+        json={"processing_activity_ids": [own_activity["id"]]},
+    )
+    assert patch_own_activity.status_code == 200
+    assert patch_own_activity.json()["processing_activity_ids"] == [own_activity["id"]]
 
 
 def test_d89_breach_notification_extension(client, db_session):

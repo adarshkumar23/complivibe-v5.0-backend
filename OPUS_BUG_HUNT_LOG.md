@@ -101,3 +101,29 @@ Orientation:
 - **Files:** app/ai_governance/services/third_party_ai_service.py, app/ai_governance/routers/third_party_ai.py, tests/unit/test_model_cards_aibom_a61_a62_a63.py
 - **Tests:** `.venv/bin/python -m pytest tests/unit/test_model_cards_aibom_a61_a62_a63.py -q --disable-warnings` -> `7 passed`
 - **Commit:** TBD
+
+### 6. Privacy & Data Protection — DPA PATCH/create can attach foreign tenant related records
+- **Root cause:** `DPAService.link_processing_activity` validated the activity belonged
+  to the caller org, but `DPAService.update_dpa` accepted `processing_activity_ids`
+  through PATCH and only normalized UUID syntax. `DPAService.create_dpa` and
+  `update_dpa` also accepted `vendor_id`/`subprocessor_id` without any application-level
+  org scoping; those DPA columns are plain UUIDs, so the database could not protect the
+  relationship.
+- **Evidence before fix:** real HTTP against local server on port 8020:
+  with org A DPA `c6eefc53-d402-4351-9f9d-c6b094945a62` and org B ROPA activity
+  `f38f1641-ded8-4d9b-a669-f2fa2f5a19f1`, the dedicated
+  `POST /api/v1/privacy/dpas/{dpa_id}/link-activity` returned 404
+  `Processing activity not found`, but
+  `PATCH /api/v1/privacy/dpas/{dpa_id} {"processing_activity_ids":["f38f1641-ded8-4d9b-a669-f2fa2f5a19f1"]}`
+  returned 200 and persisted the foreign activity ID. Separately,
+  `POST /api/v1/privacy/dpas` in org A with org B `vendor_id`
+  `559a5ff4-02c3-431d-9e09-3274f672e8e5` returned 201 and persisted the foreign vendor ID.
+- **Fix:** DPA create/update now require supplied `vendor_id`, `subprocessor_id`, and
+  every `processing_activity_id` to exist in the caller organization. The direct link
+  endpoint and PATCH path now share the same activity scoping behavior.
+- **Evidence after fix:** real HTTP create with a foreign `vendor_id` returns 404
+  `Vendor not found`; real HTTP PATCH with a foreign `processing_activity_ids` value
+  returns 404 `Processing activity not found`.
+- **Files:** app/privacy/services/dpa_service.py, tests/unit/test_dpa_breach_extension_d92_d89.py
+- **Tests:** `.venv/bin/python -m pytest tests/unit/test_dpa_breach_extension_d92_d89.py -q --disable-warnings` -> `5 passed`
+- **Commit:** TBD
