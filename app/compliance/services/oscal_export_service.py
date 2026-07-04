@@ -192,6 +192,15 @@ class OSCALExportService:
             raise ValueError("Framework not found or not active for organization")
         return rows
 
+    def validate_export_framework(self, org_id: uuid.UUID, framework_id: uuid.UUID | None) -> Framework | None:
+        if framework_id is None:
+            return None
+        try:
+            frameworks = self._load_frameworks(org_id, framework_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        return frameworks[0]
+
     def _oscal_metadata(self, org: Organization, framework: Framework | None, *, doc_type: str) -> dict:
         if framework is not None:
             title = f"{org.name} - {framework.name} {doc_type}"
@@ -367,6 +376,7 @@ class OSCALExportService:
                 },
                 "system-characteristics": {
                     "system-name": org.name,
+                    "system-id": {"identifier-type": "compli_vibe_organization_uuid", "id": str(org.id)},
                     "description": getattr(org, "description", "") or "",
                     "security-sensitivity-level": "moderate",
                     "system-information": {
