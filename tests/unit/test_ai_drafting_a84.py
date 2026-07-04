@@ -127,11 +127,32 @@ def test_a84_ai_drafting_endpoints_and_service(client, db_session, monkeypatch):
         assert exc.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
     assert with_exception is True
 
-    # Apply once.
-    applied = client.post(
+    # Apply to a nonexistent policy is rejected with 404, not silently accepted.
+    apply_missing = client.post(
         f"{DRAFT_BASE}/{created_id}/apply",
         headers=org["org_headers"],
         json={"target_entity_type": "policy", "target_entity_id": str(uuid.uuid4())},
+    )
+    assert apply_missing.status_code == 404
+
+    # Create a real policy to apply the draft onto.
+    policy_created = client.post(
+        "/api/v1/compliance/policies",
+        headers=org["org_headers"],
+        json={
+            "title": "Information Security Policy",
+            "policy_type": "acceptable_use",
+            "owner_user_id": org["user_id"],
+        },
+    )
+    assert policy_created.status_code == 201
+    policy_id = policy_created.json()["id"]
+
+    # Apply once: content must be genuinely persisted as a policy version.
+    applied = client.post(
+        f"{DRAFT_BASE}/{created_id}/apply",
+        headers=org["org_headers"],
+        json={"target_entity_type": "policy", "target_entity_id": policy_id},
     )
     assert applied.status_code == 200
     applied_body = applied.json()
@@ -139,11 +160,22 @@ def test_a84_ai_drafting_endpoints_and_service(client, db_session, monkeypatch):
     assert applied_body["applied_at"] is not None
     assert applied_body["applied_by"] == org["user_id"]
 
+    versions = client.get(f"/api/v1/compliance/policies/{policy_id}/versions", headers=org["org_headers"])
+    assert versions.status_code == 200
+    version_bodies = versions.json()
+    assert len(version_bodies) == 1
+    version_detail = client.get(
+        f"/api/v1/compliance/policies/{policy_id}/versions/{version_bodies[0]['id']}",
+        headers=org["org_headers"],
+    )
+    assert version_detail.status_code == 200
+    assert version_detail.json()["content_snapshot_json"]["content"] == MOCK_DRAFT
+
     # Apply twice blocked.
     applied_again = client.post(
         f"{DRAFT_BASE}/{created_id}/apply",
         headers=org["org_headers"],
-        json={"target_entity_type": "policy", "target_entity_id": str(uuid.uuid4())},
+        json={"target_entity_type": "policy", "target_entity_id": policy_id},
     )
     assert applied_again.status_code == 422
 

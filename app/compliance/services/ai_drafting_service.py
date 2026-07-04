@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai_governance.services.draft_context_service import (
@@ -12,9 +12,17 @@ from app.ai_governance.services.draft_context_service import (
 )
 from app.compliance.prompts.drafting_prompts import SYSTEM_PROMPT_MAP
 from app.core.config import get_settings
+from app.models.ai_system import AISystem
+from app.models.compliance_policy import CompliancePolicy
+from app.models.compliance_policy_version import CompliancePolicyVersion
+from app.models.control import Control
 from app.models.draft_request import DraftRequest
+from app.models.evidence_item import EvidenceItem
+from app.models.issue import Issue
 from app.models.org_ai_config import OrgAIConfig
+from app.models.risk import Risk
 from app.services.audit_service import AuditService
+from app.services.compliance_policy_service import CompliancePolicyService
 
 
 class AIDraftingService:
@@ -295,6 +303,17 @@ class AIDraftingService:
         )
         return row
 
+    # Registry of target_entity_type -> model, used to validate that the apply target
+    # genuinely exists in this org before a draft can be marked applied.
+    TARGET_ENTITY_MODELS: dict[str, type] = {
+        "policy": CompliancePolicy,
+        "risk": Risk,
+        "control": Control,
+        "evidence": EvidenceItem,
+        "issue": Issue,
+        "ai_system": AISystem,
+    }
+
     def apply_draft(
         self,
         org_id: uuid.UUID,
@@ -306,6 +325,53 @@ class AIDraftingService:
         row = self.get_draft(org_id, draft_id)
         if row.applied:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Draft already applied")
+
+        model = self.TARGET_ENTITY_MODELS.get(target_entity_type)
+        if model is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Unsupported target_entity_type: {target_entity_type}",
+            )
+
+        target = self.db.execute(
+            select(model).where(model.id == target_entity_id, model.organization_id == org_id)
+        ).scalar_one_or_none()
+        if target is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"{target_entity_type} {target_entity_id} not found",
+            )
+
+        version_id: uuid.UUID | None = None
+        if target_entity_type == "policy":
+            # The draft body must be persisted through the real policy versioning system --
+            # the same pattern used by the AI-policy-draft-accept and policy-template-apply
+            # paths -- rather than being discarded once the draft is marked applied.
+            policy_service = CompliancePolicyService(self.db)
+            existing_version_count = int(
+                self.db.execute(
+                    select(func.count(CompliancePolicyVersion.id)).where(
+                        CompliancePolicyVersion.policy_id == target.id
+                    )
+                ).scalar_one()
+            )
+            content_snapshot = {
+                "content": row.draft_output,
+                "source": "ai_draft_request",
+                "source_draft_id": str(row.id),
+            }
+            version = CompliancePolicyVersion(
+                organization_id=org_id,
+                policy_id=target.id,
+                version_number=f"{existing_version_count + 1}.0",
+                content_snapshot_json=content_snapshot,
+                change_summary=f"Applied from AI draft ({row.draft_type})",
+                status="draft",
+                content_sha256=policy_service.content_sha256_hexdigest(content_snapshot),
+            )
+            self.db.add(version)
+            self.db.flush()
+            version_id = version.id
 
         now = self.utcnow()
         row.applied = True
@@ -325,6 +391,7 @@ class AIDraftingService:
                 "target_entity_id": str(target_entity_id),
                 "drafted_by_ai": True,
                 "applied": row.applied,
+                "policy_version_id": str(version_id) if version_id else None,
             },
             metadata_json={"source": "api"},
         )
