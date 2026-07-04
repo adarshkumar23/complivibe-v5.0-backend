@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai_governance.services.ai_governance_event_service import AIGovernanceEventService
+from app.models.evidence_item import EvidenceItem
 from app.models.framework import Framework
 from app.models.iso42001_conformity_tracker import ISO42001ConformityTracker
 from app.models.obligation import Obligation
@@ -89,6 +90,16 @@ class ISO42001Service:
 
         return sorted(existing.values(), key=lambda row: self._clause_sort_key(row.clause_ref))
 
+    def _validate_evidence(self, org_id: uuid.UUID, evidence_id: uuid.UUID) -> None:
+        evidence = self.db.execute(
+            select(EvidenceItem.id).where(
+                EvidenceItem.id == evidence_id,
+                EvidenceItem.organization_id == org_id,
+            )
+        ).scalar_one_or_none()
+        if evidence is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="evidence_id not found in organization")
+
     def update_tracker(
         self,
         org_id: uuid.UUID,
@@ -97,8 +108,16 @@ class ISO42001Service:
         notes: str | None,
         evidence_id: uuid.UUID | None,
         user_id: uuid.UUID,
+        *,
+        fields_set: set[str] | None = None,
     ) -> ISO42001ConformityTracker:
+        # fields_set (the request payload's model_fields_set) distinguishes
+        # "omitted" from "explicitly null" so a status-only update does not
+        # silently wipe existing notes/evidence.
+        provided = fields_set if fields_set is not None else {"status", "notes", "evidence_id"}
         status_value = validate_choice(status_value, ALLOWED_TRACKER_STATUS, "implementation status")
+        if "evidence_id" in provided and evidence_id is not None:
+            self._validate_evidence(org_id, evidence_id)
         clause_refs = {row.reference_code for row in self._iso_obligations()}
         if clause_ref not in clause_refs:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ISO 42001 clause not found")
@@ -126,8 +145,10 @@ class ISO42001Service:
             self.db.flush()
         else:
             row.implementation_status = status_value
-            row.notes = notes
-            row.evidence_id = evidence_id
+            if "notes" in provided:
+                row.notes = notes
+            if "evidence_id" in provided:
+                row.evidence_id = evidence_id
             row.updated_by = user_id
             row.updated_at = now
             self.db.flush()

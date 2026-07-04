@@ -378,6 +378,7 @@ def update_nist_rmf_subcategory(
         payload.notes,
         payload.evidence_id,
         current_user.id,
+        fields_set=payload.model_fields_set,
     )
     db.commit()
     db.refresh(implementation)

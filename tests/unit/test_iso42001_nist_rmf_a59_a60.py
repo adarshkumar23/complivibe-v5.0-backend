@@ -85,6 +85,125 @@ def test_a59_iso42001_conformity_tracker(client, db_session):
     assert summary["sections"]["Clause 5"]["total"] == 3
 
 
+def test_iso42001_status_only_update_preserves_notes_and_evidence(client):
+    org = bootstrap_org_user(client, email_prefix="iso42001-preserve")
+
+    seeded = client.get(f"{ISO42001_BASE}/conformity-tracker", headers=org["org_headers"])
+    assert seeded.status_code == 200
+
+    evidence = client.post(
+        "/api/v1/evidence",
+        headers=org["org_headers"],
+        json={"title": "AIMS scope document", "evidence_type": "document"},
+    )
+    assert evidence.status_code == 201
+    evidence_id = evidence.json()["id"]
+
+    with_notes = client.post(
+        f"{ISO42001_BASE}/conformity-tracker/4.1/update",
+        headers=org["org_headers"],
+        json={"status": "in_progress", "notes": "Scope drafted", "evidence_id": evidence_id},
+    )
+    assert with_notes.status_code == 200
+    assert with_notes.json()["notes"] == "Scope drafted"
+    assert with_notes.json()["evidence_id"] == evidence_id
+
+    # Status-only update must not wipe notes/evidence.
+    status_only = client.post(
+        f"{ISO42001_BASE}/conformity-tracker/4.1/update",
+        headers=org["org_headers"],
+        json={"status": "implemented"},
+    )
+    assert status_only.status_code == 200
+    assert status_only.json()["implementation_status"] == "implemented"
+    assert status_only.json()["notes"] == "Scope drafted"
+    assert status_only.json()["evidence_id"] == evidence_id
+
+    # Explicit null clears notes.
+    explicit_clear = client.post(
+        f"{ISO42001_BASE}/conformity-tracker/4.1/update",
+        headers=org["org_headers"],
+        json={"status": "implemented", "notes": None},
+    )
+    assert explicit_clear.status_code == 200
+    assert explicit_clear.json()["notes"] is None
+    assert explicit_clear.json()["evidence_id"] == evidence_id
+
+
+def test_iso42001_rejects_evidence_outside_org(client):
+    org_a = bootstrap_org_user(client, email_prefix="iso42001-eva")
+    org_b = bootstrap_org_user(client, email_prefix="iso42001-evb")
+
+    client.get(f"{ISO42001_BASE}/conformity-tracker", headers=org_a["org_headers"])
+
+    foreign_evidence = client.post(
+        "/api/v1/evidence",
+        headers=org_b["org_headers"],
+        json={"title": "Org B evidence", "evidence_type": "document"},
+    )
+    assert foreign_evidence.status_code == 201
+    foreign_id = foreign_evidence.json()["id"]
+
+    cross_org = client.post(
+        f"{ISO42001_BASE}/conformity-tracker/4.1/update",
+        headers=org_a["org_headers"],
+        json={"status": "implemented", "evidence_id": foreign_id},
+    )
+    assert cross_org.status_code == 422
+    assert "evidence_id" in cross_org.json()["detail"]
+
+    nonexistent = client.post(
+        f"{ISO42001_BASE}/conformity-tracker/4.1/update",
+        headers=org_a["org_headers"],
+        json={"status": "implemented", "evidence_id": str(uuid.uuid4())},
+    )
+    assert nonexistent.status_code == 422
+
+
+def test_nist_rmf_status_only_update_preserves_notes_and_rejects_foreign_evidence(client):
+    org = bootstrap_org_user(client, email_prefix="rmf-preserve")
+    org_b = bootstrap_org_user(client, email_prefix="rmf-preserve-b")
+    system_id = _create_system(client, org["org_headers"], org["user_id"], "RMF-Preserve-System")
+
+    create_impl = client.post(f"{SYSTEMS_BASE}/{system_id}/nist-rmf", headers=org["org_headers"])
+    assert create_impl.status_code == 200
+
+    with_notes = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/nist-rmf/update-subcategory",
+        headers=org["org_headers"],
+        json={"subcategory_ref": "GOVERN-1.1", "response_status": "partial", "notes": "Draft policy"},
+    )
+    assert with_notes.status_code == 200
+
+    status_only = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/nist-rmf/update-subcategory",
+        headers=org["org_headers"],
+        json={"subcategory_ref": "GOVERN-1.1", "response_status": "implemented"},
+    )
+    assert status_only.status_code == 200
+    row = next(item for item in status_only.json()["responses"] if item["subcategory_ref"] == "GOVERN-1.1")
+    assert row["response_status"] == "implemented"
+    assert row["notes"] == "Draft policy"
+
+    foreign_evidence = client.post(
+        "/api/v1/evidence",
+        headers=org_b["org_headers"],
+        json={"title": "Org B evidence", "evidence_type": "document"},
+    )
+    assert foreign_evidence.status_code == 201
+    cross_org = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/nist-rmf/update-subcategory",
+        headers=org["org_headers"],
+        json={
+            "subcategory_ref": "GOVERN-1.1",
+            "response_status": "implemented",
+            "evidence_id": foreign_evidence.json()["id"],
+        },
+    )
+    assert cross_org.status_code == 422
+    assert "evidence_id" in cross_org.json()["detail"]
+
+
 def test_a60_nist_rmf_workflow(client):
     org = bootstrap_org_user(client, email_prefix="a60-nist-rmf")
     system_one = _create_system(client, org["org_headers"], org["user_id"], "A60-RMF-System-1")

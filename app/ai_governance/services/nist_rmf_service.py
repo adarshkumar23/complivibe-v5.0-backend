@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.ai_governance.services.ai_governance_event_service import AIGovernanceEventService
 from app.models.ai_rmf_function_response import AIRMFFunctionResponse
 from app.models.ai_system import AISystem
+from app.models.evidence_item import EvidenceItem
 from app.models.nist_ai_rmf_implementation import NISTAIRMFImplementation
 from app.services.audit_service import AuditService
 from app.services.seed_service import NIST_AI_RMF_SUBCATEGORIES, SeedService
@@ -201,8 +202,26 @@ class NISTRMFService:
         notes: str | None,
         evidence_id: uuid.UUID | None,
         user_id: uuid.UUID,
+        *,
+        fields_set: set[str] | None = None,
     ) -> AIRMFFunctionResponse:
+        # fields_set (the request payload's model_fields_set) distinguishes
+        # "omitted" from "explicitly null" so a status-only update does not
+        # silently wipe existing notes/evidence.
+        provided = fields_set if fields_set is not None else {"response_status", "notes", "evidence_id"}
         response_status = validate_choice(response_status, ALLOWED_RESPONSE_STATUS, "response status")
+        if "evidence_id" in provided and evidence_id is not None:
+            evidence = self.db.execute(
+                select(EvidenceItem.id).where(
+                    EvidenceItem.id == evidence_id,
+                    EvidenceItem.organization_id == org_id,
+                )
+            ).scalar_one_or_none()
+            if evidence is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="evidence_id not found in organization",
+                )
         implementation = self.db.execute(
             select(NISTAIRMFImplementation).where(
                 NISTAIRMFImplementation.id == implementation_id,
@@ -224,8 +243,10 @@ class NISTRMFService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="NIST AI RMF subcategory not found")
 
         row.response_status = response_status
-        row.notes = notes
-        row.evidence_id = evidence_id
+        if "notes" in provided:
+            row.notes = notes
+        if "evidence_id" in provided:
+            row.evidence_id = evidence_id
         row.updated_at = self.utcnow()
         self.db.flush()
 
