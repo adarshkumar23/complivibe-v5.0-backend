@@ -4,9 +4,11 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from app.models.aml_kyc_check import AmlKycCheck
 from app.models.audit_log import AuditLog
 from app.models.vendor_external_rating import VendorExternalRating
 from app.models.vendor_threat_intelligence import VendorThreatIntelligence
+from app.satellites.tprm_intelligence.kyb_verification import KYBVerificationService
 from app.satellites.tprm_intelligence.threat_intelligence import ThreatIntelligenceService
 from app.satellites.tprm_intelligence.vendor_security_rating import VendorSecurityRatingService
 from tests.helpers.auth_org import bootstrap_org_user
@@ -121,5 +123,62 @@ def test_t1_2_vendor_threat_intelligence_persists_skips_and_audits(client, db_se
     audit = db_session.execute(
         select(AuditLog).where(AuditLog.action == "vendor.threat_intelligence.computed")
     ).scalar_one_or_none()
+    assert audit is not None
+    assert audit.organization_id == UUID(org["organization_id"])
+
+
+def test_t4_5_vendor_kyb_check_persists_skips_and_audits(client, db_session, monkeypatch):
+    org = bootstrap_org_user(client, email_prefix="t4-kyb")
+    vendor = _create_vendor(client, org, name="Apple Inc", website="https://apple.com")
+
+    def fake_compute(self, company_name: str) -> dict:
+        assert company_name == "Apple Inc"
+        return {
+            "company_name": company_name,
+            "signals_used": {
+                "opencorporates": {
+                    "status": "skipped",
+                    "source": "opencorporates",
+                    "message": "OpenCorporates signal skipped: API key not configured",
+                },
+                "gleif": {"status": "available", "source": "gleif", "match_count": 1, "records": [{"lei": "HWUPKR0MPOU8FGXBT394"}]},
+                "icij_offshore_leaks": {"status": "available", "source": "icij_offshore_leaks", "match_count": 0, "results": []},
+                "openownership": {
+                    "status": "available",
+                    "source": "openownership",
+                    "coverage_limitation": "Public register coverage is limited.",
+                    "statement_count": 0,
+                    "statements": [],
+                },
+                "gdelt_adverse_media": {"status": "available", "source": "gdelt", "article_count": 1, "articles": []},
+            },
+            "offshore_links_found": {"source": "icij_offshore_leaks", "found": False, "matches": [], "status": "available"},
+            "ubo_data": {
+                "source": "openownership",
+                "status": "available",
+                "coverage_limitation": "Public register coverage is limited.",
+                "statements": [],
+            },
+            "adverse_media_found": True,
+        }
+
+    monkeypatch.setattr(KYBVerificationService, "compute", fake_compute)
+    computed = client.post(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check/compute", headers=org["org_headers"])
+    assert computed.status_code == 201, computed.text
+    body = computed.json()
+    assert body["company_name"] == "Apple Inc"
+    assert body["signals_used"]["opencorporates"]["status"] == "skipped"
+    assert body["signals_used"]["gleif"]["records"][0]["lei"] == "HWUPKR0MPOU8FGXBT394"
+    assert body["adverse_media_found"] is True
+
+    latest = client.get(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check", headers=org["org_headers"])
+    assert latest.status_code == 200
+    assert latest.json()["id"] == body["id"]
+
+    row = db_session.execute(select(AmlKycCheck).where(AmlKycCheck.vendor_id == UUID(vendor["id"]))).scalar_one_or_none()
+    assert row is not None
+    assert row.ubo_data["source"] == "openownership"
+
+    audit = db_session.execute(select(AuditLog).where(AuditLog.action == "vendor.kyb_check.computed")).scalar_one_or_none()
     assert audit is not None
     assert audit.organization_id == UUID(org["organization_id"])

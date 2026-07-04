@@ -214,6 +214,7 @@ from app.models.score_snapshot import ScoreSnapshot
 from app.models.task import Task
 from app.models.user import User
 from app.models.user_session import UserSession
+from app.models.aml_kyc_check import AmlKycCheck
 from app.models.vendor import Vendor
 from app.models.vendor_external_rating import VendorExternalRating
 from app.models.vendor_threat_intelligence import VendorThreatIntelligence
