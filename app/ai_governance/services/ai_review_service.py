@@ -14,7 +14,13 @@ from app.services.audit_service import AuditService
 
 
 class AIReviewService:
-    ALLOWED_REVIEW_TYPES = {"initial_approval", "periodic", "triggered", "pre_deployment"}
+    ALLOWED_REVIEW_TYPES = {
+        "initial_review",
+        "pre_production_review",
+        "periodic_review",
+        "change_review",
+        "retirement_review",
+    }
     ALLOWED_STATUS_TRANSITIONS: dict[str, set[str]] = {
         "pending": {"in_review"},
         "in_review": {"approved", "rejected", "conditional"},

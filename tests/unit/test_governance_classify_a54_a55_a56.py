@@ -105,7 +105,7 @@ def test_a54_review_workflow_and_four_eyes(client, db_session):
         headers=org["org_headers"],
         json={
             "system_id": system_id,
-            "review_type": "initial_approval",
+            "review_type": "initial_review",
             "assigned_reviewer_id": reviewer["id"],
         },
     )
@@ -149,7 +149,7 @@ def test_a54_review_workflow_and_four_eyes(client, db_session):
         headers=org["org_headers"],
         json={
             "system_id": system_id,
-            "review_type": "periodic",
+            "review_type": "periodic_review",
             "assigned_reviewer_id": reviewer["id"],
         },
     )
@@ -170,7 +170,7 @@ def test_a54_review_workflow_and_four_eyes(client, db_session):
         headers=org["org_headers"],
         json={
             "system_id": system_id,
-            "review_type": "pre_deployment",
+            "review_type": "pre_production_review",
             "assigned_reviewer_id": reviewer["id"],
         },
     )

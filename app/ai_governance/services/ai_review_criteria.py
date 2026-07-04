@@ -24,8 +24,8 @@ PERIODIC_CRITERIA = {
 
 
 def criteria_for_review_type(review_type: str) -> dict[str, str]:
-    if review_type == "periodic":
+    if review_type == "periodic_review":
         return PERIODIC_CRITERIA
-    if review_type in {"initial_approval", "triggered", "pre_deployment"}:
+    if review_type in {"initial_review", "change_review", "pre_production_review"}:
         return INITIAL_APPROVAL_CRITERIA
     return {}

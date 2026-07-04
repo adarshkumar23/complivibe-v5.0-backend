@@ -6,12 +6,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai_governance.services.ai_governance_event_service import AIGovernanceEventService
+from app.core.validation import validate_choice
 from app.models.ai_system import AISystem
 from app.models.eu_act_conformity_assessment import EUActConformityAssessment
 from app.models.eu_act_fria import EUActFRIA
 from app.models.eu_act_post_market_plan import EUActPostMarketPlan
 from app.models.user import User
 from app.services.audit_service import AuditService
+
+CONFORMITY_ASSESSMENT_STATUSES = {"draft", "in_progress", "complete", "submitted"}
+POST_MARKET_PLAN_STATUSES = {"draft", "active", "archived"}
 
 EU_ACT_CONFORMITY_CHECKLIST: list[dict[str, str]] = [
     {"key": "technical_documentation", "label": "Technical documentation prepared (Art. 11)"},
@@ -124,6 +128,8 @@ class EUActWorkflowService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conformity assessment not found")
 
         payload = data.model_dump(exclude_unset=True)
+        if payload.get("status") is not None:
+            validate_choice(payload["status"], CONFORMITY_ASSESSMENT_STATUSES, "status")
         for key, value in payload.items():
             setattr(row, key, value)
         row.updated_at = self.utcnow()
@@ -405,6 +411,8 @@ class EUActWorkflowService:
         payload = data.model_dump(exclude_unset=True)
         if payload.get("responsible_person_id") is not None:
             self._validate_user_exists(payload["responsible_person_id"], "Responsible person not found")
+        if payload.get("status") is not None:
+            validate_choice(payload["status"], POST_MARKET_PLAN_STATUSES, "status")
 
         for key, value in payload.items():
             setattr(row, key, value)
