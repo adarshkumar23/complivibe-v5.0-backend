@@ -474,6 +474,7 @@ class CommonControlsService:
         reuse_rate = float(reused_count / total_evidence_items) if total_evidence_items > 0 else 0.0
 
         return {
+            "reuse_definition": "Evidence items linked to more than one common control mapping",
             "reused_evidence": reused_evidence,
             "total_evidence_items": total_evidence_items,
             "reused_count": reused_count,

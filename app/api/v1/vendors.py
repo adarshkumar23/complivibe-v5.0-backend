@@ -162,6 +162,7 @@ def create_vendor(
 ) -> VendorRead:
     service = VendorService(db)
     service.ensure_owner_is_active_member(organization.id, payload.owner_user_id)
+    service.ensure_unique_vendor_name(organization.id, payload.name)
 
     if payload.status == "archived":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New vendors cannot start in archived status")
@@ -287,6 +288,9 @@ def update_vendor(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="owner_user_id is required")
         service.ensure_owner_is_active_member(organization.id, owner_user_id)
 
+    if "name" in changes:
+        service.ensure_unique_vendor_name(organization.id, changes["name"], exclude_id=vendor_id)
+
     if "status" in changes and changes["status"] == "archived":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Use archive endpoint to archive vendors")
 
@@ -345,6 +349,8 @@ def archive_vendor(
 
     if row.status == "archived":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Vendor is already archived")
+
+    service.check_archive_eligibility(organization.id, vendor_id)
 
     before = {
         "status": row.status,

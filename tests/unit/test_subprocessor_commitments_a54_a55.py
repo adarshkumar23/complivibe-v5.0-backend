@@ -25,6 +25,7 @@ def _create_subprocessor(client, headers: dict[str, str], *, name: str) -> dict:
             "data_types_processed": ["email", "name"],
             "legal_basis": "contract",
             "geographic_locations": ["US"],
+            "data_transfer_mechanism": "sccs",
             "controller_type": "processor",
             "risk_level": "medium",
             "status": "active",
@@ -161,6 +162,46 @@ def test_a54_subprocessor_lifecycle_sweep_dashboard_and_org_isolation(client, db
     ids_b = {row["id"] for row in list_b.json()}
     assert created["id"] in ids_a
     assert created["id"] not in ids_b
+
+
+def test_a54_subprocessor_gdpr_completeness_validation(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="a54-gdpr")
+
+    incomplete = client.post(
+        SUBPROCESSOR_BASE,
+        headers=org["org_headers"],
+        json={
+            "name": "Incomplete Processor",
+            "service_description": "Missing fields",
+            "data_types_processed": [],
+            "legal_basis": "contract",
+            "geographic_locations": ["US"],
+            "controller_type": "processor",
+            "risk_level": "medium",
+            "status": "active",
+        },
+    )
+    assert incomplete.status_code == 422
+    detail = incomplete.json()["detail"]
+    assert "data_types_processed" in detail
+    assert "data_transfer_mechanism" in detail
+
+    missing_locations = client.post(
+        SUBPROCESSOR_BASE,
+        headers=org["org_headers"],
+        json={
+            "name": "No Location Processor",
+            "service_description": "Missing location",
+            "data_types_processed": ["email"],
+            "legal_basis": "contract",
+            "geographic_locations": [],
+            "controller_type": "processor",
+            "risk_level": "medium",
+            "status": "active",
+        },
+    )
+    assert missing_locations.status_code == 422
+    assert "geographic_locations" in missing_locations.json()["detail"]
 
 
 def test_a55_commitment_types_workflow_sweeps_and_dashboard(client, db_session):

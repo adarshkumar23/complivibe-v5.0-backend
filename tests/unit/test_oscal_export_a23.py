@@ -455,17 +455,16 @@ def test_a23_framework_scope_validate_download_pending_failed_summary_and_tenant
         headers=org1["org_headers"],
         json={"export_type": "ssp", "framework_id": str(uuid.uuid4())},
     )
-    assert failed.status_code == 200
-    assert failed.json()["status"] == "failed"
-    assert failed.json()["error_message"]
+    assert failed.status_code == 404
+    assert "framework" in failed.json()["detail"].lower()
 
     summary = client.get(f"{BASE}/summary", headers=org1["org_headers"])
     assert summary.status_code == 200
     body = summary.json()
-    assert body["total_exports"] >= 4
-    assert body["by_type"]["ssp"] >= 2
+    assert body["total_exports"] >= 3
+    assert body["by_type"]["ssp"] >= 1
     assert body["by_status"]["complete"] >= 2
-    assert body["by_status"]["failed"] >= 1
+    assert body["by_status"]["failed"] == 0
 
     list_org1 = client.get(f"{BASE}/exports", headers=org1["org_headers"])
     list_org2 = client.get(f"{BASE}/exports", headers=org2["org_headers"])
@@ -489,6 +488,8 @@ def test_a23_empty_org_valid_documents_uuid_v4_and_audit_events(client, db_sessi
     ssp_doc = ssp.json()["result_json"]["system-security-plan"]
     assert isinstance(ssp_doc["system-implementation"]["components"], list)
     assert ssp_doc["system-implementation"]["components"] == []
+    assert "system-id" in ssp_doc["system-characteristics"]
+    assert ssp_doc["system-characteristics"]["system-id"]["id"] == str(uuid.UUID(org["organization_id"]))
 
     ap_doc = ap.json()["result_json"]["assessment-plan"]
     assert isinstance(ap_doc["tasks"], list)

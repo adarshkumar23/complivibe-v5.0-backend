@@ -49,6 +49,8 @@ def create_and_build_export(
     _: Membership = Depends(require_permission("reports:read")),
 ) -> OSCALExportJobDetail:
     service = OSCALExportService(db)
+    if payload.framework_id is not None:
+        _ = service.validate_export_framework(organization.id, payload.framework_id)
     job = service.create_job(
         export_type=payload.export_type,
         framework_id=payload.framework_id,

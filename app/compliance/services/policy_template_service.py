@@ -227,7 +227,7 @@ class PolicyTemplateService:
                 "template_title": template.title or template.name,
                 "framework_tags": template.framework_tags or [],
             },
-            notes=template.content,
+            notes="Created from policy template",
         )
 
         # The template body must be persisted through the real versioning system, not just

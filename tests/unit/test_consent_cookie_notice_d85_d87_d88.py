@@ -261,6 +261,25 @@ def test_d85_consent_lifecycle_inbound_and_expiry(client, db_session):
     assert refreshed.withdrawal_reason == "expired"
 
 
+def test_d88_draft_notice_acknowledgement_blocked_until_published(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="d88-draft-ack")
+
+    draft = _create_notice(client, org["org_headers"], title="Draft Notice", content="draft content")
+    assert draft["status"] == "draft"
+
+    ack_draft = client.post(f"{NOTICES_BASE}/{draft['id']}/acknowledge", headers=org["org_headers"])
+    assert ack_draft.status_code == 422
+    assert "published" in ack_draft.json()["detail"].lower()
+
+    publish = client.post(f"{NOTICES_BASE}/{draft['id']}/publish", headers=org["org_headers"])
+    assert publish.status_code == 200
+    assert publish.json()["status"] == "published"
+
+    ack_published = client.post(f"{NOTICES_BASE}/{draft['id']}/acknowledge", headers=org["org_headers"])
+    assert ack_published.status_code == 200
+    assert ack_published.json()["notice_id"] == draft["id"]
+
+
 def test_d87_cookie_registry_scan_and_public_banner(client, db_session):
     org = bootstrap_org_user(client, email_prefix="d87-org")
     ingest_key = _configure_ingest_key(client, org["org_headers"], key="cookie-scan-key-12345")

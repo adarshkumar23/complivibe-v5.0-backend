@@ -115,6 +115,10 @@ class CustomRoleService:
         if role.organization_id != org_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
 
+        original_name = role.name
+        original_description = role.description
+        original_permissions = RBACService.get_role_permissions(self.db, role.id)
+
         if name is not None:
             candidate_name = name.strip()
             duplicate = self.db.execute(
@@ -133,12 +137,20 @@ class CustomRoleService:
             self._set_role_permissions(role.id, permission_codes)
 
         self.db.flush()
+        before_json: dict[str, object] = {}
+        if name is not None:
+            before_json["name"] = original_name
+        if description is not None:
+            before_json["description"] = original_description
+        if permission_codes is not None:
+            before_json["permission_codes"] = original_permissions
         AuditService(self.db).write_audit_log(
             action="custom_role.updated",
             entity_type="role",
             entity_id=role.id,
             organization_id=org_id,
             actor_user_id=updated_by,
+            before_json=before_json,
             after_json={
                 "name": role.name,
                 "description": role.description,
@@ -205,6 +217,13 @@ class CustomRoleService:
         if role.organization_id not in {org_id, None}:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
 
+        previous_role_id = membership.role_id
+        previous_role_name = None
+        if previous_role_id is not None:
+            prev_role = self.db.execute(select(Role).where(Role.id == previous_role_id)).scalar_one_or_none()
+            if prev_role is not None:
+                previous_role_name = prev_role.name
+
         membership.role_id = role.id
         self.db.flush()
         AuditService(self.db).write_audit_log(
@@ -213,6 +232,10 @@ class CustomRoleService:
             entity_id=membership.id,
             organization_id=org_id,
             actor_user_id=assigned_by,
+            before_json={
+                "role_id": str(previous_role_id) if previous_role_id is not None else None,
+                "role_name": previous_role_name,
+            },
             after_json={"role_id": str(role.id), "role_name": role.name},
             metadata_json={"source": "api"},
         )

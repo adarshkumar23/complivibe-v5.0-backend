@@ -415,3 +415,24 @@ def test_a22_tenant_isolation_and_audit_events(client, db_session):
     assert "common_control.mapping_created" in actions
     assert "common_control.mapping_updated" in actions
     assert "common_control.mapping_deactivated" in actions
+
+
+def test_a22_coverage_empty_and_reuse_definition(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="a22-empty-coverage")
+    control = _create_control(client, org["org_headers"], title="A22 Unmapped Control")
+
+    coverage = client.get(f"{BASE}/coverage/{control['id']}", headers=org["org_headers"])
+    assert coverage.status_code == 200
+    report = coverage.json()
+    assert report["control"]["id"] == control["id"]
+    assert report["frameworks_covered"] == []
+    assert report["total_frameworks"] == 0
+    assert report["total_obligations"] == 0
+
+    reuse = client.get(f"{BASE}/evidence-reuse", headers=org["org_headers"])
+    assert reuse.status_code == 200
+    reuse_body = reuse.json()
+    assert "linked to more than one" in reuse_body["reuse_definition"]
+    assert reuse_body["reused_evidence"] == []
+    assert reuse_body["total_evidence_items"] == 0
+    assert reuse_body["reuse_rate"] == 0.0
