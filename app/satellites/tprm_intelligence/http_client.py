@@ -21,3 +21,12 @@ class SatelliteHTTPClient:
         if not isinstance(payload, dict):
             return {"items": payload}
         return payload
+
+    def post_json(self, url: str, *, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None) -> dict[str, Any]:
+        with httpx.Client(timeout=self.settings.HTTP_TIMEOUT_SECONDS, follow_redirects=True) as client:
+            response = client.post(url, params=params, headers=headers)
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, dict):
+            return {"items": payload}
+        return payload

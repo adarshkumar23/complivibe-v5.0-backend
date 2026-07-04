@@ -57,11 +57,15 @@ class VendorSecurityRatingService:
 
     def _mozilla_observatory(self, domain: str) -> dict:
         try:
-            payload = self.http.get_json("https://observatory.mozilla.org/api/v1/analyze", params={"host": domain})
+            # The old Mozilla Observatory v1 endpoint was shut down; MDN's v2
+            # scanner is the current no-key API for the same header grade.
+            payload = self.http.post_json("https://observatory-api.mdn.mozilla.net/api/v2/scan", params={"host": domain})
             grade = str(payload.get("grade") or payload.get("scan", {}).get("grade") or "").upper()
-            score = GRADE_SCORES.get(grade)
-            if score is None and isinstance(payload.get("score"), (int, float)):
+            score = None
+            if isinstance(payload.get("score"), (int, float)):
                 score = max(0, min(100, int(payload["score"])))
+            if score is None:
+                score = GRADE_SCORES.get(grade)
             return {
                 "status": "available" if score is not None else "unavailable",
                 "source": "mozilla_observatory",
