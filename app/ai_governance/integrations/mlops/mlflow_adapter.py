@@ -1,10 +1,21 @@
 import os
 
+# Explicit, bounded timeout for every outbound MLflow tracking request.
+# Defaults are otherwise far too high (often 120s) and include aggressive
+# retries, which lets a single unreachable tracking server hang a worker
+# thread indefinitely.
+MLFLOW_HTTP_TIMEOUT_SECONDS = 10
+
 
 class MLflowAdapter:
     def __init__(self, tracking_uri: str, token: str | None = None):
         import mlflow
         from mlflow.tracking import MlflowClient
+
+        # These environment variables are read by mlflow at request time.
+        os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] = str(MLFLOW_HTTP_TIMEOUT_SECONDS)
+        os.environ["MLFLOW_HTTP_REQUEST_MAX_RETRIES"] = "0"
+        os.environ["MLFLOW_HTTP_REQUEST_BACKOFF_FACTOR"] = "0"
 
         mlflow.set_tracking_uri(tracking_uri)
         if token:

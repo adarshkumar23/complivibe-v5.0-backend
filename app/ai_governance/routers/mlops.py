@@ -90,10 +90,13 @@ def sync_mlops_integration(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("integrations:write")),
 ) -> MLOpsSyncResult:
+    # Call with raise_on_error=False so the service can record a failed sync status
+    # (and audit trail) and return a structured error. We then decide whether to
+    # surface that as an HTTP error without rolling back the persisted status.
     try:
-        result = MLOPSSyncService(db).sync(organization.id, integration_id, current_user.id)
-        db.commit()
-        return MLOpsSyncResult(**result)
+        result = MLOPSSyncService(db).sync(
+            organization.id, integration_id, current_user.id, raise_on_error=False
+        )
     except HTTPException:
         db.rollback()
         raise
@@ -103,6 +106,14 @@ def sync_mlops_integration(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"MLOps sync failed: {exc}",
         ) from exc
+
+    db.commit()
+    if result.get("error"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"MLOps sync failed: {result['error']}",
+        )
+    return MLOpsSyncResult(**result)
 
 
 @router.get("/{integration_id}/sync-log", response_model=MLOpsSyncLogRead)

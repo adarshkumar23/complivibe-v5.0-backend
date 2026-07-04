@@ -163,7 +163,14 @@ class MLOPSSyncService:
             created_systems += 1
         return created_systems
 
-    def sync(self, org_id: uuid.UUID, integration_id: uuid.UUID, triggered_by: uuid.UUID) -> dict:
+    def sync(
+        self,
+        org_id: uuid.UUID,
+        integration_id: uuid.UUID,
+        triggered_by: uuid.UUID,
+        *,
+        raise_on_error: bool = True,
+    ) -> dict:
         integration = self._require_integration(org_id, integration_id)
         if not integration.is_active:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Integration is inactive")
@@ -267,7 +274,14 @@ class MLOPSSyncService:
                 after_json={"error": integration.last_sync_error},
                 metadata_json={"source": "service"},
             )
-            raise
+            if raise_on_error:
+                raise
+            return {
+                "error": integration.last_sync_error,
+                "models_found": 0,
+                "systems_created": 0,
+                "aiboms_updated": 0,
+            }
 
     def get_sync_log(self, org_id: uuid.UUID, integration_id: uuid.UUID) -> MLOpsIntegration:
         row = self._require_integration(org_id, integration_id)
