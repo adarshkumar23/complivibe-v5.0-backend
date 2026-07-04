@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, date, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,6 +11,7 @@ from app.models.framework_section import FrameworkSection
 from app.models.framework_version import FrameworkVersion
 from app.models.obligation import Obligation
 from app.models.obligation_applicability_question import ObligationApplicabilityQuestion
+from app.models.obligation_applicability_rule import ObligationApplicabilityRule
 from app.models.permission import Permission
 from app.models.policy_template import PolicyTemplate
 from app.models.issue_sla_policy import IssueSLAPolicy
@@ -51,6 +53,7 @@ from app.services.framework_seed_data_stream_a5 import (
     DPDP_QUESTIONS,
     DPDP_SECTIONS,
 )
+from app.services.applicability_service import ApplicabilityService
 from app.services.framework_seed_data_stream_a6 import (
     ATLAS_NIST_AIRMF_MAPPINGS,
     ATLAS_OBLIGATIONS,
@@ -3115,6 +3118,100 @@ class SeedService:
         SeedService.ensure_g7_oecd_cross_mappings(db)
         SeedService.ensure_atlas_nist_airmf_cross_mappings(db)
         return created_or_updated
+
+    @staticmethod
+    def ensure_applicability_rules(db: Session) -> list[ObligationApplicabilityRule]:
+        """Seed deterministic applicability rules so evaluations can produce real outcomes.
+
+        Rules are created through ApplicabilityService (the real rule-creation API) so all
+        validation, status handling and audit hooks are respected.  Only a meaningful
+        starter subset is seeded; each rule is keyed deterministically to stay idempotent.
+        """
+        service = ApplicabilityService(db)
+        questions = db.execute(
+            select(ObligationApplicabilityQuestion).where(
+                ObligationApplicabilityQuestion.status == "active",
+            )
+        ).scalars().all()
+
+        questions_by_framework: dict[uuid.UUID, list[ObligationApplicabilityQuestion]] = {}
+        for q in questions:
+            questions_by_framework.setdefault(q.framework_id, []).append(q)
+
+        obligations = db.execute(
+            select(Obligation).where(Obligation.status == "active").order_by(Obligation.reference_code.asc())
+        ).scalars().all()
+        obligation_by_framework: dict[uuid.UUID, list[Obligation]] = {}
+        for o in obligations:
+            obligation_by_framework.setdefault(o.framework_id, []).append(o)
+
+        existing_rule_keys = {
+            (r.framework_id, r.obligation_id, r.rule_key)
+            for r in db.execute(
+                select(ObligationApplicabilityRule).where(
+                    ObligationApplicabilityRule.status == "active",
+                    ObligationApplicabilityRule.rule_key.like("seeded_%"),
+                )
+            ).scalars().all()
+        }
+
+        created: list[ObligationApplicabilityRule] = []
+        for framework_id, qlist in questions_by_framework.items():
+            qlist_sorted = sorted(qlist, key=lambda q: (q.sort_order, q.question_key))
+            obl_list = obligation_by_framework.get(framework_id, [])
+            if not obl_list:
+                continue
+            target_obligation = obl_list[0]
+
+            # Prefer a boolean question because it supports an unambiguous yes/no rule pair.
+            boolean_question = next((q for q in qlist_sorted if q.answer_type == "boolean"), None)
+            chosen_question = boolean_question or qlist_sorted[0]
+
+            def _create_if_needed(rule_key: str, operator: str, expected: Any, result: str, rationale: str) -> None:
+                key_tuple = (framework_id, target_obligation.id, rule_key)
+                if key_tuple in existing_rule_keys:
+                    return
+                rule = service.create_rule(
+                    framework_id=framework_id,
+                    obligation_id=target_obligation.id,
+                    question_id=chosen_question.id,
+                    rule_key=rule_key,
+                    operator=operator,
+                    expected_value_json=expected,
+                    result_applicability=result,
+                    rationale=rationale,
+                    created_by_user_id=None,
+                )
+                created.append(rule)
+                existing_rule_keys.add(key_tuple)
+
+            if chosen_question.answer_type == "boolean":
+                _create_if_needed(
+                    f"seeded_{chosen_question.question_key}_true",
+                    "equals",
+                    True,
+                    "applicable",
+                    f"Seeded rule: {chosen_question.question_text} is true, so this obligation is applicable.",
+                )
+                _create_if_needed(
+                    f"seeded_{chosen_question.question_key}_false",
+                    "equals",
+                    False,
+                    "not_applicable",
+                    f"Seeded rule: {chosen_question.question_text} is false, so this obligation is not applicable.",
+                )
+            else:
+                # For non-boolean answer types, an explicit answer means the topic is active.
+                _create_if_needed(
+                    f"seeded_{chosen_question.question_key}_exists",
+                    "exists",
+                    None,
+                    "applicable",
+                    f"Seeded rule: {chosen_question.question_text} was answered, so this obligation is applicable.",
+                )
+
+        db.flush()
+        return created
 
     @staticmethod
     def ensure_framework_versions(db: Session) -> list[FrameworkVersion]:
