@@ -642,6 +642,7 @@ def link_risk_to_control(
         link.linked_at = now
         link.unlinked_at = None
 
+    db.flush()
     _recompute_residual(db, organization.id, risk)
     db.flush()
 
@@ -681,6 +682,7 @@ def unlink_risk_from_control(
     before = {"status": link.status}
     link.status = "inactive"
     link.unlinked_at = datetime.now(UTC)
+    db.flush()
     _recompute_residual(db, organization.id, risk)
     db.flush()
 

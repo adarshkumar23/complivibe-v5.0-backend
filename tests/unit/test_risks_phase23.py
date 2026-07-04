@@ -367,6 +367,48 @@ def test_risk_control_and_evidence_linking_detail_and_cross_tenant_rules(client)
     assert "risk.evidence_unlinked" in actions
 
 
+def test_direct_risk_control_link_unlink_recomputes_residual_immediately(client):
+    owner = _register(client, "p23-residual-owner@example.com", "Pass1234!@", "P23 Residual Org")
+    org_id = _org_id(client, owner)
+
+    risk = client.post(
+        "/api/v1/risks",
+        headers=_headers(owner, org_id),
+        json={"title": "Immediate residual risk", "category": "security", "likelihood": 5, "impact": 4},
+    )
+    assert risk.status_code == 201
+    risk_id = risk.json()["id"]
+    assert risk.json()["residual_score"] == 20
+
+    control_id = _create_control(client, owner, org_id, "Implemented Critical Control")
+    implemented = client.patch(
+        f"/api/v1/controls/{control_id}",
+        headers=_headers(owner, org_id),
+        json={"status": "implemented", "criticality": "critical"},
+    )
+    assert implemented.status_code == 200
+
+    linked = client.post(
+        f"/api/v1/risks/{risk_id}/controls",
+        headers=_headers(owner, org_id),
+        json={"control_id": control_id, "link_type": "mitigates"},
+    )
+    assert linked.status_code == 200
+
+    after_link = client.get(f"/api/v1/risks/{risk_id}", headers=_headers(owner, org_id))
+    assert after_link.status_code == 200
+    assert after_link.json()["residual_likelihood"] == 3
+    assert after_link.json()["residual_score"] == 12
+
+    unlinked = client.delete(f"/api/v1/risks/{risk_id}/controls/{control_id}", headers=_headers(owner, org_id))
+    assert unlinked.status_code == 200
+
+    after_unlink = client.get(f"/api/v1/risks/{risk_id}", headers=_headers(owner, org_id))
+    assert after_unlink.status_code == 200
+    assert after_unlink.json()["residual_likelihood"] == 5
+    assert after_unlink.json()["residual_score"] == 20
+
+
 def test_risk_summary_and_heatmap(client):
     owner = _register(client, "p23-owner7@example.com", "Pass1234!@", "P23 Org7")
     org_id = _org_id(client, owner)
