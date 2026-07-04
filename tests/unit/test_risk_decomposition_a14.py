@@ -181,7 +181,15 @@ def test_a14_score_breakdown_endpoint_standard(client):
     )
     assert breakdown.status_code == 200
     body = breakdown.json()
-    assert body == {"method": "standard", "likelihood": 4, "impact": 2, "score": 8}
+    assert body == {
+        "method": "standard",
+        "likelihood": 4,
+        "impact": 2,
+        "score": 8,
+        "residual_likelihood": 4,
+        "residual_impact": 2,
+        "residual_score": 8,
+    }
 
 
 def test_a14_score_auto_recomputes_on_risk_patch_when_factor_changes(client):

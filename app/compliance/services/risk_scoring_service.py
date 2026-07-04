@@ -109,6 +109,9 @@ class RiskScoringService:
                 "likelihood": int(risk.likelihood),
                 "impact": int(risk.impact),
                 "score": int(risk.inherent_score),
+                "residual_likelihood": risk.residual_likelihood,
+                "residual_impact": risk.residual_impact,
+                "residual_score": risk.residual_score,
             }
 
         if risk.financial_impact is None or risk.brand_impact is None or risk.operational_impact is None:
@@ -145,4 +148,7 @@ class RiskScoringService:
                 "brand": float(org_settings.brand_weight),
                 "operational": float(org_settings.operational_weight),
             },
+            "residual_likelihood": risk.residual_likelihood,
+            "residual_impact": risk.residual_impact,
+            "residual_score": risk.residual_score,
         }
