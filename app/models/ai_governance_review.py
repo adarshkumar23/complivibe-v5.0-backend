@@ -12,7 +12,7 @@ class AIGovernanceReview(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedM
     __tablename__ = "ai_governance_reviews"
     __table_args__ = (
         CheckConstraint(
-            "review_type IN ('initial_approval', 'periodic', 'triggered', 'pre_deployment')",
+            "review_type IN ('initial_review', 'pre_production_review', 'periodic_review', 'change_review', 'retirement_review')",
             name="ck_ai_governance_reviews_review_type",
         ),
         CheckConstraint(

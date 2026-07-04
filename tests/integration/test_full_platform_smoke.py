@@ -329,7 +329,7 @@ def test_p2_governance_review_four_eyes(client, db_session: Session):
     rev = client.post(
         "/api/v1/ai-governance/reviews",
         headers=ctx["org_headers"],
-        json={"system_id": s["id"], "review_type": "periodic", "assigned_reviewer_id": reviewer.id.hex},
+        json={"system_id": s["id"], "review_type": "periodic_review", "assigned_reviewer_id": reviewer.id.hex},
     )
     assert rev.status_code == 201, rev.text
     bad = client.post(f"/api/v1/ai-governance/reviews/{rev.json()['id']}/approve", headers=ctx["org_headers"], json={"decision_notes": "self"})
@@ -1063,4 +1063,4 @@ def test_cross_migration_head():
     script = ScriptDirectory.from_config(cfg)
     heads = script.get_heads()
     assert len(heads) == 1
-    assert heads[0] == "0199_audit_engagement_source_schedule_link"
+    assert heads[0] == "0200_align_ai_governance_review_types"
