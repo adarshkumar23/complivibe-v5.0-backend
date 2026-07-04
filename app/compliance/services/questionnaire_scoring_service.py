@@ -85,13 +85,13 @@ class QuestionnaireScoringService:
         condition = (rule.condition_value or "").strip()
 
         if rule.condition_operator == "eq":
-            return value == condition
+            return value.casefold() == condition.casefold()
         if rule.condition_operator == "ne":
-            return value != condition
+            return value.casefold() != condition.casefold()
         if rule.condition_operator == "contains":
-            return condition in value
+            return condition.casefold() in value.casefold()
         if rule.condition_operator == "not_contains":
-            return condition not in value
+            return condition.casefold() not in value.casefold()
         if rule.condition_operator == "gte":
             try:
                 return float(value) >= float(condition)
