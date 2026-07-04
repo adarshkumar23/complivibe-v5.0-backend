@@ -15,7 +15,7 @@ class OffboardingRecord(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
     )
 
     deactivated_user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
-    successor_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    successor_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
     records_reassigned: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     total_reassigned: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     executed_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)

@@ -37,7 +37,7 @@ class OffboardingRecordRead(BaseModel):
     id: UUID
     organization_id: UUID
     deactivated_user_id: UUID
-    successor_id: UUID
+    successor_id: UUID | None
     records_reassigned: dict
     total_reassigned: int
     executed_by: UUID

@@ -166,14 +166,13 @@ class OffboardingService:
 
         if config.require_successor_on_deactivate and chosen_successor is None:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="successor_id is required when offboarding policy requires successor")
-        if chosen_successor is None:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="successor_id is required")
 
         self._ensure_user_in_org(org_id, deactivated_user_id, field_name="deactivated_user_id", require_active=False)
-        self._ensure_user_in_org(org_id, chosen_successor, field_name="successor_id", require_active=True)
 
-        if deactivated_user_id == chosen_successor:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="deactivated_user_id and successor_id cannot be the same")
+        if chosen_successor is not None:
+            self._ensure_user_in_org(org_id, chosen_successor, field_name="successor_id", require_active=True)
+            if deactivated_user_id == chosen_successor:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="deactivated_user_id and successor_id cannot be the same")
 
         counts: dict[str, int] = {
             "risks": 0,
@@ -185,20 +184,44 @@ class OffboardingService:
         }
 
         with self.db.begin_nested():
-            result = self.db.execute(
-                update(Risk)
-                .where(Risk.organization_id == org_id, Risk.owner_user_id == deactivated_user_id)
-                .values(owner_user_id=chosen_successor)
-            )
-            counts["risks"] = int(result.rowcount or 0)
+            if chosen_successor is not None:
+                result = self.db.execute(
+                    update(Risk)
+                    .where(Risk.organization_id == org_id, Risk.owner_user_id == deactivated_user_id)
+                    .values(owner_user_id=chosen_successor)
+                )
+                counts["risks"] = int(result.rowcount or 0)
 
-            result = self.db.execute(
-                update(Control)
-                .where(Control.organization_id == org_id, Control.owner_user_id == deactivated_user_id)
-                .values(owner_user_id=chosen_successor)
-            )
-            counts["controls"] = int(result.rowcount or 0)
+                result = self.db.execute(
+                    update(Control)
+                    .where(Control.organization_id == org_id, Control.owner_user_id == deactivated_user_id)
+                    .values(owner_user_id=chosen_successor)
+                )
+                counts["controls"] = int(result.rowcount or 0)
 
+                result = self.db.execute(
+                    update(CompliancePolicy)
+                    .where(CompliancePolicy.organization_id == org_id, CompliancePolicy.owner_user_id == deactivated_user_id)
+                    .values(owner_user_id=chosen_successor)
+                )
+                counts["policies"] = int(result.rowcount or 0)
+
+                result = self.db.execute(
+                    update(Vendor)
+                    .where(Vendor.organization_id == org_id, Vendor.owner_user_id == deactivated_user_id)
+                    .values(owner_user_id=chosen_successor)
+                )
+                counts["vendors"] = int(result.rowcount or 0)
+
+                # Also reassign compliance deadlines when owner field exists in schema.
+                self.db.execute(
+                    update(ComplianceDeadline)
+                    .where(ComplianceDeadline.organization_id == org_id, ComplianceDeadline.owner_user_id == deactivated_user_id)
+                    .values(owner_user_id=chosen_successor)
+                )
+
+            # Tasks are always handled.  When a successor is provided they get reassigned;
+            # otherwise they are intentionally orphaned so dashboards can surface them.
             result = self.db.execute(
                 update(Task)
                 .where(
@@ -210,39 +233,19 @@ class OffboardingService:
             )
             counts["tasks"] = int(result.rowcount or 0)
 
-            result = self.db.execute(
-                update(CompliancePolicy)
-                .where(CompliancePolicy.organization_id == org_id, CompliancePolicy.owner_user_id == deactivated_user_id)
-                .values(owner_user_id=chosen_successor)
-            )
-            counts["policies"] = int(result.rowcount or 0)
-
-            result = self.db.execute(
-                update(Vendor)
-                .where(Vendor.organization_id == org_id, Vendor.owner_user_id == deactivated_user_id)
-                .values(owner_user_id=chosen_successor)
-            )
-            counts["vendors"] = int(result.rowcount or 0)
-
             # Audit engagements use assigned_auditor_ids JSON list; replace user id in-array.
-            deactivated_user_str = str(deactivated_user_id)
-            successor_str = str(chosen_successor)
-            engagement_rows = self.db.execute(
-                select(AuditEngagement).where(AuditEngagement.organization_id == org_id)
-            ).scalars().all()
-            for engagement in engagement_rows:
-                current = [str(item) for item in (engagement.assigned_auditor_ids or [])]
-                if deactivated_user_str not in current:
-                    continue
-                engagement.assigned_auditor_ids = [successor_str if item == deactivated_user_str else item for item in current]
-                counts["audit_engagements"] += 1
-
-            # Also reassign compliance deadlines when owner field exists in schema.
-            self.db.execute(
-                update(ComplianceDeadline)
-                .where(ComplianceDeadline.organization_id == org_id, ComplianceDeadline.owner_user_id == deactivated_user_id)
-                .values(owner_user_id=chosen_successor)
-            )
+            if chosen_successor is not None:
+                deactivated_user_str = str(deactivated_user_id)
+                successor_str = str(chosen_successor)
+                engagement_rows = self.db.execute(
+                    select(AuditEngagement).where(AuditEngagement.organization_id == org_id)
+                ).scalars().all()
+                for engagement in engagement_rows:
+                    current = [str(item) for item in (engagement.assigned_auditor_ids or [])]
+                    if deactivated_user_str not in current:
+                        continue
+                    engagement.assigned_auditor_ids = [successor_str if item == deactivated_user_str else item for item in current]
+                    counts["audit_engagements"] += 1
 
             total_reassigned = int(sum(counts.values()))
             record = OffboardingRecord(
