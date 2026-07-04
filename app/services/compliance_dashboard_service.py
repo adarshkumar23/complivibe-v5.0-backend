@@ -413,7 +413,7 @@ class ComplianceDashboardService:
                     AuditFinding.organization_id == organization_id,
                     AuditFinding.deleted_at.is_(None),
                     AuditFinding.severity.in_(["high", "critical"]),
-                    AuditFinding.status.not_in(["resolved", "closed", "accepted_risk", "risk_accepted"]),
+                    AuditFinding.status.not_in(["resolved", "closed", "accepted_risk"]),
                 )
             ).scalar_one()
         )

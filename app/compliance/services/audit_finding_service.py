@@ -26,11 +26,11 @@ VALID_FINDING_TYPES = ("observation", "minor_nonconformity", "major_nonconformit
 
 class AuditFindingService:
     ALLOWED_TRANSITIONS: dict[str, set[str]] = {
-        "open": {"in_remediation", "risk_accepted", "closed"},
+        "open": {"in_remediation", "accepted_risk", "closed"},
         "in_remediation": {"remediated", "open"},
         "remediated": {"closed", "open"},
         "closed": set(),
-        "risk_accepted": set(),
+        "accepted_risk": set(),
     }
 
     def __init__(self, db: Session) -> None:
@@ -278,7 +278,7 @@ class AuditFindingService:
 
         before_status = row.status
         row.status = new_status
-        if new_status in {"closed", "risk_accepted"}:
+        if new_status in {"closed", "accepted_risk"}:
             row.closed_at = self.utcnow()
             row.closed_by = user_id
         else:
@@ -349,7 +349,7 @@ class AuditFindingService:
                 continue
 
             row.status = new_status
-            if new_status in {"closed", "risk_accepted"}:
+            if new_status in {"closed", "accepted_risk"}:
                 row.closed_at = self.utcnow()
                 row.closed_by = user_id
             else:
@@ -394,7 +394,7 @@ class AuditFindingService:
             "in_remediation": 0,
             "remediated": 0,
             "closed": 0,
-            "risk_accepted": 0,
+            "accepted_risk": 0,
         }
 
         today = self.utcdate()
@@ -406,7 +406,7 @@ class AuditFindingService:
             by_severity[row.severity] = by_severity.get(row.severity, 0) + 1
             by_status[row.status] = by_status.get(row.status, 0) + 1
 
-            is_terminal = row.status in {"closed", "risk_accepted"}
+            is_terminal = row.status in {"closed", "accepted_risk"}
             if row.severity == "critical" and not is_terminal:
                 open_critical_count += 1
             if row.target_remediation_date < today and not is_terminal:

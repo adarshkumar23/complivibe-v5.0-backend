@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from app.schemas.common import UUIDTimestampSchema
 
 FINDING_SEVERITY_PATTERN = "^(critical|high|medium|low|informational)$"
-FINDING_STATUS_PATTERN = "^(open|in_remediation|remediated|closed|risk_accepted)$"
+FINDING_STATUS_PATTERN = "^(open|in_remediation|remediated|closed|accepted_risk)$"
 
 
 class AuditFindingCreate(BaseModel):
