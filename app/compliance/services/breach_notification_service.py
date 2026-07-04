@@ -185,6 +185,11 @@ class BreachNotificationService:
 
     def close_breach(self, org_id: uuid.UUID, breach_id: uuid.UUID, user_id: uuid.UUID) -> BreachNotification:
         row = self._get_breach(org_id, breach_id)
+        if (row.subject_notification_required or row.article34_required) and row.subjects_notified_at is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Cannot close breach until required Article 34 subject notification is completed",
+            )
         self._transition(row, "closed")
         self.db.flush()
 

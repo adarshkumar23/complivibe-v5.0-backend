@@ -341,3 +341,39 @@ def test_d89_breach_notification_extension(client, db_session):
         db_session,
     )
     assert "GDPR Article 33 Notification Draft" in fallback_payload["draft_text"]
+
+
+def test_d89_breach_close_requires_article34_subject_notification_completion(client):
+    org = bootstrap_org_user(client, email_prefix="d89-close-article34")
+    issue = _create_issue(client, org["org_headers"], org["user_id"], issue_type="security_incident")
+
+    created = client.post(
+        f"{ISSUES_BASE}/{issue['id']}/breach-notification",
+        headers=org["org_headers"],
+        json={
+            "breach_type": "personal_data",
+            "personal_data_affected": True,
+            "regulatory_notification_required": True,
+            "regulatory_framework": "gdpr",
+            "regulatory_notification_hours": 72,
+            "subject_notification_required": True,
+        },
+    )
+    assert created.status_code == 201
+    breach_id = created.json()["id"]
+
+    blocked = client.post(f"{BREACH_BASE}/{breach_id}/close", headers=org["org_headers"])
+    assert blocked.status_code == 422
+    assert "Article 34 subject notification" in blocked.json()["detail"]
+
+    notified = client.post(
+        f"{BREACH_BASE}/{breach_id}/record-subjects-notified",
+        headers=org["org_headers"],
+        json={"count": 12},
+    )
+    assert notified.status_code == 200
+    assert notified.json()["subjects_notified_at"] is not None
+
+    closed = client.post(f"{BREACH_BASE}/{breach_id}/close", headers=org["org_headers"])
+    assert closed.status_code == 200
+    assert closed.json()["status"] == "closed"
