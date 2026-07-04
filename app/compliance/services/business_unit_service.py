@@ -24,6 +24,38 @@ class BusinessUnitService:
     def _now() -> datetime:
         return datetime.now(UTC)
 
+    def _get_active_children(self, org_id: uuid.UUID, bu_id: uuid.UUID) -> list[BusinessUnit]:
+        return (
+            self.db.query(BusinessUnit)
+            .filter(
+                BusinessUnit.organization_id == org_id,
+                BusinessUnit.parent_bu_id == bu_id,
+                BusinessUnit.deleted_at.is_(None),
+                BusinessUnit.is_active.is_(True),
+            )
+            .all()
+        )
+
+    def _assert_would_not_create_cycle(self, org_id: uuid.UUID, bu_id: uuid.UUID, new_parent_id: uuid.UUID) -> None:
+        cursor_id: uuid.UUID | None = new_parent_id
+        seen: set[uuid.UUID] = set()
+        while cursor_id is not None:
+            if cursor_id == bu_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot set parent business unit: the chosen parent is a descendant of this business "
+                    "unit, which would create a cycle in the hierarchy",
+                )
+            if cursor_id in seen:
+                break
+            seen.add(cursor_id)
+            cursor = (
+                self.db.query(BusinessUnit)
+                .filter(BusinessUnit.id == cursor_id, BusinessUnit.organization_id == org_id)
+                .first()
+            )
+            cursor_id = cursor.parent_bu_id if cursor else None
+
     def create_bu(
         self,
         org_id: uuid.UUID,
@@ -48,6 +80,11 @@ class BusinessUnitService:
             )
             if not parent:
                 raise HTTPException(status_code=404, detail="Parent business unit not found in this organization")
+            if not parent.is_active:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Business unit '{parent.name}' ({parent.code}) is inactive and cannot be assigned as a parent",
+                )
 
         existing = (
             self.db.query(BusinessUnit)
@@ -83,6 +120,12 @@ class BusinessUnitService:
             organization_id=org_id,
             actor_user_id=created_by,
             entity_id=bu.id,
+            after_json={
+                "name": bu.name,
+                "code": bu.code,
+                "parent_bu_id": str(bu.parent_bu_id) if bu.parent_bu_id else None,
+                "is_active": bu.is_active,
+            },
         )
         return bu
 
@@ -130,6 +173,13 @@ class BusinessUnitService:
         if not changes:
             return bu
 
+        before = {
+            "name": bu.name,
+            "code": bu.code,
+            "parent_bu_id": str(bu.parent_bu_id) if bu.parent_bu_id else None,
+            "is_active": bu.is_active,
+        }
+
         if "code" in changes and changes["code"] is not None:
             code = str(changes["code"]).strip().upper()
             existing = (
@@ -161,6 +211,46 @@ class BusinessUnitService:
             )
             if not parent:
                 raise HTTPException(status_code=404, detail="Parent business unit not found in this organization")
+            if not parent.is_active:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Business unit '{parent.name}' ({parent.code}) is inactive and cannot be assigned as a parent",
+                )
+            self._assert_would_not_create_cycle(org_id, bu.id, parent_id)
+
+        activating = changes.get("is_active") is True and not bu.is_active
+        deactivating = changes.get("is_active") is False and bu.is_active
+
+        if deactivating:
+            active_children = self._get_active_children(org_id, bu.id)
+            if active_children:
+                names = ", ".join(f"{child.name} ({child.code})" for child in active_children[:5])
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Cannot deactivate business unit '{bu.name}': it still has {len(active_children)} active "
+                        f"child business unit(s) ({names}). Deactivate or reparent them first."
+                    ),
+                )
+
+        if activating:
+            effective_parent_id = changes.get("parent_bu_id", bu.parent_bu_id)
+            if effective_parent_id:
+                parent = (
+                    self.db.query(BusinessUnit)
+                    .filter(
+                        BusinessUnit.id == effective_parent_id,
+                        BusinessUnit.organization_id == org_id,
+                        BusinessUnit.deleted_at.is_(None),
+                    )
+                    .first()
+                )
+                if parent and not parent.is_active:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Cannot reactivate business unit '{bu.name}': its parent "
+                        f"'{parent.name}' ({parent.code}) is inactive. Reactivate the parent first.",
+                    )
 
         for field, value in changes.items():
             if field == "name" and isinstance(value, str):
@@ -168,17 +258,40 @@ class BusinessUnitService:
             setattr(bu, field, value)
 
         self.db.flush()
+
+        after = {
+            "name": bu.name,
+            "code": bu.code,
+            "parent_bu_id": str(bu.parent_bu_id) if bu.parent_bu_id else None,
+            "is_active": bu.is_active,
+        }
         AuditService(self.db).write_audit_log(
             action="business_unit.updated",
             entity_type="business_units",
             organization_id=org_id,
             actor_user_id=user_id,
             entity_id=bu.id,
+            before_json=before,
+            after_json=after,
         )
         return bu
 
     def deactivate_bu(self, org_id: uuid.UUID, bu_id: uuid.UUID, user_id: uuid.UUID) -> BusinessUnit:
         bu = self.get_bu(org_id, bu_id)
+        if not bu.is_active:
+            return bu
+
+        active_children = self._get_active_children(org_id, bu.id)
+        if active_children:
+            names = ", ".join(f"{child.name} ({child.code})" for child in active_children[:5])
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Cannot deactivate business unit '{bu.name}': it still has {len(active_children)} active "
+                    f"child business unit(s) ({names}). Deactivate or reparent them first."
+                ),
+            )
+
         bu.is_active = False
         self.db.flush()
         AuditService(self.db).write_audit_log(
@@ -187,11 +300,33 @@ class BusinessUnitService:
             organization_id=org_id,
             actor_user_id=user_id,
             entity_id=bu.id,
+            before_json={"is_active": True},
+            after_json={"is_active": False},
         )
         return bu
 
     def delete_bu(self, org_id: uuid.UUID, bu_id: uuid.UUID, user_id: uuid.UUID) -> BusinessUnit:
         bu = self.get_bu(org_id, bu_id)
+
+        children = (
+            self.db.query(BusinessUnit)
+            .filter(
+                BusinessUnit.organization_id == org_id,
+                BusinessUnit.parent_bu_id == bu_id,
+                BusinessUnit.deleted_at.is_(None),
+            )
+            .all()
+        )
+        if children:
+            names = ", ".join(f"{child.name} ({child.code})" for child in children[:5])
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Cannot delete business unit '{bu.name}': it still has {len(children)} child "
+                    f"business unit(s) ({names}). Delete or reparent them first."
+                ),
+            )
+
         bu.deleted_at = self._now()
         self.db.flush()
         AuditService(self.db).write_audit_log(
@@ -200,6 +335,8 @@ class BusinessUnitService:
             organization_id=org_id,
             actor_user_id=user_id,
             entity_id=bu.id,
+            before_json={"deleted_at": None},
+            after_json={"deleted_at": bu.deleted_at.isoformat()},
         )
         return bu
 
@@ -220,7 +357,11 @@ class BusinessUnitService:
         }
         model = model_map.get(entity_type)
         if not model:
-            raise HTTPException(status_code=400, detail=f"Invalid entity_type: {entity_type}")
+            valid_types = ", ".join(sorted(model_map))
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid entity_type: '{entity_type}'. Valid options are: {valid_types}",
+            )
 
         entity = self.db.query(model).filter(model.id == entity_id, model.organization_id == org_id).first()
         if not entity:
@@ -239,6 +380,7 @@ class BusinessUnitService:
             if not bu:
                 raise HTTPException(status_code=404, detail="Business unit not found")
 
+        previous_business_unit_id = getattr(entity, "business_unit_id", None)
         setattr(entity, "business_unit_id", business_unit_id)
         self.db.flush()
 
@@ -248,7 +390,8 @@ class BusinessUnitService:
             organization_id=org_id,
             actor_user_id=user_id,
             entity_id=entity_id,
-            metadata_json={"business_unit_id": str(business_unit_id) if business_unit_id else None},
+            before_json={"business_unit_id": str(previous_business_unit_id) if previous_business_unit_id else None},
+            after_json={"business_unit_id": str(business_unit_id) if business_unit_id else None},
         )
 
         return {

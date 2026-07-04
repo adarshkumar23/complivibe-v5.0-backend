@@ -289,3 +289,35 @@ def test_a63_aibom_versioning_and_diff(client):
         headers=org_b["org_headers"],
     )
     assert forbidden.status_code == 404
+
+
+def test_a63_aibom_invalid_component_type_lists_valid_options(client):
+    org = bootstrap_org_user(client, email_prefix="a63-invalid-type")
+    system_id = _create_system(client, org["org_headers"], org["user_id"], name="A63 Invalid Type System")
+
+    create = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/aibom",
+        headers=org["org_headers"],
+        json={"notes": "Initial inventory"},
+    )
+    assert create.status_code == 201
+
+    bad = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/aibom/components",
+        headers=org["org_headers"],
+        json={
+            "component_type": "not_a_real_type",
+            "name": "mystery-component",
+        },
+    )
+    assert bad.status_code == 422
+    body = bad.json()
+    assert "not_a_real_type" in body["detail"]
+    assert set(body["valid_options"]) == {
+        "training_data",
+        "base_model",
+        "fine_tuning_dataset",
+        "runtime_data_feed",
+        "third_party_api",
+        "framework_library",
+    }

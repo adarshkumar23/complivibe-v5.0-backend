@@ -300,3 +300,91 @@ def test_policy_vendor_ai_system_tagging_and_soft_delete_behavior(client, db_ses
     assert policy.business_unit_id == bu_id
     assert vendor.business_unit_id == bu_id
     assert ai_system.business_unit_id == bu_id
+
+
+def test_deactivate_blocked_by_active_children_and_reparent_cycle_protection(client, db_session):
+    owner = bootstrap_org_user(client, email_prefix="bu-hierarchy")
+    headers = owner["org_headers"]
+
+    parent = client.post(
+        "/api/v1/compliance/business-units",
+        headers=headers,
+        json={"name": "Global", "code": "GLOBAL"},
+    ).json()
+    parent_id = parent["id"]
+
+    child = client.post(
+        "/api/v1/compliance/business-units",
+        headers=headers,
+        json={"name": "APAC", "code": "APAC", "parent_bu_id": parent_id},
+    ).json()
+    child_id = child["id"]
+
+    grandchild = client.post(
+        "/api/v1/compliance/business-units",
+        headers=headers,
+        json={"name": "Japan", "code": "JAPAN", "parent_bu_id": child_id},
+    ).json()
+    grandchild_id = grandchild["id"]
+
+    # Deactivating a BU that still has an active child must be blocked with a clear error.
+    blocked_deactivate = client.post(
+        f"/api/v1/compliance/business-units/{parent_id}/deactivate",
+        headers=headers,
+    )
+    assert blocked_deactivate.status_code == 409
+    assert "active" in blocked_deactivate.json()["detail"].lower()
+    assert "APAC" in blocked_deactivate.json()["detail"]
+
+    # Same guard applies via PATCH is_active=False.
+    blocked_patch = client.patch(
+        f"/api/v1/compliance/business-units/{parent_id}",
+        headers=headers,
+        json={"is_active": False},
+    )
+    assert blocked_patch.status_code == 409
+
+    # Reparenting the top-level unit to be a child of its own descendant must be rejected
+    # as a cycle, not silently accepted.
+    cycle_attempt = client.patch(
+        f"/api/v1/compliance/business-units/{parent_id}",
+        headers=headers,
+        json={"parent_bu_id": grandchild_id},
+    )
+    assert cycle_attempt.status_code == 400
+    assert "cycle" in cycle_attempt.json()["detail"].lower()
+
+    # Deactivate leaf-to-root works once children are deactivated first.
+    deactivate_grandchild = client.post(
+        f"/api/v1/compliance/business-units/{grandchild_id}/deactivate",
+        headers=headers,
+    )
+    assert deactivate_grandchild.status_code == 200
+
+    deactivate_child = client.post(
+        f"/api/v1/compliance/business-units/{child_id}/deactivate",
+        headers=headers,
+    )
+    assert deactivate_child.status_code == 200
+
+    deactivate_parent = client.post(
+        f"/api/v1/compliance/business-units/{parent_id}/deactivate",
+        headers=headers,
+    )
+    assert deactivate_parent.status_code == 200
+
+    # An inactive business unit cannot be assigned as a new parent.
+    new_bu = client.post(
+        "/api/v1/compliance/business-units",
+        headers=headers,
+        json={"name": "EMEA", "code": "EMEA", "parent_bu_id": parent_id},
+    )
+    assert new_bu.status_code == 400
+    assert "inactive" in new_bu.json()["detail"].lower()
+
+    # Deleting a BU that still has children (even inactive ones) must be blocked.
+    blocked_delete = client.delete(
+        f"/api/v1/compliance/business-units/{parent_id}",
+        headers=headers,
+    )
+    assert blocked_delete.status_code == 409
