@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
@@ -24,6 +24,7 @@ router = APIRouter(prefix="/reports", tags=["report-sharing"])
 @router.post("/share", response_model=ShareLinkResponse)
 def create_share_link(
     payload: ShareLinkCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
@@ -40,6 +41,7 @@ def create_share_link(
         recipient_email=payload.recipient_email,
         watermark_text=payload.watermark_text,
         db=db,
+        base_url=str(request.base_url),
     )
     db.commit()
     return ShareLinkResponse.model_validate(row)

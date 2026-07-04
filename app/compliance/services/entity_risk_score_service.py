@@ -1,6 +1,8 @@
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import inspect, select
@@ -19,7 +21,24 @@ from app.models.risk import Risk
 from app.models.risk_control_link import RiskControlLink
 from app.models.vendor import Vendor
 from app.models.vendor_control_link import VendorControlLink
+from app.models.vendor_risk_score import VendorRiskScore
 from app.services.audit_service import AuditService
+
+
+@dataclass
+class _RiskLike:
+    """MinimalRisk-like object that lets vendor-specific VendorRiskScore rows
+    participate in the generic entity-risk-score computations (which expect an
+    ``inherent_score`` and optional impact dimensions).
+    """
+
+    id: uuid.UUID
+    title: str
+    inherent_score: int | None
+    financial_impact: int | None = None
+    brand_impact: int | None = None
+    operational_impact: int | None = None
+    source: str = "risk"
 
 
 class EntityRiskScoreService:
@@ -142,7 +161,28 @@ class EntityRiskScoreService:
                 )
                 .distinct()
             ).scalars().all()
-            return rows, None
+
+            vendor_score_rows = db.execute(
+                select(VendorRiskScore).where(
+                    VendorRiskScore.organization_id == org_id,
+                    VendorRiskScore.vendor_id == entity_id,
+                )
+            ).scalars().all()
+
+            if not vendor_score_rows:
+                return rows, None
+
+            combined: list[Any] = list(rows)
+            for vrs in vendor_score_rows:
+                combined.append(
+                    _RiskLike(
+                        id=vrs.id,
+                        title=f"Vendor risk score ({vrs.risk_level})",
+                        inherent_score=vrs.inherent_risk_score,
+                        source="vendor_risk_score",
+                    )
+                )
+            return combined, f"{len(vendor_score_rows)} vendor-specific risk score(s) included."
 
         if entity_type == "framework":
             rows = db.execute(

@@ -1078,6 +1078,7 @@ def main() -> None:
         SeedService.ensure_permissions(db)
         SeedService.ensure_framework_catalog(db)
         SeedService.ensure_starter_obligations(db)
+        SeedService.ensure_applicability_rules(db)
         SeedService.ensure_framework_versions(db)
         SeedService.ensure_policy_templates(db)
         SeedService.ensure_questionnaire_scoring_rules(db)
