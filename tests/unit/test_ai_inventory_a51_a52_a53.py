@@ -200,6 +200,51 @@ def test_a52_shadow_ai_discovery_flows(client, db_session):
     assert all(row["status"] == "dismissed" for row in filtered.json())
 
 
+def test_a52_shadow_ai_state_machine_blocks_double_register_and_dismiss(client):
+    org = bootstrap_org_user(client, email_prefix="a52-statemachine")
+
+    reported = client.post(
+        f"{SHADOW_BASE}/report",
+        headers=org["org_headers"],
+        json={"detected_name": "midjourney", "notes": "Design team"},
+    )
+    assert reported.status_code == 201
+    det_id = reported.json()["id"]
+
+    registered = client.post(
+        f"{SHADOW_BASE}/detections/{det_id}/register",
+        headers=org["org_headers"],
+        json={"name": "Midjourney", "system_type": "application", "owner_id": org["user_id"]},
+    )
+    assert registered.status_code == 201
+    system_id = registered.json()["id"]
+
+    # Re-registering must not create a duplicate AI system.
+    duplicate = client.post(
+        f"{SHADOW_BASE}/detections/{det_id}/register",
+        headers=org["org_headers"],
+        json={"name": "Midjourney Again", "system_type": "application", "owner_id": org["user_id"]},
+    )
+    assert duplicate.status_code == 422
+    assert system_id in duplicate.json()["detail"]
+
+    # A registered detection cannot be dismissed or sent back to review.
+    dismiss = client.post(
+        f"{SHADOW_BASE}/detections/{det_id}/dismiss",
+        headers=org["org_headers"],
+        json={"notes": "trying to dismiss"},
+    )
+    assert dismiss.status_code == 422
+
+    review = client.post(f"{SHADOW_BASE}/detections/{det_id}/review", headers=org["org_headers"])
+    assert review.status_code == 422
+
+    # Detection remains registered and linked.
+    detail = client.get(f"{SHADOW_BASE}/detections/{det_id}", headers=org["org_headers"])
+    assert detail.json()["status"] == "registered"
+    assert detail.json()["registered_system_id"] == system_id
+
+
 def test_a53_use_cases_and_dashboard_counts(client, db_session):
     org = bootstrap_org_user(client, email_prefix="a53-org")
 

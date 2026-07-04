@@ -103,16 +103,41 @@ class ShadowAIService:
 
     def review_detection(self, org_id: uuid.UUID, detection_id: uuid.UUID, reviewer_id: uuid.UUID) -> ShadowAIDetection:
         row = self.get_detection(org_id, detection_id)
+        if row.status not in {"new", "under_review"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Detection with status '{row.status}' cannot be moved to under_review",
+            )
+        before_status = row.status
         row.status = "under_review"
         row.reviewed_by = reviewer_id
         row.reviewed_at = self.utcnow()
         self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="shadow_ai.review_started",
+            entity_type="shadow_ai_detection",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=reviewer_id,
+            before_json={"status": before_status},
+            after_json={"status": row.status},
+            metadata_json={"source": "api"},
+        )
         return row
 
     def register_as_system(self, org_id: uuid.UUID, detection_id: uuid.UUID, system_data, user_id: uuid.UUID) -> AISystem:
         detection = self.get_detection(org_id, detection_id)
         if detection.status == "dismissed":
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Dismissed detection cannot be registered")
+        if detection.status == "registered":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Detection is already registered as AI system "
+                    f"{detection.registered_system_id}"
+                ),
+            )
 
         payload_dict = system_data.model_dump()
         if not payload_dict.get("name"):
@@ -155,6 +180,14 @@ class ShadowAIService:
         notes: str | None = None,
     ) -> ShadowAIDetection:
         row = self.get_detection(org_id, detection_id)
+        if row.status == "registered":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Registered detection cannot be dismissed; it is tracked as AI system "
+                    f"{row.registered_system_id}"
+                ),
+            )
         row.status = "dismissed"
         row.reviewed_by = user_id
         row.reviewed_at = self.utcnow()
