@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai_governance.services.ai_governance_event_service import AIGovernanceEventService
@@ -54,15 +54,24 @@ class AIBOMService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="AIBOM record not found")
         return row
 
-    def create_aibom(self, org_id: uuid.UUID, system_id: uuid.UUID, generated_by: uuid.UUID, notes: str | None = None) -> AIBOMRecord:
+    def create_aibom(
+        self,
+        org_id: uuid.UUID,
+        system_id: uuid.UUID,
+        generated_by: uuid.UUID,
+        notes: str | None = None,
+        components: list | None = None,
+    ) -> AIBOMRecord:
         self._require_system(org_id, system_id)
-        max_version = self.db.execute(
-            select(func.max(AIBOMRecord.version)).where(
+        previous = self.db.execute(
+            select(AIBOMRecord)
+            .where(
                 AIBOMRecord.organization_id == org_id,
                 AIBOMRecord.ai_system_id == system_id,
             )
-        ).scalar_one_or_none()
-        next_version = int(max_version or 0) + 1
+            .order_by(AIBOMRecord.version.desc())
+        ).scalars().first()
+        next_version = int(previous.version if previous else 0) + 1
 
         now = self.utcnow()
         row = AIBOMRecord(
@@ -76,6 +85,35 @@ class AIBOMService:
         self.db.add(row)
         self.db.flush()
 
+        copied_components = 0
+        explicit_components = components is not None
+        source_components = components if explicit_components else self.list_components(org_id, previous.id) if previous else []
+        seen_keys: set[tuple[str, str]] = set()
+        for component in source_components:
+            component_type = validate_choice(component.component_type, ALLOWED_COMPONENT_TYPES, "component_type")
+            name = component.name
+            key = (component_type, name)
+            if key in seen_keys:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Duplicate component in AIBOM version")
+            seen_keys.add(key)
+            self.db.add(
+                AIBOMComponent(
+                    organization_id=org_id,
+                    aibom_id=row.id,
+                    component_type=component_type,
+                    name=name,
+                    version=component.version,
+                    source=component.source,
+                    license_type=component.license_type,
+                    is_third_party=component.is_third_party,
+                    risk_notes=component.risk_notes,
+                    source_integration=component.source_integration,
+                    created_at=now,
+                )
+            )
+            copied_components += 1
+        self.db.flush()
+
         AIGovernanceEventService.log(
             self.db,
             org_id,
@@ -83,7 +121,12 @@ class AIBOMService:
             actor_id=generated_by,
             actor_type="user",
             ai_system_id=system_id,
-            event_data={"aibom_id": str(row.id), "version": row.version},
+            event_data={
+                "aibom_id": str(row.id),
+                "version": row.version,
+                "component_count": copied_components,
+                "explicit_components": explicit_components,
+            },
         )
         AuditService(self.db).write_audit_log(
             action="aibom.created",
@@ -91,7 +134,12 @@ class AIBOMService:
             entity_id=row.id,
             organization_id=org_id,
             actor_user_id=generated_by,
-            after_json={"ai_system_id": str(system_id), "version": row.version},
+            after_json={
+                "ai_system_id": str(system_id),
+                "version": row.version,
+                "component_count": copied_components,
+                "explicit_components": explicit_components,
+            },
             metadata_json={"source": "api"},
         )
         return row
@@ -195,13 +243,30 @@ class AIBOMService:
         for key in v1_keys & v2_keys:
             c1 = next(c for c in v1_components if (c.component_type, c.name) == key)
             c2 = next(c for c in v2_components if (c.component_type, c.name) == key)
-            if c1.version != c2.version:
+            if (
+                c1.version != c2.version
+                or c1.source != c2.source
+                or c1.license_type != c2.license_type
+                or c1.is_third_party != c2.is_third_party
+                or c1.risk_notes != c2.risk_notes
+                or c1.source_integration != c2.source_integration
+            ):
                 changed.append(
                     {
                         "component_type": key[0],
                         "name": key[1],
                         "from_version": c1.version,
                         "to_version": c2.version,
+                        "from_source": c1.source,
+                        "to_source": c2.source,
+                        "from_license_type": c1.license_type,
+                        "to_license_type": c2.license_type,
+                        "from_is_third_party": c1.is_third_party,
+                        "to_is_third_party": c2.is_third_party,
+                        "from_risk_notes": c1.risk_notes,
+                        "to_risk_notes": c2.risk_notes,
+                        "from_source_integration": c1.source_integration,
+                        "to_source_integration": c2.source_integration,
                     }
                 )
 
@@ -242,7 +307,13 @@ class AIBOMService:
         source_integration: str,
         generated_by: uuid.UUID,
     ) -> AIBOMRecord:
-        aibom = self.create_aibom(org_id, system_id, generated_by, notes=f"Synced via {source_integration}")
+        aibom = self.create_aibom(
+            org_id,
+            system_id,
+            generated_by,
+            notes=f"Synced via {source_integration}",
+            components=[],
+        )
         for component in components:
             payload = {
                 **component,

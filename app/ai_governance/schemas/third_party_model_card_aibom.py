@@ -106,10 +106,6 @@ class ModelCardRead(BaseModel):
     updated_at: datetime
 
 
-class AIBOMCreateRequest(BaseModel):
-    notes: str | None = None
-
-
 class AIBOMComponentCreate(BaseModel):
     component_type: str
     name: str = Field(min_length=1, max_length=255)
@@ -119,6 +115,11 @@ class AIBOMComponentCreate(BaseModel):
     is_third_party: bool = False
     risk_notes: str | None = None
     source_integration: str | None = Field(default=None, max_length=50)
+
+
+class AIBOMCreateRequest(BaseModel):
+    notes: str | None = None
+    components: list[AIBOMComponentCreate] | None = None
 
 
 class AIBOMComponentRead(BaseModel):

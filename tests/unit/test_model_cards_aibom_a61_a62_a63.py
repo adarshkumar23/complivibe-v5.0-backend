@@ -239,27 +239,7 @@ def test_a63_aibom_versioning_and_diff(client):
     )
     assert duplicate.status_code == 409
 
-    # Create v2 and alter component set.
-    v2 = client.post(
-        f"{SYSTEMS_BASE}/{system_id}/aibom",
-        headers=org["org_headers"],
-        json={"notes": "Second inventory"},
-    )
-    assert v2.status_code == 201
-    assert v2.json()["version"] == 2
-
-    add_a2 = client.post(
-        f"{SYSTEMS_BASE}/{system_id}/aibom/components",
-        headers=org["org_headers"],
-        json={
-            "component_type": "base_model",
-            "name": "gpt-base",
-            "version": "2.0",
-        },
-    )
-    assert add_a2.status_code == 201
-
-    add_c2 = client.post(
+    add_c1 = client.post(
         f"{SYSTEMS_BASE}/{system_id}/aibom/components",
         headers=org["org_headers"],
         json={
@@ -268,19 +248,66 @@ def test_a63_aibom_versioning_and_diff(client):
             "version": "3",
         },
     )
-    assert add_c2.status_code == 201
+    assert add_c1.status_code == 201
 
-    diff = client.get(
+    # Create v2 with no explicit component payload: prior components carry forward.
+    v2 = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/aibom",
+        headers=org["org_headers"],
+        json={"notes": "Second inventory"},
+    )
+    assert v2.status_code == 201
+    assert v2.json()["version"] == 2
+
+    no_change_diff = client.get(
         f"{SYSTEMS_BASE}/{system_id}/aibom/diff?v1=1&v2=2",
         headers=org["org_headers"],
     )
-    assert diff.status_code == 200
-    body = diff.json()
+    assert no_change_diff.status_code == 200
+    assert no_change_diff.json() == {"added": [], "removed": [], "changed": []}
 
-    assert {item["name"] for item in body["added"]} == {"toxicity-api"}
+    # Create v3 with an explicit modified baseline: dataset-v1 is genuinely removed
+    # and gpt-base is changed, without deleting the v1/v2 component records.
+    v3 = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/aibom",
+        headers=org["org_headers"],
+        json={
+            "notes": "Third inventory",
+            "components": [
+                {
+                    "component_type": "base_model",
+                    "name": "gpt-base",
+                    "version": "2.0",
+                },
+                {
+                    "component_type": "third_party_api",
+                    "name": "toxicity-api",
+                    "version": "3",
+                },
+            ],
+        },
+    )
+    assert v3.status_code == 201
+    assert v3.json()["version"] == 3
+
+    diff = client.get(
+        f"{SYSTEMS_BASE}/{system_id}/aibom/diff?v2=2&v1=1",
+        headers=org["org_headers"],
+    )
+    assert diff.status_code == 200
+    assert diff.json() == {"added": [], "removed": [], "changed": []}
+
+    modified_diff = client.get(
+        f"{SYSTEMS_BASE}/{system_id}/aibom/diff?v1=2&v2=3",
+        headers=org["org_headers"],
+    )
+    assert modified_diff.status_code == 200
+    body = modified_diff.json()
+
     assert {item["name"] for item in body["removed"]} == {"dataset-v1"}
     changed_names = {item["name"] for item in body["changed"]}
     assert "gpt-base" in changed_names
+    assert body["added"] == []
 
     # Org isolation.
     org_b = bootstrap_org_user(client, email_prefix="a63-org-b")

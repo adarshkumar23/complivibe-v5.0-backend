@@ -488,7 +488,13 @@ def create_aibom(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("ai_governance:write")),
 ) -> AIBOMRecordRead:
-    row = AIBOMService(db).create_aibom(organization.id, system_id, current_user.id, payload.notes)
+    row = AIBOMService(db).create_aibom(
+        organization.id,
+        system_id,
+        current_user.id,
+        payload.notes,
+        payload.components,
+    )
     db.commit()
     db.refresh(row)
     return AIBOMRecordRead.model_validate(row)
