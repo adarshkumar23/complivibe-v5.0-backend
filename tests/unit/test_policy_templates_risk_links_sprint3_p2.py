@@ -2,6 +2,7 @@ import uuid
 
 from app.models.audit_log import AuditLog
 from app.models.compliance_policy import CompliancePolicy
+from app.models.compliance_policy_version import CompliancePolicyVersion
 from app.models.policy_template import PolicyTemplate
 from app.models.risk import Risk
 from app.services.seed_service import SeedService
@@ -103,7 +104,14 @@ def test_s3_p2_templates_seed_list_custom_apply_and_audit(client, db_session):
     policy_row = db_session.query(CompliancePolicy).filter(CompliancePolicy.id == uuid.UUID(created_policy_id)).one()
     template_row = db_session.query(PolicyTemplate).filter(PolicyTemplate.id == uuid.UUID(system_id)).one()
     assert policy_row.status == "draft"
-    assert policy_row.notes == template_row.content
+    assert policy_row.notes == "Created from policy template"
+    applied_version = (
+        db_session.query(CompliancePolicyVersion)
+        .filter(CompliancePolicyVersion.policy_id == uuid.UUID(created_policy_id))
+        .one()
+    )
+    assert applied_version.content_snapshot_json["source"] == "policy_template"
+    assert applied_version.content_snapshot_json["content"] == template_row.content
 
     # (d): applying org-custom template works and writes audit
     apply_custom = client.post(
