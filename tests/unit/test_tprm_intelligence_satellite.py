@@ -6,6 +6,8 @@ from sqlalchemy import select
 
 from app.models.audit_log import AuditLog
 from app.models.vendor_external_rating import VendorExternalRating
+from app.models.vendor_threat_intelligence import VendorThreatIntelligence
+from app.satellites.tprm_intelligence.threat_intelligence import ThreatIntelligenceService
 from app.satellites.tprm_intelligence.vendor_security_rating import VendorSecurityRatingService
 from tests.helpers.auth_org import bootstrap_org_user
 
@@ -79,3 +81,45 @@ def test_t1_1_security_rating_cross_org_blocked(client, monkeypatch):
 
     blocked = client.post(f"{SATELLITE_BASE}/{vendor['id']}/security-rating/compute", headers=org_b["org_headers"])
     assert blocked.status_code == 404
+
+
+def test_t1_2_vendor_threat_intelligence_persists_skips_and_audits(client, db_session, monkeypatch):
+    org = bootstrap_org_user(client, email_prefix="t1-threat")
+    vendor = _create_vendor(client, org, website="https://example.org")
+
+    def fake_compute(self, domain: str) -> dict:
+        assert domain == "example.org"
+        return {
+            "domain": domain,
+            "threat_score": 25.0,
+            "signals_used": {
+                "alienvault_otx": {"status": "skipped", "source": "alienvault_otx", "score": None, "message": "OTX signal skipped: no API key configured"},
+                "abuseipdb": {"status": "skipped", "source": "abuseipdb", "score": None, "message": "AbuseIPDB signal skipped: API key not configured"},
+                "gdelt_threat_media": {"status": "available", "source": "gdelt", "score": 25, "article_count": 2, "articles": []},
+            },
+            "indicators_found": {"threat_media": []},
+        }
+
+    monkeypatch.setattr(ThreatIntelligenceService, "compute", fake_compute)
+    computed = client.post(f"{SATELLITE_BASE}/{vendor['id']}/threat-intelligence/compute", headers=org["org_headers"])
+    assert computed.status_code == 201, computed.text
+    body = computed.json()
+    assert body["domain"] == "example.org"
+    assert body["threat_score"] == 25.0
+    assert body["signals_used"]["alienvault_otx"]["status"] == "skipped"
+
+    latest = client.get(f"{SATELLITE_BASE}/{vendor['id']}/threat-intelligence", headers=org["org_headers"])
+    assert latest.status_code == 200
+    assert latest.json()["id"] == body["id"]
+
+    row = db_session.execute(
+        select(VendorThreatIntelligence).where(VendorThreatIntelligence.vendor_id == UUID(vendor["id"]))
+    ).scalar_one_or_none()
+    assert row is not None
+    assert row.indicators_found == {"threat_media": []}
+
+    audit = db_session.execute(
+        select(AuditLog).where(AuditLog.action == "vendor.threat_intelligence.computed")
+    ).scalar_one_or_none()
+    assert audit is not None
+    assert audit.organization_id == UUID(org["organization_id"])

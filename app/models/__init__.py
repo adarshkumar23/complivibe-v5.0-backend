@@ -216,6 +216,7 @@ from app.models.user import User
 from app.models.user_session import UserSession
 from app.models.vendor import Vendor
 from app.models.vendor_external_rating import VendorExternalRating
+from app.models.vendor_threat_intelligence import VendorThreatIntelligence
 from app.models.vendor_assessment import VendorAssessment
 from app.models.vendor_assessment_question import VendorAssessmentQuestion
 from app.models.vendor_risk_score import VendorRiskScore
@@ -512,6 +513,7 @@ __all__ = [
     "ScoreSnapshot",
     "Vendor",
     "VendorExternalRating",
+    "VendorThreatIntelligence",
     "VendorAssessment",
     "VendorAssessmentQuestion",
     "VendorRiskScore",

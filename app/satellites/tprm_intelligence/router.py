@@ -12,6 +12,8 @@ from app.models.membership import Membership
 from app.models.organization import Organization
 from app.models.user import User
 from app.models.vendor_external_rating import VendorExternalRating
+from app.models.vendor_threat_intelligence import VendorThreatIntelligence
+from app.satellites.tprm_intelligence.threat_intelligence import ThreatIntelligenceService
 from app.satellites.tprm_intelligence.vendor_security_rating import VendorSecurityRatingService, normalize_domain
 from app.services.audit_service import AuditService
 from app.services.vendor_service import VendorService
@@ -27,6 +29,19 @@ def _rating_payload(row: VendorExternalRating) -> dict:
         "domain": row.domain,
         "signals_used": row.signals_used,
         "composite_score": float(row.composite_score),
+        "computed_at": row.computed_at.isoformat() if row.computed_at else None,
+    }
+
+
+def _threat_payload(row: VendorThreatIntelligence) -> dict:
+    return {
+        "id": str(row.id),
+        "organization_id": str(row.organization_id),
+        "vendor_id": str(row.vendor_id),
+        "domain": row.domain,
+        "signals_used": row.signals_used,
+        "threat_score": float(row.threat_score),
+        "indicators_found": row.indicators_found,
         "computed_at": row.computed_at.isoformat() if row.computed_at else None,
     }
 
@@ -91,3 +106,65 @@ def get_vendor_security_rating(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor security rating not found")
     return _rating_payload(row)
+
+
+@router.post("/{vendor_id}/threat-intelligence/compute", status_code=status.HTTP_201_CREATED)
+def compute_vendor_threat_intelligence(
+    vendor_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("vendors:write")),
+) -> dict:
+    vendor = VendorService(db).require_vendor_in_org(organization.id, vendor_id)
+    if vendor.status == "archived":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Archived vendors cannot be rescored")
+    try:
+        domain = normalize_domain(vendor.website or vendor.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    result = ThreatIntelligenceService().compute(domain)
+    row = VendorThreatIntelligence(
+        organization_id=organization.id,
+        vendor_id=vendor.id,
+        domain=result["domain"],
+        signals_used=result["signals_used"],
+        threat_score=Decimal(str(result["threat_score"])),
+        indicators_found=result["indicators_found"],
+    )
+    db.add(row)
+    db.flush()
+    AuditService(db).write_audit_log(
+        action="vendor.threat_intelligence.computed",
+        entity_type="vendor_threat_intelligence",
+        entity_id=row.id,
+        organization_id=organization.id,
+        actor_user_id=current_user.id,
+        after_json={"vendor_id": str(vendor.id), "domain": row.domain, "threat_score": float(row.threat_score)},
+        metadata_json={"source": "tprm_intelligence_satellite"},
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    db.commit()
+    db.refresh(row)
+    return _threat_payload(row)
+
+
+@router.get("/{vendor_id}/threat-intelligence")
+def get_vendor_threat_intelligence(
+    vendor_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("vendors:read")),
+) -> dict:
+    VendorService(db).require_vendor_in_org(organization.id, vendor_id)
+    row = db.execute(
+        select(VendorThreatIntelligence)
+        .where(VendorThreatIntelligence.organization_id == organization.id, VendorThreatIntelligence.vendor_id == vendor_id)
+        .order_by(VendorThreatIntelligence.computed_at.desc(), VendorThreatIntelligence.id.desc())
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor threat intelligence not found")
+    return _threat_payload(row)
