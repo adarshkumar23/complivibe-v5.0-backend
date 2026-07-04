@@ -71,6 +71,7 @@ def _risk_read(risk: Risk) -> RiskRead:
         residual_risk_acceptable=risk.residual_risk_acceptable,
         risk_communication_plan=risk.risk_communication_plan,
         owner_user_id=risk.owner_user_id,
+        business_unit_id=risk.business_unit_id,
         target_date=risk.target_date,
         accepted_by_user_id=risk.accepted_by_user_id,
         accepted_at=risk.accepted_at,
@@ -279,6 +280,7 @@ def create_risk(
 ) -> RiskRead:
     service = RiskService(db)
     service.ensure_owner_is_active_member(organization.id, payload.owner_user_id)
+    service.ensure_business_unit_in_org(organization.id, payload.business_unit_id)
     _ensure_factor_based_fields(
         method=payload.composite_score_method,
         financial_impact=payload.financial_impact,
@@ -306,6 +308,7 @@ def create_risk(
         residual_risk_acceptable=payload.residual_risk_acceptable,
         risk_communication_plan=payload.risk_communication_plan,
         owner_user_id=payload.owner_user_id,
+        business_unit_id=payload.business_unit_id,
         target_date=payload.target_date,
         metadata_json=payload.metadata_json,
         created_by_user_id=current_user.id,
@@ -337,6 +340,7 @@ def create_risk(
             "status": risk.status,
             "severity": risk.severity,
             "inherent_score": risk.inherent_score,
+            "business_unit_id": str(risk.business_unit_id) if risk.business_unit_id else None,
         },
         metadata_json={"source": "api"},
         ip_address=request.client.host if request.client else None,
@@ -413,6 +417,8 @@ def update_risk(
 
     if payload.owner_user_id is not None:
         service.ensure_owner_is_active_member(organization.id, payload.owner_user_id)
+    if "business_unit_id" in payload.model_fields_set:
+        service.ensure_business_unit_in_org(organization.id, payload.business_unit_id)
 
     before = {
         "title": risk.title,
@@ -437,6 +443,7 @@ def update_risk(
         "residual_risk_acceptable": risk.residual_risk_acceptable,
         "risk_communication_plan": risk.risk_communication_plan,
         "owner_user_id": str(risk.owner_user_id) if risk.owner_user_id else None,
+        "business_unit_id": str(risk.business_unit_id) if risk.business_unit_id else None,
     }
 
     for field in [
@@ -459,12 +466,13 @@ def update_risk(
         "residual_risk_acceptable",
         "risk_communication_plan",
         "owner_user_id",
+        "business_unit_id",
         "target_date",
         "review_due_at",
         "metadata_json",
     ]:
         value = getattr(payload, field)
-        if value is not None:
+        if field in payload.model_fields_set:
             setattr(risk, field, value)
 
     _ensure_factor_based_fields(
@@ -513,6 +521,7 @@ def update_risk(
         "residual_risk_acceptable": risk.residual_risk_acceptable,
         "risk_communication_plan": risk.risk_communication_plan,
         "owner_user_id": str(risk.owner_user_id) if risk.owner_user_id else None,
+        "business_unit_id": str(risk.business_unit_id) if risk.business_unit_id else None,
     }
 
     AuditService(db).write_audit_log(

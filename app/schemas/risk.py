@@ -72,6 +72,7 @@ class RiskCreate(BaseModel):
     residual_risk_acceptable: bool | None = None
     risk_communication_plan: str | None = None
     owner_user_id: UUID | None = None
+    business_unit_id: UUID | None = None
     target_date: datetime | None = None
     metadata_json: dict | None = None
 
@@ -96,6 +97,7 @@ class RiskUpdate(BaseModel):
     residual_risk_acceptable: bool | None = None
     risk_communication_plan: str | None = None
     owner_user_id: UUID | None = None
+    business_unit_id: UUID | None = None
     target_date: datetime | None = None
     review_due_at: datetime | None = None
     metadata_json: dict | None = None
@@ -125,6 +127,7 @@ class RiskRead(UUIDTimestampSchema):
     residual_risk_acceptable: bool | None = None
     risk_communication_plan: str | None = None
     owner_user_id: UUID | None = None
+    business_unit_id: UUID | None = None
     target_date: datetime | None = None
     accepted_by_user_id: UUID | None = None
     accepted_at: datetime | None = None

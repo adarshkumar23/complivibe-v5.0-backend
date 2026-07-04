@@ -142,6 +142,67 @@ def test_risk_permissions_tenant_scoping_scoring_and_validation(client, db_sessi
     assert list2.json() == []
 
 
+def test_risk_create_update_exposes_and_validates_business_unit_id(client):
+    owner1 = _register(client, "p23-bu-owner1@example.com", "Pass1234!@", "P23 BU Org1")
+    owner2 = _register(client, "p23-bu-owner2@example.com", "Pass1234!@", "P23 BU Org2")
+    org1 = _org_id(client, owner1)
+    org2 = _org_id(client, owner2)
+
+    bu1 = client.post(
+        "/api/v1/compliance/business-units",
+        headers=_headers(owner1, org1),
+        json={"name": "Payments", "code": "PAY"},
+    )
+    assert bu1.status_code == 201
+    bu1_id = bu1.json()["id"]
+
+    bu2 = client.post(
+        "/api/v1/compliance/business-units",
+        headers=_headers(owner2, org2),
+        json={"name": "Other", "code": "OTH"},
+    )
+    assert bu2.status_code == 201
+
+    created = client.post(
+        "/api/v1/risks",
+        headers=_headers(owner1, org1),
+        json={
+            "title": "BU-linked risk",
+            "category": "operational",
+            "likelihood": 3,
+            "impact": 4,
+            "business_unit_id": bu1_id,
+        },
+    )
+    assert created.status_code == 201
+    risk_id = created.json()["id"]
+    assert created.json()["business_unit_id"] == bu1_id
+
+    fetched = client.get(f"/api/v1/risks/{risk_id}", headers=_headers(owner1, org1))
+    assert fetched.status_code == 200
+    assert fetched.json()["business_unit_id"] == bu1_id
+
+    listed = client.get(f"/api/v1/risks?business_unit_id={bu1_id}", headers=_headers(owner1, org1))
+    assert listed.status_code == 200
+    assert any(row["id"] == risk_id and row["business_unit_id"] == bu1_id for row in listed.json())
+
+    cross_org_update = client.patch(
+        f"/api/v1/risks/{risk_id}",
+        headers=_headers(owner1, org1),
+        json={"business_unit_id": bu2.json()["id"]},
+    )
+    assert cross_org_update.status_code == 400
+    assert "business_unit_id" in cross_org_update.json()["detail"]
+
+    cleared = client.patch(
+        f"/api/v1/risks/{risk_id}",
+        headers=_headers(owner1, org1),
+        json={"business_unit_id": None},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["business_unit_id"] is None
+
+
 def test_risk_update_owner_validation_archive_accept_and_audit(client, db_session):
     owner1 = _register(client, "p23-owner3@example.com", "Pass1234!@", "P23 Org3")
     owner2 = _register(client, "p23-owner4@example.com", "Pass1234!@", "P23 Org4")

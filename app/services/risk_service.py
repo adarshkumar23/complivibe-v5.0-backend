@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.compliance.services.risk_appetite_service import RiskAppetiteService
+from app.models.business_unit import BusinessUnit
 from app.models.control import Control
 from app.models.evidence_item import EvidenceItem
 from app.models.membership import Membership
@@ -82,6 +83,24 @@ class RiskService:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="owner_user_id must be an active member of the organization",
+            )
+
+    def ensure_business_unit_in_org(self, organization_id: uuid.UUID, business_unit_id: uuid.UUID | None) -> None:
+        if business_unit_id is None:
+            return
+
+        business_unit = self.db.execute(
+            select(BusinessUnit).where(
+                BusinessUnit.id == business_unit_id,
+                BusinessUnit.organization_id == organization_id,
+                BusinessUnit.deleted_at.is_(None),
+                BusinessUnit.is_active.is_(True),
+            )
+        ).scalar_one_or_none()
+        if business_unit is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="business_unit_id must reference an active business unit in the organization",
             )
 
     def check_appetite_breach(self, *, organization_id: uuid.UUID, risk: Risk, actor_user_id: uuid.UUID | None = None) -> None:
