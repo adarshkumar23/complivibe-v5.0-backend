@@ -16,6 +16,7 @@ from app.schemas.governance_override import (
     GovernanceOverrideCreateFromTemplate,
     GovernanceOverrideDecisionRequest,
     GovernanceOverrideDetail,
+    GovernanceOverrideEligibleApproverRead,
     GovernanceOverrideEventRead,
     GovernanceOverrideExpireResponse,
     GovernanceOverrideListResponse,
@@ -238,10 +239,15 @@ def get_override_detail(
     row = service.require_request(organization_id=organization.id, override_id=override_id)
     approvals = GovernanceOverrideRepository(db).list_approvals(organization_id=organization.id, override_request_id=row.id)
     events = GovernanceOverrideRepository(db).list_events(organization_id=organization.id, override_request_id=row.id)
+    eligible_approvers = service.eligible_approvers(row=row)
     return GovernanceOverrideDetail(
         request=_request_read(row),
         approvals=[_approval_read(item) for item in approvals],
         events=[_event_read(item) for item in events],
+        eligible_approvers=[
+            GovernanceOverrideEligibleApproverRead(user_id=item["user_id"], role_name=item["role_name"])
+            for item in eligible_approvers
+        ],
     )
 
 

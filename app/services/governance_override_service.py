@@ -985,6 +985,31 @@ class GovernanceOverrideService:
             "overrides_executed_last_30d": overrides_executed_last_30d,
         }
 
+    def eligible_approvers(self, *, row: GovernanceOverrideRequest) -> list[dict[str, Any]]:
+        already_reviewed = {
+            approval.approver_user_id
+            for approval in self.repo.list_approvals(organization_id=row.organization_id, override_request_id=row.id)
+        }
+
+        query = (
+            select(Membership.user_id, Role.name)
+            .join(Role, Role.id == Membership.role_id)
+            .where(
+                Membership.organization_id == row.organization_id,
+                Membership.status == "active",
+                Membership.user_id != row.requested_by_user_id,
+            )
+        )
+        if row.approver_role_names_json:
+            query = query.where(Role.name.in_(row.approver_role_names_json))
+
+        rows = self.db.execute(query).all()
+        return [
+            {"user_id": user_id, "role_name": role_name}
+            for user_id, role_name in rows
+            if user_id not in already_reviewed
+        ]
+
     def template_summary(self, *, organization_id: uuid.UUID) -> dict[str, int]:
         since_30d = self.now() - timedelta(days=30)
 

@@ -469,3 +469,51 @@ def test_override_list_detail_scope_events_audit_and_summary(client, db_session)
     actions = [item["action"] for item in logs.json()]
     assert "governance_override.created" in actions
     assert "governance_override.approved" in actions
+
+
+def test_item6_override_detail_exposes_eligible_approvers(client, db_session):
+    owner = _register(client, "item6-owner@example.com", "Pass1234!@", "Item6 Org No Approvers")
+    org = _org_id(client, owner)
+
+    export_id, _ = _completed_export(client, owner, org)
+    no_approver_request = _create_override(
+        client,
+        owner,
+        org,
+        override_type="export_lock_exception",
+        target_entity_type="export_job",
+        target_entity_id=export_id,
+        requested_action="archive_locked_export",
+        reason="item6 no eligible approver case",
+    )
+    assert no_approver_request.status_code == 201
+    no_approver_id = no_approver_request.json()["id"]
+
+    no_approver_detail = client.get(f"/api/v1/governance/overrides/{no_approver_id}", headers=_headers(owner, org))
+    assert no_approver_detail.status_code == 200
+    assert no_approver_detail.json()["eligible_approvers"] == []
+
+    admin = _create_active_user_with_role(db_session, org, "item6-admin@example.com", "admin")
+
+    export_id_2, _ = _completed_export(client, owner, org)
+    with_approver_request = _create_override(
+        client,
+        owner,
+        org,
+        override_type="export_lock_exception",
+        target_entity_type="export_job",
+        target_entity_id=export_id_2,
+        requested_action="archive_locked_export",
+        reason="item6 eligible approver case",
+    )
+    assert with_approver_request.status_code == 201
+    with_approver_id = with_approver_request.json()["id"]
+
+    with_approver_detail = client.get(f"/api/v1/governance/overrides/{with_approver_id}", headers=_headers(owner, org))
+    assert with_approver_detail.status_code == 200
+    eligible = with_approver_detail.json()["eligible_approvers"]
+    eligible_user_ids = {item["user_id"] for item in eligible}
+    assert str(admin.id) in eligible_user_ids
+    # Requester must never be listed as an eligible approver of their own request.
+    requester_id = with_approver_detail.json()["request"]["requested_by_user_id"]
+    assert requester_id not in eligible_user_ids
