@@ -20,6 +20,7 @@ _risk_category_enum = Enum(
     "reputational",
     "technology",
     "vendor",
+    "ai_governance",
     name="risk_appetite_category_enum",
     create_type=False,
 )
