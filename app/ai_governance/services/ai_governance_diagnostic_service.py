@@ -96,6 +96,27 @@ class AIGovernanceDiagnosticService:
         ).scalars().all()
         return {rid for rid in [*reg_risk_ids, *drift_risk_ids] if rid is not None}
 
+    def _active_drift_alerts(self, org_id: uuid.UUID, ai_system_id: uuid.UUID) -> list[MLflowDriftEvent]:
+        now = self.utcnow()
+        return self.db.execute(
+            select(MLflowDriftEvent).where(
+                MLflowDriftEvent.organization_id == org_id,
+                MLflowDriftEvent.ai_system_id == ai_system_id,
+                MLflowDriftEvent.severity.in_(["high", "critical"]),
+                MLflowDriftEvent.detected_at >= (now - timedelta(days=30)),
+            )
+        ).scalars().all()
+
+    def _has_active_mlflow_connection(self, org_id: uuid.UUID) -> bool:
+        return bool(
+            self.db.execute(
+                select(func.count(MLflowConnection.id)).where(
+                    MLflowConnection.organization_id == org_id,
+                    MLflowConnection.is_active.is_(True),
+                )
+            ).scalar_one()
+        )
+
     def _open_compliance_recommendation_count(self, org_id: uuid.UUID, ai_system_id: uuid.UUID) -> int:
         risk_ids = self._linked_system_risk_ids(org_id, ai_system_id)
         if not risk_ids:
@@ -130,8 +151,11 @@ class AIGovernanceDiagnosticService:
 
         mlops_coverage = mlops_service.get_mlops_coverage(org_id=org_id, ai_system_id=system.id)
         mlflow_connected = bool(mlops_coverage.get("is_mlflow_connected", False))
+        has_active_mlflow_connection = self._has_active_mlflow_connection(org_id)
         latest_model_version = mlops_coverage.get("latest_model_version")
-        active_drift_alerts = int(mlops_coverage.get("active_drift_alerts", 0) or 0)
+        active_drift_events = self._active_drift_alerts(org_id, system.id)
+        active_drift_alerts = len(active_drift_events)
+        unresolved_drift_alerts = sum(1 for item in active_drift_events if item.linked_risk_id is None)
 
         open_compliance_recommendations = self._open_compliance_recommendation_count(org_id, system.id)
         eu_ai_act_risk_category = self._eu_ai_act_category(org_id, system.id)
@@ -141,9 +165,9 @@ class AIGovernanceDiagnosticService:
             gaps.append("No completed risk assessment")
         if stale_assessment:
             gaps.append("Risk assessment older than 12 months")
-        if active_drift_alerts > 0:
+        if unresolved_drift_alerts > 0:
             gaps.append("High/critical model drift detected — no risk raised")
-        if self._is_deployed(system.deployment_status) and not mlflow_connected:
+        if self._is_deployed(system.deployment_status) and not has_active_mlflow_connection:
             gaps.append("Deployed with no MLflow monitoring connected")
         if not self._has_recent_audit_activity(org_id, system.id):
             gaps.append("No audit trail entries in last 90 days")

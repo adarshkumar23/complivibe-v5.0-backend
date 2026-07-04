@@ -14,6 +14,7 @@ from app.models.business_unit import BusinessUnit
 from app.models.mlflow_connection import MLflowConnection
 from app.models.mlflow_drift_event import MLflowDriftEvent
 from app.models.mlflow_model_registration import MLflowModelRegistration
+from app.models.risk import Risk
 from tests.helpers.auth_org import bootstrap_org_user
 
 
@@ -182,6 +183,54 @@ def test_deployed_without_assessment_marks_critical_and_in_summary(client, db_se
     system = next(item for item in payload["snapshot_data"]["ai_systems_summary"] if item["name"] == "NoAssessment")
     assert system["system_health"] == "critical"
     assert "NoAssessment" in payload["snapshot_data"]["org_level_summary"]["critical_gap_systems"]
+
+
+def test_diagnostics_regeneration_uses_live_resolution_state(client, db_session):
+    owner = bootstrap_org_user(client, email_prefix="diag-live-state")
+    org_id = UUID(owner["organization_id"])
+    system = _mk_system(db_session, org_id, "LiveState", deployment_status="deployed")
+
+    inactive_conn = _mk_mlflow_connection(db_session, org_id)
+    inactive_conn.is_active = False
+    _mk_drift(db_session, org_id, inactive_conn.id, system.id, "LiveState", severity="high")
+    db_session.commit()
+
+    initial = client.post("/api/v1/ai-governance/diagnostics/generate", headers=owner["org_headers"], json={})
+    assert initial.status_code == 200, initial.text
+    initial_system = next(item for item in initial.json()["snapshot_data"]["ai_systems_summary"] if item["name"] == "LiveState")
+    assert "High/critical model drift detected — no risk raised" in initial_system["governance_gaps"]
+    assert "Deployed with no MLflow monitoring connected" in initial_system["governance_gaps"]
+
+    linked_risk = Risk(
+        organization_id=org_id,
+        title="Resolved drift risk",
+        category="ai_governance",
+        likelihood=3,
+        impact=4,
+        inherent_score=12,
+        severity="high",
+        status="identified",
+    )
+    db_session.add(linked_risk)
+    db_session.flush()
+    drift = db_session.execute(
+        select(MLflowDriftEvent).where(
+            MLflowDriftEvent.organization_id == org_id,
+            MLflowDriftEvent.ai_system_id == system.id,
+        )
+    ).scalar_one()
+    drift.linked_risk_id = linked_risk.id
+    inactive_conn.is_active = True
+    db_session.commit()
+
+    regenerated = client.post("/api/v1/ai-governance/diagnostics/generate", headers=owner["org_headers"], json={})
+    assert regenerated.status_code == 200, regenerated.text
+    regenerated_system = next(
+        item for item in regenerated.json()["snapshot_data"]["ai_systems_summary"] if item["name"] == "LiveState"
+    )
+    assert "High/critical model drift detected — no risk raised" not in regenerated_system["governance_gaps"]
+    assert "Deployed with no MLflow monitoring connected" not in regenerated_system["governance_gaps"]
+    assert regenerated_system["active_drift_alerts"] == 1
 
 
 def test_active_drift_sets_at_risk_and_scoring_formula_known_input(client, db_session):
