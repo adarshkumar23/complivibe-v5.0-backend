@@ -187,6 +187,57 @@ def test_s5_p5_deactivate_no_assignments_succeeds_and_system_role_protected(clie
     assert deactivate_system.status_code == 400, deactivate_system.text
 
 
+def test_s5_p5_role_update_and_assignment_audit_trail(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="s5p5-audit-trail")
+    other = bootstrap_org_user(client, email_prefix="s5p5-audit-trail-user")
+    org_id = uuid.UUID(org["organization_id"])
+
+    # Capture update before/after permission codes.
+    role = _create_role(client, org["org_headers"], name="Audit Role", permission_codes=["risks:read"])
+    updated = client.patch(
+        f"{BASE}/{role['id']}",
+        headers=org["org_headers"],
+        json={"permission_codes": ["risks:read", "risks:write"]},
+    )
+    assert updated.status_code == 200
+
+    update_audit = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.organization_id == org_id, AuditLog.action == "custom_role.updated")
+        .order_by(AuditLog.created_at.desc())
+        .first()
+    )
+    assert update_audit is not None
+    assert update_audit.before_json.get("permission_codes") == ["risks:read"]
+    assert update_audit.after_json.get("permission_codes") == ["risks:read", "risks:write"]
+
+    # Capture assignment before/after role.
+    create_membership = client.post(
+        "/api/v1/memberships",
+        headers=org["org_headers"],
+        json={"email": other["email"], "full_name": "Audit User", "role_name": "readonly"},
+    )
+    assert create_membership.status_code == 201
+    membership_id = create_membership.json()["id"]
+
+    assign = client.post(
+        f"/api/v1/organizations/memberships/{membership_id}/assign-role",
+        headers=org["org_headers"],
+        json={"role_id": role["id"]},
+    )
+    assert assign.status_code == 200
+
+    assign_audit = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.organization_id == org_id, AuditLog.action == "custom_role.assigned")
+        .order_by(AuditLog.created_at.desc())
+        .first()
+    )
+    assert assign_audit is not None
+    assert assign_audit.before_json.get("role_name") == "readonly"
+    assert assign_audit.after_json.get("role_name") == "Audit Role"
+
+
 def test_s5_p5_list_roles_cross_org_and_signature_unchanged(client, db_session):
     org_a = bootstrap_org_user(client, email_prefix="s5p5-list-a")
     org_b = bootstrap_org_user(client, email_prefix="s5p5-list-b")
