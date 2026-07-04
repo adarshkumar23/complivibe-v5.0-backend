@@ -202,6 +202,26 @@ def test_a54_subprocessor_gdpr_completeness_validation(client, db_session):
     )
     assert missing_locations.status_code == 422
     assert "geographic_locations" in missing_locations.json()["detail"]
+
+    complete = _create_subprocessor(client, org["org_headers"], name="Complete Processor")
+    partial = client.patch(
+        f"{SUBPROCESSOR_BASE}/{complete['id']}",
+        headers=org["org_headers"],
+        json={"contact_email": "privacy@example.com"},
+    )
+    assert partial.status_code == 200
+    assert partial.json()["contact_email"] == "privacy@example.com"
+    assert partial.json()["data_transfer_mechanism"] == "sccs"
+
+    clearing_required_transfer = client.patch(
+        f"{SUBPROCESSOR_BASE}/{complete['id']}",
+        headers=org["org_headers"],
+        json={"data_transfer_mechanism": None},
+    )
+    assert clearing_required_transfer.status_code == 422
+    assert "data_transfer_mechanism" in clearing_required_transfer.json()["detail"]
+
+
 def test_item2_gdpr_dashboard_counts_geographic_locations_without_double_counting(client):
     org = bootstrap_org_user(client, email_prefix="item2-gdpr")
 

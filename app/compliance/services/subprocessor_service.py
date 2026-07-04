@@ -86,16 +86,23 @@ class SubprocessorService:
         return row
 
     def _validate_gdpr_required_fields(self, data, existing: Subprocessor | None = None) -> None:
+        updates = data.model_dump(exclude_unset=True) if hasattr(data, "model_dump") else {}
+
+        def effective(field_name: str):
+            if field_name in updates:
+                return updates[field_name]
+            if existing is not None:
+                return getattr(existing, field_name)
+            return getattr(data, field_name, None)
+
         missing: list[str] = []
-        data_types = getattr(data, "data_types_processed", None)
+        data_types = effective("data_types_processed")
         if not data_types:
             missing.append("data_types_processed")
-        locations = getattr(data, "geographic_locations", None)
+        locations = effective("geographic_locations")
         if not locations:
             missing.append("geographic_locations")
-        mechanism = getattr(data, "data_transfer_mechanism", None)
-        if mechanism is None and existing is not None:
-            mechanism = existing.data_transfer_mechanism
+        mechanism = effective("data_transfer_mechanism")
         if locations:
             non_eea = [loc for loc in locations if loc not in self.EEA_COUNTRIES]
             if non_eea and not mechanism:
