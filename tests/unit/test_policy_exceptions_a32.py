@@ -372,6 +372,7 @@ def test_verify_sod_applies_symmetrically_to_reject_not_just_approve(client):
     self_reject = client.post(f"{BASE}/{exception['id']}/reject", headers=org["org_headers"])
     print("SELF REJECT:", self_reject.status_code, self_reject.json())
     assert self_reject.status_code == 409, "BUG: requester was able to reject their own exception (no SoD check)"
+    assert "cannot be requester" in self_reject.json()["detail"].lower()
 
     row_after = self_reject if self_reject.status_code == 200 else None
     assert row_after is None, "exception must remain pending after a blocked self-reject attempt"
