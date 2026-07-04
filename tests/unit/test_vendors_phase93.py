@@ -175,6 +175,74 @@ def test_phase93_archive_behavior_and_include_archived(client, db_session):
     _ = active
 
 
+def test_phase93_duplicate_name_and_archive_with_active_work_blocked(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="p93-dup-archive")
+    owner = _create_active_user_with_role(
+        db_session, org["organization_id"], "p93-dup-archive-owner@example.com", "admin"
+    )
+
+    v1 = _create_vendor(client, org["org_headers"], owner_user_id=str(owner.id), name="Shared Name")
+    duplicate = client.post(
+        BASE,
+        headers=org["org_headers"],
+        json={
+            "name": "Shared Name",
+            "vendor_type": "software",
+            "owner_user_id": str(owner.id),
+            "risk_tier": "not_assessed",
+            "status": "active",
+            "data_access": True,
+        },
+    )
+    assert duplicate.status_code == 409
+    assert "name" in duplicate.json()["detail"].lower()
+
+    v2 = _create_vendor(client, org["org_headers"], owner_user_id=str(owner.id), name="Other Vendor")
+    rename_conflict = client.patch(
+        f"{BASE}/{v2['id']}",
+        headers=org["org_headers"],
+        json={"name": "Shared Name"},
+    )
+    assert rename_conflict.status_code == 409
+
+    assessment = client.post(
+        f"{BASE}/{v1['id']}/assessments",
+        headers=org["org_headers"],
+        json={"title": "Active assessment", "assessment_type": "initial"},
+    )
+    assert assessment.status_code == 201
+    assessment_id = assessment.json()["id"]
+
+    started = client.post(
+        f"{BASE}/{v1['id']}/assessments/{assessment_id}/start",
+        headers=org["org_headers"],
+    )
+    assert started.status_code == 200
+
+    archive_blocked = client.post(
+        f"{BASE}/{v1['id']}/archive",
+        headers=org["org_headers"],
+        json={"reason": "should be blocked"},
+    )
+    assert archive_blocked.status_code == 409
+    assert "active assessment" in archive_blocked.json()["detail"].lower()
+
+    cancelled = client.post(
+        f"{BASE}/{v1['id']}/assessments/{assessment_id}/cancel",
+        headers=org["org_headers"],
+        json={"cancellation_reason": "no longer needed"},
+    )
+    assert cancelled.status_code == 200
+
+    archived = client.post(
+        f"{BASE}/{v1['id']}/archive",
+        headers=org["org_headers"],
+        json={"reason": "contract terminated"},
+    )
+    assert archived.status_code == 200
+    assert archived.json()["status"] == "archived"
+
+
 def test_phase93_summary_and_audit_events(client, db_session):
     org = bootstrap_org_user(client, email_prefix="p93-summary")
     owner = _create_active_user_with_role(db_session, org["organization_id"], "p93-summary-owner@example.com", "admin")
