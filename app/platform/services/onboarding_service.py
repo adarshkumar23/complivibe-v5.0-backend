@@ -419,34 +419,46 @@ class OnboardingService:
         if not org:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
 
-        has_frameworks = (
-            db.execute(
-                select(OrganizationFramework)
-                .where(
-                    OrganizationFramework.organization_id == org_id,
-                    OrganizationFramework.status == "active",
-                )
-                .limit(1)
-            ).scalar_one_or_none()
-            is not None
-        )
+        first_active_framework = db.execute(
+            select(OrganizationFramework)
+            .where(
+                OrganizationFramework.organization_id == org_id,
+                OrganizationFramework.status == "active",
+            )
+            .order_by(OrganizationFramework.activated_at.asc())
+            .limit(1)
+        ).scalar_one_or_none()
+        has_frameworks = first_active_framework is not None
+
         has_team = (
-            db.execute(select(Membership).where(Membership.organization_id == org_id)).scalars().all()
+            db.execute(
+                select(Membership)
+                .where(Membership.organization_id == org_id)
+                .order_by(Membership.created_at.asc())
+            ).scalars().all()
         )
         has_multiple_members = len(has_team) > 1
-        has_pending_invites = (
-            db.execute(
-                select(TeamInvitation)
-                .where(
-                    TeamInvitation.organization_id == org_id,
-                    TeamInvitation.status == "pending",
-                )
-                .limit(1)
-            ).scalar_one_or_none()
-            is not None
-        )
-        has_controls = db.execute(select(Control).where(Control.organization_id == org_id).limit(1)).scalar_one_or_none() is not None
-        has_risks = db.execute(select(Risk).where(Risk.organization_id == org_id).limit(1)).scalar_one_or_none() is not None
+        first_pending_invite = db.execute(
+            select(TeamInvitation)
+            .where(
+                TeamInvitation.organization_id == org_id,
+                TeamInvitation.status == "pending",
+            )
+            .order_by(TeamInvitation.created_at.asc())
+            .limit(1)
+        ).scalar_one_or_none()
+        has_pending_invites = first_pending_invite is not None
+
+        first_control = db.execute(
+            select(Control).where(Control.organization_id == org_id).order_by(Control.created_at.asc()).limit(1)
+        ).scalar_one_or_none()
+        has_controls = first_control is not None
+
+        first_risk = db.execute(
+            select(Risk).where(Risk.organization_id == org_id).order_by(Risk.created_at.asc()).limit(1)
+        ).scalar_one_or_none()
+        has_risks = first_risk is not None
+
         first_verified_evidence = db.execute(
             select(EvidenceItem)
             .where(
@@ -485,17 +497,45 @@ class OnboardingService:
                 or first_verified_evidence.created_at
             )
 
+        frameworks_completed_at = first_active_framework.activated_at if first_active_framework else None
+
+        team_completed_at = None
+        if has_multiple_members:
+            # has_team is ordered by created_at ascending; index 0 is the org creator, so the
+            # second entry is the first genuinely "invited" additional member.
+            team_completed_at = has_team[1].created_at
+        elif has_pending_invites:
+            team_completed_at = first_pending_invite.created_at
+
+        controls_completed_at = first_control.created_at if first_control else None
+        risks_completed_at = first_risk.created_at if first_risk else None
+
         checklist_items = [
             {"id": "org_created", "label": "Create your organization", "completed": True, "completed_at": org.created_at},
-            {"id": "frameworks_selected", "label": "Select at least one framework", "completed": has_frameworks, "completed_at": None},
+            {
+                "id": "frameworks_selected",
+                "label": "Select at least one framework",
+                "completed": has_frameworks,
+                "completed_at": frameworks_completed_at,
+            },
             {
                 "id": "team_invited_or_has_members",
                 "label": "Invite your team",
                 "completed": has_multiple_members or has_pending_invites,
-                "completed_at": None,
+                "completed_at": team_completed_at,
             },
-            {"id": "has_controls", "label": "Add your first control", "completed": has_controls, "completed_at": None},
-            {"id": "has_risks", "label": "Add your first risk", "completed": has_risks, "completed_at": None},
+            {
+                "id": "has_controls",
+                "label": "Add your first control",
+                "completed": has_controls,
+                "completed_at": controls_completed_at,
+            },
+            {
+                "id": "has_risks",
+                "label": "Add your first risk",
+                "completed": has_risks,
+                "completed_at": risks_completed_at,
+            },
             {
                 "id": "evidence_uploaded",
                 "label": "Upload your first piece of evidence",

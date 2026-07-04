@@ -5,7 +5,6 @@ import uuid
 
 from app.core.security import get_password_hash
 from app.models.auditor_portal_invitation import AuditorPortalInvitation
-from app.models.control import Control
 from app.models.membership import Membership
 from app.models.obligation import Obligation
 from app.models.role import Role
@@ -260,13 +259,34 @@ def test_a43_portal_controls_and_evidence_scoping_and_org_isolation(client, db_s
     c_out = _create_control(client, org_a["org_headers"], "Out-of-scope control")
     c_org_b = _create_control(client, org_b["org_headers"], "Other org control")
 
-    row_in = db_session.query(Control).filter_by(id=uuid.UUID(c_in["id"])).one()
-    row_out = db_session.query(Control).filter_by(id=uuid.UUID(c_out["id"])).one()
-    row_b = db_session.query(Control).filter_by(id=uuid.UUID(c_org_b["id"])).one()
-    row_in.obligation_id = ob_in.id
-    row_out.obligation_id = ob_out.id
-    row_b.obligation_id = ob_in.id
-    db_session.commit()
+    # Real control<->obligation membership is tracked via ControlObligationMapping
+    # (POST /controls/{id}/obligations), not the legacy Control.obligation_id FK,
+    # which no API path writes to. Activate both frameworks for org_a first since
+    # mapping requires the obligation's framework to be active in-org.
+    for fw_id in (fw_in_scope, fw_out_scope):
+        activate = client.post(f"/api/v1/frameworks/{fw_id}/activate", headers=org_a["org_headers"], json={})
+        assert activate.status_code == 200
+    activate_b = client.post(f"/api/v1/frameworks/{fw_in_scope}/activate", headers=org_b["org_headers"], json={})
+    assert activate_b.status_code == 200
+
+    map_in = client.post(
+        f"/api/v1/controls/{c_in['id']}/obligations",
+        headers=org_a["org_headers"],
+        json={"obligation_id": str(ob_in.id), "mapping_type": "satisfies"},
+    )
+    assert map_in.status_code == 200
+    map_out = client.post(
+        f"/api/v1/controls/{c_out['id']}/obligations",
+        headers=org_a["org_headers"],
+        json={"obligation_id": str(ob_out.id), "mapping_type": "satisfies"},
+    )
+    assert map_out.status_code == 200
+    map_b = client.post(
+        f"/api/v1/controls/{c_org_b['id']}/obligations",
+        headers=org_b["org_headers"],
+        json={"obligation_id": str(ob_in.id), "mapping_type": "satisfies"},
+    )
+    assert map_b.status_code == 200
 
     ev_in = _create_evidence(client, org_a["org_headers"], "Scoped evidence")
     ev_out = _create_evidence(client, org_a["org_headers"], "Other evidence")

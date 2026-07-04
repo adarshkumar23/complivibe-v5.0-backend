@@ -261,10 +261,19 @@ class LineageService:
         visited_nodes: dict[uuid.UUID, DataLineageNode] = {node.id: node for node in start_nodes}
         visited_edge_ids: set[uuid.UUID] = set()
         collected_edges: list[DataLineageEdge] = []
+        # A node must only ever be expanded (its edges queried and neighbors enqueued) once,
+        # regardless of how many distinct paths reach it. Without this, a cyclic or densely
+        # connected graph re-enqueues the same node combinatorially at every depth level before
+        # the depth cap finally stops it -- correct (bounded by the depth cap) but capable of
+        # doing a large multiple of the necessary work on a pathological graph.
+        processed_node_ids: set[uuid.UUID] = set()
 
         queue: deque[tuple[uuid.UUID, int]] = deque((node.id, 0) for node in start_nodes)
         while queue:
             current_node_id, current_depth = queue.popleft()
+            if current_node_id in processed_node_ids:
+                continue
+            processed_node_ids.add(current_node_id)
             if current_depth >= depth:
                 continue
             edges = self.db.execute(
@@ -286,7 +295,8 @@ class LineageService:
                     if neighbor_id not in visited_nodes:
                         node = self._require_node(org_id, neighbor_id)
                         visited_nodes[neighbor_id] = node
-                    queue.append((neighbor_id, current_depth + 1))
+                    if neighbor_id not in processed_node_ids:
+                        queue.append((neighbor_id, current_depth + 1))
 
         return {
             "asset_id": str(data_asset_id),

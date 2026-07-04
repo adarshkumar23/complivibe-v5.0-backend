@@ -12,6 +12,7 @@ from app.models.audit_engagement import AuditEngagement
 from app.models.auditor_portal_invitation import AuditorPortalInvitation
 from app.models.compliance_report import ComplianceReport
 from app.models.control import Control
+from app.models.control_obligation_mapping import ControlObligationMapping
 from app.models.evidence_control_link import EvidenceControlLink
 from app.models.evidence_item import EvidenceItem
 from app.models.framework import Framework
@@ -308,7 +309,19 @@ class AuditorPortalService:
             framework_ids = [uuid.UUID(item) for item in (invitation.scoped_framework_ids or [])]
             if not framework_ids:
                 return []
-            stmt = stmt.join(Obligation, Obligation.id == Control.obligation_id).where(Obligation.framework_id.in_(framework_ids))
+            # Control.obligation_id is a legacy FK that no API path ever writes to;
+            # the real control<->obligation relationship is tracked via
+            # ControlObligationMapping (populated by POST /controls/{id}/obligations).
+            stmt = (
+                stmt.join(ControlObligationMapping, ControlObligationMapping.control_id == Control.id)
+                .join(Obligation, Obligation.id == ControlObligationMapping.obligation_id)
+                .where(
+                    ControlObligationMapping.organization_id == invitation.organization_id,
+                    ControlObligationMapping.status == "active",
+                    Obligation.framework_id.in_(framework_ids),
+                )
+                .distinct()
+            )
         else:
             control_ids = [uuid.UUID(item) for item in scoped_control_ids]
             if not control_ids:

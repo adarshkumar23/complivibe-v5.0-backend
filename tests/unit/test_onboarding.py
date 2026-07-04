@@ -303,6 +303,14 @@ def test_checklist_complete_audit_and_org_isolation(client, db_session):
     checklist_body = checklist.json()
     assert checklist_body["completion_percentage"] == 100
 
+    # Every completed signal must carry a real completed_at timestamp, not a hardcoded None,
+    # so the checklist accurately reflects when each milestone was actually reached.
+    items_by_id = {item["id"]: item for item in checklist_body["checklist_items"]}
+    for item_id in ("frameworks_selected", "team_invited_or_has_members", "has_controls", "has_risks"):
+        item = items_by_id[item_id]
+        assert item["completed"] is True
+        assert item["completed_at"] is not None, f"{item_id} should have a real completed_at timestamp"
+
     complete = client.post("/api/v1/onboarding/complete", headers=headers)
     assert complete.status_code == 200
     assert complete.json()["onboarding_completed"] is True

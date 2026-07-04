@@ -140,6 +140,84 @@ def test_c75_lineage_tracking(client):
     assert forbidden.status_code == 404
 
 
+def test_c75_lineage_graph_disconnected_node_and_cycle(client):
+    org = bootstrap_org_user(client, email_prefix="c75-cycle-org")
+    asset_id = _create_asset(client, org["org_headers"], org["user_id"], "cycle_table")
+
+    # A node with zero edges at all should return gracefully (no crash), not an error.
+    lone_node = client.post(
+        f"{LINEAGE_BASE}/nodes",
+        headers=org["org_headers"],
+        json={"node_type": "data_asset", "name": "lonely.node", "system_name": "dbt"},
+    )
+    assert lone_node.status_code == 201
+    lone_node_id = lone_node.json()["id"]
+    link_lone = client.post(
+        f"{LINEAGE_BASE}/nodes/{lone_node_id}/link-asset/{asset_id}",
+        headers=org["org_headers"],
+    )
+    assert link_lone.status_code == 200
+
+    disconnected_graph = client.get(
+        f"{LINEAGE_BASE}/assets/{asset_id}/lineage?depth=3",
+        headers=org["org_headers"],
+    )
+    assert disconnected_graph.status_code == 200
+    disconnected_body = disconnected_graph.json()
+    assert len(disconnected_body["nodes"]) == 1
+    assert disconnected_body["edges"] == []
+
+    # Build a genuine cycle A -> B -> C -> A and confirm traversal terminates cleanly
+    # (depth-limit protection) and returns a well-formed, deduplicated graph.
+    cycle_asset_id = _create_asset(client, org["org_headers"], org["user_id"], "cycle_root_table")
+    node_a = client.post(
+        f"{LINEAGE_BASE}/nodes",
+        headers=org["org_headers"],
+        json={"node_type": "data_asset", "name": "cycle.a", "system_name": "dbt"},
+    ).json()
+    node_b = client.post(
+        f"{LINEAGE_BASE}/nodes",
+        headers=org["org_headers"],
+        json={"node_type": "pipeline_step", "name": "cycle.b", "system_name": "Airflow"},
+    ).json()
+    node_c = client.post(
+        f"{LINEAGE_BASE}/nodes",
+        headers=org["org_headers"],
+        json={"node_type": "pipeline_step", "name": "cycle.c", "system_name": "Airflow"},
+    ).json()
+
+    link_a = client.post(
+        f"{LINEAGE_BASE}/nodes/{node_a['id']}/link-asset/{cycle_asset_id}",
+        headers=org["org_headers"],
+    )
+    assert link_a.status_code == 200
+
+    for upstream, downstream in ((node_a, node_b), (node_b, node_c), (node_c, node_a)):
+        edge_resp = client.post(
+            f"{LINEAGE_BASE}/edges",
+            headers=org["org_headers"],
+            json={"upstream_node_id": upstream["id"], "downstream_node_id": downstream["id"]},
+        )
+        assert edge_resp.status_code == 201
+
+    cycle_graph = client.get(
+        f"{LINEAGE_BASE}/assets/{cycle_asset_id}/lineage?depth=5",
+        headers=org["org_headers"],
+    )
+    assert cycle_graph.status_code == 200
+    cycle_body = cycle_graph.json()
+    node_ids = {node["id"] for node in cycle_body["nodes"]}
+    assert node_ids == {node_a["id"], node_b["id"], node_c["id"]}
+    assert len(cycle_body["edges"]) == 3
+
+    # A nonexistent starting asset must produce a clear 404, not a crash.
+    missing = client.get(
+        f"{LINEAGE_BASE}/assets/00000000-0000-0000-0000-000000000000/lineage",
+        headers=org["org_headers"],
+    )
+    assert missing.status_code == 404
+
+
 def test_c76_quality_metrics(client):
     org = bootstrap_org_user(client, email_prefix="c76-org")
     personal_asset_id = _create_asset(client, org["org_headers"], org["user_id"], "customer_email_records")

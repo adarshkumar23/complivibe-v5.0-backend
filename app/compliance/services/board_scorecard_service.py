@@ -383,16 +383,33 @@ class BoardScorecardService:
         }
 
     @staticmethod
-    def _compute_overall_score(*, framework_readiness: dict, control_effectiveness: dict) -> float:
+    def _compute_overall_score(*, framework_readiness: dict, control_effectiveness: dict) -> dict:
         # Weighted score: average of org-level framework coverage and control effectiveness.
         # This is transparent and deterministic for board quick-reference use.
         rows = framework_readiness.get("rows", []) if isinstance(framework_readiness, dict) else []
+        has_framework_data = bool(rows)
         if rows:
             fw_avg = sum(float(item.get("control_coverage_pct", 0.0)) for item in rows) / len(rows)
         else:
             fw_avg = 0.0
+
+        if "total_controls_by_status" in control_effectiveness:
+            total_controls = sum(int(v) for v in control_effectiveness["total_controls_by_status"].values())
+        else:
+            total_controls = int(control_effectiveness.get("total_controls", 0))
+        has_control_data = total_controls > 0
         control_pct = float(control_effectiveness.get("effectiveness_pct", 0.0))
-        return round((fw_avg + control_pct) / 2.0, 2)
+
+        score = round((fw_avg + control_pct) / 2.0, 2)
+        data_sufficient = has_framework_data or has_control_data
+        basis = (
+            "Average of organization-wide framework control-coverage percentage and control "
+            "effectiveness percentage (share of active controls with verified evidence)."
+        )
+        if not data_sufficient:
+            basis += " No active frameworks or controls exist yet, so this score does not yet reflect a real assessment."
+
+        return {"score": score, "basis": basis, "data_sufficient": data_sufficient}
 
     def generate_snapshot(
         self,
@@ -411,10 +428,11 @@ class BoardScorecardService:
         deadlines = self._deadline_summary(org_id)
         kri = self._kri_summary(org_id)
 
-        overall_score = self._compute_overall_score(
+        score_result = self._compute_overall_score(
             framework_readiness=framework,
             control_effectiveness=controls,
         )
+        overall_score = score_result["score"]
 
         snapshot_data = {
             "scope": {
@@ -430,6 +448,8 @@ class BoardScorecardService:
             "deadlines": deadlines,
             "kri_summary": kri,
             "overall_compliance_score": overall_score,
+            "overall_compliance_score_basis": score_result["basis"],
+            "overall_compliance_score_data_sufficient": score_result["data_sufficient"],
             "generated_at": self._now().isoformat(),
         }
 
@@ -454,6 +474,7 @@ class BoardScorecardService:
                 "business_unit_id": str(business_unit_id) if business_unit_id else None,
                 "snapshot_label": snapshot_label,
                 "overall_compliance_score": overall_score,
+                "overall_compliance_score_data_sufficient": score_result["data_sufficient"],
             },
         )
         return row
