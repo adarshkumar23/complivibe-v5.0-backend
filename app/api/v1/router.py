@@ -67,6 +67,7 @@ from app.privacy.routers import lawful_basis as privacy_lawful_basis
 from app.privacy.routers import dpa as privacy_dpa
 from app.privacy.routers import notification_preferences as privacy_notification_preferences
 from app.privacy.routers import digest as privacy_digest
+from app.satellites.tprm_intelligence import router as tprm_intelligence_router
 
 from app.api.v1 import (
     admin_email_config,
@@ -297,6 +298,7 @@ api_router.include_router(exports.router)
 api_router.include_router(attestations.router)
 api_router.include_router(email.router)
 api_router.include_router(vendors.router)
+api_router.include_router(tprm_intelligence_router.router)
 api_router.include_router(questionnaire_templates.router)
 api_router.include_router(questionnaire_responses.router)
 api_router.include_router(scoring_rules.router)
