@@ -297,6 +297,31 @@ class AuditorPortalService:
     def get_invitation(self, org_id: uuid.UUID, invitation_id: uuid.UUID) -> AuditorPortalInvitation:
         return self.require_invitation(org_id, invitation_id)
 
+    def log_scoped_data_view(
+        self,
+        invitation: AuditorPortalInvitation,
+        resource_type: str,
+        item_ids: list[uuid.UUID],
+    ) -> None:
+        # Distinct from the login-level "auditor_portal.access" log written on every
+        # token authentication: this records which specific scoped resource the
+        # auditor actually viewed (and which items), so the audit trail can answer
+        # "what did the auditor see", not just "did the auditor log in".
+        AuditService(self.db).write_audit_log(
+            action="auditor_portal.data_viewed",
+            entity_type="auditor_portal_invitation",
+            entity_id=invitation.id,
+            organization_id=invitation.organization_id,
+            actor_user_id=None,
+            after_json={
+                "resource_type": resource_type,
+                "item_count": len(item_ids),
+                "item_ids": [str(item) for item in item_ids],
+            },
+            metadata_json={"source": "portal", "auditor_email": invitation.auditor_email},
+        )
+        self.db.flush()
+
     def get_scoped_controls(self, invitation: AuditorPortalInvitation) -> list[Control]:
         scoped_control_ids = invitation.scoped_control_ids
         stmt = select(Control).where(

@@ -152,6 +152,9 @@ def portal_me(
     if engagement is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit engagement not found")
 
+    AuditorPortalService(db).log_scoped_data_view(invitation, "engagement_summary", [invitation.audit_engagement_id])
+    db.commit()
+
     return AuditorPortalMeResponse(
         auditor_email=invitation.auditor_email,
         audit_engagement_title=engagement.title,
@@ -173,6 +176,9 @@ def portal_controls(
         for obligation in db.execute(select(Obligation).where(Obligation.id.in_(obligation_ids))).scalars().all():
             framework_by_obligation[obligation.id] = obligation.framework_id
 
+    AuditorPortalService(db).log_scoped_data_view(invitation, "controls", [row.id for row in rows])
+    db.commit()
+
     return [
         AuditorPortalControlRead(
             id=row.id,
@@ -191,6 +197,9 @@ def portal_evidence(
     db: Session = Depends(get_db),
 ) -> list[AuditorPortalEvidenceRead]:
     rows = AuditorPortalService(db).get_scoped_evidence(invitation)
+    AuditorPortalService(db).log_scoped_data_view(invitation, "evidence", [row.id for row in rows])
+    db.commit()
+
     return [
         AuditorPortalEvidenceRead(
             id=row.id,
@@ -214,6 +223,9 @@ def portal_reports(
     db: Session = Depends(get_db),
 ) -> list[AuditorPortalReportRead]:
     rows = AuditorPortalService(db).get_scoped_reports(invitation)
+    AuditorPortalService(db).log_scoped_data_view(invitation, "reports", [row.id for row in rows])
+    db.commit()
+
     return [
         AuditorPortalReportRead(
             id=row.id,
