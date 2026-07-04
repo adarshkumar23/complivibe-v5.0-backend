@@ -1063,4 +1063,4 @@ def test_cross_migration_head():
     script = ScriptDirectory.from_config(cfg)
     heads = script.get_heads()
     assert len(heads) == 1
-    assert heads[0] == "0200_align_ai_governance_review_types"
+    assert heads[0] == "0201_align_ai_governance_review_types"
