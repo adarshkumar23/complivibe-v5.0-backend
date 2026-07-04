@@ -118,6 +118,49 @@ def test_a61_third_party_ai_assessment_workflow(client):
     assert forbidden.status_code == 404
 
 
+def test_third_party_assessment_never_downgrades_system_risk_tier(client):
+    org = bootstrap_org_user(client, email_prefix="tpa-tier-guard")
+    vendor_id = _create_vendor(client, org["org_headers"], org["user_id"], name="Tier Guard Vendor")
+    system_id = _create_system(client, org["org_headers"], org["user_id"], name="Tier Guard System")
+
+    # Authoritative EU AI Act classification marks the system high risk.
+    classified = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/eu-act-classification",
+        headers=org["org_headers"],
+        json={"article_category": "high_risk_annex3"},
+    )
+    assert classified.status_code == 200
+    assert client.get(f"{SYSTEMS_BASE}/{system_id}", headers=org["org_headers"]).json()["risk_tier"] == "high"
+
+    # A favorable (low-risk) third-party assessment must NOT downgrade the tier.
+    favorable = client.post(
+        f"{VENDORS_BASE}/{vendor_id}/ai-model-assessments",
+        headers=org["org_headers"],
+        json={
+            "ai_system_id": system_id,
+            "model_name": "Benign Vendor Model",
+            "data_egress_type": "none",
+            "model_card_provided": True,
+            "bias_testing_documented": True,
+            "explainability_level": "full",
+            "contractual_ai_terms_reviewed": True,
+            "eu_act_compliance_status": "compliant",
+        },
+    )
+    assert favorable.status_code == 201
+    done = client.post(
+        f"{THIRD_PARTY_BASE}/{favorable.json()['id']}/complete",
+        headers=org["org_headers"],
+    )
+    assert done.status_code == 200
+    assert done.json()["overall_risk_level"] == "low"
+
+    system_after = client.get(f"{SYSTEMS_BASE}/{system_id}", headers=org["org_headers"])
+    assert system_after.json()["risk_tier"] == "high", (
+        "low-risk vendor assessment silently downgraded an EU AI Act high-risk system"
+    )
+
+
 def test_a62_model_card_versioning_and_publish(client):
     org = bootstrap_org_user(client, email_prefix="a62-org")
     system_id = _create_system(client, org["org_headers"], org["user_id"], name="A62 System")

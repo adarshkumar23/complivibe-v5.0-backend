@@ -18,6 +18,11 @@ ALLOWED_EU_ACT = {"compliant", "non_compliant", "unknown", "not_applicable"}
 ALLOWED_RISK_LEVEL = {"low", "medium", "high", "critical"}
 ALLOWED_STATUS = {"draft", "in_progress", "completed", "archived"}
 
+# Severity order for ai_system.risk_tier. A third-party model assessment may
+# escalate a linked system's tier but must never downgrade one set by a more
+# authoritative source (e.g. EU AI Act classification of high/prohibited).
+RISK_TIER_SEVERITY = {"unassessed": 0, "minimal": 1, "limited": 2, "high": 3, "prohibited": 4}
+
 
 class ThirdPartyAIService:
     def __init__(self, db: Session) -> None:
@@ -220,7 +225,23 @@ class ThirdPartyAIService:
                 "medium": "limited",
                 "low": "minimal",
             }
-            system.risk_tier = tier_map[risk_level]
+            proposed_tier = tier_map[risk_level]
+            current_tier = system.risk_tier or "unassessed"
+            if RISK_TIER_SEVERITY.get(proposed_tier, 0) > RISK_TIER_SEVERITY.get(current_tier, 0):
+                system.risk_tier = proposed_tier
+                AuditService(self.db).write_audit_log(
+                    action="ai_system.risk_tier_escalated",
+                    entity_type="ai_system",
+                    entity_id=system.id,
+                    organization_id=org_id,
+                    actor_user_id=user_id,
+                    before_json={"risk_tier": current_tier},
+                    after_json={"risk_tier": proposed_tier},
+                    metadata_json={
+                        "source": "third_party_ai_assessment",
+                        "assessment_id": str(row.id),
+                    },
+                )
 
         self.db.flush()
 
