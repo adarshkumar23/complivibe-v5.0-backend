@@ -110,6 +110,7 @@ class EvidenceReuseItem(BaseModel):
 
 
 class EvidenceReuseReport(BaseModel):
+    reuse_definition: str
     reused_evidence: list[EvidenceReuseItem]
     total_evidence_items: int
     reused_count: int
