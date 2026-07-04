@@ -383,3 +383,104 @@ def test_s4_p3_no_duplicate_case_for_same_response(client, db_session):
         )
     ).scalars().all()
     assert len(rows) == 1
+
+
+def test_s4_p3_case_description_references_triggering_answers(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="s4p3-desc-detail")
+    vendor = _create_vendor(client, org["org_headers"], org["user_id"], name="Descriptive Vendor")
+    _create_vendor_assessment(client, org["org_headers"], vendor["id"])
+    template = _ai_template(db_session)
+
+    created = client.post(
+        Q_RESP_BASE,
+        headers=org["org_headers"],
+        json={"vendor_id": vendor["id"], "template_id": str(template.id), "title": "AI Vendor Q-desc"},
+    )
+    assert created.status_code == 201
+    response_id = created.json()["id"]
+
+    detail = client.get(f"{Q_RESP_BASE}/{response_id}", headers=org["org_headers"])
+    questions_by_id = {row["question_id"]: row for row in detail.json()["answers"]}
+    answers = [{"question_id": qid, "answer_value": "No", "answer_text": "No"} for qid in questions_by_id]
+    bulk = client.post(f"{Q_RESP_BASE}/{response_id}/answers/bulk", headers=org["org_headers"], json={"answers": answers})
+    assert bulk.status_code == 200
+    assert bulk.json()["score"] >= 70
+
+    marker = f"[auto_response_id:{response_id}]"
+    case = db_session.execute(
+        select(VendorMitigationCase).where(
+            VendorMitigationCase.organization_id == uuid.UUID(org["organization_id"]),
+            VendorMitigationCase.vendor_id == uuid.UUID(vendor["id"]),
+            VendorMitigationCase.description.ilike(f"%{marker}%"),
+            VendorMitigationCase.deleted_at.is_(None),
+        )
+    ).scalar_one()
+    # Description must name specific triggering answers, not just a bare score number.
+    assert "Top contributing answers:" in case.description
+    assert '"No"' in case.description
+    assert "(+" in case.description
+
+
+def test_s4_p3_second_high_risk_response_does_not_duplicate_open_case(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="s4p3-repeat-breach")
+    vendor = _create_vendor(client, org["org_headers"], org["user_id"], name="Repeat Breach Vendor")
+    _create_vendor_assessment(client, org["org_headers"], vendor["id"])
+    template = _ai_template(db_session)
+
+    first_created = client.post(
+        Q_RESP_BASE,
+        headers=org["org_headers"],
+        json={"vendor_id": vendor["id"], "template_id": str(template.id), "title": "AI Vendor Repeat 1"},
+    )
+    assert first_created.status_code == 201
+    first_response_id = first_created.json()["id"]
+    first_detail = client.get(f"{Q_RESP_BASE}/{first_response_id}", headers=org["org_headers"])
+    first_answers = [
+        {"question_id": row["question_id"], "answer_value": "No", "answer_text": "No"} for row in first_detail.json()["answers"]
+    ]
+    first_bulk = client.post(f"{Q_RESP_BASE}/{first_response_id}/answers/bulk", headers=org["org_headers"], json={"answers": first_answers})
+    assert first_bulk.status_code == 200
+    assert first_bulk.json()["score"] >= 70
+
+    # A second, distinct questionnaire response for the SAME vendor also breaches
+    # threshold while the first case is still open.
+    second_created = client.post(
+        Q_RESP_BASE,
+        headers=org["org_headers"],
+        json={"vendor_id": vendor["id"], "template_id": str(template.id), "title": "AI Vendor Repeat 2"},
+    )
+    assert second_created.status_code == 201
+    second_response_id = second_created.json()["id"]
+    second_detail = client.get(f"{Q_RESP_BASE}/{second_response_id}", headers=org["org_headers"])
+    second_answers = [
+        {"question_id": row["question_id"], "answer_value": "No", "answer_text": "No"} for row in second_detail.json()["answers"]
+    ]
+    second_bulk = client.post(
+        f"{Q_RESP_BASE}/{second_response_id}/answers/bulk", headers=org["org_headers"], json={"answers": second_answers}
+    )
+    assert second_bulk.status_code == 200
+    assert second_bulk.json()["score"] >= 70
+
+    all_cases = db_session.execute(
+        select(VendorMitigationCase).where(
+            VendorMitigationCase.organization_id == uuid.UUID(org["organization_id"]),
+            VendorMitigationCase.vendor_id == uuid.UUID(vendor["id"]),
+            VendorMitigationCase.deleted_at.is_(None),
+        )
+    ).scalars().all()
+    # Only the first breach created a case; the second breach against the same
+    # still-open vendor risk must not spawn a duplicate.
+    assert len(all_cases) == 1
+
+    second_marker = f"[auto_response_id:{second_response_id}]"
+    assert second_marker not in all_cases[0].description
+
+    repeat_note = db_session.execute(
+        select(AuditLog).where(
+            AuditLog.organization_id == uuid.UUID(org["organization_id"]),
+            AuditLog.action == "vendor_mitigation.repeat_threshold_breach_noted",
+            AuditLog.entity_id == all_cases[0].id,
+        )
+    ).scalar_one_or_none()
+    assert repeat_note is not None
+    assert repeat_note.after_json["questionnaire_response_id"] == second_response_id

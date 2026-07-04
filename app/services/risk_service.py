@@ -14,7 +14,15 @@ from app.models.risk_control_link import RiskControlLink
 
 
 class RiskService:
-    APPETITE_FALLBACK_CATEGORIES = {"operational", "financial", "compliance", "reputational", "technology", "vendor"}
+    APPETITE_FALLBACK_CATEGORIES = {
+        "operational",
+        "financial",
+        "compliance",
+        "reputational",
+        "technology",
+        "vendor",
+        "ai_governance",
+    }
 
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -198,6 +206,13 @@ class RiskService:
             key = (risk.likelihood, risk.impact)
             cell = matrix[key]
             cell["count"] += 1
-            cell["risks"].append({"id": str(risk.id), "title": risk.title})
+            cell["risks"].append(
+                {
+                    "id": str(risk.id),
+                    "title": risk.title,
+                    "inherent_score": risk.inherent_score,
+                    "residual_score": risk.residual_score,
+                }
+            )
 
         return [matrix[(l, i)] for l in range(1, 6) for i in range(1, 6)]

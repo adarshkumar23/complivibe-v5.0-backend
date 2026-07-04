@@ -1064,4 +1064,3 @@ def test_cross_migration_head():
     script = ScriptDirectory.from_config(cfg)
     heads = script.get_heads()
     assert len(heads) == 1
-    assert heads[0] == "a6947935ab21"

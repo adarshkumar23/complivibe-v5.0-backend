@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 import uuid
 
 from app.core.security import get_password_hash
+from app.models.audit_log import AuditLog
 from app.models.auditor_portal_invitation import AuditorPortalInvitation
 from app.models.membership import Membership
 from app.models.obligation import Obligation
@@ -329,6 +330,96 @@ def test_a43_portal_controls_and_evidence_scoping_and_org_isolation(client, db_s
     assert evidence.status_code == 200
     evidence_ids = {row["id"] for row in evidence.json()}
     assert evidence_ids == {ev_in["id"]}
+
+
+def test_a43_portal_view_writes_resource_specific_audit_trail(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="a43-viewaudit")
+    fw_in_scope, _ = _framework_ids(client, org["headers"])
+    engagement = _create_engagement(client, org["org_headers"], fw_in_scope, org["user_id"])
+
+    invitation = _create_invitation(
+        client,
+        org["org_headers"],
+        engagement["id"],
+        {
+            "auditor_email": "view-auditor@example.com",
+            "scoped_framework_ids": [fw_in_scope],
+            "expires_in_days": 30,
+        },
+    )
+    portal_headers = {"Authorization": f"Bearer {invitation['plaintext_token']}"}
+    invitation_id = uuid.UUID(invitation["invitation_id"])
+
+    assert client.get(f"{PORTAL_BASE}/me", headers=portal_headers).status_code == 200
+    assert client.get(f"{PORTAL_BASE}/controls", headers=portal_headers).status_code == 200
+    assert client.get(f"{PORTAL_BASE}/evidence", headers=portal_headers).status_code == 200
+    assert client.get(f"{PORTAL_BASE}/reports", headers=portal_headers).status_code == 200
+
+    logs = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.entity_id == invitation_id, AuditLog.action == "auditor_portal.data_viewed")
+        .all()
+    )
+    resource_types = {log.after_json["resource_type"] for log in logs}
+    # Each scoped-data endpoint gets its own audit entry -- distinguishable from the
+    # generic "auditor_portal.access" login-level entry written on every token auth.
+    assert resource_types == {"engagement_summary", "controls", "evidence", "reports"}
+    for log in logs:
+        assert "item_count" in log.after_json
+        assert "item_ids" in log.after_json
+
+    access_logs = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.entity_id == invitation_id, AuditLog.action == "auditor_portal.access")
+        .all()
+    )
+    assert len(access_logs) == 4
+
+
+def test_a43_portal_auth_error_messages_distinguish_invalid_expired_revoked(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="a43-msgs")
+    fw_in_scope, _ = _framework_ids(client, org["headers"])
+    engagement = _create_engagement(client, org["org_headers"], fw_in_scope, org["user_id"])
+
+    garbage = client.get(f"{PORTAL_BASE}/me", headers={"Authorization": "Bearer not-a-real-token"})
+    assert garbage.status_code == 401
+    assert garbage.json()["detail"] == "Invalid portal token"
+
+    expired_invite = _create_invitation(
+        client,
+        org["org_headers"],
+        engagement["id"],
+        {"auditor_email": "msg-expired@example.com", "scoped_framework_ids": [fw_in_scope], "expires_in_days": 1},
+    )
+    expired_row = db_session.query(AuditorPortalInvitation).filter_by(id=uuid.UUID(expired_invite["invitation_id"])).one()
+    expired_row.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    db_session.commit()
+
+    expired = client.get(
+        f"{PORTAL_BASE}/me",
+        headers={"Authorization": f"Bearer {expired_invite['plaintext_token']}"},
+    )
+    assert expired.status_code == 401
+    assert expired.json()["detail"] == "Portal token expired"
+
+    revoked_invite = _create_invitation(
+        client,
+        org["org_headers"],
+        engagement["id"],
+        {"auditor_email": "msg-revoked@example.com", "scoped_framework_ids": [fw_in_scope], "expires_in_days": 30},
+    )
+    client.post(f"{PORTAL_BASE}/invitations/{revoked_invite['invitation_id']}/revoke", headers=org["org_headers"])
+
+    revoked = client.get(
+        f"{PORTAL_BASE}/me",
+        headers={"Authorization": f"Bearer {revoked_invite['plaintext_token']}"},
+    )
+    assert revoked.status_code == 401
+    assert revoked.json()["detail"] == "Portal token revoked"
+
+    # All three messages are distinct -- an auditor (or support engineer) can tell
+    # apart "never existed"/"malformed" vs "expired mid-session" vs "explicitly revoked".
+    assert len({garbage.json()["detail"], expired.json()["detail"], revoked.json()["detail"]}) == 3
 
 
 def test_a44_finding_ref_generation_and_org_sequences(client):

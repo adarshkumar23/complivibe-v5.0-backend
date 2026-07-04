@@ -295,6 +295,9 @@ def update_control(
     if payload.owner_user_id is not None:
         ControlService.ensure_owner_is_active_member(db, organization.id, payload.owner_user_id)
 
+    if payload.status is not None:
+        ControlService.validate_status_transition(control.status, payload.status)
+
     before = {
         "title": control.title,
         "description": control.description,

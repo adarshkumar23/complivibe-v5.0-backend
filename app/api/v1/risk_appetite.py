@@ -24,7 +24,7 @@ from app.schemas.risk_appetite import (
 from app.services.audit_service import AuditService
 
 router = APIRouter(prefix="/compliance/risk-appetite", tags=["risk-appetite"])
-ALL_RISK_CATEGORIES = ["operational", "financial", "compliance", "reputational", "technology", "vendor"]
+ALL_RISK_CATEGORIES = ["operational", "financial", "compliance", "reputational", "technology", "vendor", "ai_governance"]
 
 
 def _threshold_read(row: RiskAppetiteThreshold) -> RiskAppetiteThresholdRead:

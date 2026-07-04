@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.schemas.common import UUIDTimestampSchema
 
 RISK_APPETITE_SCOPE_PATTERN = "^(org|business_unit)$"
-RISK_APPETITE_CATEGORY_PATTERN = "^(operational|financial|compliance|reputational|technology|vendor)$"
+RISK_APPETITE_CATEGORY_PATTERN = "^(operational|financial|compliance|reputational|technology|vendor|ai_governance)$"
 
 
 class RiskAppetiteThresholdCreate(BaseModel):

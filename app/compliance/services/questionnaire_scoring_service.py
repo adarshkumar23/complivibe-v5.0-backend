@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.compliance.services.vendor_mitigation_service import VendorMitigationService
+from app.models.audit_log import AuditLog
 from app.models.questionnaire_scoring_rule import QuestionnaireScoringRule
 from app.models.questionnaire_template_question import QuestionnaireTemplateQuestion
 from app.models.vendor import Vendor
@@ -202,6 +203,33 @@ class QuestionnaireScoringService:
         )
         return final_score
 
+    def _top_triggering_answers_summary(self, response: VendorQuestionnaireResponse, *, limit: int = 3) -> str:
+        """Summarize the highest-scoring answers that actually drove the breach.
+
+        Without this, every auto-created mitigation case's description is just a
+        generic score number -- a reviewer has to go dig up the questionnaire
+        response separately to find out *why* the vendor is high-risk.
+        """
+        pairs = self.db.execute(
+            select(VendorQuestionnaireAnswer, QuestionnaireTemplateQuestion)
+            .join(QuestionnaireTemplateQuestion, QuestionnaireTemplateQuestion.id == VendorQuestionnaireAnswer.question_id)
+            .where(
+                VendorQuestionnaireAnswer.organization_id == response.organization_id,
+                VendorQuestionnaireAnswer.response_id == response.id,
+                VendorQuestionnaireAnswer.score_contribution.is_not(None),
+                VendorQuestionnaireAnswer.score_contribution > 0,
+            )
+            .order_by(VendorQuestionnaireAnswer.score_contribution.desc())
+        ).all()
+        if not pairs:
+            return "No individual answer contributed a positive score (see full response for detail)."
+
+        entries = []
+        for answer, question in pairs[:limit]:
+            answer_text = self._effective_answer_text(answer) or "(no answer text)"
+            entries.append(f'"{question.question_text}" -> "{answer_text}" (+{answer.score_contribution})')
+        return "; ".join(entries)
+
     def _auto_create_mitigation_case_on_threshold_breach(
         self,
         *,
@@ -224,6 +252,50 @@ class QuestionnaireScoringService:
             )
         ).scalar_one_or_none()
         if existing is not None:
+            return
+
+        # A different response for the same vendor breaching threshold while an
+        # auto-created case from a *prior* breach is still open shouldn't spawn a
+        # second case for the same underlying vendor risk -- note the repeat breach
+        # against the existing case instead of creating a duplicate.
+        existing_open_case = self.db.execute(
+            select(VendorMitigationCase).where(
+                VendorMitigationCase.organization_id == response.organization_id,
+                VendorMitigationCase.vendor_id == response.vendor_id,
+                VendorMitigationCase.deleted_at.is_(None),
+                VendorMitigationCase.status.not_in(["closed", "cancelled"]),
+                VendorMitigationCase.description.ilike("%[auto_response_id:%"),
+            )
+        ).scalar_one_or_none()
+        if existing_open_case is not None:
+            # An answer-by-answer bulk submission recomputes the score after every
+            # single answer, so this branch can be entered repeatedly for the same
+            # response as it crosses the threshold multiple times in one submission --
+            # only note the repeat breach once per (case, response) pair.
+            prior_notes = self.db.execute(
+                select(AuditLog.after_json).where(
+                    AuditLog.organization_id == response.organization_id,
+                    AuditLog.action == "vendor_mitigation.repeat_threshold_breach_noted",
+                    AuditLog.entity_id == existing_open_case.id,
+                )
+            ).scalars().all()
+            if any(note.get("questionnaire_response_id") == str(response.id) for note in prior_notes):
+                return
+
+            AuditService(self.db).write_audit_log(
+                action="vendor_mitigation.repeat_threshold_breach_noted",
+                entity_type="vendor_mitigation_case",
+                entity_id=existing_open_case.id,
+                organization_id=response.organization_id,
+                actor_user_id=actor_user_id,
+                after_json={
+                    "vendor_id": str(response.vendor_id),
+                    "questionnaire_response_id": str(response.id),
+                    "score": int(score),
+                    "existing_case_id": str(existing_open_case.id),
+                },
+                metadata_json={"source": "questionnaire_scoring_hook"},
+            )
             return
 
         vendor = self.db.execute(
@@ -276,6 +348,7 @@ class QuestionnaireScoringService:
                 after_json={"vendor_id": str(response.vendor_id), "response_id": str(response.id)},
                 metadata_json={"source": "questionnaire_threshold_breach"},
             )
+        triggering_answers_summary = self._top_triggering_answers_summary(response)
         case_payload = SimpleNamespace(
             vendor_id=response.vendor_id,
             assessment_id=vendor_assessment.id,
@@ -283,7 +356,8 @@ class QuestionnaireScoringService:
             title=f"Auto Mitigation: Questionnaire risk score {score}",
             description=(
                 f"Automatically created from questionnaire response threshold breach. "
-                f"Response {response.id} scored {score}/{self.HIGH_RISK_THRESHOLD}. {marker}"
+                f"Response {response.id} scored {score}/{self.HIGH_RISK_THRESHOLD}. "
+                f"Top contributing answers: {triggering_answers_summary} {marker}"
             ),
             severity="critical" if score >= 85 else "high",
             assigned_owner_id=vendor.owner_user_id,

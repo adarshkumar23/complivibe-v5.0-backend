@@ -15,6 +15,34 @@ from app.models.organization_framework import OrganizationFramework
 
 
 class ControlService:
+    # Valid next statuses for each current control status. "archived" is terminal: a control
+    # cannot be revived from it (must be recreated), which was the reported bug -- any status
+    # could previously transition to any other, including out of archived.
+    STATUS_TRANSITIONS: dict[str, set[str]] = {
+        "not_started": {"in_progress", "implemented", "failed", "not_applicable", "archived"},
+        "in_progress": {"needs_review", "implemented", "failed", "not_applicable", "archived"},
+        "needs_review": {"implemented", "failed", "in_progress", "archived"},
+        "implemented": {"needs_review", "failed", "in_progress", "archived"},
+        "failed": {"in_progress", "needs_review", "implemented", "archived"},
+        "not_applicable": {"in_progress", "archived"},
+        "archived": set(),
+    }
+
+    @staticmethod
+    def validate_status_transition(current_status: str, new_status: str) -> None:
+        if current_status == new_status:
+            return
+        allowed = ControlService.STATUS_TRANSITIONS.get(current_status, set())
+        if new_status not in allowed:
+            valid = ", ".join(sorted(allowed)) if allowed else "none (terminal status)"
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"Cannot transition control status from '{current_status}' to '{new_status}'. "
+                    f"Valid next statuses: {valid}."
+                ),
+            )
+
     @staticmethod
     def emit_control_status_changed(
         db: Session,
@@ -59,6 +87,7 @@ class ControlService:
         if control is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Control not found")
         previous_status = control.status
+        ControlService.validate_status_transition(previous_status, new_status)
         control.status = new_status
         db.flush()
         ControlService.emit_control_status_changed(

@@ -161,6 +161,53 @@ def test_control_owner_validation_update_archive_and_audit(client, db_session):
     assert "control.archived" in actions
 
 
+def test_control_status_transitions_enforced(client, db_session):
+    owner = _register(client, "p21-transitions@example.com", "Pass1234!@", "P21 Transitions Org")
+    org = client.get("/api/v1/organizations/me", headers=_headers(owner)).json()[0]["id"]
+
+    created = client.post(
+        "/api/v1/controls",
+        headers=_headers(owner, org),
+        json={"title": "Transition Control", "control_type": "process", "criticality": "medium"},
+    )
+    assert created.status_code == 201
+    control_id = created.json()["id"]
+    assert created.json()["status"] == "not_started"
+
+    # Cannot skip straight to needs_review from not_started (not a valid transition).
+    invalid = client.patch(
+        f"/api/v1/controls/{control_id}",
+        headers=_headers(owner, org),
+        json={"status": "needs_review"},
+    )
+    assert invalid.status_code == 422
+    assert "not_started" in invalid.json()["detail"]
+    assert "needs_review" in invalid.json()["detail"]
+
+    # Valid forward transition still works.
+    valid = client.patch(
+        f"/api/v1/controls/{control_id}",
+        headers=_headers(owner, org),
+        json={"status": "in_progress"},
+    )
+    assert valid.status_code == 200
+    assert valid.json()["status"] == "in_progress"
+
+    archived = client.patch(f"/api/v1/controls/{control_id}/archive", headers=_headers(owner, org))
+    assert archived.status_code == 200
+    assert archived.json()["status"] == "archived"
+
+    # Archived is terminal: cannot be revived to any other status.
+    revive = client.patch(
+        f"/api/v1/controls/{control_id}",
+        headers=_headers(owner, org),
+        json={"status": "in_progress"},
+    )
+    assert revive.status_code == 422
+    assert "archived" in revive.json()["detail"]
+    assert "terminal" in revive.json()["detail"]
+
+
 def test_control_mapping_unmapping_obligation_controls_and_gap_summary(client):
     owner = _register(client, "p21-owner5@example.com", "Pass1234!@", "P21 Org5")
     org_id = client.get("/api/v1/organizations/me", headers=_headers(owner)).json()[0]["id"]

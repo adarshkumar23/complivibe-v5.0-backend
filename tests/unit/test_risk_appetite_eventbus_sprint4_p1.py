@@ -111,7 +111,10 @@ def _alert_for_risk(db_session, org_id: str, risk_id: uuid.UUID) -> ControlMonit
 
 def test_s4_p1_appetite_check_mlops_auto_risk_creates_breach_alert(client, db_session):
     org = bootstrap_org_user(client, email_prefix="s4p1-mlops")
-    _create_threshold(db_session, org["organization_id"], org["user_id"], max_score=5)
+    # MLOps-adapter auto-created risks are categorized "ai_governance" (see
+    # app/ai_governance/services/mlops_adapter_service.py); the threshold must match
+    # that category for the breach check to resolve to it.
+    _create_threshold(db_session, org["organization_id"], org["user_id"], max_score=5, category="ai_governance")
 
     org_id = uuid.UUID(org["organization_id"])
     user_id = uuid.UUID(org["user_id"])

@@ -212,6 +212,37 @@ def test_a41_soft_delete_allowed_from_planning_blocked_from_fieldwork(client):
     assert blocked.status_code == 422
 
 
+def test_a41_soft_delete_blocked_by_open_pbc_item_even_in_planning(client):
+    org = bootstrap_org_user(client, email_prefix="a41-delete-openpbc")
+    framework_id = _framework_id(client, org["headers"])
+
+    engagement = _create_engagement(
+        client,
+        org["org_headers"],
+        framework_id=framework_id,
+        auditor_user_id=org["user_id"],
+        title="Delete blocked by open PBC",
+    )
+    # PBC items can be requested before fieldwork starts, so an engagement can carry
+    # open PBC work while still nominally in "planning" status.
+    pbc_item = _create_pbc_item(client, org["org_headers"], engagement_id=engagement["id"])
+
+    blocked = client.delete(f"{ENGAGEMENT_BASE}/{engagement['id']}", headers=org["org_headers"])
+    assert blocked.status_code == 422
+    assert "open PBC" in blocked.json()["detail"]
+
+    reject = client.post(
+        f"{PBC_BASE}/{pbc_item['id']}/reject",
+        headers=org["org_headers"],
+        json={"rejection_reason": "not needed"},
+    )
+    assert reject.status_code == 200
+
+    # Rejected is still an open/actionable state (can be resubmitted), not terminal.
+    still_blocked = client.delete(f"{ENGAGEMENT_BASE}/{engagement['id']}", headers=org["org_headers"])
+    assert still_blocked.status_code == 422
+
+
 def test_a41_dashboard_counts_and_org_isolation(client):
     org_a = bootstrap_org_user(client, email_prefix="a41-dash-a")
     org_b = bootstrap_org_user(client, email_prefix="a41-dash-b")

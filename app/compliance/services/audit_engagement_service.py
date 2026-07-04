@@ -6,11 +6,19 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.audit_engagement import AuditEngagement
+from app.models.audit_finding import AuditFinding
 from app.models.framework import Framework
 from app.models.membership import Membership
+from app.models.pbc_item import PbcItem
 from app.models.user import User
 from app.schemas.audit_engagement import AuditEngagementCreate, AuditEngagementUpdate
 from app.services.audit_service import AuditService
+
+# Terminal statuses for items linked to an engagement -- anything outside these sets
+# still represents open, unresolved work that would be silently orphaned by deleting
+# the parent engagement.
+_PBC_ITEM_OPEN_STATUSES = {"pending", "submitted", "overdue", "rejected"}
+_FINDING_OPEN_STATUSES = {"open", "in_remediation", "remediation_in_progress"}
 
 
 class AuditEngagementService:
@@ -233,9 +241,13 @@ class AuditEngagementService:
         row = self.require_engagement(org_id, engagement_id)
         allowed = self.ALLOWED_TRANSITIONS.get(row.status, set())
         if new_status not in allowed:
+            valid = ", ".join(sorted(allowed)) if allowed else "none (terminal status)"
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Invalid status transition from {row.status} to {new_status}",
+                detail=(
+                    f"Invalid status transition from '{row.status}' to '{new_status}'. "
+                    f"Valid next statuses: {valid}."
+                ),
             )
 
         before_status = row.status
@@ -265,6 +277,34 @@ class AuditEngagementService:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Only planning or cancelled engagements can be deleted",
+            )
+
+        open_pbc_count = int(
+            self.db.execute(
+                select(func.count(PbcItem.id)).where(
+                    PbcItem.organization_id == org_id,
+                    PbcItem.audit_engagement_id == engagement_id,
+                    PbcItem.status.in_(_PBC_ITEM_OPEN_STATUSES),
+                )
+            ).scalar_one()
+        )
+        open_finding_count = int(
+            self.db.execute(
+                select(func.count(AuditFinding.id)).where(
+                    AuditFinding.organization_id == org_id,
+                    AuditFinding.audit_engagement_id == engagement_id,
+                    AuditFinding.status.in_(_FINDING_OPEN_STATUSES),
+                )
+            ).scalar_one()
+        )
+        if open_pbc_count or open_finding_count:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Cannot delete engagement with open PBC requests or findings: "
+                    f"{open_pbc_count} open PBC item(s), {open_finding_count} open finding(s). "
+                    "Resolve or close them first."
+                ),
             )
 
         row.deleted_at = self.utcnow()
