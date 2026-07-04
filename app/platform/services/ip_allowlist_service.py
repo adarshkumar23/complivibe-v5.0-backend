@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.org_ip_allowlist import OrgIPAllowlist
+from app.services.audit_service import AuditService
 
 
 class IPAllowlistService:
@@ -97,7 +98,26 @@ class IPAllowlistService:
                 return True
         return False
 
-    def remove_ip_range(self, *, org_id: uuid.UUID, range_id: uuid.UUID) -> OrgIPAllowlist:
+    def _remaining_active_ranges(self, *, org_id: uuid.UUID, exclude_id: uuid.UUID) -> list[str]:
+        return [
+            r.cidr_range
+            for r in self.db.execute(
+                select(OrgIPAllowlist.cidr_range).where(
+                    OrgIPAllowlist.organization_id == org_id,
+                    OrgIPAllowlist.is_active.is_(True),
+                    OrgIPAllowlist.id != exclude_id,
+                )
+            ).all()
+        ]
+
+    def remove_ip_range(
+        self,
+        *,
+        org_id: uuid.UUID,
+        range_id: uuid.UUID,
+        requester_ip: str | None,
+        removed_by: uuid.UUID,
+    ) -> OrgIPAllowlist:
         row = self.db.execute(
             select(OrgIPAllowlist).where(
                 OrgIPAllowlist.id == range_id,
@@ -107,9 +127,63 @@ class IPAllowlistService:
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="IP allowlist range not found")
 
-        row.is_active = False
+        if row.is_active:
+            remaining = self._remaining_active_ranges(org_id=org_id, exclude_id=row.id)
+            if not self._ip_in_any_range(requester_ip, remaining):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "Deactivating this range would exclude your own current IP address "
+                        f"({requester_ip or 'unknown'}), locking you out of the organization. "
+                        "If you intend to disable IP allowlisting entirely, use the disable endpoint instead."
+                    ),
+                )
+            row.is_active = False
+
         self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="ip_allowlist.range_deactivated",
+            entity_type="org_ip_allowlist",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=removed_by,
+            after_json={"cidr_range": row.cidr_range, "is_active": row.is_active},
+            metadata_json={"source": "api"},
+        )
         return row
+
+    def disable_allowlist(
+        self,
+        *,
+        org_id: uuid.UUID,
+        requester_ip: str | None,
+        disabled_by: uuid.UUID,
+    ) -> list[OrgIPAllowlist]:
+        """Explicitly disable IP allowlisting for the organization by deactivating all active ranges."""
+        rows = list(
+            self.db.execute(
+                select(OrgIPAllowlist).where(
+                    OrgIPAllowlist.organization_id == org_id,
+                    OrgIPAllowlist.is_active.is_(True),
+                )
+            ).scalars().all()
+        )
+        for row in rows:
+            row.is_active = False
+
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="ip_allowlist.disabled",
+            entity_type="org_ip_allowlist",
+            entity_id=org_id,
+            organization_id=org_id,
+            actor_user_id=disabled_by,
+            after_json={"deactivated_range_ids": [str(row.id) for row in rows]},
+            metadata_json={"requester_ip": requester_ip, "source": "api"},
+        )
+        return rows
 
     def list_ranges(self, *, org_id: uuid.UUID) -> list[OrgIPAllowlist]:
         return list(

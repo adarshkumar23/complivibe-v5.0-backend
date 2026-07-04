@@ -53,11 +53,46 @@ def list_ip_allowlist_ranges(
 @router.delete("/{range_id}", response_model=IPAllowlistRead)
 def deactivate_ip_allowlist_range(
     range_id: uuid.UUID,
+    request: Request,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("org:update")),
 ) -> IPAllowlistRead:
-    row = IPAllowlistService(db).remove_ip_range(org_id=organization.id, range_id=range_id)
+    requester_ip = IPAllowlistService.extract_request_ip(
+        x_forwarded_for=request.headers.get("X-Forwarded-For"),
+        client_host=request.client.host if request.client else None,
+    )
+    row = IPAllowlistService(db).remove_ip_range(
+        org_id=organization.id,
+        range_id=range_id,
+        requester_ip=requester_ip,
+        removed_by=current_user.id,
+    )
     db.commit()
     db.refresh(row)
     return IPAllowlistRead.model_validate(row)
+
+
+@router.post("/disable", response_model=list[IPAllowlistRead])
+def disable_ip_allowlist(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("org:update")),
+) -> list[IPAllowlistRead]:
+    """Explicitly disable IP allowlisting for the organization."""
+    requester_ip = IPAllowlistService.extract_request_ip(
+        x_forwarded_for=request.headers.get("X-Forwarded-For"),
+        client_host=request.client.host if request.client else None,
+    )
+    rows = IPAllowlistService(db).disable_allowlist(
+        org_id=organization.id,
+        requester_ip=requester_ip,
+        disabled_by=current_user.id,
+    )
+    db.commit()
+    for row in rows:
+        db.refresh(row)
+    return [IPAllowlistRead.model_validate(row) for row in rows]

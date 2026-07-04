@@ -112,7 +112,7 @@ def test_s5_p6_sessions_login_list_revoke_admin_cross_org_and_expire(client, db_
     assert db_session.get(UserSession, stale.id).status == "expired"
 
 
-def test_s5_p6_ip_allowlist_add_validate_enforce_and_deactivate(client, db_session):
+def test_s5_p6_ip_allowlist_add_validate_enforce_deactivate_and_disable(client, db_session):
     org = bootstrap_org_user(client, email_prefix="s5p6-ip")
 
     add = client.post(
@@ -136,22 +136,48 @@ def test_s5_p6_ip_allowlist_add_validate_enforce_and_deactivate(client, db_sessi
     blocked = client.get("/api/v1/risks", headers=_headers(org, ip="198.51.100.9"))
     assert blocked.status_code == 403, blocked.text
 
-    second = client.post(
+    # Adding a non-covering range is fine because the requester is still covered
+    # by an existing active range.
+    non_covering = client.post(
         "/api/v1/organizations/ip-allowlist",
         headers=_headers(org, ip="203.0.113.9"),
         json={"cidr_range": "198.51.100.0/24", "label": "Branch VPN"},
     )
-    assert second.status_code == 200, second.text
+    assert non_covering.status_code == 200, non_covering.text
+    non_covering_id = non_covering.json()["id"]
 
-    deactivate = client.delete(
+    # Removing the covering range would lock the requester out; must be rejected.
+    lockout_attempt = client.delete(
         f"/api/v1/organizations/ip-allowlist/{range_id}",
         headers=_headers(org, ip="203.0.113.9"),
     )
-    assert deactivate.status_code == 200, deactivate.text
-    assert deactivate.json()["is_active"] is False
+    assert lockout_attempt.status_code == 400, lockout_attempt.text
+    assert "locking you out" in lockout_attempt.json()["detail"].lower()
 
-    now_blocked = client.get("/api/v1/risks", headers=_headers(org, ip="203.0.113.9"))
-    assert now_blocked.status_code == 403, now_blocked.text
+    # Removing a non-covering range is safe and should succeed.
+    remove_non_covering = client.delete(
+        f"/api/v1/organizations/ip-allowlist/{non_covering_id}",
+        headers=_headers(org, ip="203.0.113.9"),
+    )
+    assert remove_non_covering.status_code == 200, remove_non_covering.text
+    assert remove_non_covering.json()["is_active"] is False
+
+    # The requester is still covered by the original range.
+    still_allowed = client.get("/api/v1/risks", headers=_headers(org, ip="203.0.113.9"))
+    assert still_allowed.status_code == 200, still_allowed.text
+
+    # Explicitly disable IP allowlisting entirely.
+    disabled_resp = client.post(
+        "/api/v1/organizations/ip-allowlist/disable",
+        headers=_headers(org, ip="203.0.113.9"),
+    )
+    assert disabled_resp.status_code == 200, disabled_resp.text
+    deactivated = disabled_resp.json()
+    assert any(row["id"] == range_id and row["is_active"] is False for row in deactivated)
+
+    # With no active ranges the organization is no longer IP-restricted.
+    now_allowed = client.get("/api/v1/risks", headers=_headers(org, ip="198.51.100.9"))
+    assert now_allowed.status_code == 200, now_allowed.text
 
     # Org with zero active ranges remains unrestricted.
     org2 = bootstrap_org_user(client, email_prefix="s5p6-ip-open")
