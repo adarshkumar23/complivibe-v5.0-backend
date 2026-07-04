@@ -256,10 +256,13 @@ def test_a24_ingest_endpoint_auth_scoping_and_payload_storage(client, db_session
     )
     assert ok["status_code"] == 200
     assert ok["json"]["passed"] is True
-    assert ok["json"]["control_test_run_id"] is None
+    assert ok["json"]["control_test_run_id"] is not None
 
     stored = db_session.query(TechnicalControlResult).filter_by(id=uuid.UUID(ok["json"]["result_id"])).one()
     assert stored.raw_payload == {"agent": "scanner", "value": "true"}
+
+    ok_run = db_session.query(ControlTestRun).filter_by(id=uuid.UUID(ok["json"]["control_test_run_id"])).one()
+    assert ok_run.result == "passed"
 
     fail = _ingest(
         client,
@@ -279,6 +282,7 @@ def test_a24_ingest_endpoint_auth_scoping_and_payload_storage(client, db_session
     run = db_session.query(ControlTestRun).filter_by(id=uuid.UUID(fail["json"]["control_test_run_id"])).one_or_none()
     assert run is not None
     assert run.result == "failed"
+    assert run.control_test_definition_id == ok_run.control_test_definition_id
 
     wrong_org = _ingest(
         client,
@@ -479,7 +483,7 @@ def test_a24_result_tenant_isolation_and_control_test_run_links(client, db_sessi
         },
     )
     assert passed["status_code"] == 200
-    assert passed["json"]["control_test_run_id"] is None
+    assert passed["json"]["control_test_run_id"] is not None
 
     failed = _ingest(
         client,

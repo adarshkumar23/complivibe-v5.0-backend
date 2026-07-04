@@ -406,7 +406,7 @@ class TechnicalControlResultService:
         return row
 
     def _get_or_create_control_test_definition(self, rule: TechnicalControlRule, evaluated_at: datetime) -> ControlTestDefinition:
-        existing = self.db.execute(
+        candidates = self.db.execute(
             select(ControlTestDefinition)
             .where(
                 ControlTestDefinition.organization_id == rule.organization_id,
@@ -414,7 +414,15 @@ class TechnicalControlResultService:
                 ControlTestDefinition.status != "archived",
             )
             .order_by(ControlTestDefinition.created_at.asc())
-        ).scalars().first()
+        ).scalars().all()
+        existing = next(
+            (
+                candidate
+                for candidate in candidates
+                if isinstance(candidate.metadata_json, dict) and candidate.metadata_json.get("rule_id") == str(rule.id)
+            ),
+            None,
+        )
         if existing is not None:
             existing.last_run_at = evaluated_at
             self.db.flush()
@@ -424,7 +432,7 @@ class TechnicalControlResultService:
             organization_id=rule.organization_id,
             control_id=rule.control_id,
             name=f"Automated technical checks: {rule.name}"[:255],
-            description="Auto-generated definition for technical control ingestion failures",
+            description="Auto-generated definition for technical control ingestion results",
             test_type="internal_metadata_check",
             check_key="control_status_implemented",
             status="active",
@@ -456,30 +464,30 @@ class TechnicalControlResultService:
         evaluated_at = self.utcnow()
         passed, failure_reason = self.evaluator.evaluate(rule, payload.actual_config_value)
 
-        control_test_run_id: uuid.UUID | None = None
-        if not passed:
-            definition = self._get_or_create_control_test_definition(rule, evaluated_at)
-            run = ControlTestRun(
-                organization_id=agent.organization_id,
-                control_test_definition_id=definition.id,
-                control_id=rule.control_id,
-                result="failed",
-                result_reason=f"Automated technical check failed: {failure_reason}",
-                check_key=definition.check_key,
-                executed_by_user_id=None,
-                execution_source="automation",
-                evidence_item_id=None,
-                metadata_json={
-                    "source": "technical_control_ingest",
-                    "rule_id": str(rule.id),
-                    "agent_id": str(agent.id),
-                    "resource_identifier": payload.resource_identifier,
-                },
-                created_at=evaluated_at,
-            )
-            self.db.add(run)
-            self.db.flush()
-            control_test_run_id = run.id
+        definition = self._get_or_create_control_test_definition(rule, evaluated_at)
+        run = ControlTestRun(
+            organization_id=agent.organization_id,
+            control_test_definition_id=definition.id,
+            control_id=rule.control_id,
+            result="passed" if passed else "failed",
+            result_reason=(
+                "Automated technical check passed" if passed else f"Automated technical check failed: {failure_reason}"
+            ),
+            check_key=definition.check_key,
+            executed_by_user_id=None,
+            execution_source="automation",
+            evidence_item_id=None,
+            metadata_json={
+                "source": "technical_control_ingest",
+                "rule_id": str(rule.id),
+                "agent_id": str(agent.id),
+                "resource_identifier": payload.resource_identifier,
+            },
+            created_at=evaluated_at,
+        )
+        self.db.add(run)
+        self.db.flush()
+        control_test_run_id = run.id
 
         result = TechnicalControlResult(
             organization_id=agent.organization_id,
