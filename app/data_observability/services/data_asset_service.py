@@ -161,11 +161,15 @@ class DataAssetService:
         self.db.add(row)
         self.db.flush()
 
-        try:
-            self._run_tier1_classification(row)
-        except Exception:
-            # Classification is best-effort and must not block asset creation.
-            pass
+        explicit_sensitivity_tier = payload.get("sensitivity_tier") is not None
+        if explicit_sensitivity_tier:
+            row.classification_source = payload.get("classification_source") or "manual"
+        else:
+            try:
+                self._run_tier1_classification(row)
+            except Exception:
+                # Classification is best-effort and must not block asset creation.
+                pass
         row.permitted_regions = self.suggest_residency_policy(org_id, row.classification_type, row.permitted_regions)
 
         self.db.flush()

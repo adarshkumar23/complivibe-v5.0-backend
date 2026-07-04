@@ -109,6 +109,29 @@ def test_c73_data_asset_catalog_flow(client):
     assert isolated.status_code == 404
 
 
+def test_item7_explicit_sensitivity_tier_is_not_silently_overridden_by_auto_classification(client):
+    org = bootstrap_org_user(client, email_prefix="item7-org")
+
+    # This name/description/columns combo would auto-classify to "personal_data" /
+    # "confidential" via metadata_rules (see test_c73 above) if sensitivity_tier were
+    # left unset. Here the caller explicitly provides a different, lower tier.
+    created = _create_asset(
+        client,
+        org["org_headers"],
+        org["user_id"],
+        sensitivity_tier="public",
+    )
+    body = created.json()
+    assert body["sensitivity_tier"] == "public"
+    assert body["classification_source"] == "manual"
+
+    # Auto-classification still runs when no explicit tier is provided.
+    auto_created = _create_asset(client, org["org_headers"], org["user_id"], name="another_customer_email_db")
+    auto_body = auto_created.json()
+    assert auto_body["sensitivity_tier"] == "confidential"
+    assert auto_body["classification_source"] == "metadata_rules"
+
+
 def test_c74_classification_engine(monkeypatch, client):
     personal = classify_metadata("ssn_records", "contains email and name", ["ssn", "email"])
     assert personal["classification_type"] == "personal_data"
