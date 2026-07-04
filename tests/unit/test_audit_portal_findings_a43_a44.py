@@ -165,12 +165,15 @@ def test_a43_create_invitation_returns_plaintext_token_and_get_does_not(client):
     )
     assert created["plaintext_token"]
     assert created["warning"]
+    assert created["framework_id"] == fw1
 
     detail = client.get(f"{PORTAL_BASE}/invitations/{created['invitation_id']}", headers=org["org_headers"])
     assert detail.status_code == 200
     payload = detail.json()
     assert "plaintext_token" not in payload
     assert "token_hash" not in payload
+    assert payload["framework_id"] == fw1
+    assert payload["scoped_framework_ids"] == [fw1]
 
 
 def test_a43_portal_auth_valid_expired_revoked_and_access_count(client, db_session):
@@ -585,3 +588,4 @@ def test_a43_scoped_framework_ids_must_be_within_engagement_scope(client, db_ses
     detail = client.get(f"{PORTAL_BASE}/invitations/{default_scoped['invitation_id']}", headers=org["org_headers"])
     assert detail.status_code == 200
     assert detail.json()["scoped_framework_ids"] == [fw_in_scope]
+    assert detail.json()["framework_id"] == fw_in_scope

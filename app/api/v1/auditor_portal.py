@@ -27,6 +27,13 @@ from app.schemas.auditor_portal import (
 router = APIRouter(prefix="/audit-portal", tags=["auditor-portal"])
 
 
+def _primary_framework_id(row: AuditorPortalInvitation) -> uuid.UUID | None:
+    framework_ids = row.scoped_framework_ids or []
+    if not framework_ids:
+        return None
+    return uuid.UUID(framework_ids[0])
+
+
 def _invitation_read(row: AuditorPortalInvitation) -> AuditorPortalInvitationRead:
     return AuditorPortalInvitationRead(
         id=row.id,
@@ -35,6 +42,7 @@ def _invitation_read(row: AuditorPortalInvitation) -> AuditorPortalInvitationRea
         auditor_email=row.auditor_email,
         auditor_name=row.auditor_name,
         masked_email=AuditorPortalService.mask_email(row.auditor_email),
+        framework_id=_primary_framework_id(row),
         scoped_framework_ids=[uuid.UUID(item) for item in (row.scoped_framework_ids or [])],
         scoped_control_ids=[uuid.UUID(item) for item in row.scoped_control_ids] if row.scoped_control_ids is not None else None,
         scoped_evidence_ids=[uuid.UUID(item) for item in row.scoped_evidence_ids] if row.scoped_evidence_ids is not None else None,
@@ -95,6 +103,7 @@ def create_auditor_invitation(
     return AuditorPortalInvitationCreateResponse(
         invitation_id=row.id,
         auditor_email=row.auditor_email,
+        framework_id=_primary_framework_id(row),
         expires_at=row.expires_at,
         plaintext_token=plaintext_token,
         warning="Token is shown only once. Store it securely.",

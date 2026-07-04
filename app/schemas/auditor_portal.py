@@ -20,6 +20,7 @@ class AuditorPortalInvitationCreate(BaseModel):
 class AuditorPortalInvitationCreateResponse(BaseModel):
     invitation_id: UUID
     auditor_email: EmailStr
+    framework_id: UUID | None = None
     expires_at: datetime
     plaintext_token: str
     warning: str
@@ -32,6 +33,7 @@ class AuditorPortalInvitationRead(AppBaseSchema):
     auditor_email: EmailStr
     auditor_name: str | None = None
     masked_email: str
+    framework_id: UUID | None = None
     scoped_framework_ids: list[UUID]
     scoped_control_ids: list[UUID] | None = None
     scoped_evidence_ids: list[UUID] | None = None
