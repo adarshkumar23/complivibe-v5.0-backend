@@ -15,14 +15,14 @@ class OrgEmailConfigUpsertRequest(BaseModel):
 class OrgEmailConfigStatusRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: uuid.UUID
+    id: uuid.UUID | None = None
     organization_id: uuid.UUID
     provider: str
     is_active: bool
-    test_sent_at: datetime | None
-    created_by: uuid.UUID
-    created_at: datetime
-    updated_at: datetime
+    test_sent_at: datetime | None = None
+    created_by: uuid.UUID | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     config_configured: bool
 
 
