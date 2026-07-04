@@ -60,6 +60,65 @@ def test_nist_800_53_seed_and_assess_low(client, db_session):
     assert assess_resp.json()["applicable_obligation_count"] == 125
 
 
+def test_phase1_framework_quick_win_seed_counts_and_idempotency(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="phase1-frameworks")
+    _seed_frameworks(db_session)
+    _seed_frameworks(db_session)
+
+    nist = _framework(db_session, "NIST SP 800-53")
+    moderate_resp = client.post(
+        f"/api/v1/compliance/frameworks/{nist.id}/assess-applicability",
+        headers=org["org_headers"],
+        json={"answers": {"federal_system": True, "impact_level": "MODERATE"}},
+    )
+    assert moderate_resp.status_code == 200
+    assert moderate_resp.json()["applicable_obligation_count"] == 325
+
+    high_resp = client.post(
+        f"/api/v1/compliance/frameworks/{nist.id}/assess-applicability",
+        headers=org["org_headers"],
+        json={"answers": {"federal_system": True, "impact_level": "HIGH"}},
+    )
+    assert high_resp.status_code == 200
+    assert high_resp.json()["applicable_obligation_count"] == 421
+
+    csa = _framework(db_session, "CSA STAR CCM")
+    csa_rows = db_session.execute(
+        select(Obligation).where(Obligation.framework_id == csa.id, Obligation.status == "active")
+    ).scalars().all()
+    assert len(csa_rows) == 197
+    ais_01 = next(row for row in csa_rows if row.reference_code == "AIS-01")
+    assert "application security" in (ais_01.description or "").lower()
+
+    cra = _framework(db_session, "EU CRA Annex IV")
+    cra_rows = db_session.execute(
+        select(Obligation).where(Obligation.framework_id == cra.id, Obligation.status == "active")
+    ).scalars().all()
+    assert len(cra_rows) == 3
+    assert {row.reference_code for row in cra_rows} == {"CRA-IV-1", "CRA-IV-2", "CRA-IV-3"}
+
+    dpdp = _framework(db_session, "India DPDP")
+    dpdp_rows = db_session.execute(
+        select(Obligation).where(Obligation.framework_id == dpdp.id, Obligation.status == "active")
+    ).scalars().all()
+    assert len(dpdp_rows) == 18
+    assert any(row.reference_code == "DPDP-RULE-BREACH" and "without delay" in (row.description or "") for row in dpdp_rows)
+    assert all(row.reference_code != "DPDP-S16-2" for row in dpdp_rows)
+
+    obligations = db_session.execute(select(Obligation)).scalars().all()
+    by_id = {row.id: row for row in obligations}
+    mappings = db_session.execute(select(CrossFrameworkObligationMapping)).scalars().all()
+    csa_iso_mappings = [
+        row
+        for row in mappings
+        if by_id.get(row.source_obligation_id) is not None
+        and by_id.get(row.target_obligation_id) is not None
+        and by_id[row.source_obligation_id].reference_code.startswith("AIS-")
+        and by_id[row.target_obligation_id].reference_code.startswith("A.")
+    ]
+    assert csa_iso_mappings
+
+
 def test_hipaa_schema_seed_and_sla_wiring(client, db_session):
     org = bootstrap_org_user(client, email_prefix="a4-hipaa")
     _seed_frameworks(db_session)

@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 import uuid
 
@@ -653,6 +654,7 @@ def assess_framework_applicability(
 
     applies = True
     ig_scope = None
+    nist_impact_scope = None
     pii_role = None
     for question in questions:
         answer = payload.answers.get(question.question_key)
@@ -663,6 +665,11 @@ def assess_framework_applicability(
             candidate = answer.strip().upper()
             if candidate in {"IG1", "IG2", "IG3"}:
                 ig_scope = candidate
+                continue
+        if question.question_key == "impact_level" and isinstance(answer, str):
+            candidate = answer.strip().upper()
+            if candidate in {"LOW", "MODERATE", "HIGH"}:
+                nist_impact_scope = candidate
                 continue
         if question.question_key == "pii_role" and isinstance(answer, str):
             candidate = answer.strip().lower()
@@ -680,6 +687,24 @@ def assess_framework_applicability(
                 filtered = [row for row in filtered if row.ig_level == "IG1"]
             elif ig_scope == "IG2":
                 filtered = [row for row in filtered if row.ig_level in {"IG1", "IG2"}]
+        if framework.name == "NIST SP 800-53" and nist_impact_scope is not None:
+            if nist_impact_scope == "LOW":
+                filtered = [row for row in filtered if row.baseline == "LOW"]
+            else:
+                scoped: list[Obligation] = []
+                for row in filtered:
+                    baselines: list[str] = []
+                    if row.embedding_json:
+                        try:
+                            payload = json.loads(row.embedding_json)
+                            raw_baselines = payload.get("fedramp_rev4_baselines", [])
+                            if isinstance(raw_baselines, list):
+                                baselines = [str(item).upper() for item in raw_baselines]
+                        except (TypeError, ValueError, json.JSONDecodeError):
+                            baselines = []
+                    if nist_impact_scope in baselines:
+                        scoped.append(row)
+                filtered = scoped
         if framework.name == "ISO 27701" and pii_role is not None:
             if pii_role == "controller":
                 filtered = [row for row in filtered if row.reference_code.startswith("27701-7.")]

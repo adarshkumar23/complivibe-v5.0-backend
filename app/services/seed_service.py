@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import UTC, date, datetime
 from typing import Any
@@ -52,6 +53,16 @@ from app.services.framework_seed_data_stream_a5 import (
     DPDP_OBLIGATIONS,
     DPDP_QUESTIONS,
     DPDP_SECTIONS,
+)
+from app.services.framework_seed_data_phase1 import (
+    CSA_CCM_CONTROLS,
+    CSA_CCM_ISO27001_MAPPINGS,
+    CSA_CCM_SECTIONS,
+    DPDP_2025_RULES_OBLIGATIONS,
+    EU_CRA_ANNEX_IV_OBLIGATIONS,
+    EU_CRA_ANNEX_IV_QUESTIONS,
+    EU_CRA_ANNEX_IV_SECTIONS,
+    NIST_800_53_REV4_HIGH_CONTROLS,
 )
 from app.services.applicability_service import ApplicabilityService
 from app.services.framework_seed_data_stream_a6 import (
@@ -1111,6 +1122,37 @@ FRAMEWORK_SEEDS: list[dict] = [
         "effective_date": None,
     },
     {
+        "code": "CSA_STAR_CCM",
+        "name": "CSA STAR CCM",
+        "description": (
+            "Cloud Security Alliance STAR / Cloud Controls Matrix v4.0 cloud security controls. "
+            "Includes 197 CCM control objectives across 17 domains."
+        ),
+        "category": "Cloud Security",
+        "jurisdiction": "global",
+        "authority": "Cloud Security Alliance",
+        "version": "CCM v4.0",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": "https://cloudsecurityalliance.org/research/cloud-controls-matrix",
+        "effective_date": None,
+    },
+    {
+        "code": "EU_CRA_ANNEX_IV",
+        "name": "EU CRA Annex IV",
+        "description": (
+            "Cyber Resilience Act Annex IV critical products with digital elements classification seed."
+        ),
+        "category": "Cybersecurity",
+        "jurisdiction": "EU",
+        "authority": "European Union",
+        "version": "Regulation (EU) 2024/2847",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
+        "effective_date": None,
+    },
+    {
         "code": "NIS2",
         "name": "NIS2",
         "description": "EU Network and Information Security Directive 2 (Directive EU 2022/2555).",
@@ -1127,14 +1169,13 @@ FRAMEWORK_SEEDS: list[dict] = [
         "code": "NIST_800_53",
         "name": "NIST SP 800-53",
         "description": (
-            "NIST Special Publication 800-53 Rev 5 — Security and Privacy Controls for Information "
-            "Systems and Organizations. Baseline: LOW (125 controls). Required for US federal systems. "
-            "Foundation for FedRAMP."
+            "NIST Special Publication 800-53 security controls with FedRAMP Rev 4 LOW, MODERATE, "
+            "and HIGH baseline selections. Required for US federal cloud systems."
         ),
         "category": "Cybersecurity",
         "jurisdiction": "US",
         "authority": "NIST",
-        "version": "Rev 5",
+        "version": "Rev 4 / FedRAMP",
         "status": "active",
         "coverage_level": "starter",
         "source_url": None,
@@ -1264,8 +1305,10 @@ FRAMEWORK_VERSION_SEEDS: list[dict] = [
     {"framework_code": "CIS_CONTROLS_V8", "version_label": "v8", "status": "active", "coverage_level": "starter"},
     {"framework_code": "ISO_27701", "version_label": "2019", "status": "active", "coverage_level": "starter"},
     {"framework_code": "DORA", "version_label": "2022/2554", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "CSA_STAR_CCM", "version_label": "CCM v4.0", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "EU_CRA_ANNEX_IV", "version_label": "2024/2847", "status": "active", "coverage_level": "starter"},
     {"framework_code": "NIS2", "version_label": "2022/2555", "status": "active", "coverage_level": "starter"},
-    {"framework_code": "NIST_800_53", "version_label": "Rev 5", "status": "active", "coverage_level": "starter"},
+    {"framework_code": "NIST_800_53", "version_label": "Rev 4 / FedRAMP", "status": "active", "coverage_level": "starter"},
     {"framework_code": "HIPAA", "version_label": "2013 Omnibus", "status": "active", "coverage_level": "starter"},
     {"framework_code": "ISO_31000", "version_label": "2018", "status": "active", "coverage_level": "starter"},
     {"framework_code": "OECD_AI_PRINCIPLES", "version_label": "2024", "status": "active", "coverage_level": "starter"},
@@ -3175,6 +3218,8 @@ class SeedService:
         SeedService.ensure_cis_controls_framework(db)
         SeedService.ensure_iso_27701_framework(db)
         SeedService.ensure_dora_framework(db)
+        SeedService.ensure_csa_star_ccm_framework(db)
+        SeedService.ensure_eu_cra_annex_iv_framework(db)
         SeedService.ensure_nis2_framework(db)
         SeedService.ensure_nist_800_53_framework(db)
         SeedService.ensure_hipaa_framework(db)
@@ -3214,6 +3259,7 @@ class SeedService:
         db.flush()
         SeedService.ensure_iso27701_gdpr_cross_mappings(db)
         SeedService.ensure_dora_cross_mappings(db)
+        SeedService.ensure_csa_iso27001_cross_mappings(db)
         SeedService.ensure_hipaa_nist_cross_mappings(db)
         SeedService.ensure_dpdp_gdpr_cross_mappings(db)
         SeedService.ensure_oecd_euai_cross_mappings(db)
@@ -3755,6 +3801,146 @@ class SeedService:
         return framework
 
     @staticmethod
+    def ensure_csa_star_ccm_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "CSA STAR CCM")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="CSA_STAR_CCM",
+                name="CSA STAR CCM",
+                description=(
+                    "Cloud Security Alliance STAR / Cloud Controls Matrix v4.0 cloud security controls. "
+                    "Includes 197 CCM control objectives across 17 domains."
+                ),
+                category="Cloud Security",
+                jurisdiction="global",
+                authority="Cloud Security Alliance",
+                version="CCM v4.0",
+                status="active",
+                coverage_level="starter",
+                source_url="https://cloudsecurityalliance.org/research/cloud-controls-matrix",
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=CSA_CCM_SECTIONS)
+        existing = {
+            row.reference_code: row
+            for row in db.execute(select(Obligation).where(Obligation.framework_id == framework.id)).scalars().all()
+        }
+        active_refs: set[str] = set()
+        for item in CSA_CCM_CONTROLS:
+            ref_code = item["reference_code"]
+            active_refs.add(ref_code)
+            section = section_map[item["section_code"]]
+            title = item["title"]
+            plain = f"Implement and evidence CSA CCM control {ref_code}: {title.lower()}."
+            values = {
+                "framework_section_id": section.id,
+                "title": title,
+                "description": item["description"],
+                "plain_language_summary": plain,
+                "obligation_type": "control",
+                "jurisdiction": "global",
+                "version": "CCM v4.0",
+                "ig_level": None,
+                "control_family": None,
+                "baseline": None,
+                "status": "active",
+                "source_url": item.get("source_url"),
+                "embedding_json": json.dumps({"source": "CSA CCM v4.0", "section": item["section_code"]}),
+            }
+            row = existing.get(ref_code)
+            if row is None:
+                row = Obligation(
+                    framework_id=framework.id,
+                    reference_code=ref_code,
+                    effective_date=None,
+                    parent_obligation_id=None,
+                    **values,
+                )
+                db.add(row)
+                db.flush()
+                existing[ref_code] = row
+            else:
+                for field, value in values.items():
+                    setattr(row, field, value)
+
+        for ref_code, row in existing.items():
+            if ref_code not in active_refs:
+                row.status = "inactive"
+        db.flush()
+        return framework
+
+    @staticmethod
+    def ensure_eu_cra_annex_iv_framework(db: Session) -> Framework:
+        framework = db.execute(select(Framework).where(Framework.name == "EU CRA Annex IV")).scalar_one_or_none()
+        if framework is None:
+            framework = Framework(
+                code="EU_CRA_ANNEX_IV",
+                name="EU CRA Annex IV",
+                description="Cyber Resilience Act Annex IV critical products with digital elements classification seed.",
+                category="Cybersecurity",
+                jurisdiction="EU",
+                authority="European Union",
+                version="Regulation (EU) 2024/2847",
+                status="active",
+                coverage_level="starter",
+                source_url="https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
+                effective_date=None,
+            )
+            db.add(framework)
+            db.flush()
+
+        section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=EU_CRA_ANNEX_IV_SECTIONS)
+        existing = {
+            row.reference_code: row
+            for row in db.execute(select(Obligation).where(Obligation.framework_id == framework.id)).scalars().all()
+        }
+        active_refs: set[str] = set()
+        for ref_code, title, description, section_code, evidence_hints in EU_CRA_ANNEX_IV_OBLIGATIONS:
+            active_refs.add(ref_code)
+            plain = f"Classify and evidence {title.lower()}."
+            if evidence_hints:
+                plain = f"{plain} Evidence hints: {', '.join(evidence_hints)}"
+            values = {
+                "framework_section_id": section_map[section_code].id,
+                "title": title,
+                "description": description,
+                "plain_language_summary": plain,
+                "obligation_type": "classification",
+                "jurisdiction": "EU",
+                "version": "Regulation (EU) 2024/2847",
+                "ig_level": None,
+                "control_family": None,
+                "baseline": None,
+                "status": "active",
+                "source_url": "https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng",
+            }
+            row = existing.get(ref_code)
+            if row is None:
+                row = Obligation(
+                    framework_id=framework.id,
+                    reference_code=ref_code,
+                    effective_date=None,
+                    parent_obligation_id=None,
+                    **values,
+                )
+                db.add(row)
+                db.flush()
+                existing[ref_code] = row
+            else:
+                for field, value in values.items():
+                    setattr(row, field, value)
+
+        for ref_code, row in existing.items():
+            if ref_code not in active_refs:
+                row.status = "inactive"
+        SeedService._ensure_framework_questions(db, framework=framework, question_rows=EU_CRA_ANNEX_IV_QUESTIONS)
+        db.flush()
+        return framework
+
+    @staticmethod
     def ensure_nis2_framework(db: Session) -> Framework:
         framework = db.execute(select(Framework).where(Framework.name == "NIS2")).scalar_one_or_none()
         if framework is None:
@@ -3796,14 +3982,13 @@ class SeedService:
                 code="NIST_800_53",
                 name="NIST SP 800-53",
                 description=(
-                    "NIST Special Publication 800-53 Rev 5 — Security and Privacy Controls for Information "
-                    "Systems and Organizations. Baseline: LOW (125 controls). Required for US federal systems. "
-                    "Foundation for FedRAMP."
+                    "NIST Special Publication 800-53 security controls with FedRAMP Rev 4 LOW, MODERATE, "
+                    "and HIGH baseline selections. Required for US federal cloud systems."
                 ),
                 category="Cybersecurity",
                 jurisdiction="US",
                 authority="NIST",
-                version="Rev 5",
+                version="Rev 4 / FedRAMP",
                 status="active",
                 coverage_level="starter",
                 source_url=None,
@@ -3818,24 +4003,29 @@ class SeedService:
             for row in db.execute(select(Obligation).where(Obligation.framework_id == framework.id)).scalars().all()
         }
         active_refs: set[str] = set()
+        low_refs = {ref_code for ref_code, _, _ in NIST_800_53_LOW_CONTROLS}
+        rev4_by_ref = {item["reference_code"]: item for item in NIST_800_53_REV4_HIGH_CONTROLS}
         for ref_code, title, family in NIST_800_53_LOW_CONTROLS:
             active_refs.add(ref_code)
             hints = nist_evidence_hints(family)
             plain = f"Implement and evidence {title.lower()}."
             if hints:
                 plain = f"{plain} Evidence hints: {', '.join(hints)}"
+            rev4_item = rev4_by_ref.get(ref_code)
+            baselines = rev4_item["baselines"] if rev4_item is not None else ["LOW"]
             values = {
                 "framework_section_id": section_map[family].id,
                 "title": title,
-                "description": nist_description(ref_code, title, family),
+                "description": rev4_item["description"] if rev4_item is not None else nist_description(ref_code, title, family),
                 "plain_language_summary": plain,
                 "obligation_type": "control",
                 "jurisdiction": "US",
-                "version": "Rev 5",
+                "version": "Rev 4 / FedRAMP",
                 "ig_level": None,
                 "control_family": family,
                 "baseline": "LOW",
                 "status": "active",
+                "embedding_json": json.dumps({"fedramp_rev4_baselines": baselines}),
             }
             row = existing.get(ref_code)
             if row is None:
@@ -3849,8 +4039,58 @@ class SeedService:
                 )
                 db.add(row)
                 db.flush()
+                existing[ref_code] = row
             else:
                 for field, value in values.items():
+                    setattr(row, field, value)
+
+        for item in NIST_800_53_REV4_HIGH_CONTROLS:
+            ref_code = item["reference_code"]
+            active_refs.add(ref_code)
+            family = item["family"]
+            if family not in section_map:
+                continue
+            baselines = item["baselines"]
+            baseline = "HIGH"
+            if ref_code in low_refs:
+                baseline = "LOW"
+            elif "MODERATE" in baselines:
+                baseline = "MODERATE"
+            plain = (
+                f"Implement and evidence {item['title'].lower()} for the "
+                f"{', '.join(baselines)} FedRAMP/NIST 800-53 baseline."
+            )
+            values = {
+                "framework_section_id": section_map[family].id,
+                "title": item["title"],
+                "description": item["description"],
+                "plain_language_summary": plain,
+                "obligation_type": "control",
+                "jurisdiction": "US",
+                "version": "Rev 4 / FedRAMP",
+                "ig_level": None,
+                "control_family": family,
+                "baseline": baseline,
+                "status": "active",
+                "embedding_json": json.dumps({"fedramp_rev4_baselines": baselines}),
+            }
+            row = existing.get(ref_code)
+            if row is None:
+                row = Obligation(
+                    framework_id=framework.id,
+                    reference_code=ref_code,
+                    source_url=None,
+                    effective_date=None,
+                    parent_obligation_id=None,
+                    **values,
+                )
+                db.add(row)
+                db.flush()
+                existing[ref_code] = row
+            else:
+                for field, value in values.items():
+                    if field == "baseline" and ref_code in low_refs:
+                        value = "LOW"
                     setattr(row, field, value)
 
         for ref_code, row in existing.items():
@@ -3963,6 +4203,42 @@ class SeedService:
         return rows
 
     @staticmethod
+    def ensure_csa_iso27001_cross_mappings(db: Session) -> list[CrossFrameworkObligationMapping]:
+        obligations = {row.reference_code: row for row in db.execute(select(Obligation)).scalars().all()}
+        existing = {
+            (row.source_obligation_id, row.target_obligation_id): row
+            for row in db.execute(select(CrossFrameworkObligationMapping)).scalars().all()
+        }
+        rows: list[CrossFrameworkObligationMapping] = []
+        for source_ref, target_ref, mapping_type in CSA_CCM_ISO27001_MAPPINGS:
+            source = obligations.get(source_ref)
+            target = obligations.get(target_ref)
+            if source is None or target is None:
+                continue
+            key = (source.id, target.id)
+            row = existing.get(key)
+            notes = f"Seeded CSA CCM v4.0 to ISO 27001:2022 mapping: {source_ref} -> {target_ref}"
+            if row is None:
+                row = CrossFrameworkObligationMapping(
+                    organization_id=None,
+                    source_obligation_id=source.id,
+                    target_obligation_id=target.id,
+                    mapping_type=mapping_type,
+                    notes=notes,
+                    semantic_similarity_score=None,
+                    mapping_method="seeded",
+                )
+                db.add(row)
+                db.flush()
+            else:
+                row.mapping_type = mapping_type
+                row.notes = notes
+                row.mapping_method = "seeded"
+            rows.append(row)
+        db.flush()
+        return rows
+
+    @staticmethod
     def ensure_ccpa_framework(db: Session) -> Framework:
         framework = db.execute(select(Framework).where(Framework.name == "CCPA/CPRA")).scalar_one_or_none()
         if framework is None:
@@ -4055,7 +4331,9 @@ class SeedService:
             row.reference_code: row
             for row in db.execute(select(Obligation).where(Obligation.framework_id == framework.id)).scalars().all()
         }
-        for ref_code, title, description, section_code, evidence_hints in DPDP_OBLIGATIONS:
+        active_refs: set[str] = set()
+        for ref_code, title, description, section_code, evidence_hints in DPDP_2025_RULES_OBLIGATIONS:
+            active_refs.add(ref_code)
             plain = f"Implement and evidence {title.lower()}."
             if evidence_hints:
                 plain = f"{plain} Evidence hints: {', '.join(evidence_hints)}"
@@ -4066,7 +4344,7 @@ class SeedService:
                 "plain_language_summary": plain,
                 "obligation_type": "privacy",
                 "jurisdiction": "IN",
-                "version": "2023",
+                "version": "2023 Act / 2025 Rules",
                 "ig_level": None,
                 "control_family": None,
                 "baseline": None,
@@ -4087,6 +4365,10 @@ class SeedService:
             else:
                 for field, value in values.items():
                     setattr(row, field, value)
+
+        for ref_code, row in existing.items():
+            if ref_code not in active_refs:
+                row.status = "inactive"
 
         SeedService._ensure_framework_questions(db, framework=framework, question_rows=DPDP_QUESTIONS)
         db.flush()

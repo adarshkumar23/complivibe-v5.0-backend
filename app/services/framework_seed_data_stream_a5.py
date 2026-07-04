@@ -320,9 +320,10 @@ DPDP_QUESTIONS: list[dict[str, int | str]] = [
 
 DPDP_GDPR_MAPPINGS: list[tuple[str, str, str]] = [
     ("DPDP-S4", "GDPR-OBL-02", "equivalent"),
-    ("DPDP-S5", "GDPR-OBL-03", "equivalent"),
-    ("DPDP-S6", "GDPR-OBL-10", "equivalent"),
-    ("DPDP-S8-1", "GDPR-OBL-04", "equivalent"),
-    ("DPDP-S8-2", "GDPR-OBL-05", "equivalent"),
+    ("DPDP-S5-R3", "GDPR-OBL-03", "equivalent"),
+    ("DPDP-S6-R4", "GDPR-OBL-10", "related"),
+    ("DPDP-S11", "GDPR-OBL-04", "equivalent"),
+    ("DPDP-S12-R13", "GDPR-OBL-05", "equivalent"),
     ("DPDP-S11", "GDPR-OBL-07", "equivalent"),
+    ("DPDP-RULE-PROCESSOR", "GDPR-OBL-09", "related"),
 ]
