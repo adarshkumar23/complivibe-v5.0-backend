@@ -132,6 +132,43 @@ def test_item7_explicit_sensitivity_tier_is_not_silently_overridden_by_auto_clas
     assert auto_body["classification_source"] == "metadata_rules"
 
 
+def test_data_asset_owner_and_custodian_must_be_org_members(client):
+    org = bootstrap_org_user(client, email_prefix="data-owner-scope-a")
+    org_b = bootstrap_org_user(client, email_prefix="data-owner-scope-b")
+
+    foreign_owner = client.post(
+        ASSETS_BASE,
+        headers=org["org_headers"],
+        json={
+            "name": "foreign_owner_asset",
+            "asset_type": "database",
+            "owner_id": org_b["user_id"],
+            "description": "contains customer email",
+            "schema_column_names": ["email"],
+            "tags": ["probe"],
+        },
+    )
+    assert foreign_owner.status_code == 422
+    assert foreign_owner.json()["detail"] == "owner_id must be an active organization user"
+
+    asset = _create_asset(client, org["org_headers"], org["user_id"], name="owned_asset").json()
+    foreign_custodian = client.patch(
+        f"{ASSETS_BASE}/{asset['id']}",
+        headers=org["org_headers"],
+        json={"custodian_id": org_b["user_id"]},
+    )
+    assert foreign_custodian.status_code == 422
+    assert foreign_custodian.json()["detail"] == "custodian_id must be an active organization user"
+
+    own_custodian = client.patch(
+        f"{ASSETS_BASE}/{asset['id']}",
+        headers=org["org_headers"],
+        json={"custodian_id": org["user_id"]},
+    )
+    assert own_custodian.status_code == 200
+    assert own_custodian.json()["custodian_id"] == org["user_id"]
+
+
 def test_c74_classification_engine(monkeypatch, client):
     personal = classify_metadata("ssn_records", "contains email and name", ["ssn", "email"])
     assert personal["classification_type"] == "personal_data"

@@ -8,7 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.data_observability.services.classification_service import classify_metadata, classify_sample
 from app.models.data_asset import DataAsset
+from app.models.membership import Membership
 from app.models.organization import Organization
+from app.models.user import User
 from app.services.audit_service import AuditService
 from app.core.validation import validate_choice
 
@@ -38,6 +40,14 @@ ALLOWED_CLASSIFICATION_SOURCES = {"metadata_rules", "presidio_sample", "manual",
 ALLOWED_STATUS = {"active", "archived", "under_review", "decommissioned"}
 ALLOWED_HIPAA_SAFEGUARDS = {"administrative", "physical", "technical", "all"}
 DPDP_LOCALIZATION_CLASSIFICATIONS = {"health_data", "financial_data", "sensitive_personal_data"}
+NON_NULL_UPDATE_FIELDS = {
+    "name",
+    "asset_type",
+    "owner_id",
+    "classification_confirmed",
+    "is_phi",
+    "status",
+}
 
 try:
     from prometheus_client import Counter
@@ -69,6 +79,25 @@ class DataAssetService:
         ).scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Data asset not found")
+        return row
+
+    def _require_active_org_user(self, org_id: uuid.UUID, user_id: uuid.UUID, field_name: str) -> User:
+        row = self.db.execute(
+            select(User)
+            .join(Membership, Membership.user_id == User.id)
+            .where(
+                User.id == user_id,
+                User.is_active.is_(True),
+                User.status == "active",
+                Membership.organization_id == org_id,
+                Membership.status == "active",
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{field_name} must be an active organization user",
+            )
         return row
 
     @staticmethod
@@ -104,6 +133,13 @@ class DataAssetService:
             for required in ["name", "asset_type", "owner_id"]:
                 if not payload.get(required):
                     raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"{required} is required")
+        else:
+            for field in NON_NULL_UPDATE_FIELDS:
+                if field in payload and payload[field] is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"{field} cannot be null",
+                    )
 
     def _run_tier1_classification(self, row: DataAsset) -> None:
         result = classify_metadata(row.name, row.description, row.schema_column_names)
@@ -128,6 +164,9 @@ class DataAssetService:
     def create_asset(self, org_id: uuid.UUID, data, created_by: uuid.UUID) -> DataAsset:
         payload = data.model_dump()
         self._validate_payload(payload)
+        self._require_active_org_user(org_id, payload["owner_id"], "owner_id")
+        if payload.get("custodian_id") is not None:
+            self._require_active_org_user(org_id, payload["custodian_id"], "custodian_id")
 
         now = self.utcnow()
         row = DataAsset(
@@ -229,6 +268,10 @@ class DataAssetService:
         row = self._require_asset(org_id, asset_id)
         payload = data.model_dump(exclude_unset=True)
         self._validate_payload(payload, is_update=True)
+        if payload.get("owner_id") is not None:
+            self._require_active_org_user(org_id, payload["owner_id"], "owner_id")
+        if payload.get("custodian_id") is not None:
+            self._require_active_org_user(org_id, payload["custodian_id"], "custodian_id")
 
         should_reclassify = any(field in payload for field in ["name", "description", "schema_column_names"])
 

@@ -127,3 +127,22 @@ Orientation:
 - **Files:** app/privacy/services/dpa_service.py, tests/unit/test_dpa_breach_extension_d92_d89.py
 - **Tests:** `.venv/bin/python -m pytest tests/unit/test_dpa_breach_extension_d92_d89.py -q --disable-warnings` -> `5 passed`
 - **Commit:** TBD
+
+### 7. Data Observability — data assets can be owned/custodied by users from another tenant
+- **Root cause:** `DataAssetService.create_asset` and `update_asset` accepted
+  `owner_id`/`custodian_id` as raw user UUIDs. The database foreign key only proves the
+  user exists globally, not that the user is an active member of the asset's
+  organization.
+- **Evidence before fix:** real HTTP against local server on port 8020:
+  `POST /api/v1/data-observability/assets` in org A with `owner_id`
+  `689f8ea5-3ca5-4bfb-806a-e5029223b5cb` from org B returned 201 and response
+  persisted that foreign owner on asset `e182b7b1-9c20-450b-93f9-540aa760404d`.
+- **Fix:** validate supplied `owner_id` and `custodian_id` against active user +
+  active membership in the caller organization on create and update. Explicit `null`
+  for non-null scalar update fields now returns a clear 422 before database flush.
+- **Evidence after fix:** real HTTP create with foreign `owner_id` returns 422
+  `owner_id must be an active organization user`; real HTTP PATCH with foreign
+  `custodian_id` returns 422 `custodian_id must be an active organization user`.
+- **Files:** app/data_observability/services/data_asset_service.py, tests/unit/test_data_catalog_classify_c73_c74.py
+- **Tests:** `.venv/bin/python -m pytest tests/unit/test_data_catalog_classify_c73_c74.py -q --disable-warnings` -> `4 passed`
+- **Commit:** TBD
