@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import re
 import uuid
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+
+from app.core.password_validation import PasswordValidationError, validate_password_strength
 
 
 class OnboardingStartRequest(BaseModel):
@@ -17,17 +18,10 @@ class OnboardingStartRequest(BaseModel):
     @field_validator("admin_password")
     @classmethod
     def validate_password_strength(cls, value: str) -> str:
-        if len(value) < 10:
-            raise ValueError("Password must be at least 10 characters long")
-        if re.search(r"[A-Z]", value) is None:
-            raise ValueError("Password must include at least one uppercase letter")
-        if re.search(r"[a-z]", value) is None:
-            raise ValueError("Password must include at least one lowercase letter")
-        if re.search(r"\d", value) is None:
-            raise ValueError("Password must include at least one number")
-        if re.search(r"[^A-Za-z0-9]", value) is None:
-            raise ValueError("Password must include at least one symbol")
-        return value
+        try:
+            return validate_password_strength(value)
+        except PasswordValidationError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 class OnboardingStartResponse(BaseModel):
@@ -60,17 +54,10 @@ class AcceptInviteRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def validate_password_strength(cls, value: str) -> str:
-        if len(value) < 10:
-            raise ValueError("Password must be at least 10 characters long")
-        if re.search(r"[A-Z]", value) is None:
-            raise ValueError("Password must include at least one uppercase letter")
-        if re.search(r"[a-z]", value) is None:
-            raise ValueError("Password must include at least one lowercase letter")
-        if re.search(r"\d", value) is None:
-            raise ValueError("Password must include at least one number")
-        if re.search(r"[^A-Za-z0-9]", value) is None:
-            raise ValueError("Password must include at least one symbol")
-        return value
+        try:
+            return validate_password_strength(value)
+        except PasswordValidationError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 class OnboardingChecklistResponse(BaseModel):

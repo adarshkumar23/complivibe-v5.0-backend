@@ -28,7 +28,7 @@ def _headers(token: str, organization_id: str | None = None) -> dict[str, str]:
     return headers
 
 
-def _create_active_user_with_role(db_session, organization_id: str, email: str, role_name: str, password: str = "pass123456") -> User:
+def _create_active_user_with_role(db_session, organization_id: str, email: str, role_name: str, password: str = "Pass1234!@") -> User:
     user = User(
         email=email,
         full_name=email.split("@")[0],
@@ -53,8 +53,8 @@ def _create_active_user_with_role(db_session, organization_id: str, email: str, 
 
 
 def test_owner_can_list_members_and_roles_are_org_scoped(client):
-    owner1 = _register(client, "phase12-owner1@example.com", "pass123456", "Phase12 Org1")
-    owner2 = _register(client, "phase12-owner2@example.com", "pass123456", "Phase12 Org2")
+    owner1 = _register(client, "phase12-owner1@example.com", "Pass1234!@", "Phase12 Org1")
+    owner2 = _register(client, "phase12-owner2@example.com", "Pass1234!@", "Phase12 Org2")
 
     org1_id = client.get("/api/v1/organizations/me", headers=_headers(owner1)).json()[0]["id"]
     org2_id = client.get("/api/v1/organizations/me", headers=_headers(owner2)).json()[0]["id"]
@@ -75,11 +75,11 @@ def test_owner_can_list_members_and_roles_are_org_scoped(client):
 
 
 def test_readonly_cannot_invite_or_update_role(client, db_session):
-    owner_token = _register(client, "phase12-owner3@example.com", "pass123456", "Phase12 Org3")
+    owner_token = _register(client, "phase12-owner3@example.com", "Pass1234!@", "Phase12 Org3")
     org_id = client.get("/api/v1/organizations/me", headers=_headers(owner_token)).json()[0]["id"]
 
     readonly_user = _create_active_user_with_role(db_session, org_id, "phase12-readonly@example.com", "readonly")
-    readonly_token = _login(client, readonly_user.email, "pass123456")
+    readonly_token = _login(client, readonly_user.email, "Pass1234!@")
 
     invite_resp = client.post(
         "/api/v1/memberships",
@@ -99,14 +99,14 @@ def test_readonly_cannot_invite_or_update_role(client, db_session):
 
 
 def test_owner_admin_can_create_membership_and_membership_is_tenant_scoped(client, db_session):
-    owner_token = _register(client, "phase12-owner4@example.com", "pass123456", "Phase12 Org4")
-    other_owner_token = _register(client, "phase12-owner5@example.com", "pass123456", "Phase12 Org5")
+    owner_token = _register(client, "phase12-owner4@example.com", "Pass1234!@", "Phase12 Org4")
+    other_owner_token = _register(client, "phase12-owner5@example.com", "Pass1234!@", "Phase12 Org5")
 
     org_id = client.get("/api/v1/organizations/me", headers=_headers(owner_token)).json()[0]["id"]
     other_org_id = client.get("/api/v1/organizations/me", headers=_headers(other_owner_token)).json()[0]["id"]
 
     admin_user = _create_active_user_with_role(db_session, org_id, "phase12-admin@example.com", "admin")
-    admin_token = _login(client, admin_user.email, "pass123456")
+    admin_token = _login(client, admin_user.email, "Pass1234!@")
 
     created = client.post(
         "/api/v1/memberships",
@@ -132,7 +132,7 @@ def test_owner_admin_can_create_membership_and_membership_is_tenant_scoped(clien
 
 
 def test_owner_can_update_role_and_deactivate_with_audit_and_last_owner_protection(client):
-    owner_token = _register(client, "phase12-owner6@example.com", "pass123456", "Phase12 Org6")
+    owner_token = _register(client, "phase12-owner6@example.com", "Pass1234!@", "Phase12 Org6")
     org_id = client.get("/api/v1/organizations/me", headers=_headers(owner_token)).json()[0]["id"]
 
     create_member = client.post(
@@ -182,7 +182,7 @@ def test_owner_can_update_role_and_deactivate_with_audit_and_last_owner_protecti
 
 
 def test_auth_permissions_returns_current_org_permissions(client):
-    owner_token = _register(client, "phase12-owner7@example.com", "pass123456", "Phase12 Org7")
+    owner_token = _register(client, "phase12-owner7@example.com", "Pass1234!@", "Phase12 Org7")
     org_id = client.get("/api/v1/organizations/me", headers=_headers(owner_token)).json()[0]["id"]
 
     permissions = client.get("/api/v1/auth/permissions", headers=_headers(owner_token, org_id))

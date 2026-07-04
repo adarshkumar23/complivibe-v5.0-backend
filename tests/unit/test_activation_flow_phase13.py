@@ -142,6 +142,33 @@ def test_activate_invite_success_login_and_used_token_protection(client, db_sess
     assert "membership.invitation_accepted" in actions
 
 
+def test_register_and_invite_activation_use_same_password_strength_rule(client):
+    weak_password = "password12"
+
+    register = client.post(
+        "/api/v1/auth/register",
+        json={"email": "p13-weak-register@example.com", "password": weak_password, "organization_name": "P13 Weak Password Org"},
+    )
+    assert register.status_code == 400
+    assert register.json()["detail"] == "Password must include at least one uppercase letter"
+
+    owner_token = _register(client, "p13-owner-weak-invite@example.com", "Pass1234!@", "P13 Weak Invite Org")
+    org_id = client.get("/api/v1/organizations/me", headers=_headers(owner_token)).json()[0]["id"]
+    membership_id = _invite_member(client, owner_token, org_id, "p13-weak-invited@example.com")
+    token_resp = client.post(
+        f"/api/v1/memberships/{membership_id}/activation-token",
+        headers=_headers(owner_token, org_id),
+    )
+    raw_token = token_resp.json()["activation_token"]
+
+    activate = client.post(
+        "/api/v1/auth/activate-invite",
+        json={"activation_token": raw_token, "password": weak_password},
+    )
+    assert activate.status_code == 400
+    assert activate.json()["detail"] == register.json()["detail"]
+
+
 def test_expired_and_revoked_tokens_cannot_be_used(client, db_session):
     owner_token = _register(client, "p13-owner4@example.com", "Pass1234!@", "P13 Org4")
     org_id = client.get("/api/v1/organizations/me", headers=_headers(owner_token)).json()[0]["id"]

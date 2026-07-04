@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.deps import get_current_active_user, get_current_organization, get_db
+from app.core.password_validation import PasswordValidationError, validate_password_strength
 from app.core.rate_limiter import rate_limiter
 from app.core.security import create_access_token, get_password_hash, verify_password
 from app.models.membership import Membership
@@ -26,10 +27,6 @@ from app.services.seed_service import SeedService
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-class PasswordValidationError(ValueError):
-    pass
-
-
 def _slugify(value: str) -> str:
     base = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return base[:80] or "organization"
@@ -45,22 +42,14 @@ def _generate_org_slug(db: Session, organization_name: str) -> str:
     return candidate
 
 
-def _validate_password_strength(password: str) -> None:
-    if len(password) < 10:
-        raise PasswordValidationError("Password must be at least 10 characters long")
-    if re.search(r"[A-Z]", password) is None:
-        raise PasswordValidationError("Password must include at least one uppercase letter")
-    if re.search(r"[a-z]", password) is None:
-        raise PasswordValidationError("Password must include at least one lowercase letter")
-    if re.search(r"\d", password) is None:
-        raise PasswordValidationError("Password must include at least one number")
-    if re.search(r"[^A-Za-z0-9]", password) is None:
-        raise PasswordValidationError("Password must include at least one symbol")
-
-
 @router.post("/register", response_model=Token)
 @rate_limiter.limiter.limit("10/minute")
 def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)) -> Token:
+    try:
+        validate_password_strength(payload.password)
+    except PasswordValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
     existing = db.execute(select(User).where(User.email == payload.email)).scalar_one_or_none()
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
@@ -180,7 +169,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 @rate_limiter.limiter.limit("10/minute")
 def activate_invite(payload: ActivateInviteRequest, request: Request, db: Session = Depends(get_db)) -> ActivateInviteResponse:
     try:
-        _validate_password_strength(payload.password)
+        validate_password_strength(payload.password)
     except PasswordValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
