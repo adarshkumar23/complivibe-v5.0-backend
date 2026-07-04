@@ -21,12 +21,28 @@ from app.services.audit_service import AuditService
 class QuestionnaireScoringService:
     HIGH_RISK_THRESHOLD = 70
 
+    # Normalized from the working VendorRiskScore 1-25 banding (low <=4, medium <=9,
+    # high <=16, critical above) to the 0-100 questionnaire score scale.
+    TIER_LOW_THRESHOLD = 16
+    TIER_MEDIUM_THRESHOLD = 36
+    TIER_HIGH_THRESHOLD = 64
+
     def __init__(self, db: Session) -> None:
         self.db = db
 
     @staticmethod
     def utcnow() -> datetime:
         return datetime.now(UTC)
+
+    @classmethod
+    def risk_tier_from_score(cls, score: int) -> str:
+        if score <= cls.TIER_LOW_THRESHOLD:
+            return "low"
+        if score <= cls.TIER_MEDIUM_THRESHOLD:
+            return "medium"
+        if score <= cls.TIER_HIGH_THRESHOLD:
+            return "high"
+        return "critical"
 
     def require_response_in_org(self, org_id: uuid.UUID, response_id: uuid.UUID) -> VendorQuestionnaireResponse:
         row = self.db.execute(
@@ -141,6 +157,29 @@ class QuestionnaireScoringService:
         response.calculated_risk_score = final_score
         response.score_computed_at = self.utcnow()
         self.db.flush()
+
+        vendor = self.db.execute(
+            select(Vendor).where(
+                Vendor.id == response.vendor_id,
+                Vendor.organization_id == org_id,
+            )
+        ).scalar_one_or_none()
+        if vendor is not None:
+            previous_tier = vendor.risk_tier
+            computed_tier = self.risk_tier_from_score(final_score)
+            if computed_tier != previous_tier:
+                vendor.risk_tier = computed_tier
+                self.db.flush()
+                AuditService(self.db).write_audit_log(
+                    action="vendor.risk_tier.updated",
+                    entity_type="vendor",
+                    entity_id=vendor.id,
+                    organization_id=org_id,
+                    actor_user_id=actor_user_id,
+                    before_json={"risk_tier": previous_tier},
+                    after_json={"risk_tier": computed_tier, "questionnaire_score": final_score},
+                    metadata_json={"source": "questionnaire_scoring"},
+                )
 
         AuditService(self.db).write_audit_log(
             action="questionnaire_response.score_computed",
