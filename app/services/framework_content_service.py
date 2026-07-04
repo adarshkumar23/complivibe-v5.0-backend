@@ -98,6 +98,16 @@ class FrameworkContentService:
         self.validate_version_status(status_value)
         self.validate_coverage_level(coverage_level)
 
+        if status_value == "active":
+            others_active = self.db.execute(
+                select(FrameworkVersion).where(
+                    FrameworkVersion.framework_id == framework_id,
+                    FrameworkVersion.status == "active",
+                )
+            ).scalars().all()
+            for other in others_active:
+                other.status = "superseded"
+
         row = FrameworkVersion(
             framework_id=framework_id,
             version_label=version_label,

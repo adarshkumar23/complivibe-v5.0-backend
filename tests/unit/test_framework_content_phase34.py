@@ -105,6 +105,34 @@ def test_framework_versions_and_sections_create_list_and_validate(client):
     assert any(s["section_code"] == "ART-1" for s in sections.json())
 
 
+def test_item1_activating_new_version_supersedes_prior_active_version(client):
+    owner = _register(client, "item1-owner@example.com", "Pass1234!@", "Item1 Org")
+    org = _org_id(client, owner)
+    framework = _first_framework(client, owner)
+
+    v1 = client.post(
+        f"/api/v1/frameworks/{framework['id']}/versions",
+        headers=_headers(owner, org),
+        json={"version_label": "item1-v1", "status": "active", "coverage_level": "starter"},
+    )
+    assert v1.status_code == 201
+    v1_id = v1.json()["id"]
+
+    v2 = client.post(
+        f"/api/v1/frameworks/{framework['id']}/versions",
+        headers=_headers(owner, org),
+        json={"version_label": "item1-v2", "status": "active", "coverage_level": "starter"},
+    )
+    assert v2.status_code == 201
+    v2_id = v2.json()["id"]
+
+    versions = client.get(f"/api/v1/frameworks/{framework['id']}/versions", headers=_headers(owner, org))
+    assert versions.status_code == 200
+    by_id = {v["id"]: v for v in versions.json()}
+    assert by_id[v1_id]["status"] == "superseded"
+    assert by_id[v2_id]["status"] == "active"
+
+
 def test_obligation_content_evidence_suggestion_questions_and_detail(client):
     owner = _register(client, "p34-owner2@example.com", "Pass1234!@", "P34 Org2")
     org = _org_id(client, owner)
