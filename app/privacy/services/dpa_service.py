@@ -183,6 +183,14 @@ class DPAService:
         row = self._require_dpa(org_id, dpa_id)
         payload = data.model_dump(exclude_unset=True)
         self._validate_payload(payload)
+        if "status" in payload and payload["status"] != row.status:
+            new_status = payload["status"]
+            allowed = STATUS_TRANSITIONS.get(row.status, set())
+            if new_status not in allowed:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Invalid status transition from {row.status} to {new_status}",
+                )
         if payload.get("owner_id") is not None:
             self._require_owner(org_id, payload["owner_id"])
         if "processing_activity_ids" in payload:

@@ -215,6 +215,31 @@ def test_d92_dpa_tracking(client, db_session):
     assert foreign.status_code == 404
 
 
+def test_d92_dpa_update_status_transition_enforced(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="d92-update-transition")
+
+    dpa = _create_dpa(client, org["org_headers"], org["user_id"], counterparty_name="Transition Guard")
+    assert dpa["status"] == "pending"
+
+    # Direct status update via PATCH must respect transition rules.
+    bad_patch = client.patch(
+        f"{DPA_BASE}/{dpa['id']}",
+        headers=org["org_headers"],
+        json={"status": "expired"},
+    )
+    assert bad_patch.status_code == 422
+    assert "transition" in bad_patch.json()["detail"].lower()
+
+    # Valid transitions still work through the dedicated endpoint.
+    to_active = client.post(
+        f"{DPA_BASE}/{dpa['id']}/status",
+        headers=org["org_headers"],
+        json={"new_status": "active"},
+    )
+    assert to_active.status_code == 200
+    assert to_active.json()["status"] == "active"
+
+
 def test_d89_breach_notification_extension(client, db_session):
     org = bootstrap_org_user(client, email_prefix="d89-org")
 

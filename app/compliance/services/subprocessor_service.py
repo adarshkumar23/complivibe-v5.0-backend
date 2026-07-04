@@ -85,8 +85,30 @@ class SubprocessorService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subprocessor not found")
         return row
 
+    def _validate_gdpr_required_fields(self, data, existing: Subprocessor | None = None) -> None:
+        missing: list[str] = []
+        data_types = getattr(data, "data_types_processed", None)
+        if not data_types:
+            missing.append("data_types_processed")
+        locations = getattr(data, "geographic_locations", None)
+        if not locations:
+            missing.append("geographic_locations")
+        mechanism = getattr(data, "data_transfer_mechanism", None)
+        if mechanism is None and existing is not None:
+            mechanism = existing.data_transfer_mechanism
+        if locations:
+            non_eea = [loc for loc in locations if loc not in self.EEA_COUNTRIES]
+            if non_eea and not mechanism:
+                missing.append("data_transfer_mechanism (required for non-EEA transfers)")
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Missing GDPR Article 28 required fields: {', '.join(missing)}",
+            )
+
     def create_subprocessor(self, org_id: uuid.UUID, data, created_by: uuid.UUID) -> Subprocessor:
         self._require_user(created_by)
+        self._validate_gdpr_required_fields(data)
         row = Subprocessor(
             organization_id=org_id,
             name=data.name,
@@ -151,6 +173,7 @@ class SubprocessorService:
 
     def update_subprocessor(self, org_id: uuid.UUID, subprocessor_id: uuid.UUID, data, *, actor_user_id: uuid.UUID | None = None) -> Subprocessor:
         row = self.require_subprocessor(org_id, subprocessor_id)
+        self._validate_gdpr_required_fields(data, existing=row)
         updates = data.model_dump(exclude_unset=True)
 
         before = {
