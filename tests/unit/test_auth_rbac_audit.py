@@ -74,7 +74,7 @@ def test_readonly_cannot_update_org_owner_can_and_audit_logged(client, db_sessio
     readonly_user = User(
         email="readonly@example.com",
         full_name="Readonly",
-        hashed_password=get_password_hash("readonlypass123"),
+        hashed_password=get_password_hash("ReadonlyPass123!"),
         is_active=True,
         is_superuser=False,
     )
@@ -90,7 +90,7 @@ def test_readonly_cannot_update_org_owner_can_and_audit_logged(client, db_sessio
     db_session.add(readonly_membership)
     db_session.commit()
 
-    readonly_token = _login(client, "readonly@example.com", "readonlypass123")
+    readonly_token = _login(client, "readonly@example.com", "ReadonlyPass123!")
     readonly_update = client.patch(
         f"/api/v1/organizations/{org_id}",
         headers=_auth_headers(readonly_token, org_id),
