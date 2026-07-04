@@ -10,6 +10,7 @@ from app.models.control import Control
 from app.models.vendor import Vendor
 from app.models.vendor_assessment import VendorAssessment
 from app.models.vendor_risk_score import VendorRiskScore
+from app.services.audit_service import AuditService
 
 LIKELIHOOD_MAP: dict[str, int] = {
     "very_low": 1,
@@ -28,6 +29,16 @@ IMPACT_MAP: dict[str, int] = {
 
 
 class VendorRiskService:
+    """Manual vendor likelihood x impact scoring.
+
+    ``VendorRiskScore`` is the point-in-time manual risk score history and the
+    latest manual score updates ``Vendor.risk_tier`` as the cached vendor-list
+    tier. Questionnaire scoring is a separate answer-rule subsystem with its
+    own 0-100 scale; it may also update the cached tier, but it does not create
+    synthetic ``VendorRiskScore`` rows because no real likelihood/impact axes
+    exist for those questionnaire totals.
+    """
+
     def __init__(self, db: Session) -> None:
         self.db = db
 
@@ -77,7 +88,7 @@ class VendorRiskService:
         scored_by_user_id: uuid.UUID,
         triggered_by: str = "user_action",
     ) -> tuple[VendorRiskScore, int | None]:
-        self.require_vendor_in_org(organization_id, vendor_id)
+        vendor = self.require_vendor_in_org(organization_id, vendor_id)
         if assessment_id is not None:
             self.require_assessment_in_org(organization_id, vendor_id, assessment_id)
 
@@ -112,6 +123,25 @@ class VendorRiskService:
         )
         self.db.add(row)
         self.db.flush()
+
+        previous_tier = vendor.risk_tier
+        if previous_tier != row.risk_level:
+            vendor.risk_tier = row.risk_level
+            self.db.flush()
+            AuditService(self.db).write_audit_log(
+                action="vendor.risk_tier.updated",
+                entity_type="vendor",
+                entity_id=vendor.id,
+                organization_id=organization_id,
+                actor_user_id=scored_by_user_id,
+                before_json={"risk_tier": previous_tier},
+                after_json={
+                    "risk_tier": vendor.risk_tier,
+                    "vendor_risk_score_id": str(row.id),
+                    "inherent_risk_score": row.inherent_risk_score,
+                },
+                metadata_json={"source": "vendor_risk_score"},
+            )
 
         EventBus.get_instance().emit(
             EventType.VENDOR_SCORE_UPDATED,

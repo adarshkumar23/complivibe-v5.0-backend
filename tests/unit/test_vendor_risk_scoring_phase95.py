@@ -116,6 +116,37 @@ def test_phase95_risk_level_thresholds(client, db_session):
     assert critical["risk_level"] == "critical"
 
 
+def test_phase95_manual_risk_score_updates_cached_vendor_tier_and_audit(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="p95-tier-cache")
+    owner = _create_active_user_with_role(db_session, org["organization_id"], "p95-tier-cache-owner@example.com", "admin")
+    vendor = _create_vendor(client, org["org_headers"], owner_user_id=str(owner.id), name="Tier Cache Vendor")
+    assert vendor["risk_tier"] == "not_assessed"
+
+    high = _create_score(client, org["org_headers"], vendor["id"], likelihood="high", impact="high")
+    assert high["risk_level"] == "high"
+
+    after_high = client.get(f"{VENDORS_BASE}/{vendor['id']}", headers=org["org_headers"])
+    assert after_high.status_code == 200
+    assert after_high.json()["risk_tier"] == "high"
+
+    critical = _create_score(client, org["org_headers"], vendor["id"], likelihood="very_high", impact="very_high")
+    assert critical["risk_level"] == "critical"
+
+    after_critical = client.get(f"{VENDORS_BASE}/{vendor['id']}", headers=org["org_headers"])
+    assert after_critical.status_code == 200
+    assert after_critical.json()["risk_tier"] == "critical"
+
+    latest = client.get(f"{VENDORS_BASE}/{vendor['id']}/risk-scores/latest", headers=org["org_headers"])
+    assert latest.status_code == 200
+    assert latest.json()["risk_level"] == after_critical.json()["risk_tier"]
+
+    logs = client.get("/api/v1/audit-logs", headers=org["org_headers"])
+    assert logs.status_code == 200
+    tier_updates = [row for row in logs.json() if row["action"] == "vendor.risk_tier.updated"]
+    assert any(row["after_json"]["risk_tier"] == "critical" for row in tier_updates)
+    assert any(row["after_json"].get("vendor_risk_score_id") == critical["id"] for row in tier_updates)
+
+
 def test_phase95_score_history_newest_first_and_latest_endpoint(client, db_session):
     org = bootstrap_org_user(client, email_prefix="p95-history")
     owner = _create_active_user_with_role(db_session, org["organization_id"], "p95-history-owner@example.com", "admin")
