@@ -414,15 +414,19 @@ class SubprocessorService:
         by_dpa_status = Counter(row.dpa_status for row in rows)
         by_risk_level = Counter(row.risk_level for row in rows)
 
-        transfers_outside_eea = int(
+        subprocessor_ids_with_explicit_transfer = set(
             self.db.execute(
-                select(func.count(SubprocessorDataTransfer.id)).where(
+                select(SubprocessorDataTransfer.subprocessor_id).where(
                     SubprocessorDataTransfer.organization_id == org_id,
                     SubprocessorDataTransfer.is_active.is_(True),
                     SubprocessorDataTransfer.destination_country.not_in(sorted(self.EEA_COUNTRIES)),
                 )
-            ).scalar_one()
+            ).scalars().all()
         )
+        subprocessor_ids_with_non_eea_locations = {
+            row.id for row in rows if set(row.geographic_locations or []) - self.EEA_COUNTRIES
+        }
+        transfers_outside_eea = len(subprocessor_ids_with_explicit_transfer | subprocessor_ids_with_non_eea_locations)
 
         review_overdue_count = int(
             self.db.execute(
