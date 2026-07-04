@@ -453,9 +453,29 @@ class ResidencyService:
         )
         eea_compliant_pct = (eea_compliant_assets / total_assets_checked * 100.0) if total_assets_checked > 0 else 100.0
 
+        # Same distinct-asset methodology as eea_compliant_assets above, but across all
+        # violation types rather than just data_outside_eea. total_assets_checked - open_violations
+        # is wrong whenever a single asset carries more than one open violation (double-subtracts it).
+        compliant_assets = int(
+            self.db.execute(
+                select(func.count(DataAsset.id)).where(
+                    DataAsset.organization_id == org_id,
+                    DataAsset.deleted_at.is_(None),
+                    DataAsset.status == "active",
+                    ~DataAsset.id.in_(
+                        select(DataResidencyViolation.data_asset_id).where(
+                            DataResidencyViolation.organization_id == org_id,
+                            DataResidencyViolation.status.in_(["open", "acknowledged"]),
+                        )
+                    ),
+                )
+            ).scalar_one()
+            or 0
+        )
+
         return {
             "total_assets_checked": total_assets_checked,
-            "compliant_count": max(total_assets_checked - open_violations, 0),
+            "compliant_count": compliant_assets,
             "violation_count": violation_count,
             "open_violations": open_violations,
             "by_violation_type": by_violation_type,
