@@ -1,7 +1,11 @@
 from datetime import date, datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+FINDING_SEVERITIES = ("critical", "high", "medium", "low", "informational")
+FINDING_TYPES = ("observation", "minor_nonconformity", "major_nonconformity", "opportunity_for_improvement")
 
 
 class PBCRequestItemCreate(BaseModel):
@@ -43,8 +47,8 @@ class PBCRequestResponse(BaseModel):
 class AuditFindingCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     description: str = Field(min_length=1)
-    severity: str
-    finding_type: str
+    severity: Literal[FINDING_SEVERITIES]
+    finding_type: Literal[FINDING_TYPES]
     control_id: UUID | None = None
     remediation_plan: str | None = None
     remediation_due_date: date | None = None

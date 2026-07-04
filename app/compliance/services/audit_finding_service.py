@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import UTC, date, datetime
 
@@ -16,6 +17,11 @@ from app.schemas.audit_finding import AuditFindingCreate, AuditFindingUpdate
 from app.compliance.services.risk_scoring_service import RiskScoringService
 from app.services.risk_service import RiskService
 from app.services.audit_service import AuditService
+
+logger = logging.getLogger(__name__)
+
+VALID_SEVERITIES = ("critical", "high", "medium", "low", "informational")
+VALID_FINDING_TYPES = ("observation", "minor_nonconformity", "major_nonconformity", "opportunity_for_improvement")
 
 
 class AuditFindingService:
@@ -506,14 +512,20 @@ class AuditFindingService:
                 # expected race under concurrent creation). Any OTHER IntegrityError -- a CHECK
                 # constraint violation from a bad finding_type, an FK violation from a stale
                 # control_id, etc. -- has nothing to do with finding_ref and retrying with a new
-                # ref will never fix it. Surface those immediately with the real constraint name
-                # instead of exhausting retries and returning a generic, misleading 409 that
-                # looks like a collision when it's actually bad input.
+                # ref will never fix it. Surface those immediately instead of exhausting retries
+                # and returning a generic, misleading 409 that looks like a collision when it's
+                # actually bad input. The raw driver error (which echoes back full column values
+                # of the failing row) is never returned to the client -- only logged server-side.
                 constraint_name = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
                 if constraint_name != "uq_audit_findings_org_ref":
+                    logger.exception(
+                        "audit_finding.create_v2 failed database constraint",
+                        extra={"organization_id": str(org_id), "audit_id": str(audit_id), "constraint_name": constraint_name},
+                    )
                     raise HTTPException(
                         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail=f"Finding violates database constraint '{constraint_name or 'unknown'}': {exc.orig}",
+                        detail="Finding could not be created because the submitted data violates a database "
+                        f"constraint. Valid severities are {VALID_SEVERITIES}; valid finding types are {VALID_FINDING_TYPES}.",
                     ) from exc
                 if attempt == 1:
                     raise HTTPException(
