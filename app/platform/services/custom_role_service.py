@@ -115,6 +115,10 @@ class CustomRoleService:
         if role.organization_id != org_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
 
+        original_name = role.name
+        original_description = role.description
+        original_permissions = RBACService.get_role_permissions(self.db, role.id)
+
         if name is not None:
             candidate_name = name.strip()
             duplicate = self.db.execute(
@@ -130,17 +134,16 @@ class CustomRoleService:
         if description is not None:
             role.description = description
         if permission_codes is not None:
-            current_permissions = RBACService.get_role_permissions(self.db, role.id)
             self._set_role_permissions(role.id, permission_codes)
-        else:
-            current_permissions = None
 
         self.db.flush()
-        before_json: dict[str, object] = {"permission_codes": current_permissions}
+        before_json: dict[str, object] = {}
         if name is not None:
-            before_json["name"] = name
+            before_json["name"] = original_name
         if description is not None:
-            before_json["description"] = description
+            before_json["description"] = original_description
+        if permission_codes is not None:
+            before_json["permission_codes"] = original_permissions
         AuditService(self.db).write_audit_log(
             action="custom_role.updated",
             entity_type="role",
