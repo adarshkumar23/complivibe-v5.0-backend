@@ -40,6 +40,73 @@ def test_verify_data_scope_guardrail_enforces(client):
     assert allowed.json()["decision"] == "permit"
 
 
+def test_guardrail_create_rejects_unenforceable_constraint_value(client):
+    org = bootstrap_org_user(client, email_prefix="partD-gr-constraint")
+    system = client.post("/api/v1/ai-systems", headers=org["org_headers"], json={"name": "GR Constraint System", "system_type": "agent"})
+    system_id = system.json()["id"]
+
+    # Wrong key: the built-in engine reads max_usd, so max_amount would be a silent no-op.
+    wrong_key = client.post(
+        "/api/v1/ai-governance/guardrails",
+        headers=org["org_headers"],
+        json={
+            "ai_system_id": system_id,
+            "guardrail_type": "financial_limit",
+            "constraint_description": "Max 1000",
+            "constraint_value": {"max_amount": 1000},
+            "violation_action": "block_and_alert",
+        },
+    )
+    assert wrong_key.status_code == 422
+    assert "max_usd" in wrong_key.json()["detail"]
+
+    # Wrong value shape: list expected.
+    wrong_shape = client.post(
+        "/api/v1/ai-governance/guardrails",
+        headers=org["org_headers"],
+        json={
+            "guardrail_type": "data_scope",
+            "constraint_description": "Categories",
+            "constraint_value": {"allowed_data_categories": "pii"},
+        },
+    )
+    assert wrong_shape.status_code == 422
+
+    # Correct key accepted and actually enforced.
+    ok = client.post(
+        "/api/v1/ai-governance/guardrails",
+        headers=org["org_headers"],
+        json={
+            "ai_system_id": system_id,
+            "guardrail_type": "financial_limit",
+            "constraint_description": "Max 1000 USD",
+            "constraint_value": {"max_usd": 1000},
+            "violation_action": "block_and_alert",
+        },
+    )
+    assert ok.status_code == 201
+
+    blocked = client.post(
+        f"/api/v1/ai-governance/systems/{system_id}/guardrails/check",
+        headers=org["org_headers"],
+        json={"action_context": {"estimated_value": 5000}},
+    )
+    assert blocked.status_code == 200
+    assert blocked.json()["decision"] == "block"
+
+    # approval_required needs no constraint keys.
+    approval = client.post(
+        "/api/v1/ai-governance/guardrails",
+        headers=org["org_headers"],
+        json={
+            "guardrail_type": "approval_required",
+            "constraint_description": "Needs approval",
+            "constraint_value": {},
+        },
+    )
+    assert approval.status_code == 201
+
+
 def test_verify_output_drift_breach_auto_creates_risk_signal(client):
     org = bootstrap_org_user(client, email_prefix="partD-drift")
     system = client.post("/api/v1/ai-systems", headers=org["org_headers"], json={"name": "Drift System", "system_type": "agent"})

@@ -24,6 +24,17 @@ ALLOWED_GUARDRAIL_TYPES = {
 ALLOWED_VIOLATION_ACTIONS = {"alert_only", "block_and_alert", "require_approval"}
 ALLOWED_EVENT_TYPES = {"check_passed", "violation_detected", "blocked"}
 
+# The key each guardrail type's constraint_value must carry for the built-in
+# policy engine (app/platform/policy_engine/builtin_engine.py) to enforce it.
+# Without this a typo'd key produces a guardrail that silently permits everything.
+REQUIRED_CONSTRAINT_KEYS: dict[str, tuple[str, str]] = {
+    "financial_limit": ("max_usd", "number"),
+    "geographic_scope": ("allowed_regions", "list"),
+    "user_scope": ("allowed_user_roles", "list"),
+    "action_scope": ("prohibited_actions", "list"),
+    "data_scope": ("allowed_data_categories", "list"),
+}
+
 
 class GuardrailService:
     def __init__(self, db: Session) -> None:
@@ -38,6 +49,28 @@ class GuardrailService:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid guardrail_type")
         if payload.get("violation_action") is not None and payload["violation_action"] not in ALLOWED_VIOLATION_ACTIONS:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid violation_action")
+
+    def _validate_constraint_value(self, guardrail_type: str, constraint_value: dict | None) -> None:
+        spec = REQUIRED_CONSTRAINT_KEYS.get(guardrail_type)
+        if spec is None:  # approval_required has no required constraint keys
+            return
+        key, kind = spec
+        value = (constraint_value or {}).get(key)
+        if value is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"constraint_value for '{guardrail_type}' guardrails must include '{key}'",
+            )
+        if kind == "number" and (isinstance(value, bool) or not isinstance(value, (int, float))):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"constraint_value['{key}'] must be a number",
+            )
+        if kind == "list" and not isinstance(value, list):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"constraint_value['{key}'] must be a list",
+            )
 
     def _require_system_if_set(self, org_id: uuid.UUID, system_id: uuid.UUID | None) -> None:
         if system_id is None:
@@ -67,6 +100,7 @@ class GuardrailService:
     def create_guardrail(self, org_id: uuid.UUID, data, created_by: uuid.UUID) -> AIPolicyGuardrail:
         payload = data.model_dump()
         self._validate_payload(payload)
+        self._validate_constraint_value(payload["guardrail_type"], payload.get("constraint_value"))
         self._require_system_if_set(org_id, payload.get("ai_system_id"))
 
         now = self.utcnow()
@@ -133,6 +167,10 @@ class GuardrailService:
         row = self._require_guardrail(org_id, guardrail_id)
         payload = data.model_dump(exclude_unset=True)
         self._validate_payload(payload)
+        if "guardrail_type" in payload or "constraint_value" in payload:
+            effective_type = payload.get("guardrail_type", row.guardrail_type)
+            effective_value = payload.get("constraint_value", row.constraint_value)
+            self._validate_constraint_value(effective_type, effective_value)
         if "ai_system_id" in payload:
             self._require_system_if_set(org_id, payload["ai_system_id"])
 
