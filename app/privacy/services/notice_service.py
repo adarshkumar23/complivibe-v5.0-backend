@@ -239,7 +239,12 @@ class NoticeService:
         ip: str | None = None,
         user_agent: str | None = None,
     ) -> NoticeUserAcknowledgement:
-        self._require_notice(org_id, notice_id)
+        notice = self._require_notice(org_id, notice_id)
+        if notice.status != "published":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Only published notices can be acknowledged",
+            )
 
         row = self.db.execute(
             select(NoticeUserAcknowledgement).where(
