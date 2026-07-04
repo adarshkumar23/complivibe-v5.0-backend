@@ -1494,7 +1494,111 @@ NIST_AI_RMF_SUBCATEGORIES: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+EU_AI_ACT_SOURCE_URL = "https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng"
+
+# Regulation (EU) 2024/1689, Chapter III, Section 2 sets the high-risk AI
+# system requirements in Articles 9-15. These are concise implementation
+# obligations, not substituted legal text.
+EU_AI_ACT_HIGH_RISK_OBLIGATIONS: list[dict[str, str]] = [
+    {
+        "reference_code": "Art. 9",
+        "title": "Operate a lifecycle risk management system for high-risk AI",
+        "description": (
+            "Establish, implement, document, and maintain a continuous risk management system for each high-risk AI "
+            "system. The process should identify known and reasonably foreseeable risks to health, safety, and "
+            "fundamental rights; estimate and evaluate those risks, including reasonably foreseeable misuse; adopt "
+            "risk-control measures; and use post-market monitoring evidence to keep the assessment current."
+        ),
+        "plain_language_summary": "Continuously identify, evaluate, mitigate, and monitor risks from high-risk AI systems.",
+        "obligation_type": "process",
+    },
+    {
+        "reference_code": "Art. 10",
+        "title": "Apply data governance and quality controls",
+        "description": (
+            "For high-risk AI systems using data for training, validation, or testing, maintain data governance and "
+            "management practices covering design choices, data collection, preparation, relevance, representativeness, "
+            "accuracy, completeness, bias detection and mitigation, data gaps, and suitability for the intended purpose."
+        ),
+        "plain_language_summary": "Use governed, suitable, representative, and bias-managed data for high-risk AI.",
+        "obligation_type": "control",
+    },
+    {
+        "reference_code": "Art. 11",
+        "title": "Maintain technical documentation before placing on market or putting into service",
+        "description": (
+            "Prepare and keep up-to-date technical documentation demonstrating that the high-risk AI system complies "
+            "with EU AI Act requirements. Documentation should enable competent authorities and conformity assessors "
+            "to understand the system's purpose, design, development, operation, risk controls, monitoring, and changes."
+        ),
+        "plain_language_summary": "Keep technical documentation sufficient to demonstrate high-risk AI compliance.",
+        "obligation_type": "documentation",
+    },
+    {
+        "reference_code": "Art. 12",
+        "title": "Enable automatic record-keeping and event logs",
+        "description": (
+            "Design high-risk AI systems with logging capabilities that automatically record events over the system "
+            "lifecycle where technically feasible. Logs should support traceability of system functioning, monitoring, "
+            "incident analysis, and post-market oversight proportionate to the intended purpose and risk profile."
+        ),
+        "plain_language_summary": "Generate and retain logs that support traceability and oversight of high-risk AI.",
+        "obligation_type": "control",
+    },
+    {
+        "reference_code": "Art. 13",
+        "title": "Provide transparency and instructions for deployers",
+        "description": (
+            "Design and accompany high-risk AI systems with clear, concise, complete, and correct instructions for use. "
+            "The information should allow deployers to understand the provider, system characteristics, intended "
+            "purpose, performance, limitations, human oversight measures, input data expectations, and maintenance needs."
+        ),
+        "plain_language_summary": "Give deployers the information needed to use high-risk AI safely and appropriately.",
+        "obligation_type": "documentation",
+    },
+    {
+        "reference_code": "Art. 14",
+        "title": "Implement effective human oversight",
+        "description": (
+            "Design high-risk AI systems so natural persons can effectively oversee them during use, understand "
+            "capabilities and limitations, monitor operation, interpret outputs appropriately, decide not to use or "
+            "override outputs, and intervene or stop the system where necessary to prevent or minimise risks."
+        ),
+        "plain_language_summary": "Ensure trained people can monitor, understand, override, and stop high-risk AI when needed.",
+        "obligation_type": "control",
+    },
+    {
+        "reference_code": "Art. 15",
+        "title": "Meet accuracy, robustness, and cybersecurity requirements",
+        "description": (
+            "Design and develop high-risk AI systems to achieve an appropriate level of accuracy, robustness, and "
+            "cybersecurity throughout their lifecycle. Providers should declare relevant accuracy metrics, protect "
+            "against errors, faults, inconsistencies, unauthorised access, data poisoning, model manipulation, and other "
+            "adversarial or security threats proportionate to the system's risks."
+        ),
+        "plain_language_summary": "Set and maintain lifecycle accuracy, robustness, resilience, and cybersecurity controls.",
+        "obligation_type": "control",
+    },
+]
+
 OBLIGATION_SEEDS: list[dict] = [
+    *[
+        {
+            "framework_code": "EU_AI_ACT",
+            "reference_code": item["reference_code"],
+            "title": item["title"],
+            "description": item["description"],
+            "plain_language_summary": item["plain_language_summary"],
+            "obligation_type": item["obligation_type"],
+            "jurisdiction": "European Union",
+            "source_url": EU_AI_ACT_SOURCE_URL,
+            "version": "2024",
+            "status": "active",
+            "effective_date": None,
+            "parent_obligation_id": None,
+        }
+        for item in EU_AI_ACT_HIGH_RISK_OBLIGATIONS
+    ],
     {
         "framework_code": "NIST_AI_RMF",
         "reference_code": "GOV-1",

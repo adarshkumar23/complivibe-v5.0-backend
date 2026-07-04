@@ -7,9 +7,7 @@ from sqlalchemy import func, select
 from app.core.security import get_password_hash
 from app.models.ai_system import AISystem
 from app.models.eu_ai_act_classification import EUAIActClassification
-from app.models.framework import Framework
 from app.models.membership import Membership
-from app.models.obligation import Obligation
 from app.models.role import Role
 from app.models.user import User
 from tests.helpers.auth_org import bootstrap_org_user, login_user, org_headers
@@ -258,34 +256,6 @@ def test_a56_eu_ai_act_classification_and_annex_seeding(client, db_session):
     assert annex.status_code == 200
     assert len(annex.json()) == 8
 
-    # Seed an EU AI Act framework obligation in DB so obligations endpoint can return data.
-    framework = db_session.execute(select(Framework).where(Framework.code == "EU_AI_ACT")).scalar_one_or_none()
-    if framework is None:
-        framework = Framework(
-            code="EU_AI_ACT",
-            name="EU AI Act",
-            description="EU AI Act framework",
-            category="AI Governance",
-            jurisdiction="European Union",
-            authority="EU",
-            version="2024",
-            status="active",
-            coverage_level="starter",
-        )
-        db_session.add(framework)
-        db_session.flush()
-
-    ob = Obligation(
-        framework_id=framework.id,
-        reference_code="Art. 6",
-        title="High-risk AI requirements",
-        description="Requirements for high-risk systems",
-        jurisdiction="European Union",
-        status="active",
-    )
-    db_session.add(ob)
-    db_session.commit()
-
     high_risk = client.post(
         f"{SYSTEMS_BASE}/{system_id}/eu-act-classification",
         headers=org["org_headers"],
@@ -297,6 +267,15 @@ def test_a56_eu_ai_act_classification_and_annex_seeding(client, db_session):
     )
     assert high_risk.status_code == 200
     assert high_risk.json()["registration_required"] is True
+
+    obligations = client.get(f"{SYSTEMS_BASE}/{system_id}/eu-act-obligations", headers=org["org_headers"])
+    assert obligations.status_code == 200
+    obligation_rows = obligations.json()
+    refs = {row["reference_code"] for row in obligation_rows}
+    assert {"Art. 9", "Art. 10", "Art. 11", "Art. 12", "Art. 13", "Art. 14", "Art. 15"} <= refs
+    by_ref = {row["reference_code"]: row for row in obligation_rows}
+    assert "continuous risk management system" in by_ref["Art. 9"]["description"]
+    assert "accuracy, robustness, and cybersecurity" in by_ref["Art. 15"]["title"]
 
     minimal = client.post(
         f"{SYSTEMS_BASE}/{system_id}/eu-act-classification",
@@ -315,9 +294,9 @@ def test_a56_eu_ai_act_classification_and_annex_seeding(client, db_session):
     ).scalar_one()
     assert int(count_rows) == 1
 
-    obligations = client.get(f"{SYSTEMS_BASE}/{system_id}/eu-act-obligations", headers=org["org_headers"])
-    assert obligations.status_code == 200
-    assert isinstance(obligations.json(), list)
+    minimal_obligations = client.get(f"{SYSTEMS_BASE}/{system_id}/eu-act-obligations", headers=org["org_headers"])
+    assert minimal_obligations.status_code == 200
+    assert minimal_obligations.json() == []
 
     # Org isolation.
     org_b = bootstrap_org_user(client, email_prefix="a56-orgb")

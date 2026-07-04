@@ -178,6 +178,7 @@ class EUAIActClassificationService:
 
     def get_applicable_obligations(self, org_id: uuid.UUID, system_id: uuid.UUID) -> list[Obligation]:
         classification = self.get_classification(org_id, system_id)
+        SeedService.ensure_starter_obligations(self.db)
 
         framework = self.db.execute(
             select(Framework).where(
@@ -195,22 +196,38 @@ class EUAIActClassificationService:
             Obligation.status == "active",
         )
 
-        if classification.annex_reference:
-            annex = self.db.execute(
-                select(EUActAnnexMapping).where(EUActAnnexMapping.annex_ref == classification.annex_reference)
-            ).scalar_one_or_none()
-            if annex and annex.article_refs:
-                article_tokens = [str(v) for v in list(annex.article_refs or [])]
-                predicates = [
-                    or_(
-                        Obligation.reference_code.ilike(f"%{token}%"),
-                        Obligation.title.ilike(f"%{token}%"),
-                        Obligation.description.ilike(f"%{token}%"),
-                    )
-                    for token in article_tokens
-                ]
-                if predicates:
-                    stmt = stmt.where(or_(*predicates))
+        if classification.article_category in {"high_risk_annex1", "high_risk_annex3"}:
+            high_risk_articles = [f"Art. {article}" for article in range(9, 16)]
+            stmt = stmt.where(
+                or_(
+                    *[
+                        or_(
+                            Obligation.reference_code.ilike(f"%{article}%"),
+                            Obligation.title.ilike(f"%{article}%"),
+                            Obligation.description.ilike(f"%{article}%"),
+                        )
+                        for article in high_risk_articles
+                    ]
+                )
+            )
+        elif classification.article_category == "prohibited":
+            stmt = stmt.where(
+                or_(
+                    Obligation.reference_code.ilike("%Art. 5%"),
+                    Obligation.title.ilike("%prohibit%"),
+                    Obligation.description.ilike("%prohibit%"),
+                )
+            )
+        elif classification.article_category == "limited_risk":
+            stmt = stmt.where(
+                or_(
+                    Obligation.reference_code.ilike("%Art. 50%"),
+                    Obligation.title.ilike("%transparency%"),
+                    Obligation.description.ilike("%transparency%"),
+                )
+            )
+        elif classification.article_category == "minimal_risk":
+            return []
 
         return self.db.execute(stmt.order_by(Obligation.reference_code.asc())).scalars().all()
 
