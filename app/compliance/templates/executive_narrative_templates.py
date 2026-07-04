@@ -32,5 +32,11 @@ CAVEAT = (
 )
 
 NO_OPEN_RISKS = "No high-severity risks currently open."
+
+ISSUES_ONLY_ATTENTION = (
+    "No open risks currently, but {high_severity_issue_count}"
+    " high-severity issue(s) require attention, the most"
+    " urgent being: {top_issue_title} (severity: {top_issue_severity})."
+)
 NO_ACHIEVEMENTS = "No new certifications or risk closures recorded this quarter."
 NO_DEADLINES = "No compliance deadlines due within the next 90 days."

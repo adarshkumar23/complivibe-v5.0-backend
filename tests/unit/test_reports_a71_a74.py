@@ -354,3 +354,33 @@ def test_generate_executive_narrative_sections_and_fallbacks(client, db_session)
 
     caveat = section_map["caveats"]["body_markdown"]
     assert "not legal advice" in caveat
+
+
+def test_item5_needs_attention_flags_high_severity_issue_with_zero_open_risks(client, db_session):
+    token = _register(client, "item5-owner@example.com", "Pass1234!@", "Item5 Org")
+    org = uuid.UUID(_org_id(client, token))
+    owner = _create_active_user_with_role(db_session, str(org), "item5-owner-user@example.com", "compliance_manager")
+
+    db_session.add(
+        Issue(
+            organization_id=org,
+            title="Unpatched high-severity vulnerability",
+            description="desc",
+            issue_type="security_incident",
+            severity="high",
+            status="open",
+            owner_id=owner.id,
+            created_by=owner.id,
+        )
+    )
+    db_session.commit()
+
+    resp = client.post("/api/v1/reports/executive-narrative", headers=_headers(token, str(org)))
+    assert resp.status_code == 200
+
+    detail = client.get(f"/api/v1/reports/{resp.json()['id']}", headers=_headers(token, str(org)))
+    assert detail.status_code == 200
+    section_map = {item["section_key"]: item for item in detail.json()["sections"]}
+    needs_attention = section_map["needs_attention"]["body_markdown"]
+    assert needs_attention != "No high-severity risks currently open."
+    assert "Unpatched high-severity vulnerability" in needs_attention
