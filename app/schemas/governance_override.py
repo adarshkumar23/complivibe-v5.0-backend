@@ -86,10 +86,16 @@ class GovernanceOverrideRequestRead(BaseModel):
     updated_at: datetime
 
 
+class GovernanceOverrideEligibleApproverRead(BaseModel):
+    user_id: UUID
+    role_name: str
+
+
 class GovernanceOverrideDetail(BaseModel):
     request: GovernanceOverrideRequestRead
     approvals: list[GovernanceOverrideApprovalRead]
     events: list[GovernanceOverrideEventRead]
+    eligible_approvers: list[GovernanceOverrideEligibleApproverRead] = []
 
 
 class GovernanceOverrideRoutingRead(BaseModel):

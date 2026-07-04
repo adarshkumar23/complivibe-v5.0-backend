@@ -245,6 +245,28 @@ def test_a52_submit_no_and_yes_mfa_scoring_and_score_refresh(client):
     assert response_after_yes["score_computed_at"] is not None
 
 
+def test_item4_scoring_is_case_insensitive_for_text_match(client):
+    org = bootstrap_org_user(client, email_prefix="item4-case")
+    sig = _template_by_type(client, org["org_headers"], "sig_lite")
+    detail = _template_detail(client, org["org_headers"], sig["id"])
+    mfa_question_id = _question_id_by_category(detail, "access_control_mfa")
+
+    vendor = _create_vendor(client, org["org_headers"], owner_user_id=org["user_id"], name="Case Vendor")
+    response = _create_response(client, org["org_headers"], vendor_id=vendor["id"], template_id=sig["id"], title="Case Score")
+
+    mixed_case_no = _submit_answer(client, org["org_headers"], response["id"], mfa_question_id, "No")
+    assert mixed_case_no["score_contribution"] == 20
+
+    upper_case_no = _submit_answer(client, org["org_headers"], response["id"], mfa_question_id, "NO")
+    assert upper_case_no["score_contribution"] == 20
+
+    lower_case_yes = _submit_answer(client, org["org_headers"], response["id"], mfa_question_id, "yes")
+    assert lower_case_yes["score_contribution"] == -5
+
+    mixed_case_yes = _submit_answer(client, org["org_headers"], response["id"], mfa_question_id, "YeS")
+    assert mixed_case_yes["score_contribution"] == -5
+
+
 def test_a52_scoring_uses_answer_text_only_field_not_just_answer_value(client):
     """Regression: submitting only the documented answer_text field (no answer_value)
     must still score correctly, not silently compute 0. answer_value is a legacy/

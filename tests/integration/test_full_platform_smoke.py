@@ -745,7 +745,8 @@ def test_p4_consent_hashed(client):
     )
     assert cid.status_code == 201
     rec = cid.json()
-    assert rec["subject_identifier"] == "hashed"
+    assert rec["subject_identifier"] != "hashed"
+    assert rec["subject_identifier"] == rec["subject_identifier_hash"]
     assert rec["subject_identifier_hash"]
 
 

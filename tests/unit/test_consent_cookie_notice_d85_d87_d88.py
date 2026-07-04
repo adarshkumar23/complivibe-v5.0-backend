@@ -278,6 +278,36 @@ def test_d88_draft_notice_acknowledgement_blocked_until_published(client, db_ses
     ack_published = client.post(f"{NOTICES_BASE}/{draft['id']}/acknowledge", headers=org["org_headers"])
     assert ack_published.status_code == 200
     assert ack_published.json()["notice_id"] == draft["id"]
+def test_item3_subject_identifier_is_real_one_way_hash_not_literal_placeholder(client):
+    org = bootstrap_org_user(client, email_prefix="item3-hash")
+    activity = _create_processing_activity(client, org["org_headers"], org["user_id"])
+
+    def _record(subject_identifier: str, activity_id: str):
+        response = client.post(
+            CONSENT_BASE,
+            headers=org["org_headers"],
+            json={
+                "processing_activity_id": activity_id,
+                "subject_identifier": subject_identifier,
+                "consent_mechanism": "explicit_checkbox",
+                "granted": True,
+            },
+        )
+        assert response.status_code == 201
+        return response.json()
+
+    activity2 = _create_processing_activity(client, org["org_headers"], org["user_id"], name="Second Activity")
+
+    rec_a = _record("subject-alpha", activity["id"])
+    rec_b = _record("subject-alpha", activity2["id"])
+    rec_c = _record("subject-beta", activity["id"])
+
+    assert rec_a["subject_identifier"] != "hashed"
+    assert rec_a["subject_identifier"] == ConsentService.hash_subject_identifier("subject-alpha")
+    # Same subject identifier -> same stored hash, consistent across repeat calls.
+    assert rec_a["subject_identifier"] == rec_b["subject_identifier"]
+    # Different subject identifier -> different stored hash.
+    assert rec_a["subject_identifier"] != rec_c["subject_identifier"]
 
 
 def test_d87_cookie_registry_scan_and_public_banner(client, db_session):

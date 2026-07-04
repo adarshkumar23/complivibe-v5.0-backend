@@ -202,6 +202,39 @@ def test_a54_subprocessor_gdpr_completeness_validation(client, db_session):
     )
     assert missing_locations.status_code == 422
     assert "geographic_locations" in missing_locations.json()["detail"]
+def test_item2_gdpr_dashboard_counts_geographic_locations_without_double_counting(client):
+    org = bootstrap_org_user(client, email_prefix="item2-gdpr")
+
+    baseline = client.get(f"{SUBPROCESSOR_BASE}/gdpr-dashboard", headers=org["org_headers"])
+    assert baseline.status_code == 200
+    baseline_count = baseline.json()["transfers_outside_eea"]
+
+    # Subprocessor with a non-EEA geographic_locations entry but NO explicit transfer record.
+    location_only = _create_subprocessor(client, org["org_headers"], name="Location-Only Vendor")
+    location_only_dashboard = client.get(f"{SUBPROCESSOR_BASE}/gdpr-dashboard", headers=org["org_headers"])
+    assert location_only_dashboard.status_code == 200
+    assert location_only_dashboard.json()["transfers_outside_eea"] == baseline_count + 1
+
+    # Subprocessor with BOTH a non-EEA geographic_locations entry AND an explicit non-EEA transfer
+    # record -- must count once, not twice.
+    both_signals = _create_subprocessor(client, org["org_headers"], name="Both-Signals Vendor")
+    transfer = client.post(
+        f"{SUBPROCESSOR_BASE}/{both_signals['id']}/transfers",
+        headers=org["org_headers"],
+        json={
+            "origin_country": "DE",
+            "destination_country": "US",
+            "data_categories": ["email"],
+            "transfer_mechanism": "sccs",
+            "legal_basis": "contract",
+            "is_active": True,
+        },
+    )
+    assert transfer.status_code == 201
+
+    final_dashboard = client.get(f"{SUBPROCESSOR_BASE}/gdpr-dashboard", headers=org["org_headers"])
+    assert final_dashboard.status_code == 200
+    assert final_dashboard.json()["transfers_outside_eea"] == baseline_count + 2
 
 
 def test_a55_commitment_types_workflow_sweeps_and_dashboard(client, db_session):

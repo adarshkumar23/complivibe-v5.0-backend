@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.compliance.templates.executive_narrative_templates import (
     ACHIEVEMENTS,
     CAVEAT,
+    ISSUES_ONLY_ATTENTION,
     NEEDS_ATTENTION,
     NO_ACHIEVEMENTS,
     NO_DEADLINES,
@@ -206,7 +207,42 @@ class ExecutiveNarrativeBuilder:
         )
 
         if open_risks == 0 or top_risk is None:
-            needs_attention = NO_OPEN_RISKS
+            high_severity_issue_count = int(
+                db.execute(
+                    select(func.count(Issue.id)).where(
+                        Issue.organization_id == org_id,
+                        Issue.severity.in_(["critical", "high"]),
+                        Issue.status.notin_(["resolved", "closed"]),
+                        Issue.deleted_at.is_(None),
+                    )
+                ).scalar_one()
+            )
+            if high_severity_issue_count == 0:
+                needs_attention = NO_OPEN_RISKS
+            else:
+                top_issue = db.execute(
+                    select(Issue)
+                    .where(
+                        Issue.organization_id == org_id,
+                        Issue.severity.in_(["critical", "high"]),
+                        Issue.status.notin_(["resolved", "closed"]),
+                        Issue.deleted_at.is_(None),
+                    )
+                    .order_by(
+                        case(
+                            (Issue.severity == "critical", 2),
+                            (Issue.severity == "high", 1),
+                            else_=0,
+                        ).desc(),
+                        Issue.updated_at.desc(),
+                    )
+                    .limit(1)
+                ).scalar_one()
+                needs_attention = ISSUES_ONLY_ATTENTION.format(
+                    high_severity_issue_count=high_severity_issue_count,
+                    top_issue_title=top_issue.title,
+                    top_issue_severity=top_issue.severity,
+                )
         else:
             issue_sentence = (
                 f" {critical_issue_count} critical issue(s) require immediate attention."

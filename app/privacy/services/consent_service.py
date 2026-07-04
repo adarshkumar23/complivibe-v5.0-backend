@@ -139,7 +139,7 @@ class ConsentService:
         mechanism = validate_choice(mechanism, ALLOWED_CONSENT_MECHANISMS, "consent_mechanism")
         subject_identifier = payload["subject_identifier"]
         subject_hash = self.hash_subject_identifier(subject_identifier)
-        stored_identifier = "hashed"
+        stored_identifier = subject_hash
         now = self.utcnow()
 
         row = self.db.execute(
