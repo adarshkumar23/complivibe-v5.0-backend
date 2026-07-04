@@ -261,6 +261,38 @@ def test_d85_consent_lifecycle_inbound_and_expiry(client, db_session):
     assert refreshed.withdrawal_reason == "expired"
 
 
+def test_item3_subject_identifier_is_real_one_way_hash_not_literal_placeholder(client):
+    org = bootstrap_org_user(client, email_prefix="item3-hash")
+    activity = _create_processing_activity(client, org["org_headers"], org["user_id"])
+
+    def _record(subject_identifier: str, activity_id: str):
+        response = client.post(
+            CONSENT_BASE,
+            headers=org["org_headers"],
+            json={
+                "processing_activity_id": activity_id,
+                "subject_identifier": subject_identifier,
+                "consent_mechanism": "explicit_checkbox",
+                "granted": True,
+            },
+        )
+        assert response.status_code == 201
+        return response.json()
+
+    activity2 = _create_processing_activity(client, org["org_headers"], org["user_id"], name="Second Activity")
+
+    rec_a = _record("subject-alpha", activity["id"])
+    rec_b = _record("subject-alpha", activity2["id"])
+    rec_c = _record("subject-beta", activity["id"])
+
+    assert rec_a["subject_identifier"] != "hashed"
+    assert rec_a["subject_identifier"] == ConsentService.hash_subject_identifier("subject-alpha")
+    # Same subject identifier -> same stored hash, consistent across repeat calls.
+    assert rec_a["subject_identifier"] == rec_b["subject_identifier"]
+    # Different subject identifier -> different stored hash.
+    assert rec_a["subject_identifier"] != rec_c["subject_identifier"]
+
+
 def test_d87_cookie_registry_scan_and_public_banner(client, db_session):
     org = bootstrap_org_user(client, email_prefix="d87-org")
     ingest_key = _configure_ingest_key(client, org["org_headers"], key="cookie-scan-key-12345")
