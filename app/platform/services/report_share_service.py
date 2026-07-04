@@ -34,6 +34,7 @@ class ReportShareService:
         max_views: int | None = None,
         recipient_email: str | None = None,
         watermark_text: str | None = None,
+        base_url: str | None = None,
     ) -> dict:
         token = secrets.token_urlsafe(48)
         password_hash = hashlib.sha256(password.encode()).hexdigest() if password else None
@@ -72,7 +73,8 @@ class ReportShareService:
         )
 
         settings = get_settings()
-        share_url = f"{settings.BASE_URL}/api/v1/reports/shared/{token}"
+        resolved_base = (base_url or settings.BASE_URL).rstrip("/")
+        share_url = f"{resolved_base}/api/v1/reports/shared/{token}"
         return {
             "share_id": str(link.id),
             "share_url": share_url,
