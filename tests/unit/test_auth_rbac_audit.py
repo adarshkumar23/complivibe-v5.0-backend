@@ -34,19 +34,19 @@ def _auth_headers(token: str, organization_id: str | None = None) -> dict[str, s
 
 
 def test_register_login_and_me(client):
-    token = _register(client, "owner1@example.com", "strongpass123", "Org One")
+    token = _register(client, "owner1@example.com", "StrongPass123!", "Org One")
 
     me_response = client.get("/api/v1/auth/me", headers=_auth_headers(token))
     assert me_response.status_code == 200
     assert me_response.json()["email"] == "owner1@example.com"
 
-    login_token = _login(client, "owner1@example.com", "strongpass123")
+    login_token = _login(client, "owner1@example.com", "StrongPass123!")
     assert isinstance(login_token, str)
     assert login_token
 
 
 def test_missing_organization_header_fails(client):
-    token = _register(client, "owner2@example.com", "strongpass123", "Org Two")
+    token = _register(client, "owner2@example.com", "StrongPass123!", "Org Two")
     orgs_response = client.get("/api/v1/organizations/me", headers=_auth_headers(token))
     organization_id = orgs_response.json()[0]["id"]
 
@@ -56,8 +56,8 @@ def test_missing_organization_header_fails(client):
 
 
 def test_user_cannot_access_other_organization(client):
-    token_org1 = _register(client, "owner3@example.com", "strongpass123", "Org Three")
-    token_org2 = _register(client, "owner4@example.com", "strongpass123", "Org Four")
+    token_org1 = _register(client, "owner3@example.com", "StrongPass123!", "Org Three")
+    token_org2 = _register(client, "owner4@example.com", "StrongPass123!", "Org Four")
 
     org2_id = client.get("/api/v1/organizations/me", headers=_auth_headers(token_org2)).json()[0]["id"]
     response = client.get(
@@ -68,7 +68,7 @@ def test_user_cannot_access_other_organization(client):
 
 
 def test_readonly_cannot_update_org_owner_can_and_audit_logged(client, db_session):
-    owner_token = _register(client, "owner5@example.com", "strongpass123", "Org Five")
+    owner_token = _register(client, "owner5@example.com", "StrongPass123!", "Org Five")
     org_id = client.get("/api/v1/organizations/me", headers=_auth_headers(owner_token)).json()[0]["id"]
 
     readonly_user = User(
@@ -113,8 +113,8 @@ def test_readonly_cannot_update_org_owner_can_and_audit_logged(client, db_sessio
 
 
 def test_audit_logs_are_tenant_scoped(client):
-    token1 = _register(client, "owner6@example.com", "strongpass123", "Org Six")
-    token2 = _register(client, "owner7@example.com", "strongpass123", "Org Seven")
+    token1 = _register(client, "owner6@example.com", "StrongPass123!", "Org Six")
+    token2 = _register(client, "owner7@example.com", "StrongPass123!", "Org Seven")
 
     org1_id = client.get("/api/v1/organizations/me", headers=_auth_headers(token1)).json()[0]["id"]
     org2_id = client.get("/api/v1/organizations/me", headers=_auth_headers(token2)).json()[0]["id"]
