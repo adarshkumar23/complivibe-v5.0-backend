@@ -195,6 +195,7 @@ class EscalationService:
                 .join(IssueSLATracking, IssueSLATracking.issue_id == Issue.id)
                 .where(
                     Issue.organization_id == policy.organization_id,
+                    IssueSLATracking.organization_id == policy.organization_id,
                     Issue.deleted_at.is_(None),
                     Issue.status.notin_(["resolved", "closed"]),
                     or_(IssueSLATracking.response_breached.is_(True), IssueSLATracking.resolution_breached.is_(True)),

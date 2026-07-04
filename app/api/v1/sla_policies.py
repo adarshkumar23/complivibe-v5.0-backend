@@ -65,9 +65,9 @@ def create_or_update_sla_policy(
 def trigger_breach_check(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
-    __: Organization = Depends(get_current_organization),
-    ___: Membership = Depends(require_permission("issues:admin")),
+    organization: Organization = Depends(get_current_organization),
+    __: Membership = Depends(require_permission("issues:admin")),
 ) -> SLABreachCheckResult:
-    payload = SLAService(db).check_sla_breaches()
+    payload = SLAService(db).check_sla_breaches(organization.id)
     db.commit()
     return SLABreachCheckResult(**payload)

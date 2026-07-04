@@ -7,6 +7,8 @@ try:
 except Exception:  # pragma: no cover - optional in local test environments
     sentry_sdk = None  # type: ignore[assignment]
 
+from sqlalchemy import select
+
 from app.compliance.services.audit_schedule_service import run_daily_audit_schedule_reminder_sweep
 from app.compliance.services.customer_commitment_service import run_daily_customer_commitment_trigger_sweep
 from app.compliance.services.escalation_service import run_daily_escalation_policy_evaluation
@@ -28,6 +30,7 @@ from app.compliance.services.digest_service import run_daily_digest_send_sweep, 
 from app.core.scheduler_logger import SchedulerJobLogger
 from app.core.config import get_settings
 from app.db.session import get_session_maker
+from app.models.organization import Organization
 from app.platform.services.email_outbox_flush_service import EmailOutboxFlushService
 
 logger = logging.getLogger(__name__)
@@ -260,10 +263,15 @@ def _run_mitigation_overdue_action_sweep_job() -> None:
 
 def _run_issue_sla_breach_check_job_internal(*, db) -> dict:
     try:
-        result = run_hourly_issue_sla_breach_check(db)
+        org_ids = [row.id for row in db.execute(select(Organization.id)).scalars().all()]
+        total = {"response_breached": 0, "resolution_breached": 0, "notifications_queued": 0}
+        for org_id in org_ids:
+            result = run_hourly_issue_sla_breach_check(db, org_id)
+            for key in total:
+                total[key] += result.get(key, 0)
         db.commit()
-        logger.info("Issue SLA breach check complete", extra=result)
-        payload = dict(result or {})
+        logger.info("Issue SLA breach check complete", extra=total)
+        payload = dict(total)
         payload.setdefault("records_processed", _records_from_result(payload))
         return payload
     except Exception as exc:

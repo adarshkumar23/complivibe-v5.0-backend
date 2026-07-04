@@ -178,7 +178,12 @@ class SLAService:
 
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Issue SLA tracking not found")
 
-        response_hours, resolution_hours = self._policy_hours(org_id, issue.severity)
+        # The frozen deadlines recorded at issue creation are authoritative.
+        # Derive the effective SLA hours from them so the payload is internally
+        # consistent even if the organization's live SLA policy is later changed.
+        created_at = issue.created_at
+        response_hours = int((tracking.response_deadline - created_at).total_seconds() / 3600)
+        resolution_hours = int((tracking.resolution_deadline - created_at).total_seconds() / 3600)
         now = self.utcnow()
 
         response_remaining_hours: float | None
@@ -240,7 +245,7 @@ class SLAService:
             )
         return payload
 
-    def check_sla_breaches(self) -> dict[str, int]:
+    def check_sla_breaches(self, org_id: uuid.UUID) -> dict[str, int]:
         now = self.utcnow()
         response_breached = 0
         resolution_breached = 0
@@ -250,6 +255,8 @@ class SLAService:
             select(IssueSLATracking, Issue)
             .join(Issue, Issue.id == IssueSLATracking.issue_id)
             .where(
+                IssueSLATracking.organization_id == org_id,
+                Issue.organization_id == org_id,
                 IssueSLATracking.response_deadline < now,
                 IssueSLATracking.response_breached.is_(False),
                 IssueSLATracking.response_met_at.is_(None),
@@ -279,6 +286,8 @@ class SLAService:
             select(IssueSLATracking, Issue)
             .join(Issue, Issue.id == IssueSLATracking.issue_id)
             .where(
+                IssueSLATracking.organization_id == org_id,
+                Issue.organization_id == org_id,
                 IssueSLATracking.resolution_deadline < now,
                 IssueSLATracking.resolution_breached.is_(False),
                 IssueSLATracking.resolution_met_at.is_(None),
@@ -378,5 +387,5 @@ class SLAService:
         return {"overdue_count": overdue_count}
 
 
-def run_hourly_issue_sla_breach_check(db: Session) -> dict[str, int]:
-    return SLAService(db).check_sla_breaches()
+def run_hourly_issue_sla_breach_check(db: Session, org_id: uuid.UUID) -> dict[str, int]:
+    return SLAService(db).check_sla_breaches(org_id)
