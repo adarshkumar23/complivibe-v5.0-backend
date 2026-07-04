@@ -181,6 +181,8 @@ from app.models.siem_export_run import SiemExportRun
 from app.models.scim_token import ScimToken
 from app.models.security_scan_job import SecurityScanJob
 from app.models.sso_config import SSOConfig
+from app.models.oidc_config import OIDCConfig
+from app.models.oidc_auth_state import OIDCAuthState
 from app.models.shared_report_link import SharedReportLink
 from app.models.team_invitation import TeamInvitation
 from app.models.permission import Permission
@@ -634,6 +636,8 @@ __all__ = [
     "OffboardingRecord",
     "SchedulerRunLog",
     "ScimToken",
+    "OIDCConfig",
+    "OIDCAuthState",
     "SecurityScanJob",
     "OpenSCAPRuleMapping",
     "PolicyTemplate",

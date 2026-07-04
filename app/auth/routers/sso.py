@@ -5,6 +5,14 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth.schemas.oidc import (
+    OIDCCallbackResponse,
+    OIDCConfigCreate,
+    OIDCConfigResponse,
+    OIDCConfigUpdate,
+    OIDCInitiateResponse,
+    OIDCTestConfigResponse,
+)
 from app.auth.schemas.sso import (
     SSOCallbackResponse,
     SSOConfigCreate,
@@ -13,6 +21,8 @@ from app.auth.schemas.sso import (
     SSOInitiateResponse,
     SSOTestConfigResponse,
 )
+from app.auth.services.oidc_config_service import OIDCConfigService
+from app.auth.services.oidc_service import OIDCService
 from app.auth.services.sso_config_service import SSOConfigService
 from app.auth.services.sso_service import SSOService
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
@@ -57,6 +67,28 @@ def sso_callback(
     payload = SSOService().process_callback(org_slug=org_slug, saml_response=saml_response, db=db)
     db.commit()
     return SSOCallbackResponse(**payload)
+
+
+@router.post("/auth/oidc/{org_slug}/initiate", response_model=OIDCInitiateResponse)
+@rate_limiter.limiter.limit("10/minute")
+def initiate_oidc(org_slug: str, request: Request, db: Session = Depends(get_db)) -> OIDCInitiateResponse:
+    redirect_url = OIDCService().initiate_login(org_slug=org_slug, db=db)
+    db.commit()
+    return OIDCInitiateResponse(redirect_url=redirect_url)
+
+
+@router.get("/auth/oidc/{org_slug}/callback", response_model=OIDCCallbackResponse)
+@rate_limiter.limiter.limit("10/minute")
+def oidc_callback(
+    org_slug: str,
+    request: Request,
+    code: str,
+    state: str,
+    db: Session = Depends(get_db),
+) -> OIDCCallbackResponse:
+    payload = OIDCService().process_callback(org_slug=org_slug, code=code, state=state, db=db)
+    db.commit()
+    return OIDCCallbackResponse(**payload)
 
 
 @router.post(
@@ -160,3 +192,106 @@ def test_sso_config(
     _require_admin_membership(db, membership)
     valid, errors = SSOConfigService(db).test_config(organization.id, config_id, db)
     return SSOTestConfigResponse(valid=valid, errors=errors)
+
+
+@router.post(
+    "/oidc-configs",
+    response_model=OIDCConfigResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_feature("sso_enabled")],
+)
+def create_oidc_config(
+    payload: OIDCConfigCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    membership: Membership = Depends(require_permission("org:update")),
+) -> OIDCConfigResponse:
+    _require_admin_membership(db, membership)
+    row = OIDCConfigService(db).create_config(organization.id, payload, current_user.id, db)
+    db.commit()
+    db.refresh(row)
+    return OIDCConfigResponse.model_validate(row)
+
+
+@router.get("/oidc-configs", response_model=OIDCConfigResponse)
+def get_oidc_config(
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    membership: Membership = Depends(require_permission("org:read")),
+) -> OIDCConfigResponse:
+    _require_admin_membership(db, membership)
+    row = OIDCConfigService(db).get_config(organization.id, db)
+    return OIDCConfigResponse.model_validate(row)
+
+
+@router.patch("/oidc-configs/{config_id}", response_model=OIDCConfigResponse)
+def update_oidc_config(
+    config_id: uuid.UUID,
+    payload: OIDCConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    membership: Membership = Depends(require_permission("org:update")),
+) -> OIDCConfigResponse:
+    _require_admin_membership(db, membership)
+    row = OIDCConfigService(db).update_config(organization.id, config_id, payload, current_user.id, db)
+    db.commit()
+    db.refresh(row)
+    return OIDCConfigResponse.model_validate(row)
+
+
+@router.post("/oidc-configs/{config_id}/activate", response_model=OIDCConfigResponse)
+def activate_oidc_config(
+    config_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    membership: Membership = Depends(require_permission("org:update")),
+) -> OIDCConfigResponse:
+    _require_admin_membership(db, membership)
+    row = OIDCConfigService(db).activate_config(organization.id, config_id, current_user.id, db)
+    db.commit()
+    db.refresh(row)
+    return OIDCConfigResponse.model_validate(row)
+
+
+@router.post("/oidc-configs/{config_id}/deactivate", response_model=OIDCConfigResponse)
+def deactivate_oidc_config(
+    config_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    membership: Membership = Depends(require_permission("org:update")),
+) -> OIDCConfigResponse:
+    _require_admin_membership(db, membership)
+    row = OIDCConfigService(db).deactivate_config(organization.id, config_id, current_user.id, db)
+    db.commit()
+    db.refresh(row)
+    return OIDCConfigResponse.model_validate(row)
+
+
+@router.delete("/oidc-configs/{config_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_oidc_config(
+    config_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    membership: Membership = Depends(require_permission("org:update")),
+) -> Response:
+    _require_admin_membership(db, membership)
+    OIDCConfigService(db).soft_delete_config(organization.id, config_id, current_user.id, db)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/oidc-configs/{config_id}/test", response_model=OIDCTestConfigResponse)
+def test_oidc_config(
+    config_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    membership: Membership = Depends(require_permission("org:read")),
+) -> OIDCTestConfigResponse:
+    _require_admin_membership(db, membership)
+    valid, errors = OIDCConfigService(db).test_config(organization.id, config_id, db)
+    return OIDCTestConfigResponse(valid=valid, errors=errors)

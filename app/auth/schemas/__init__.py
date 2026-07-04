@@ -6,6 +6,14 @@ from app.auth.schemas.sso import (
     SSOInitiateResponse,
     SSOTestConfigResponse,
 )
+from app.auth.schemas.oidc import (
+    OIDCCallbackResponse,
+    OIDCConfigCreate,
+    OIDCConfigResponse,
+    OIDCConfigUpdate,
+    OIDCInitiateResponse,
+    OIDCTestConfigResponse,
+)
 from app.auth.schemas.scim import (
     ScimPatchOperation,
     ScimPatchRequest,
@@ -21,6 +29,12 @@ __all__ = [
     "SSOInitiateResponse",
     "SSOCallbackResponse",
     "SSOTestConfigResponse",
+    "OIDCConfigCreate",
+    "OIDCConfigUpdate",
+    "OIDCConfigResponse",
+    "OIDCInitiateResponse",
+    "OIDCCallbackResponse",
+    "OIDCTestConfigResponse",
     "ScimTokenCreate",
     "ScimTokenResponse",
     "ScimTokenCreatedResponse",
