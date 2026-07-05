@@ -19,6 +19,7 @@ from app.schemas.ot_ics import (
     OtIcsAssetUpdate,
     OtIcsFindingIngestRequest,
     OtIcsFindingIngestResponse,
+    OtIcsFindingResolveRequest,
     OtIcsFindingResponse,
     OtIcsFindingSummaryResponse,
 )
@@ -237,6 +238,21 @@ def list_ot_ics_findings(
         unresolved_only=unresolved_only,
     )
     return [_finding_read(row) for row in rows]
+
+
+@router.post("/findings/{finding_id}/resolve", response_model=OtIcsFindingResponse)
+def resolve_ot_ics_finding(
+    finding_id: uuid.UUID,
+    payload: OtIcsFindingResolveRequest = OtIcsFindingResolveRequest(),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("ot_ics_assets:manage")),
+) -> OtIcsFindingResponse:
+    row = OtIcsFindingService(db).resolve_finding(organization.id, finding_id, payload, current_user.id)
+    db.commit()
+    db.refresh(row)
+    return _finding_read(row)
 
 
 @router.get("/findings/summary", response_model=OtIcsFindingSummaryResponse)

@@ -18,6 +18,7 @@ from app.schemas.ot_ics import (
     OtIcsAssetCreate,
     OtIcsAssetUpdate,
     OtIcsFindingIngestRequest,
+    OtIcsFindingResolveRequest,
 )
 from app.services.audit_service import AuditService
 
@@ -309,6 +310,46 @@ class OtIcsFindingService:
         ).scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OT/ICS asset not found for this finding")
+        return row
+
+    def _get_finding_in_org(self, org_id: uuid.UUID, finding_id: uuid.UUID) -> OtIcsFinding:
+        row = self.db.execute(
+            select(OtIcsFinding).where(
+                OtIcsFinding.organization_id == org_id,
+                OtIcsFinding.id == finding_id,
+                OtIcsFinding.deleted_at.is_(None),
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OT/ICS finding not found")
+        return row
+
+    def resolve_finding(
+        self,
+        org_id: uuid.UUID,
+        finding_id: uuid.UUID,
+        payload: OtIcsFindingResolveRequest,
+        actor_id: uuid.UUID,
+    ) -> OtIcsFinding:
+        row = self._get_finding_in_org(org_id, finding_id)
+        if row.resolved_at is not None:
+            # Already resolved: idempotent no-op (no duplicate audit entry), but
+            # still returns the existing resolved state rather than erroring.
+            return row
+
+        row.resolved_at = _utcnow()
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="ot_ics.finding_resolved",
+            entity_type="ot_ics_finding",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=actor_id,
+            before_json={"resolved_at": None},
+            after_json={"resolved_at": row.resolved_at.isoformat()},
+            metadata_json={"source": "api", "resolution_note": payload.resolution_note},
+        )
         return row
 
     def ingest_finding(self, agent: OtIcsAgent, payload: OtIcsFindingIngestRequest) -> OtIcsFinding:

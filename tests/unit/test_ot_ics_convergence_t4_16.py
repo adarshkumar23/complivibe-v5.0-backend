@@ -376,6 +376,71 @@ def _create_readonly_user_without_ot_ics_permission(db_session, org_id: str, ema
     return user
 
 
+def test_resolve_finding_sets_resolved_at_is_idempotent_and_audited(client, db_session):
+    org = _bootstrap(client, db_session, "otics-resolve")
+    agent = _register_agent(client, org["org_headers"], name="ot-collector-resolve")
+    asset = _create_asset(client, org["org_headers"], name="PLC-resolve")
+
+    ingested = _ingest(
+        client,
+        agent["token"],
+        {"asset_id": asset["id"], "finding_type": "unpatched_firmware", "severity": "critical"},
+    )
+    assert ingested["status_code"] == 200
+    finding_id = ingested["json"]["finding_id"]
+
+    # Before resolving: summary counts it as open.
+    summary_before = client.get(f"{FINDINGS_BASE}/summary", headers=org["org_headers"]).json()
+    assert summary_before["open_findings"] == 1
+    assert summary_before["resolved_findings"] == 0
+
+    resolved = client.post(
+        f"{FINDINGS_BASE}/{finding_id}/resolve",
+        headers=org["org_headers"],
+        json={"resolution_note": "firmware patched to v2.3.1"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["resolved_at"] is not None
+
+    from app.models.ot_ics_finding import OtIcsFinding as _Finding
+
+    stored = db_session.query(_Finding).filter_by(id=uuid.UUID(finding_id)).one()
+    assert stored.resolved_at is not None
+
+    summary_after = client.get(f"{FINDINGS_BASE}/summary", headers=org["org_headers"]).json()
+    assert summary_after["open_findings"] == 0
+    assert summary_after["resolved_findings"] == 1
+
+    audit_rows = db_session.query(AuditLog).filter(
+        AuditLog.organization_id == uuid.UUID(org["organization_id"]),
+        AuditLog.action == "ot_ics.finding_resolved",
+    ).all()
+    assert len(audit_rows) == 1
+    assert audit_rows[0].entity_id == uuid.UUID(finding_id)
+    assert audit_rows[0].metadata_json["resolution_note"] == "firmware patched to v2.3.1"
+
+    # Resolving again is idempotent: no duplicate audit row, still 200.
+    resolved_again = client.post(f"{FINDINGS_BASE}/{finding_id}/resolve", headers=org["org_headers"], json={})
+    assert resolved_again.status_code == 200
+    audit_rows_after_second_call = db_session.query(AuditLog).filter(
+        AuditLog.organization_id == uuid.UUID(org["organization_id"]),
+        AuditLog.action == "ot_ics.finding_resolved",
+    ).all()
+    assert len(audit_rows_after_second_call) == 1
+
+    # Resolving a finding from another org (or nonexistent) 404s, no cross-org leak.
+    other_org = _bootstrap(client, db_session, "otics-resolve-other")
+    cross_org_attempt = client.post(
+        f"{FINDINGS_BASE}/{finding_id}/resolve", headers=other_org["org_headers"], json={}
+    )
+    assert cross_org_attempt.status_code == 404
+
+    missing = client.post(
+        f"{FINDINGS_BASE}/{uuid.uuid4()}/resolve", headers=org["org_headers"], json={}
+    )
+    assert missing.status_code == 404
+
+
 def test_permission_enforcement_403_for_manage_but_agent_ingest_uses_token_auth_401(client, db_session):
     from tests.helpers.auth_org import login_user, org_headers
 
