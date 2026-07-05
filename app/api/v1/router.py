@@ -83,6 +83,7 @@ from app.api.v1 import geopolitical_risk
 from app.api.v1 import ot_ics
 from app.api.v1 import ai_usage_compliance
 from app.api.v1 import training_analytics
+from app.api.v1 import risk_quantification
 
 from app.api.v1 import (
     admin_email_config,
@@ -367,3 +368,4 @@ api_router.include_router(ai_usage_compliance.router)
 api_router.include_router(training_analytics.router)
 api_router.include_router(bcm.router)
 api_router.include_router(crisis_management.router)
+api_router.include_router(risk_quantification.router)

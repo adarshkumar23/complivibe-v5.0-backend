@@ -241,6 +241,8 @@ PERMISSIONS: dict[str, str] = {
     "bcm:manage": "Create and update business continuity processes and BIA assessments",
     "crisis_management:read": "Read crisis management playbooks and activations",
     "crisis_management:manage": "Create playbooks and activate/resolve crisis events",
+    "financial_risk:read": "Read quantitative risk assessment (Monte Carlo/FAIR) runs",
+    "financial_risk:manage": "Run quantitative risk assessments (Monte Carlo/FAIR)",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {
@@ -380,6 +382,8 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "bcm:manage",
         "crisis_management:read",
         "crisis_management:manage",
+        "financial_risk:read",
+        "financial_risk:manage",
     },
     "reviewer": {
         "frameworks:read",
@@ -459,6 +463,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "training_analytics:write",
         "bcm:read",
         "crisis_management:read",
+        "financial_risk:read",
     },
     "auditor": {
         "frameworks:read",
@@ -515,6 +520,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "training_analytics:read",
         "bcm:read",
         "crisis_management:read",
+        "financial_risk:read",
     },
     "readonly": {
         "frameworks:read",
@@ -565,6 +571,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "training_analytics:read",
         "bcm:read",
         "crisis_management:read",
+        "financial_risk:read",
     },
 }
 
