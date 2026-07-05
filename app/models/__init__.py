@@ -217,6 +217,7 @@ from app.models.user_session import UserSession
 from app.models.non_human_identity import NonHumanIdentity
 from app.models.pam_session_record import PAMSessionRecord
 from app.models.access_certification import AccessCertificationCampaign, AccessCertificationItem
+from app.models.sod_conflict import SodConflictFinding, SodConflictRule
 from app.models.aml_kyc_check import AmlKycCheck
 from app.models.sanctions_entity import SanctionsEntity
 from app.models.sanctions_screen_result import SanctionsScreenResult
@@ -659,6 +660,8 @@ __all__ = [
     "PAMSessionRecord",
     "AccessCertificationCampaign",
     "AccessCertificationItem",
+    "SodConflictRule",
+    "SodConflictFinding",
     "SecurityScanJob",
     "OpenSCAPRuleMapping",
     "PolicyTemplate",

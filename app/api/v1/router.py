@@ -154,6 +154,7 @@ from app.api.v1 import (
     ai_governance_dashboard,
     ai_drafting,
     scheduler_admin,
+    sod_conflicts,
     webhooks,
     offboarding,
     attestations,
@@ -250,6 +251,7 @@ api_router.include_router(non_human_identities.router)
 api_router.include_router(pam_sessions.router)
 api_router.include_router(access_certifications.router)
 api_router.include_router(roles.router)
+api_router.include_router(sod_conflicts.router)
 api_router.include_router(audit_logs.router)
 api_router.include_router(frameworks.router)
 api_router.include_router(frameworks.compliance_router)
