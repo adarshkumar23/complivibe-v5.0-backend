@@ -70,6 +70,10 @@ from app.privacy.routers import notification_preferences as privacy_notification
 from app.privacy.routers import digest as privacy_digest
 from app.satellites.tprm_intelligence import router as tprm_intelligence_router
 from app.satellites.tprm_intelligence import sanctions_router as tprm_sanctions_router
+from app.satellites.tprm_intelligence import bribery_router as tprm_bribery_router
+from app.satellites.tprm_intelligence import export_control_router as tprm_export_control_router
+from app.api.v1 import bcm
+from app.api.v1 import crisis_management
 from app.api.v1 import vendor_supply_chain
 from app.api.v1 import vendor_concentration_risk
 from app.api.v1 import legal_matters
@@ -81,6 +85,9 @@ from app.api.v1 import geopolitical_risk
 from app.api.v1 import ot_ics
 from app.api.v1 import ai_usage_compliance
 from app.api.v1 import training_analytics
+from app.api.v1 import risk_quantification
+from app.api.v1 import resilience_testing
+from app.api.v1 import whistleblower
 
 from app.api.v1 import (
     admin_email_config,
@@ -329,6 +336,8 @@ api_router.include_router(vendor_supply_chain.router)
 api_router.include_router(vendor_concentration_risk.router)
 api_router.include_router(tprm_intelligence_router.router)
 api_router.include_router(tprm_sanctions_router.router)
+api_router.include_router(tprm_bribery_router.router)
+api_router.include_router(tprm_export_control_router.router)
 api_router.include_router(questionnaire_templates.router)
 api_router.include_router(questionnaire_responses.router)
 api_router.include_router(scoring_rules.router)
@@ -363,3 +372,8 @@ api_router.include_router(ot_ics.router)
 api_router.include_router(ot_ics.ingest_router)
 api_router.include_router(ai_usage_compliance.router)
 api_router.include_router(training_analytics.router)
+api_router.include_router(bcm.router)
+api_router.include_router(crisis_management.router)
+api_router.include_router(risk_quantification.router)
+api_router.include_router(resilience_testing.router)
+api_router.include_router(whistleblower.router)

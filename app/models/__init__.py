@@ -223,6 +223,8 @@ from app.models.sod_conflict import SodConflictFinding, SodConflictRule
 from app.models.aml_kyc_check import AmlKycCheck
 from app.models.sanctions_entity import SanctionsEntity
 from app.models.sanctions_screen_result import SanctionsScreenResult
+from app.models.bribery_risk_assessment import BriberyRiskAssessment
+from app.models.export_control_check import ExportControlCheck
 from app.models.vendor import Vendor
 from app.models.vendor_external_rating import VendorExternalRating
 from app.models.vendor_threat_intelligence import VendorThreatIntelligence
@@ -287,6 +289,11 @@ from app.models.policy_template import PolicyTemplate
 from app.models.policy_template_clone import PolicyTemplateClone
 from app.models.policy_issue_link import PolicyIssueLink
 from app.models.issue import Issue
+from app.models.bcm import BusinessProcess, BiaAssessment
+from app.models.crisis_management import CrisisPlaybook, CrisisActivation
+from app.models.risk_quantification import RiskQuantificationRun
+from app.models.resilience_testing import ResilienceTest
+from app.models.whistleblower import WhistleblowerReport, WhistleblowerMessage
 from app.models.issue_transition import IssueTransition
 from app.models.org_issue_settings import OrgIssueSettings
 from app.models.issue_policy_link import IssuePolicyLink
@@ -546,6 +553,8 @@ __all__ = [
     "AmlKycCheck",
     "SanctionsEntity",
     "SanctionsScreenResult",
+    "BriberyRiskAssessment",
+    "ExportControlCheck",
     "Vendor",
     "VendorExternalRating",
     "VendorThreatIntelligence",
