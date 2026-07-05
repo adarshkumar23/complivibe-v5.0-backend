@@ -288,6 +288,7 @@ from app.models.policy_template_clone import PolicyTemplateClone
 from app.models.policy_issue_link import PolicyIssueLink
 from app.models.issue import Issue
 from app.models.bcm import BusinessProcess, BiaAssessment
+from app.models.crisis_management import CrisisPlaybook, CrisisActivation
 from app.models.issue_transition import IssueTransition
 from app.models.org_issue_settings import OrgIssueSettings
 from app.models.issue_policy_link import IssuePolicyLink

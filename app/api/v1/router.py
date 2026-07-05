@@ -71,6 +71,7 @@ from app.privacy.routers import digest as privacy_digest
 from app.satellites.tprm_intelligence import router as tprm_intelligence_router
 from app.satellites.tprm_intelligence import sanctions_router as tprm_sanctions_router
 from app.api.v1 import bcm
+from app.api.v1 import crisis_management
 from app.api.v1 import vendor_supply_chain
 from app.api.v1 import vendor_concentration_risk
 from app.api.v1 import legal_matters
@@ -365,3 +366,4 @@ api_router.include_router(ot_ics.ingest_router)
 api_router.include_router(ai_usage_compliance.router)
 api_router.include_router(training_analytics.router)
 api_router.include_router(bcm.router)
+api_router.include_router(crisis_management.router)

@@ -239,6 +239,8 @@ PERMISSIONS: dict[str, str] = {
     "webhooks:write": "Create and manage outbound webhook endpoints and test emissions",
     "bcm:read": "Read business continuity processes and BIA assessments",
     "bcm:manage": "Create and update business continuity processes and BIA assessments",
+    "crisis_management:read": "Read crisis management playbooks and activations",
+    "crisis_management:manage": "Create playbooks and activate/resolve crisis events",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {
@@ -376,6 +378,8 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "training_analytics:write",
         "bcm:read",
         "bcm:manage",
+        "crisis_management:read",
+        "crisis_management:manage",
     },
     "reviewer": {
         "frameworks:read",
@@ -454,6 +458,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "training_analytics:read",
         "training_analytics:write",
         "bcm:read",
+        "crisis_management:read",
     },
     "auditor": {
         "frameworks:read",
@@ -509,6 +514,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "ai_usage_policy:read",
         "training_analytics:read",
         "bcm:read",
+        "crisis_management:read",
     },
     "readonly": {
         "frameworks:read",
@@ -558,6 +564,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "ai_usage_policy:read",
         "training_analytics:read",
         "bcm:read",
+        "crisis_management:read",
     },
 }
 
