@@ -10,6 +10,7 @@ from app.data_observability.services.lineage_service import LineageService
 from app.models.consent_record import ConsentRecord
 from app.models.data_asset import DataAsset
 from app.models.email_outbox import EmailOutbox
+from app.models.google_consent_mode_event import GoogleConsentModeEvent
 from app.models.processing_activity import ProcessingActivity
 from app.models.user import User
 from app.services.audit_service import AuditService
@@ -24,6 +25,8 @@ ALLOWED_CONSENT_MECHANISMS = {
     "implied",
     "ccpa_opt_out",
 }
+
+GCM_V2_STATES = {"granted", "denied"}
 
 
 class ConsentService:
@@ -314,6 +317,97 @@ class ConsentService:
             "expired_count": expired_count,
             "consent_rate_pct": round(consent_rate, 2),
         }
+
+    def record_google_consent_mode_v2(
+        self,
+        org_id: uuid.UUID,
+        data,
+        actor_user_id: uuid.UUID | None = None,
+    ) -> GoogleConsentModeEvent:
+        event_timestamp = getattr(data, "event_timestamp", None) if hasattr(data, "event_timestamp") else None
+        payload = data.model_dump(mode="json") if hasattr(data, "model_dump") else dict(data)
+        subject_identifier = payload.pop("subject_identifier")
+        subject_hash = self.hash_subject_identifier(subject_identifier)
+
+        states = {
+            "ad_storage": payload["ad_storage"],
+            "analytics_storage": payload["analytics_storage"],
+            "ad_user_data": payload["ad_user_data"],
+            "ad_personalization": payload["ad_personalization"],
+        }
+        for field, value in states.items():
+            validate_choice(value, GCM_V2_STATES, field)
+
+        now = self.utcnow()
+        raw_payload = {
+            "gcm_version": "v2",
+            "domain": payload["domain"],
+            "url": payload.get("url"),
+            "region": payload.get("region"),
+            "client_id": payload.get("client_id"),
+            "session_id": payload.get("session_id"),
+            "event_name": payload.get("event_name") or "consent_update",
+            "event_timestamp": payload.get("event_timestamp"),
+            "states": states,
+            "metadata": payload.get("metadata") or {},
+        }
+
+        row = GoogleConsentModeEvent(
+            organization_id=org_id,
+            subject_identifier_hash=subject_hash,
+            domain=payload["domain"].strip().lower(),
+            url=payload.get("url"),
+            region=payload.get("region"),
+            client_id=payload.get("client_id"),
+            session_id=payload.get("session_id"),
+            gcm_version="v2",
+            event_name=payload.get("event_name") or "consent_update",
+            event_timestamp=event_timestamp,
+            ad_storage=states["ad_storage"],
+            analytics_storage=states["analytics_storage"],
+            ad_user_data=states["ad_user_data"],
+            ad_personalization=states["ad_personalization"],
+            raw_payload_json=raw_payload,
+            created_by_user_id=actor_user_id,
+            created_at=now,
+        )
+        self.db.add(row)
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="consent.google_consent_mode_v2_recorded",
+            entity_type="google_consent_mode_event",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=actor_user_id,
+            after_json={
+                "subject_identifier_hash": subject_hash,
+                "domain": row.domain,
+                "gcm_version": row.gcm_version,
+                "states": states,
+            },
+            metadata_json={"source": "api"},
+        )
+        return row
+
+    def list_google_consent_mode_v2_events(
+        self,
+        org_id: uuid.UUID,
+        domain: str | None = None,
+        subject_identifier: str | None = None,
+        skip: int = 0,
+        limit: int = 50,
+    ) -> list[GoogleConsentModeEvent]:
+        stmt = select(GoogleConsentModeEvent).where(GoogleConsentModeEvent.organization_id == org_id)
+        if domain:
+            stmt = stmt.where(GoogleConsentModeEvent.domain == domain.strip().lower())
+        if subject_identifier:
+            stmt = stmt.where(
+                GoogleConsentModeEvent.subject_identifier_hash == self.hash_subject_identifier(subject_identifier)
+            )
+        return self.db.execute(
+            stmt.order_by(GoogleConsentModeEvent.created_at.desc()).offset(max(0, int(skip))).limit(max(1, min(int(limit), 500)))
+        ).scalars().all()
 
     def sweep_expired_consents(self) -> dict:
         now = self.utcnow()

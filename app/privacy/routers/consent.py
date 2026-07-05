@@ -14,6 +14,8 @@ from app.privacy.schemas.consent import (
     ConsentStatusRead,
     ConsentSummaryRead,
     ConsentWithdrawRequest,
+    GoogleConsentModeV2Create,
+    GoogleConsentModeV2Read,
 )
 from app.privacy.services.consent_service import ConsentService
 
@@ -81,6 +83,44 @@ def consent_summary(
 ) -> ConsentSummaryRead:
     payload = ConsentService(db).get_consent_summary(organization.id, activity_id=activity_id)
     return ConsentSummaryRead.model_validate(payload)
+
+
+@router.post("/google-consent-mode-v2", response_model=GoogleConsentModeV2Read, status_code=status.HTTP_201_CREATED)
+def record_google_consent_mode_v2(
+    payload: GoogleConsentModeV2Create,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("privacy:write")),
+) -> GoogleConsentModeV2Read:
+    row = ConsentService(db).record_google_consent_mode_v2(
+        organization.id,
+        payload,
+        actor_user_id=current_user.id,
+    )
+    db.commit()
+    db.refresh(row)
+    return GoogleConsentModeV2Read.model_validate(row)
+
+
+@router.get("/google-consent-mode-v2", response_model=list[GoogleConsentModeV2Read])
+def list_google_consent_mode_v2(
+    domain: str | None = Query(default=None),
+    subject_identifier: str | None = Query(default=None, min_length=1),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=500),
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("privacy:read")),
+) -> list[GoogleConsentModeV2Read]:
+    rows = ConsentService(db).list_google_consent_mode_v2_events(
+        organization.id,
+        domain=domain,
+        subject_identifier=subject_identifier,
+        skip=skip,
+        limit=limit,
+    )
+    return [GoogleConsentModeV2Read.model_validate(row) for row in rows]
 
 
 @router.post("/{consent_id}/withdraw", response_model=ConsentRecordRead)

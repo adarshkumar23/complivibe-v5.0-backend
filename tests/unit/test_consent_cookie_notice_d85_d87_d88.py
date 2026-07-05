@@ -3,9 +3,11 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime, timedelta
 
+from app.models.audit_log import AuditLog
 from app.models.consent_record import ConsentRecord
 from app.models.cookie_registry import CookieRegistry
 from app.models.email_outbox import EmailOutbox
+from app.models.google_consent_mode_event import GoogleConsentModeEvent
 from app.models.notice_user_acknowledgement import NoticeUserAcknowledgement
 from app.privacy.services.consent_service import ConsentService
 from tests.helpers.auth_org import bootstrap_org_user
@@ -259,6 +261,85 @@ def test_d85_consent_lifecycle_inbound_and_expiry(client, db_session):
     assert refreshed is not None
     assert refreshed.granted is False
     assert refreshed.withdrawal_reason == "expired"
+
+
+def test_t1_15_google_consent_mode_v2_signal_handling(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="t115-gcm")
+
+    response = client.post(
+        f"{CONSENT_BASE}/google-consent-mode-v2",
+        headers=org["org_headers"],
+        json={
+            "subject_identifier": "browser-user-123",
+            "domain": "Example.COM",
+            "url": "https://example.com/pricing",
+            "region": "EEA",
+            "client_id": "GA1.2.12345",
+            "session_id": "session-123",
+            "event_name": "consent_update",
+            "ad_storage": "denied",
+            "analytics_storage": "granted",
+            "ad_user_data": "denied",
+            "ad_personalization": "denied",
+            "metadata": {"banner_version": "2026.07"},
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    expected_hash = ConsentService.hash_subject_identifier("browser-user-123")
+    assert body["subject_identifier_hash"] == expected_hash
+    assert body["domain"] == "example.com"
+    assert body["ad_storage"] == "denied"
+    assert body["analytics_storage"] == "granted"
+    assert body["ad_user_data"] == "denied"
+    assert body["ad_personalization"] == "denied"
+    assert "browser-user-123" not in str(body["raw_payload_json"])
+
+    rows = (
+        db_session.query(GoogleConsentModeEvent)
+        .filter(
+            GoogleConsentModeEvent.organization_id == uuid.UUID(org["organization_id"]),
+            GoogleConsentModeEvent.subject_identifier_hash == expected_hash,
+        )
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].raw_payload_json["states"]["analytics_storage"] == "granted"
+
+    audit = (
+        db_session.query(AuditLog)
+        .filter(
+            AuditLog.organization_id == uuid.UUID(org["organization_id"]),
+            AuditLog.action == "consent.google_consent_mode_v2_recorded",
+        )
+        .one_or_none()
+    )
+    assert audit is not None
+    assert audit.after_json["states"]["ad_user_data"] == "denied"
+
+    listed = client.get(
+        f"{CONSENT_BASE}/google-consent-mode-v2",
+        headers=org["org_headers"],
+        params={"domain": "example.com", "subject_identifier": "browser-user-123"},
+    )
+    assert listed.status_code == 200
+    assert len(listed.json()) == 1
+
+    invalid = client.post(
+        f"{CONSENT_BASE}/google-consent-mode-v2",
+        headers=org["org_headers"],
+        json={
+            "subject_identifier": "browser-user-123",
+            "domain": "example.com",
+            "ad_storage": "pending",
+            "analytics_storage": "granted",
+            "ad_user_data": "denied",
+            "ad_personalization": "denied",
+        },
+    )
+    assert invalid.status_code == 422
+    assert "granted" in invalid.text
+    assert "denied" in invalid.text
 
 
 def test_d88_draft_notice_acknowledgement_blocked_until_published(client, db_session):

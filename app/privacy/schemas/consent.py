@@ -2,7 +2,10 @@ import uuid
 from datetime import date, datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+GCM_V2_CONSENT_STATES = {"granted", "denied"}
 
 
 class ConsentRecordCreate(BaseModel):
@@ -62,3 +65,51 @@ class ConsentSummaryRead(BaseModel):
     withdrawn_count: int
     expired_count: int
     consent_rate_pct: float
+
+
+class GoogleConsentModeV2Create(BaseModel):
+    subject_identifier: str = Field(min_length=1, max_length=500)
+    domain: str = Field(min_length=1, max_length=255)
+    url: str | None = None
+    region: str | None = Field(default=None, max_length=50)
+    client_id: str | None = Field(default=None, max_length=255)
+    session_id: str | None = Field(default=None, max_length=255)
+    event_name: str = Field(default="consent_update", min_length=1, max_length=100)
+    event_timestamp: datetime | None = None
+    ad_storage: str
+    analytics_storage: str
+    ad_user_data: str
+    ad_personalization: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("ad_storage", "analytics_storage", "ad_user_data", "ad_personalization")
+    @classmethod
+    def validate_gcm_state(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in GCM_V2_CONSENT_STATES:
+            allowed = ", ".join(sorted(GCM_V2_CONSENT_STATES))
+            raise ValueError(f"Google Consent Mode v2 state must be one of: {allowed}")
+        return normalized
+
+
+class GoogleConsentModeV2Read(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    subject_identifier_hash: str
+    domain: str
+    url: str | None
+    region: str | None
+    client_id: str | None
+    session_id: str | None
+    gcm_version: str
+    event_name: str
+    event_timestamp: datetime | None
+    ad_storage: str
+    analytics_storage: str
+    ad_user_data: str
+    ad_personalization: str
+    raw_payload_json: dict
+    created_by_user_id: uuid.UUID | None
+    created_at: datetime

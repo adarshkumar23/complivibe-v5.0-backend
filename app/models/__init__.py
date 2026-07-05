@@ -345,6 +345,7 @@ from app.models.dsr_sla_tracking import DSRSLATracking
 from app.models.privacy_notice import PrivacyNotice
 from app.models.notice_user_acknowledgement import NoticeUserAcknowledgement
 from app.models.consent_record import ConsentRecord
+from app.models.google_consent_mode_event import GoogleConsentModeEvent
 from app.models.cookie_registry import CookieRegistry
 from app.models.consent_banner_config import ConsentBannerConfig
 from app.models.regulatory_change_alert import RegulatoryChangeAlert
@@ -637,6 +638,7 @@ __all__ = [
     "PrivacyNotice",
     "NoticeUserAcknowledgement",
     "ConsentRecord",
+    "GoogleConsentModeEvent",
     "CookieRegistry",
     "ConsentBannerConfig",
     "RegulatoryChangeAlert",
