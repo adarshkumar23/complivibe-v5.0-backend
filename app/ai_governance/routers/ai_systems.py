@@ -61,6 +61,8 @@ from app.ai_governance.schemas.monitoring import (
     MonitoringConfigUpdate,
     MonitoringDashboardItem,
     MonitoringDashboardRead,
+    MonitoringReadingHistoryRead,
+    MonitoringReadingHistorySummary,
     MonitoringReadingRead,
 )
 from app.ai_governance.schemas.signals_recommendations_diagnostics import (
@@ -734,6 +736,35 @@ def deactivate_monitoring_config(
     db.commit()
     db.refresh(row)
     return MonitoringConfigRead.model_validate(row).model_copy(update={"api_key_configured": row.api_key_hash is not None})
+
+
+@router.get(
+    "/{system_id}/monitoring-configs/{config_id}/readings",
+    response_model=MonitoringReadingHistoryRead,
+)
+def get_monitoring_reading_history(
+    system_id: uuid.UUID,
+    config_id: uuid.UUID,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("ai_governance:read")),
+) -> MonitoringReadingHistoryRead:
+    service = AIMonitoringService(db)
+    config = service.get_config(organization.id, config_id)
+    if config.ai_system_id != system_id:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monitoring config not found")
+    payload = service.list_readings(organization.id, config_id, skip=skip, limit=limit)
+    return MonitoringReadingHistoryRead(
+        config_id=config_id,
+        metric_type=payload["config"].metric_type,
+        total=payload["total"],
+        readings=[MonitoringReadingRead.model_validate(row) for row in payload["readings"]],
+        summary=MonitoringReadingHistorySummary(**payload["summary"]),
+    )
 
 
 @router.get("/{system_id}/monitoring-dashboard", response_model=MonitoringDashboardRead)
