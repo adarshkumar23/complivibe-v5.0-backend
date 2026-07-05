@@ -81,3 +81,42 @@ def test_langfuse_trace_adapter_converts_trace_list(monkeypatch):
         ("langfuse_error_rate", Decimal("0.5"), "langfuse"),
         ("langfuse_avg_latency", Decimal("20.0"), "langfuse"),
     ]
+
+
+def test_deepeval_hallucination_adapter_scores_sample_case():
+    from app.satellites.llm_observability.quality_adapters import DeepEvalHallucinationAdapter
+
+    result = DeepEvalHallucinationAdapter().score(
+        prompt="Where is Paris?",
+        actual_output="Paris is in France.",
+        context=["Paris is the capital of France."],
+    )
+
+    assert result.metric_type == "hallucination_score"
+    assert result.source_tool == "deepeval"
+    assert result.value == Decimal("0.0")
+    assert result.details["success"] is True
+
+
+def test_giskard_scan_adapter_runs_real_scan_on_sample_data():
+    from app.satellites.llm_observability.quality_adapters import (
+        GiskardScanAdapter,
+        build_sample_giskard_dataframe,
+        sample_giskard_predict_proba,
+    )
+
+    data = build_sample_giskard_dataframe()
+    result = GiskardScanAdapter().scan_classification(
+        dataframe=data,
+        target="label",
+        prediction_function=sample_giskard_predict_proba,
+        feature_names=["text", "group"],
+        classification_labels=[0, 1],
+        detectors="performance",
+        cat_columns=["group"],
+    )
+
+    assert result.metric_type == "giskard_issue_count"
+    assert result.source_tool == "giskard"
+    assert result.value >= 0
+    assert result.details["detectors"] == "performance"
