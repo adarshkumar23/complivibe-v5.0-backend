@@ -1,5 +1,10 @@
 import uuid
+import base64
+import copy
+import json
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from app.core.security import get_password_hash
 from app.models.audit_log import AuditLog
 from app.models.content_provenance_record import ContentProvenanceRecord
@@ -11,19 +16,29 @@ from tests.helpers.auth_org import bootstrap_org_user, login_user, org_headers
 VERIFY_URL = "/api/v1/content-provenance/verify"
 
 
+def _sign_manifest(manifest: dict, private_key: Ed25519PrivateKey | None = None) -> dict:
+    private_key = private_key or Ed25519PrivateKey.generate()
+    signed = copy.deepcopy(manifest)
+    canonical = json.dumps(signed, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    signature = private_key.sign(canonical)
+    public_key = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    signed["signature_info"] = {
+        "algorithm": "ed25519",
+        "signature": base64.b64encode(signature).decode("ascii"),
+        "public_key": base64.b64encode(public_key).decode("ascii"),
+    }
+    return signed
+
+
 def _valid_manifest() -> dict:
-    return {
+    return _sign_manifest({
         "claim_generator": "AcmeCam/1.0",
         "spec_version": "c2pa-1.2",
         "assertions": [
             {"label": "c2pa.actions", "data": {"actions": [{"action": "c2pa.created"}]}},
             {"label": "c2pa.hash.data", "data": {"hash": "abc123"}},
         ],
-        "signature_info": {
-            "algorithm": "es256",
-            "signature": "deadbeefcafebabe",
-        },
-    }
+    })
 
 
 def _create_active_user_with_role(db_session, org_id: str, email: str, role_name: str) -> User:
@@ -152,6 +167,60 @@ def test_t4_12_signature_block_empty_algorithm_is_tampered(client, db_session):
         VERIFY_URL,
         headers=org["org_headers"],
         json={"content_identifier": "asset-004b", "manifest": manifest},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["verification_status"] == "invalid"
+    assert body["invalid_reason"] == "tampered_signature"
+
+
+def test_t4_12_corrupted_signature_block_is_rejected(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="c2pa-corruptsig")
+    manifest = _valid_manifest()
+    manifest["signature_info"]["signature"] = "not-base64-or-hex!"
+
+    response = client.post(
+        VERIFY_URL,
+        headers=org["org_headers"],
+        json={"content_identifier": "asset-004c", "manifest": manifest},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["verification_status"] == "invalid"
+    assert body["invalid_reason"] == "tampered_signature"
+
+
+def test_t4_12_wrong_cryptographic_signature_is_rejected(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="c2pa-wrongsig")
+    manifest = _valid_manifest()
+    wrong_key = Ed25519PrivateKey.generate()
+    canonical_without_signature = copy.deepcopy(manifest)
+    canonical_without_signature.pop("signature_info")
+    wrong_signature = wrong_key.sign(
+        json.dumps(canonical_without_signature, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    )
+    manifest["signature_info"]["signature"] = base64.b64encode(wrong_signature).decode("ascii")
+
+    response = client.post(
+        VERIFY_URL,
+        headers=org["org_headers"],
+        json={"content_identifier": "asset-004d", "manifest": manifest},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["verification_status"] == "invalid"
+    assert body["invalid_reason"] == "tampered_signature"
+
+
+def test_t4_12_signed_claim_tampering_is_rejected(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="c2pa-claimtamper")
+    manifest = _valid_manifest()
+    manifest["assertions"][0]["data"]["actions"][0]["action"] = "c2pa.edited"
+
+    response = client.post(
+        VERIFY_URL,
+        headers=org["org_headers"],
+        json={"content_identifier": "asset-004e", "manifest": manifest},
     )
     assert response.status_code == 200
     body = response.json()

@@ -266,6 +266,44 @@ def test_user_id_must_be_active_member_of_org(client, db_session):
     assert orphan_count == 0
 
 
+def test_cross_org_record_id_and_business_unit_filters_do_not_leak(client, db_session):
+    org1 = _bootstrap(client, db_session, "ta-leak-a")
+    org2 = _bootstrap(client, db_session, "ta-leak-b")
+    bu1 = _create_bu(db_session, org1["organization_id"], "Org A BU", org1["user_id"])
+
+    created = client.post(
+        BASE + "/records",
+        headers=org1["org_headers"],
+        json={
+            "user_id": org1["user_id"],
+            "business_unit_id": str(bu1.id),
+            "training_type": "security_awareness",
+            "due_date": _iso(datetime.now(UTC) + timedelta(days=10)),
+        },
+    )
+    assert created.status_code == 201
+    record_id = created.json()["id"]
+
+    guessed_patch = client.patch(
+        f"{BASE}/records/{record_id}",
+        headers=org2["org_headers"],
+        json={"score": 99},
+    )
+    assert guessed_patch.status_code == 404
+
+    filtered_list = client.get(
+        BASE + "/records",
+        headers=org2["org_headers"],
+        params={"business_unit_id": str(bu1.id)},
+    )
+    assert filtered_list.status_code == 200
+    assert filtered_list.json() == []
+
+    summary = client.get(BASE + "/summary", headers=org2["org_headers"])
+    assert summary.status_code == 200
+    assert summary.json()["total_assigned"] == 0
+
+
 def test_permission_enforcement_403(client, db_session):
     org = _bootstrap(client, db_session, "ta-perm")
     reader = _create_read_only_user(db_session, org["organization_id"], "ta-reader@example.com")

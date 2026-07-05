@@ -190,6 +190,66 @@ def test_close_with_open_linked_issue_requires_confirm(client, db_session):
     assert closed.json()["status"] == "closed"
 
 
+def test_status_bypass_attempts_are_blocked(client, db_session):
+    org = _bootstrap(client, db_session, "lm-status-bypass")
+    issue = _create_issue(db_session, org["organization_id"], org["user_id"], org["user_id"], status_value="open")
+    created = client.post(BASE, headers=org["org_headers"], json={"title": "Matter guarded by issue"})
+    matter_id = created.json()["id"]
+    linked = client.post(
+        f"{BASE}/{matter_id}/link-issue",
+        headers=org["org_headers"],
+        json={"issue_id": str(issue.id)},
+    )
+    assert linked.status_code == 200
+
+    patch_status = client.patch(
+        f"{BASE}/{matter_id}",
+        headers=org["org_headers"],
+        json={"status": "closed"},
+    )
+    assert patch_status.status_code == 200
+    assert patch_status.json()["status"] == "open"
+
+    patch_mixed = client.patch(
+        f"{BASE}/{matter_id}",
+        headers=org["org_headers"],
+        json={"status": "closed", "closed_at": "2026-01-01T00:00:00Z", "outside_counsel": "Bypass LLP"},
+    )
+    assert patch_mixed.status_code == 200
+    assert patch_mixed.json()["status"] == "open"
+    assert patch_mixed.json()["closed_at"] is None
+    assert patch_mixed.json()["outside_counsel"] == "Bypass LLP"
+
+    status_close = client.post(
+        f"{BASE}/{matter_id}/status",
+        headers=org["org_headers"],
+        json={"new_status": "closed"},
+    )
+    assert status_close.status_code == 422
+
+    blocked_close = client.post(f"{BASE}/{matter_id}/close", headers=org["org_headers"], json={"confirm": False})
+    assert blocked_close.status_code == 409
+
+    closed = client.post(f"{BASE}/{matter_id}/close", headers=org["org_headers"], json={"confirm": True})
+    assert closed.status_code == 200
+    assert closed.json()["status"] == "closed"
+
+    reopened = client.post(
+        f"{BASE}/{matter_id}/status",
+        headers=org["org_headers"],
+        json={"new_status": "in_progress"},
+    )
+    assert reopened.status_code == 200
+    assert reopened.json()["status"] == "in_progress"
+    assert reopened.json()["closed_at"] is None
+
+    first = client.post(f"{BASE}/{matter_id}/close", headers=org["org_headers"], json={"confirm": True})
+    second = client.post(f"{BASE}/{matter_id}/close", headers=org["org_headers"], json={"confirm": True})
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["status"] == "closed"
+
+
 def test_close_with_no_linked_issue_succeeds_without_confirm(client, db_session):
     org = _bootstrap(client, db_session, "lm-close-clean")
     created = client.post(BASE, headers=org["org_headers"], json={"title": "Clean matter"})

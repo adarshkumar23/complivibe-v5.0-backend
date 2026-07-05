@@ -12,6 +12,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.url_security import UnsafeURLTargetError, assert_public_http_url, raise_unsafe_url_http_error
 from app.models.webhook_delivery import WebhookDelivery
 from app.models.webhook_endpoint import WebhookEndpoint
 from app.services.audit_service import AuditService
@@ -47,6 +48,10 @@ class WebhookService:
 
     def create_endpoint(self, org_id: uuid.UUID, data, created_by: uuid.UUID) -> WebhookEndpoint:
         event_types = self._validate_event_types(list(data.event_types or []))
+        try:
+            assert_public_http_url(data.url, field_name="url")
+        except UnsafeURLTargetError as exc:
+            raise_unsafe_url_http_error(exc)
         row = WebhookEndpoint(
             organization_id=org_id,
             url=data.url,
@@ -98,6 +103,11 @@ class WebhookService:
 
         if "event_types" in updates and updates["event_types"] is not None:
             updates["event_types"] = self._validate_event_types(list(updates["event_types"]))
+        if "url" in updates and updates["url"] is not None:
+            try:
+                assert_public_http_url(updates["url"], field_name="url")
+            except UnsafeURLTargetError as exc:
+                raise_unsafe_url_http_error(exc)
 
         before = {
             "url": row.url,
@@ -256,6 +266,24 @@ class WebhookService:
             return row
 
         payload = dict(row.payload or {})
+        try:
+            assert_public_http_url(endpoint.url, field_name="url")
+        except UnsafeURLTargetError:
+            row.attempts = attempts + 1
+            row.last_attempted_at = self.utcnow()
+            row.status = "failed"
+            row.error_message = "Webhook endpoint URL is not a public http(s) URL"
+            self.db.flush()
+            AuditService(self.db).write_audit_log(
+                action="webhook.delivery_failed",
+                entity_type="webhook_delivery",
+                entity_id=row.id,
+                organization_id=row.organization_id,
+                actor_user_id=None,
+                after_json={"status": "failed", "attempts": row.attempts, "error": row.error_message},
+                metadata_json={"source": "webhook_service", "url_rejected": True},
+            )
+            return row
         headers = {
             "Content-Type": "application/json",
             "X-CompliVibe-Payload-Hash": row.payload_hash,
