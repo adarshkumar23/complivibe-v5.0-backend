@@ -20,11 +20,13 @@ from app.models.organization import Organization
 from app.models.sanctions_entity import SanctionsEntity
 from app.models.sanctions_screen_result import SanctionsScreenResult
 from app.models.vendor import Vendor
+from app.services.audit_service import AuditService
 
 OPEN_SANCTIONS_DEFAULT_URL = "https://data.opensanctions.org/datasets/latest/default/entities.ftm.json"
 DEFAULT_DATASET_PATH = "data/opensanctions/entities.ftm.json"
 DEFAULT_WATCHMAN_BASE_URL = "http://localhost:8084"
 DEFAULT_THRESHOLD = 0.85
+SANCTIONS_ESCALATED_RISK_TIER = "critical"
 
 
 class SanctionsDatasetUnavailable(RuntimeError):
@@ -130,6 +132,11 @@ class SanctionsScreeningService:
             entity_type="vendor",
             entity_id=str(vendor.id),
             list_name="opensanctions_default",
+            # Set explicitly (rather than relying on the column's server_default=func.now())
+            # so ordering by screened_at in latest_result() has microsecond resolution instead
+            # of SQLite's second-level CURRENT_TIMESTAMP granularity, which made "latest" ties
+            # break on random UUID ordering and could surface a stale (superseded) result.
+            screened_at=datetime.now(timezone.utc),
             match_found=match_found,
             match_details={
                 "query_name": vendor.name,
@@ -149,6 +156,9 @@ class SanctionsScreeningService:
         return row
 
     def latest_result(self, organization_id, vendor_id) -> SanctionsScreenResult | None:
+        # A vendor accumulates one row per screen (onboarding + every periodic rescreen), so
+        # this must be limited to the single most recent row rather than assuming at most one
+        # result exists overall (scalar_one_or_none() raises MultipleResultsFound otherwise).
         return self.db.execute(
             select(SanctionsScreenResult)
             .where(
@@ -157,6 +167,7 @@ class SanctionsScreeningService:
                 SanctionsScreenResult.entity_type == "vendor",
             )
             .order_by(SanctionsScreenResult.screened_at.desc(), SanctionsScreenResult.id.desc())
+            .limit(1)
         ).scalar_one_or_none()
 
     def get_result(self, organization_id, vendor_id, result_id) -> SanctionsScreenResult | None:
@@ -340,5 +351,189 @@ class SanctionsScreeningService:
         return len(rows)
 
 
+def screen_vendor_and_apply_effects(
+    db: Session,
+    organization: Organization,
+    vendor: Vendor,
+    *,
+    actor_user_id: Any | None = None,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+    audit_source: str = "tprm_intelligence_satellite",
+) -> SanctionsScreenResult:
+    """Screen a vendor and apply the full set of downstream effects a positive hit requires.
+
+    A positive sanctions match must do more than just persist a record: it has to (1) be
+    audited, (2) escalate the *screened vendor's own* risk tier (previously only upstream
+    "nth-party" vendors were flagged via VendorSupplyChainService, leaving the actually
+    sanctioned vendor's own risk_tier untouched), and (3) still propagate an nth-party
+    signal to any vendors that depend on this one.
+    """
+    row = SanctionsScreeningService(db).screen_vendor(organization, vendor)
+    audit = AuditService(db)
+    audit.write_audit_log(
+        action="vendor.sanctions_screen.computed",
+        entity_type="sanctions_screen_result",
+        entity_id=row.id,
+        organization_id=organization.id,
+        actor_user_id=actor_user_id,
+        after_json={
+            "vendor_id": str(vendor.id),
+            "match_found": row.match_found,
+            "top_score": (row.match_details or {}).get("top_score"),
+            "source": (row.match_details or {}).get("source"),
+        },
+        metadata_json={"source": audit_source},
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+
+    if row.match_found:
+        if vendor.risk_tier != SANCTIONS_ESCALATED_RISK_TIER:
+            before_tier = vendor.risk_tier
+            vendor.risk_tier = SANCTIONS_ESCALATED_RISK_TIER
+            # Remember the pre-escalation tier on the result itself so that clearing a
+            # false-positive match (see clear_vendor_sanctions_screen) can restore it
+            # instead of leaving the vendor stuck at "critical" forever.
+            row.match_details = {**(row.match_details or {}), "pre_escalation_risk_tier": before_tier}
+            db.flush()
+            audit.write_audit_log(
+                action="vendor.risk_tier_escalated",
+                entity_type="vendor",
+                entity_id=vendor.id,
+                organization_id=organization.id,
+                actor_user_id=actor_user_id,
+                before_json={"risk_tier": before_tier},
+                after_json={"risk_tier": SANCTIONS_ESCALATED_RISK_TIER, "reason": "sanctions_match_found"},
+                metadata_json={"source": audit_source, "sanctions_screen_result_id": str(row.id)},
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+
+            # The vendor's risk_tier just changed to "critical", which is one of the two
+            # direct inputs (alongside active supply-chain links) to T1-6's concentration
+            # HHI calculation. Without this, an org that already opted into concentration
+            # monitoring would keep showing a stale HHI/status until someone happened to
+            # trigger an unrelated vendor update or supply-chain link change.
+            from app.services.vendor_concentration_risk_service import VendorConcentrationRiskService
+
+            concentration_service = VendorConcentrationRiskService(db)
+            existing_detection = concentration_service.current(organization.id)
+            # Only recompute for organizations that have already opted into concentration
+            # monitoring (a detection row already exists). This keeps the persisted HHI/
+            # status current with a sanctions-driven risk_tier escalation instead of
+            # silently going stale, while avoiding unnecessary work for orgs that never
+            # use the feature.
+            if existing_detection is not None:
+                detection, risk_created, state_changed = concentration_service.recompute(
+                    organization_id=organization.id,
+                    actor_user_id=actor_user_id,
+                    threshold_hhi_score=existing_detection.threshold_hhi_score,
+                )
+                if state_changed:
+                    audit.write_audit_log(
+                        action="vendor_concentration_risk.recomputed",
+                        entity_type="vendor_concentration_risk_detection",
+                        entity_id=detection.id,
+                        organization_id=organization.id,
+                        actor_user_id=actor_user_id,
+                        after_json={
+                            "status": detection.status,
+                            "hhi_score": detection.hhi_score,
+                            "risk_id": str(detection.risk_id) if detection.risk_id else None,
+                        },
+                        metadata_json={"source": "vendor.sanctions_screen.computed", "risk_created": risk_created},
+                    )
+
+        from app.services.vendor_supply_chain_service import VendorSupplyChainService
+
+        alerts = VendorSupplyChainService(db).propagate_vendor_signal(
+            organization_id=organization.id,
+            triggering_vendor_id=vendor.id,
+            signal_type="sanctions_match_found",
+            severity="critical",
+            explanation="positive sanctions screening match requires immediate first-party vendor review",
+            source_entity_type="sanctions_screen_result",
+            source_entity_id=row.id,
+            actor_user_id=actor_user_id,
+        )
+        for alert in alerts:
+            audit.write_audit_log(
+                action="vendor_supply_chain.alert_propagated",
+                entity_type="vendor_supply_chain_alert",
+                entity_id=alert.id,
+                organization_id=organization.id,
+                actor_user_id=actor_user_id,
+                after_json={
+                    "parent_vendor_id": str(alert.parent_vendor_id),
+                    "triggering_vendor_id": str(vendor.id),
+                    "signal_type": alert.signal_type,
+                    "severity": alert.severity,
+                },
+                metadata_json={"source": "vendor.sanctions_screen.computed"},
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+
+    return row
+
+
 def run_daily_sanctions_dataset_refresh(db: Session) -> dict[str, int | str]:
     return SanctionsScreeningService(db).refresh_downloaded_dataset()
+
+
+def run_periodic_vendor_sanctions_rescreen_sweep(db: Session) -> dict[str, int]:
+    """Re-screen active vendors on a recurring cadence.
+
+    Sanctions screening was previously only triggered manually (e.g. at onboarding) via
+    POST /vendors/{id}/sanctions-screen/compute. A vendor cleared (or never screened) at
+    onboarding could be newly added to a sanctions list afterwards and this platform would
+    never notice unless a human happened to re-run the check. This sweep closes that gap by
+    re-screening every non-archived vendor against the (daily-refreshed) sanctions dataset.
+
+    Each vendor is screened and committed independently so a single failure (e.g. a
+    transient Watchman/network error) does not roll back progress already made for other
+    vendors in the sweep.
+    """
+    vendor_ids = db.execute(
+        select(Vendor.id).where(Vendor.status != "archived").order_by(Vendor.organization_id, Vendor.id)
+    ).scalars().all()
+
+    screened = 0
+    matches_found = 0
+    errors = 0
+    dataset_unavailable = False
+    for vendor_id in vendor_ids:
+        if dataset_unavailable:
+            break
+        try:
+            vendor = db.get(Vendor, vendor_id)
+            if vendor is None:
+                continue
+            organization = db.get(Organization, vendor.organization_id)
+            if organization is None:
+                continue
+            row = screen_vendor_and_apply_effects(
+                db,
+                organization,
+                vendor,
+                actor_user_id=None,
+                audit_source="sanctions_rescreen_sweep",
+            )
+            db.commit()
+            screened += 1
+            if row.match_found:
+                matches_found += 1
+        except SanctionsDatasetUnavailable:
+            db.rollback()
+            dataset_unavailable = True
+        except Exception:
+            db.rollback()
+            errors += 1
+
+    return {
+        "vendors_screened": screened,
+        "positive_matches_found": matches_found,
+        "errors": errors,
+        "records_processed": screened,
+    }

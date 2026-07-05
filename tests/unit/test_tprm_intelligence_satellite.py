@@ -352,6 +352,102 @@ def test_t4_6_vendor_sanctions_screen_local_dataset_match_clear_and_audit(client
     assert clear_audit.organization_id == UUID(org["organization_id"])
 
 
+def test_t4_6_vendor_sanctions_match_escalates_own_risk_tier_and_clear_restores_it(client, db_session, monkeypatch):
+    org = bootstrap_org_user(client, email_prefix="t4-sanctions-escalate")
+    vendor = _create_vendor(client, org, name="Sberbank Europe AG", website="https://sberbank-escalate.example")
+    _seed_sberbank_entity(db_session)
+
+    before = client.get(f"{VENDORS_BASE}/{vendor['id']}", headers=org["org_headers"])
+    assert before.status_code == 200
+    assert before.json()["risk_tier"] == "not_assessed"
+
+    monkeypatch.setattr(
+        SanctionsScreeningService,
+        "_watchman_search",
+        lambda self, name, *, limit=10: WatchmanSearchResult(available=False, matches=[], error="docker unavailable in test"),
+    )
+    computed = client.post(f"{SATELLITE_BASE}/{vendor['id']}/sanctions-screen/compute", headers=org["org_headers"])
+    assert computed.status_code == 201, computed.text
+    assert computed.json()["match_found"] is True
+
+    after_hit = client.get(f"{VENDORS_BASE}/{vendor['id']}", headers=org["org_headers"])
+    assert after_hit.status_code == 200
+    assert after_hit.json()["risk_tier"] == "critical"
+
+    escalation_audit = db_session.execute(
+        select(AuditLog).where(AuditLog.action == "vendor.risk_tier_escalated")
+    ).scalar_one_or_none()
+    assert escalation_audit is not None
+    assert escalation_audit.organization_id == UUID(org["organization_id"])
+    assert escalation_audit.entity_id == UUID(vendor["id"])
+    assert escalation_audit.before_json["risk_tier"] == "not_assessed"
+    assert escalation_audit.after_json["risk_tier"] == "critical"
+
+    result_id = computed.json()["id"]
+    cleared = client.post(f"{SATELLITE_BASE}/{vendor['id']}/sanctions-screen/{result_id}/clear", headers=org["org_headers"])
+    assert cleared.status_code == 200, cleared.text
+
+    after_clear = client.get(f"{VENDORS_BASE}/{vendor['id']}", headers=org["org_headers"])
+    assert after_clear.status_code == 200
+    assert after_clear.json()["risk_tier"] == "not_assessed"
+
+    restore_audits = db_session.execute(
+        select(AuditLog).where(AuditLog.action == "vendor.risk_tier_escalated")
+    ).scalars().all()
+    assert any(row.after_json.get("reason") == "sanctions_match_cleared" and row.after_json["risk_tier"] == "not_assessed" for row in restore_audits)
+
+
+def test_t4_6_periodic_rescreen_sweep_catches_vendor_newly_added_to_sanctions_list(client, db_session, monkeypatch):
+    from app.satellites.tprm_intelligence.sanctions_screening import (
+        WatchmanSearchResult as _WatchmanSearchResult,
+        run_periodic_vendor_sanctions_rescreen_sweep,
+    )
+
+    org = bootstrap_org_user(client, email_prefix="t4-sanctions-rescreen")
+    vendor = _create_vendor(client, org, name="Later Sanctioned Corp", website="https://later-sanctioned.example")
+    _seed_sberbank_entity(db_session)  # unrelated entity so the local dataset isn't empty
+
+    monkeypatch.setattr(
+        SanctionsScreeningService,
+        "_watchman_search",
+        lambda self, name, *, limit=10: _WatchmanSearchResult(available=False, matches=[], error="docker unavailable in test"),
+    )
+
+    # At onboarding time the vendor is clean: no sanctions dataset entry yet.
+    onboarding = client.post(f"{SATELLITE_BASE}/{vendor['id']}/sanctions-screen/compute", headers=org["org_headers"])
+    assert onboarding.status_code == 201, onboarding.text
+    assert onboarding.json()["match_found"] is False
+
+    before = client.get(f"{VENDORS_BASE}/{vendor['id']}", headers=org["org_headers"])
+    assert before.json()["risk_tier"] == "not_assessed"
+
+    # The vendor is later added to a sanctions list (dataset refresh picked it up).
+    db_session.add(
+        SanctionsEntity(
+            id="NK-LATER-SANCTIONED-CORP",
+            caption="Later Sanctioned Corp",
+            schema_type="Company",
+            countries=["ru"],
+            datasets=["us_ofac_sdn"],
+            properties={"target": True, "topics": ["sanction"]},
+        )
+    )
+    db_session.commit()
+
+    # Nobody manually re-triggers screening; the periodic sweep must catch it.
+    result = run_periodic_vendor_sanctions_rescreen_sweep(db_session)
+    assert result["vendors_screened"] >= 1
+    assert result["positive_matches_found"] >= 1
+    assert result["errors"] == 0
+
+    latest = client.get(f"{SATELLITE_BASE}/{vendor['id']}/sanctions-screen", headers=org["org_headers"])
+    assert latest.status_code == 200
+    assert latest.json()["match_found"] is True
+
+    after = client.get(f"{VENDORS_BASE}/{vendor['id']}", headers=org["org_headers"])
+    assert after.json()["risk_tier"] == "critical"
+
+
 def test_t4_6_vendor_sanctions_screen_unrelated_name_no_false_match(client, db_session, monkeypatch):
     org = bootstrap_org_user(client, email_prefix="t4-sanctions-clean")
     vendor = _create_vendor(client, org, name="Blue Garden Bakery LLC", website="https://blue-garden.example")
