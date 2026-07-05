@@ -42,19 +42,11 @@ def test_t32_xbrl_export_generates_file_job_and_audit_log(client, db_session):
             "entity_identifier": "T32-XBRL-ORG1",
             "data_points": [
                 {
-                    "name": "Scope 1 greenhouse gas emissions",
-                    "taxonomy_concept": "issb:Scope1GreenhouseGasEmissions",
-                    "value": 1250.75,
+                    "name": "Climate transition plan description",
+                    "taxonomy_concept": "ifrs-sds:ClimaterelatedTransitionPlanExplanatory",
+                    "value": "Transition plan approved by the board with annual decarbonisation milestones.",
                     "period_start": "2026-01-01T00:00:00Z",
                     "period_end": "2026-12-31T00:00:00Z",
-                    "unit": "tCO2e",
-                    "decimals": 2,
-                },
-                {
-                    "name": "Climate transition plan description",
-                    "taxonomy_concept": "issb:ClimateTransitionPlanDescription",
-                    "value": "Transition plan approved by the board with annual decarbonisation milestones.",
-                    "instant": "2026-12-31T00:00:00Z",
                 },
             ],
         },
@@ -65,7 +57,8 @@ def test_t32_xbrl_export_generates_file_job_and_audit_log(client, db_session):
     assert payload["validation_errors"] == []
     assert payload["checksum_sha256"]
     assert payload["xbrl_content"].startswith("<?xml")
-    assert "Scope1GreenhouseGasEmissions" in payload["xbrl_content"]
+    assert "ClimaterelatedTransitionPlanExplanatory" in payload["xbrl_content"]
+    assert "ifrs_sds_2024-04-26.xsd" in payload["xbrl_content"]
     assert "arelle" not in str(payload).lower()
 
     job = db_session.query(ExportJob).filter(ExportJob.id == uuid.UUID(payload["export_job_id"])).one()
@@ -121,4 +114,32 @@ def test_t32_xbrl_export_reports_exact_invalid_data_points_without_brand_leak(cl
     assert {"data_point_index": 1, "field": "period", "message": "Provide either instant or both period_start and period_end."} in detail[
         "validation_errors"
     ]
+    assert "arelle" not in str(response.json()).lower()
+
+
+def test_t32_xbrl_export_returns_service_error_when_taxonomy_source_unreachable(client):
+    token = _register(client, "t32-owner3@example.com", "Pass1234!@", "T32 XBRL Org3")
+    org_id = _org_id(client, token)
+    report_id = _create_report(client, token, org_id)
+
+    response = client.post(
+        f"/api/v1/reports/{report_id}/xbrl-export",
+        headers=_headers(token, org_id),
+        json={
+            "entity_identifier": "T32-XBRL-ORG3",
+            "taxonomy_schema_url": "https://xbrl.ifrs.org/taxonomy/2024-04-30/issb.xsd",
+            "data_points": [
+                {
+                    "name": "Climate transition plan description",
+                    "taxonomy_concept": "ifrs-sds:ClimaterelatedTransitionPlanExplanatory",
+                    "value": "Transition plan approved by the board with annual decarbonisation milestones.",
+                    "period_start": "2026-01-01T00:00:00Z",
+                    "period_end": "2026-12-31T00:00:00Z",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["message"] == "XBRL taxonomy source unreachable"
     assert "arelle" not in str(response.json()).lower()

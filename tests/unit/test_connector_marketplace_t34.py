@@ -69,6 +69,10 @@ def test_t34_connector_catalog_crud_enable_disable_and_audit(client, db_session)
     assert disabled.status_code == 200
     assert disabled.json()["enabled"] is False
 
+    org_enabled_after_disable = client.get("/api/v1/connectors/enabled", headers=_headers(token, org_id))
+    assert org_enabled_after_disable.status_code == 200
+    assert org_enabled_after_disable.json() == []
+
     updated = client.patch(
         f"/api/v1/connectors/catalog/{connector_id}",
         headers=_headers(token, org_id),

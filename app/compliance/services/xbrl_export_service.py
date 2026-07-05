@@ -1,6 +1,8 @@
 import hashlib
 import re
 import tempfile
+import urllib.error
+import urllib.request
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +21,17 @@ from app.services.export_service import ExportService
 CONCEPT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*:[A-Za-z_][A-Za-z0-9_.-]*$")
 PREFIX_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 NUMERIC_UNITS = {"iso4217:USD", "iso4217:EUR", "iso4217:GBP", "shares", "pure", "tCO2e", "MWh", "GJ"}
+TAXONOMY_SOURCE_ERROR_CODES = {"FileNotLoadable", "IOError", "webCache:retrievalError"}
+
+
+class TaxonomySourceUnavailableError(RuntimeError):
+    pass
+
+
+class XBRLValidationFailedError(RuntimeError):
+    def __init__(self, errors: list[str]) -> None:
+        self.errors = errors
+        super().__init__(", ".join(errors))
 
 
 class XBRLExportService:
@@ -92,13 +105,7 @@ class XBRLExportService:
         ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
         ET.register_namespace(payload.taxonomy_prefix, payload.taxonomy_namespace)
 
-        root = ET.Element(
-            "{http://www.xbrl.org/2003/instance}xbrl",
-            {
-                "generatedBy": "CompliVibe",
-                "sourceReportId": str(report.id),
-            },
-        )
+        root = ET.Element("{http://www.xbrl.org/2003/instance}xbrl")
         ET.SubElement(
             root,
             "{http://www.xbrl.org/2003/linkbase}schemaRef",
@@ -124,7 +131,7 @@ class XBRLExportService:
                 ET.SubElement(period, "{http://www.xbrl.org/2003/instance}endDate").text = self._date(point.period_end)  # type: ignore[arg-type]
 
             _, local_name = point.taxonomy_concept.split(":", 1)
-            attrs = {"contextRef": context_id, "label": point.name}
+            attrs = {"contextRef": context_id}
             if point.unit:
                 unit_id = unit_ids.setdefault(point.unit, f"u{len(unit_ids) + 1}")
                 attrs["unitRef"] = unit_id
@@ -138,19 +145,47 @@ class XBRLExportService:
         return ET.tostring(root, encoding="unicode", xml_declaration=True)
 
     @staticmethod
-    def _engine_parse_check(xbrl_content: str) -> None:
+    def _check_taxonomy_source(taxonomy_schema_url: str) -> None:
+        request = urllib.request.Request(taxonomy_schema_url, method="HEAD")
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                if response.status >= 400:
+                    raise TaxonomySourceUnavailableError("taxonomy source returned an error status")
+        except urllib.error.HTTPError as exc:
+            if exc.code == 405:
+                get_request = urllib.request.Request(taxonomy_schema_url, method="GET", headers={"Range": "bytes=0-0"})
+                try:
+                    with urllib.request.urlopen(get_request, timeout=15) as response:
+                        if response.status >= 400:
+                            raise TaxonomySourceUnavailableError("taxonomy source returned an error status") from exc
+                except (OSError, TimeoutError, urllib.error.URLError) as nested_exc:
+                    raise TaxonomySourceUnavailableError("taxonomy source unreachable") from nested_exc
+                return
+            raise TaxonomySourceUnavailableError("taxonomy source returned an error status") from exc
+        except (OSError, TimeoutError, urllib.error.URLError) as exc:
+            raise TaxonomySourceUnavailableError("taxonomy source unreachable") from exc
+
+    @staticmethod
+    def _engine_parse_check(xbrl_content: str, taxonomy_schema_url: str) -> None:
         # Keep the engine invocation internal; API responses must stay vendor-neutral.
         from arelle import Cntlr, ModelManager  # type: ignore[import-not-found]
 
+        XBRLExportService._check_taxonomy_source(taxonomy_schema_url)
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "report.xbrl"
+            log_path = Path(tmpdir) / "arelle.log"
             path.write_text(xbrl_content, encoding="utf-8")
-            controller = Cntlr.Cntlr(logFileName=None)
+            controller = Cntlr.Cntlr(logFileName=str(log_path))
             model_manager = ModelManager.initialize(controller)
             model_xbrl = model_manager.load(str(path))
             if model_xbrl is None:
                 raise ValueError("XBRL parser could not read generated document")
+            errors = [str(error) for error in (getattr(model_xbrl, "errors", None) or [])]
             model_xbrl.close()
+            if any(error in TAXONOMY_SOURCE_ERROR_CODES for error in errors):
+                raise TaxonomySourceUnavailableError("taxonomy source unreachable")
+            if errors:
+                raise XBRLValidationFailedError(errors)
 
     def export_report(
         self,
@@ -170,7 +205,23 @@ class XBRLExportService:
 
         xbrl_content = self._build_xbrl(report, payload)
         try:
-            self._engine_parse_check(xbrl_content)
+            self._engine_parse_check(xbrl_content, payload.taxonomy_schema_url)
+        except TaxonomySourceUnavailableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "message": "XBRL taxonomy source unreachable",
+                    "taxonomy_schema_url": payload.taxonomy_schema_url,
+                },
+            ) from exc
+        except XBRLValidationFailedError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "message": "XBRL validation failed",
+                    "validation_errors": [{"data_point_index": None, "field": "document", "message": "Generated XBRL failed taxonomy validation."}],
+                },
+            ) from exc
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
