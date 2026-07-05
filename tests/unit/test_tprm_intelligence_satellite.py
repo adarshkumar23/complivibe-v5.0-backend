@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from uuid import UUID
 
 from sqlalchemy import select
@@ -344,29 +345,39 @@ def test_t1_3_supply_chain_graph_detects_cycle_and_rejects_bad_links(client, db_
 def test_t1_3_supply_chain_propagates_nth_party_signal_to_first_party(client, db_session, monkeypatch):
     org = bootstrap_org_user(client, email_prefix="t1-supply-chain-signal")
     first_party = _create_vendor(client, org, name="Critical SaaS", website="https://critical.example")
-    nth_party = _create_vendor(client, org, name="Risky CDN", website="https://risky.example")
-    linked = client.post(
-        f"{SATELLITE_BASE}/{first_party['id']}/supply-chain-links",
-        headers=org["org_headers"],
-        json={"sub_vendor_id": nth_party["id"], "relationship_type": "cdn_dependency"},
-    )
-    assert linked.status_code == 201, linked.text
+    fourth_party = _create_vendor(client, org, name="Platform Host", website="https://platform.example")
+    fifth_party = _create_vendor(client, org, name="Risky CDN", website="https://risky.example")
+    for parent, child in [(first_party, fourth_party), (fourth_party, fifth_party), (fifth_party, first_party)]:
+        linked = client.post(
+            f"{SATELLITE_BASE}/{parent['id']}/supply-chain-links",
+            headers=org["org_headers"],
+            json={"sub_vendor_id": child["id"], "relationship_type": "cdn_dependency"},
+        )
+        assert linked.status_code == 201, linked.text
 
     def degraded_rating(self, domain: str) -> dict:
         return {"domain": domain, "composite_score": 42.0, "signals_used": {"mozilla_observatory": {"status": "available", "score": 42}}}
 
     monkeypatch.setattr(VendorSecurityRatingService, "compute", degraded_rating)
-    computed = client.post(f"{SATELLITE_BASE}/{nth_party['id']}/security-rating/compute", headers=org["org_headers"])
+    computed = client.post(f"{SATELLITE_BASE}/{fifth_party['id']}/security-rating/compute", headers=org["org_headers"])
     assert computed.status_code == 201, computed.text
 
-    graph = client.get(f"{SATELLITE_BASE}/{first_party['id']}/supply-chain-graph", headers=org["org_headers"])
+    graph = client.get(f"{SATELLITE_BASE}/{first_party['id']}/supply-chain-graph?depth=5", headers=org["org_headers"])
     assert graph.status_code == 200
-    alerts = graph.json()["open_alerts"]
-    assert len(alerts) == 1
-    assert alerts[0]["signal_type"] == "security_rating_degraded"
-    assert alerts[0]["severity"] == "high"
-    assert "Risky CDN" in alerts[0]["explanation"]
+    body = graph.json()
+    assert body["data_quality_findings"][0]["type"] == "cycle_detected"
+    alerts = body["open_alerts"]
+    first_party_alert = next(alert for alert in alerts if alert["parent_vendor_id"] == first_party["id"])
+    assert first_party_alert["triggering_vendor_id"] == fifth_party["id"]
+    assert first_party_alert["signal_type"] == "security_rating_degraded"
+    assert first_party_alert["severity"] == "high"
+    assert "Risky CDN" in first_party_alert["explanation"]
 
-    audit = db_session.execute(select(AuditLog).where(AuditLog.action == "vendor_supply_chain.alert_propagated")).scalar_one_or_none()
-    assert audit is not None
-    assert audit.after_json["parent_vendor_id"] == first_party["id"]
+    flagged = client.get(f"{VENDORS_BASE}/{first_party['id']}", headers=org["org_headers"])
+    assert flagged.status_code == 200
+    assert flagged.json()["nth_party_risk_flag"] is True
+    assert flagged.json()["nth_party_risk_severity"] == "high"
+    assert flagged.json()["nth_party_risk_signal_type"] == "security_rating_degraded"
+
+    audit = db_session.execute(select(AuditLog).where(AuditLog.action == "vendor_supply_chain.nth_party_flag_updated")).scalars().all()
+    assert any(row.after_json["triggering_vendor_id"] == fifth_party["id"] and row.entity_id == uuid.UUID(first_party["id"]) for row in audit)

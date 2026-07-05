@@ -38,6 +38,13 @@ from app.schemas.vendor_risk import (
     VendorRiskScoreCreate,
     VendorRiskScoreRead,
 )
+from app.schemas.vendor_criticality import (
+    VendorCriticalityProfileRead,
+    VendorCriticalityProfileUpdate,
+    VendorCriticalitySettingRead,
+    VendorCriticalitySettingUpdate,
+)
+from app.services.vendor_criticality_service import VendorCriticalityService
 from app.services.vendor_risk_service import VendorRiskService
 from app.schemas.vendor import VendorArchiveRequest, VendorCreate, VendorRead, VendorSummary, VendorUpdate
 from app.services.vendor_assessment_service import VendorAssessmentService
@@ -63,6 +70,10 @@ def _vendor_read(row: Vendor) -> VendorRead:
         data_access=row.data_access,
         processes_personal_data=row.processes_personal_data,
         sub_processor=row.sub_processor,
+        nth_party_risk_flag=row.nth_party_risk_flag,
+        nth_party_risk_severity=row.nth_party_risk_severity,
+        nth_party_risk_signal_type=row.nth_party_risk_signal_type,
+        nth_party_risk_updated_at=row.nth_party_risk_updated_at,
         tags_json=row.tags_json,
         notes=row.notes,
         archived_at=row.archived_at,
@@ -147,6 +158,49 @@ def _vendor_control_link_read(row: VendorControlLink) -> VendorControlLinkRead:
     )
 
 
+def _vendor_criticality_setting_read(row, organization_id: uuid.UUID) -> VendorCriticalitySettingRead:
+    if row is None:
+        return VendorCriticalitySettingRead(
+            id=None,
+            organization_id=organization_id,
+            is_default=True,
+        )
+    return VendorCriticalitySettingRead(
+        id=row.id,
+        organization_id=row.organization_id,
+        revenue_dependency_weight=row.revenue_dependency_weight,
+        data_volume_weight=row.data_volume_weight,
+        operational_criticality_weight=row.operational_criticality_weight,
+        substitutability_weight=row.substitutability_weight,
+        updated_by_user_id=row.updated_by_user_id,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        is_default=False,
+    )
+
+
+def _vendor_criticality_profile_read(row, payload: dict | None = None) -> VendorCriticalityProfileRead:
+    if payload is not None:
+        return VendorCriticalityProfileRead(**payload)
+    return VendorCriticalityProfileRead(
+        id=row.id,
+        organization_id=row.organization_id,
+        vendor_id=row.vendor_id,
+        revenue_dependency_pct=row.revenue_dependency_pct,
+        data_volume_tier=row.data_volume_tier,
+        operational_criticality=row.operational_criticality,
+        substitutability_score=row.substitutability_score,
+        criticality_score=row.criticality_score,
+        criticality_tier=row.criticality_tier,
+        score_explanation_json=row.score_explanation_json,
+        notes=row.notes,
+        updated_by_user_id=row.updated_by_user_id,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        is_default=False,
+    )
+
+
 def _third_party_ai_assessment_read(row) -> ThirdPartyAIAssessmentRead:
     return ThirdPartyAIAssessmentRead.model_validate(row)
 
@@ -218,6 +272,37 @@ def vendors_summary(
     return VendorSummary(**VendorService(db).summary(organization.id))
 
 
+@router.get("/criticality/settings", response_model=VendorCriticalitySettingRead)
+def get_vendor_criticality_settings(
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("vendor_criticality:read")),
+) -> VendorCriticalitySettingRead:
+    row = VendorCriticalityService(db).get_settings(organization.id)
+    return _vendor_criticality_setting_read(row, organization.id)
+
+
+@router.put("/criticality/settings", response_model=VendorCriticalitySettingRead)
+def upsert_vendor_criticality_settings(
+    payload: VendorCriticalitySettingUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("vendor_criticality:manage")),
+) -> VendorCriticalitySettingRead:
+    row = VendorCriticalityService(db).upsert_settings(
+        organization_id=organization.id,
+        payload=payload,
+        actor_user_id=current_user.id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    db.commit()
+    db.refresh(row)
+    return _vendor_criticality_setting_read(row, organization.id)
+
+
 @router.get("", response_model=list[VendorRead])
 def list_vendors(
     status_filter: str | None = Query(default=None, alias="status"),
@@ -258,6 +343,44 @@ def get_vendor(
 ) -> VendorRead:
     row = VendorService(db).require_vendor_in_org(organization.id, vendor_id)
     return _vendor_read(row)
+
+
+@router.get("/{vendor_id}/criticality", response_model=VendorCriticalityProfileRead)
+def get_vendor_criticality_profile(
+    vendor_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("vendor_criticality:read")),
+) -> VendorCriticalityProfileRead:
+    service = VendorCriticalityService(db)
+    service.require_vendor_in_org(organization.id, vendor_id)
+    row = service.get_profile(organization.id, vendor_id)
+    if row is None:
+        return _vendor_criticality_profile_read(None, service.default_profile_payload(organization.id, vendor_id))
+    return _vendor_criticality_profile_read(row)
+
+
+@router.put("/{vendor_id}/criticality", response_model=VendorCriticalityProfileRead)
+def upsert_vendor_criticality_profile(
+    vendor_id: uuid.UUID,
+    payload: VendorCriticalityProfileUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("vendor_criticality:manage")),
+) -> VendorCriticalityProfileRead:
+    row = VendorCriticalityService(db).upsert_profile(
+        organization_id=organization.id,
+        vendor_id=vendor_id,
+        payload=payload,
+        actor_user_id=current_user.id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    db.commit()
+    db.refresh(row)
+    return _vendor_criticality_profile_read(row)
 
 
 @router.patch("/{vendor_id}", response_model=VendorRead)

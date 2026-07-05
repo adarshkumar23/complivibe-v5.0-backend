@@ -227,8 +227,10 @@ from app.models.vendor import Vendor
 from app.models.vendor_external_rating import VendorExternalRating
 from app.models.vendor_threat_intelligence import VendorThreatIntelligence
 from app.models.vendor_supply_chain import VendorSupplyChainAlert, VendorSupplyChainLink
+from app.models.vendor_concentration_risk import VendorConcentrationRiskDetection
 from app.models.vendor_assessment import VendorAssessment
 from app.models.vendor_assessment_question import VendorAssessmentQuestion
+from app.models.vendor_criticality import VendorCriticalityProfile, VendorCriticalitySetting
 from app.models.vendor_risk_score import VendorRiskScore
 from app.models.vendor_control_link import VendorControlLink
 from app.models.questionnaire_template import QuestionnaireTemplate
@@ -255,6 +257,7 @@ from app.models.trust_center_published_policy import TrustCenterPublishedPolicy
 from app.models.ai_vendor_assessment import AIVendorAssessment
 from app.models.vendor_mitigation_case import VendorMitigationCase
 from app.models.vendor_mitigation_action import VendorMitigationAction
+from app.models.vendor_remediation_portal_token import VendorRemediationPortalToken
 from app.models.control_monitoring_definition import ControlMonitoringDefinition
 from app.models.control_monitoring_result import ControlMonitoringResult
 from app.models.control_monitoring_rule import ControlMonitoringRule
@@ -547,8 +550,11 @@ __all__ = [
     "VendorThreatIntelligence",
     "VendorSupplyChainAlert",
     "VendorSupplyChainLink",
+    "VendorConcentrationRiskDetection",
     "VendorAssessment",
     "VendorAssessmentQuestion",
+    "VendorCriticalityProfile",
+    "VendorCriticalitySetting",
     "VendorRiskScore",
     "VendorControlLink",
     "QuestionnaireTemplate",
@@ -575,6 +581,7 @@ __all__ = [
     "AIVendorAssessment",
     "VendorMitigationCase",
     "VendorMitigationAction",
+    "VendorRemediationPortalToken",
     "ControlMonitoringDefinition",
     "ControlMonitoringResult",
     "ControlMonitoringRule",

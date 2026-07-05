@@ -62,6 +62,10 @@ class VendorRead(UUIDTimestampSchema):
     data_access: bool
     processes_personal_data: bool
     sub_processor: bool
+    nth_party_risk_flag: bool
+    nth_party_risk_severity: str | None = None
+    nth_party_risk_signal_type: str | None = None
+    nth_party_risk_updated_at: datetime | None = None
     tags_json: dict | list | None = None
     notes: str | None = None
     archived_at: datetime | None = None

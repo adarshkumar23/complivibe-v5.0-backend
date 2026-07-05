@@ -279,8 +279,6 @@ def create_risk(
     _: Membership = Depends(require_permission("risks:write")),
 ) -> RiskRead:
     service = RiskService(db)
-    service.ensure_owner_is_active_member(organization.id, payload.owner_user_id)
-    service.ensure_business_unit_in_org(organization.id, payload.business_unit_id)
     _ensure_factor_based_fields(
         method=payload.composite_score_method,
         financial_impact=payload.financial_impact,
@@ -288,13 +286,11 @@ def create_risk(
         operational_impact=payload.operational_impact,
     )
 
-    risk = Risk(
+    risk = service.create_risk_from_service(
         organization_id=organization.id,
         title=payload.title,
         description=payload.description,
         category=payload.category,
-        status="identified",
-        severity="low",
         likelihood=payload.likelihood,
         impact=payload.impact,
         financial_impact=payload.financial_impact,
@@ -312,42 +308,10 @@ def create_risk(
         target_date=payload.target_date,
         metadata_json=payload.metadata_json,
         created_by_user_id=current_user.id,
+        audit_source="api",
+        audit_ip_address=request.client.host if request.client else None,
+        audit_user_agent=request.headers.get("user-agent"),
     )
-    settings = RiskScoringService.get_or_create_org_settings(organization.id, db)
-    inherent_score = RiskScoringService.compute_score(risk, settings)
-    severity = service.score_to_severity(inherent_score)
-    # No controls can be linked yet at creation time, so residual = inherent (nothing
-    # mitigating this risk so far). It will be recomputed automatically as controls are
-    # linked and change status (see RiskRecalculationListener).
-    residual_likelihood, residual_impact, residual_score = RiskScoringService.compute_residual(risk, [], inherent_score)
-    risk.inherent_score = inherent_score
-    risk.severity = severity
-    risk.residual_likelihood = residual_likelihood
-    risk.residual_impact = residual_impact
-    risk.residual_score = residual_score
-
-    db.add(risk)
-    db.flush()
-
-    AuditService(db).write_audit_log(
-        action="risk.created",
-        entity_type="risk",
-        entity_id=risk.id,
-        organization_id=organization.id,
-        actor_user_id=current_user.id,
-        after_json={
-            "title": risk.title,
-            "status": risk.status,
-            "severity": risk.severity,
-            "inherent_score": risk.inherent_score,
-            "business_unit_id": str(risk.business_unit_id) if risk.business_unit_id else None,
-        },
-        metadata_json={"source": "api"},
-        ip_address=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-    )
-
-    service.check_appetite_breach(organization_id=organization.id, risk=risk, actor_user_id=current_user.id)
 
     db.commit()
     db.refresh(risk)
