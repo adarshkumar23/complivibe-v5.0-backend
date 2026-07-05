@@ -62,7 +62,7 @@ def create_identity(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("users:update_role")),
+    _: Membership = Depends(require_permission("identity_governance:manage")),
 ) -> NonHumanIdentityRead:
     row = NonHumanIdentityService(db).create_identity(
         organization_id=organization.id,
@@ -80,7 +80,7 @@ def identity_summary(
     stale_days: int = Query(default=90, ge=1, le=3650),
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("users:read")),
+    _: Membership = Depends(require_permission("identity_governance:read")),
 ) -> NonHumanIdentitySummary:
     return NonHumanIdentitySummary(**NonHumanIdentityService(db).summary(organization.id, stale_days=stale_days))
 
@@ -91,7 +91,7 @@ def flag_orphaned_identities(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("users:update_role")),
+    _: Membership = Depends(require_permission("identity_governance:manage")),
 ) -> NonHumanIdentityOrphanScanResponse:
     result = NonHumanIdentityService(db).flag_orphaned_identities(
         organization_id=organization.id,
@@ -111,7 +111,7 @@ def list_identities(
     include_deleted: bool = Query(default=False),
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("users:read")),
+    _: Membership = Depends(require_permission("identity_governance:read")),
 ) -> list[NonHumanIdentityRead]:
     rows = NonHumanIdentityService(db).list_identities(
         organization.id,
@@ -129,7 +129,7 @@ def get_identity(
     identity_id: uuid.UUID,
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("users:read")),
+    _: Membership = Depends(require_permission("identity_governance:read")),
 ) -> NonHumanIdentityRead:
     row = NonHumanIdentityService(db).require_identity_in_org(organization.id, identity_id)
     return _identity_read(row)
@@ -143,7 +143,7 @@ def update_identity(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("users:update_role")),
+    _: Membership = Depends(require_permission("identity_governance:manage")),
 ) -> NonHumanIdentityRead:
     row = NonHumanIdentityService(db).update_identity(
         organization_id=organization.id,
@@ -164,7 +164,7 @@ def delete_identity(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("users:update_role")),
+    _: Membership = Depends(require_permission("identity_governance:manage")),
 ) -> NonHumanIdentityRead:
     row = NonHumanIdentityService(db).soft_delete_identity(
         organization_id=organization.id,

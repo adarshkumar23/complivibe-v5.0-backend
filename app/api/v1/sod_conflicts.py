@@ -55,7 +55,7 @@ def create_rule(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("users:update_role")),
+    _: Membership = Depends(require_permission("sod:manage")),
 ) -> SodConflictRuleRead:
     rule = SodConflictService(db).create_rule(
         organization.id,
@@ -75,7 +75,7 @@ def list_rules(
     include_inactive: bool = False,
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("users:read")),
+    _: Membership = Depends(require_permission("sod:read")),
 ) -> list[SodConflictRuleRead]:
     rules = SodConflictService(db).list_rules(organization.id, include_inactive=include_inactive)
     return [_rule_read(rule) for rule in rules]
@@ -86,7 +86,7 @@ def get_rule(
     rule_id: uuid.UUID,
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("users:read")),
+    _: Membership = Depends(require_permission("sod:read")),
 ) -> SodConflictRuleRead:
     return _rule_read(SodConflictService(db).get_rule(organization.id, rule_id))
 
@@ -98,7 +98,7 @@ def update_rule(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("users:update_role")),
+    _: Membership = Depends(require_permission("sod:manage")),
 ) -> SodConflictRuleRead:
     rule = SodConflictService(db).update_rule(
         organization.id,
@@ -122,7 +122,7 @@ def deactivate_rule(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("users:update_role")),
+    _: Membership = Depends(require_permission("sod:manage")),
 ) -> SodConflictRuleRead:
     rule = SodConflictService(db).deactivate_rule(organization.id, rule_id, actor_user_id=current_user.id)
     db.commit()
@@ -136,7 +136,7 @@ def list_findings(
     user_id: uuid.UUID | None = None,
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("users:read")),
+    _: Membership = Depends(require_permission("sod:read")),
 ) -> list[SodConflictFindingRead]:
     service = SodConflictService(db)
     findings = service.list_findings(organization.id, finding_status=finding_status, user_id=user_id)
@@ -150,7 +150,7 @@ def acknowledge_finding(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("users:update_role")),
+    _: Membership = Depends(require_permission("sod:manage")),
 ) -> SodConflictFindingRead:
     service = SodConflictService(db)
     finding = service.acknowledge_finding(
@@ -171,7 +171,7 @@ def waive_finding(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("users:update_role")),
+    _: Membership = Depends(require_permission("sod:manage")),
 ) -> SodConflictFindingRead:
     service = SodConflictService(db)
     finding = service.waive_finding(
@@ -191,7 +191,7 @@ def detect_user_conflicts(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("users:update_role")),
+    _: Membership = Depends(require_permission("sod:manage")),
 ) -> SodConflictDetectionResponse:
     service = SodConflictService(db)
     findings, permission_codes = service.detect_for_user(
