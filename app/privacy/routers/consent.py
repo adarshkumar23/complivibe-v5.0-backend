@@ -16,6 +16,7 @@ from app.privacy.schemas.consent import (
     ConsentWithdrawRequest,
     GoogleConsentModeV2Create,
     GoogleConsentModeV2Read,
+    GoogleConsentModeV2StatusRead,
 )
 from app.privacy.services.consent_service import ConsentService
 
@@ -121,6 +122,22 @@ def list_google_consent_mode_v2(
         limit=limit,
     )
     return [GoogleConsentModeV2Read.model_validate(row) for row in rows]
+
+
+@router.get("/google-consent-mode-v2/status", response_model=GoogleConsentModeV2StatusRead)
+def google_consent_mode_v2_status(
+    domain: str = Query(..., min_length=1),
+    subject_identifier: str = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("privacy:read")),
+) -> GoogleConsentModeV2StatusRead:
+    payload = ConsentService(db).get_google_consent_mode_v2_status(
+        organization.id,
+        domain,
+        subject_identifier,
+    )
+    return GoogleConsentModeV2StatusRead.model_validate(payload)
 
 
 @router.post("/{consent_id}/withdraw", response_model=ConsentRecordRead)

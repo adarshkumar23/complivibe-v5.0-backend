@@ -28,6 +28,44 @@ ALLOWED_CONSENT_MECHANISMS = {
 
 GCM_V2_STATES = {"granted", "denied"}
 
+# ISO 3166-1 alpha-2 codes for the jurisdictions where Google requires all four
+# Consent Mode v2 signals to default to "denied" until the visitor interacts
+# with a consent banner: the 27 EU/EEA member states, the additional EEA states
+# (Iceland, Liechtenstein, Norway), the United Kingdom, and Switzerland.
+# Source: https://support.google.com/tagmanager/answer/13695607 (traffic
+# outside this list defaults to "granted").
+EEA_UK_CH_REGION_CODES = {
+    "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR",
+    "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK",
+    "SI", "ES", "SE",  # EU member states
+    "IS", "LI", "NO",  # additional EEA states
+    "GB", "CH",  # UK and Switzerland (Google treats these the same as EEA)
+}
+# Also accept the common shorthand region value "EEA" itself, since many
+# callers (and Google's own Tag Manager UI) use that literal label rather
+# than enumerating member country codes.
+_RESTRICTED_REGION_LABELS = {"EEA", "EU", "EEA+UK", "EEA_UK_CH"}
+
+# Regulatory re-consent window: the UK ICO recommends refreshing cookie
+# consent after roughly 6 months, while EDPB commentary and most national
+# DPAs converge on 12 months as the outer bound. We flag consent as stale
+# once it exceeds 365 days so a compliance officer can decide whether to
+# re-prompt, using the more conservative (longer) end of that range as the
+# hard cutoff rather than silently expiring signals early.
+GCM_RECONSENT_STALE_DAYS = 365
+
+
+def _is_restricted_default_region(region: str | None) -> bool | None:
+    """Return True if `region` is a jurisdiction where Google requires consent
+    signals to default to denied (EEA/UK/Switzerland), False if it is clearly
+    outside that list, or None if no region was supplied (unknown)."""
+    if not region:
+        return None
+    normalized = region.strip().upper()
+    if normalized in _RESTRICTED_REGION_LABELS:
+        return True
+    return normalized in EEA_UK_CH_REGION_CODES
+
 
 class ConsentService:
     def __init__(self, db: Session) -> None:
@@ -408,6 +446,102 @@ class ConsentService:
         return self.db.execute(
             stmt.order_by(GoogleConsentModeEvent.created_at.desc()).offset(max(0, int(skip))).limit(max(1, min(int(limit), 500)))
         ).scalars().all()
+
+    def get_google_consent_mode_v2_status(
+        self,
+        org_id: uuid.UUID,
+        domain: str,
+        subject_identifier: str,
+    ) -> dict:
+        """Resolve the *current effective* Consent Mode v2 state for a given
+        subject on a given domain, rather than making the caller re-derive it
+        from the raw event list. Also surfaces two insights a bare event echo
+        would miss: whether the latest known state is stale enough to warrant
+        re-prompting, and whether the earliest recorded state for a
+        restricted (EEA/UK/Switzerland) region looks inconsistent with
+        Google's required denied-by-default posture for those jurisdictions.
+        """
+        normalized_domain = domain.strip().lower()
+        subject_hash = self.hash_subject_identifier(subject_identifier)
+
+        events = self.db.execute(
+            select(GoogleConsentModeEvent)
+            .where(
+                GoogleConsentModeEvent.organization_id == org_id,
+                GoogleConsentModeEvent.domain == normalized_domain,
+                GoogleConsentModeEvent.subject_identifier_hash == subject_hash,
+            )
+            .order_by(GoogleConsentModeEvent.created_at.asc())
+        ).scalars().all()
+
+        if not events:
+            return {
+                "has_signal": False,
+                "domain": normalized_domain,
+                "region": None,
+                "ad_storage": None,
+                "analytics_storage": None,
+                "ad_user_data": None,
+                "ad_personalization": None,
+                "last_event_at": None,
+                "is_stale": False,
+                "stale_after_days": GCM_RECONSENT_STALE_DAYS,
+                "regional_default_expected": None,
+                "default_state_risk": False,
+                "default_state_risk_detail": None,
+            }
+
+        latest = events[-1]
+        earliest = events[0]
+        reference_ts = latest.event_timestamp or latest.created_at
+        if reference_ts is not None and reference_ts.tzinfo is None:
+            reference_ts = reference_ts.replace(tzinfo=UTC)
+        now = self.utcnow()
+        age_days = (now - reference_ts).days if reference_ts else None
+        is_stale = age_days is not None and age_days > GCM_RECONSENT_STALE_DAYS
+
+        region_flag = _is_restricted_default_region(latest.region)
+        regional_default_expected = None
+        if region_flag is True:
+            regional_default_expected = "denied"
+        elif region_flag is False:
+            regional_default_expected = "granted"
+
+        default_state_risk = False
+        default_state_risk_detail = None
+        earliest_region_flag = _is_restricted_default_region(earliest.region)
+        if earliest_region_flag is True:
+            granted_signals = [
+                name
+                for name in ("ad_storage", "analytics_storage", "ad_user_data", "ad_personalization")
+                if getattr(earliest, name) == "granted"
+            ]
+            if granted_signals:
+                default_state_risk = True
+                default_state_risk_detail = (
+                    f"Earliest recorded Consent Mode v2 state for this subject in a "
+                    f"restricted region ({earliest.region}) already shows "
+                    f"{', '.join(granted_signals)} as granted. Google requires these "
+                    "signals to default to 'denied' in the EEA/UK/Switzerland until "
+                    "the visitor interacts with a consent banner — verify the tag "
+                    "default configuration for this domain."
+                )
+
+        return {
+            "has_signal": True,
+            "domain": normalized_domain,
+            "region": latest.region,
+            "ad_storage": latest.ad_storage,
+            "analytics_storage": latest.analytics_storage,
+            "ad_user_data": latest.ad_user_data,
+            "ad_personalization": latest.ad_personalization,
+            "last_event_at": reference_ts,
+            "is_stale": is_stale,
+            "stale_after_days": GCM_RECONSENT_STALE_DAYS,
+            "regional_default_expected": regional_default_expected,
+            "default_state_risk": default_state_risk,
+            "default_state_risk_detail": default_state_risk_detail,
+        }
 
     def sweep_expired_consents(self) -> dict:
         now = self.utcnow()
