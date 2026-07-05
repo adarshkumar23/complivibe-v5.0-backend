@@ -5,3 +5,4 @@ The TPRM intelligence satellite is implemented to use these optional free-tier k
 - `HIBP_API_KEY`: HaveIBeenPwned domain breach checks.
 - `ALIENVAULT_OTX_API_KEY`: AlienVault OTX domain threat intelligence.
 - `OPENCORPORATES_API_KEY`: OpenCorporates company search for KYB verification.
+- `ABUSEIPDB_API_KEY`: AbuseIPDB IP reputation checks for vendor security rating and threat intelligence.
