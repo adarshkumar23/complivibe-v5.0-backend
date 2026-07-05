@@ -113,7 +113,7 @@ class AIDraftingService:
             )
         return str(value)
 
-    def _build_user_prompt(self, draft_type: str, context: dict) -> str:
+    def _build_user_prompt(self, draft_type: str, context: dict, org_id: uuid.UUID) -> str:
         if draft_type == "policy_content":
             policy_type = self._require_context_key(context, "policy_type")
             return (
@@ -159,7 +159,7 @@ class AIDraftingService:
             )
         if draft_type == "ai_risk_assessment_narrative":
             ai_system_id = uuid.UUID(self._require_context_key(context, "ai_system_id"))
-            draft_context = build_risk_assessment_context(ai_system_id, self.db)
+            draft_context = build_risk_assessment_context(ai_system_id, org_id, self.db)
             return (
                 f"Draft an AI risk assessment narrative for '{draft_context['system_name']}'. "
                 f"Risk tier: {draft_context['risk_tier']}. "
@@ -168,7 +168,7 @@ class AIDraftingService:
             )
         if draft_type == "model_card_content":
             ai_system_id = uuid.UUID(self._require_context_key(context, "ai_system_id"))
-            draft_context = build_model_card_context(ai_system_id, self.db)
+            draft_context = build_model_card_context(ai_system_id, org_id, self.db)
             return (
                 f"Draft a model card for AI system '{draft_context['system_name']}'. "
                 f"Purpose: {draft_context['purpose']}. "
@@ -263,7 +263,7 @@ class AIDraftingService:
         if draft_type not in self.ALLOWED_DRAFT_TYPES:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unknown draft_type")
 
-        user_prompt = self._build_user_prompt(draft_type, context_json)
+        user_prompt = self._build_user_prompt(draft_type, context_json, org_id)
         system_prompt = SYSTEM_PROMPT_MAP[draft_type]
         try:
             draft_text = self._call_azure_openai(system_prompt=system_prompt, user_prompt=user_prompt)
