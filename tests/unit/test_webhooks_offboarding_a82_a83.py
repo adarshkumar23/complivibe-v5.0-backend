@@ -68,7 +68,7 @@ def test_a82_webhook_endpoints_emit_signature_delivery_and_isolation(client, db_
         WEBHOOKS_BASE,
         headers=org_a["org_headers"],
         json={
-            "url": "https://example.test/hooks/security",
+            "url": "https://example.com/hooks/security",
             "name": "Security Hooks",
             "secret": "topsecret",
             "event_types": ["issue.created", "risk.critical"],
@@ -82,7 +82,7 @@ def test_a82_webhook_endpoints_emit_signature_delivery_and_isolation(client, db_
         WEBHOOKS_BASE,
         headers=org_a["org_headers"],
         json={
-            "url": "https://example.test/hooks/invalid",
+            "url": "https://example.com/hooks/invalid",
             "name": "Invalid",
             "secret": "topsecret",
             "event_types": ["issue.created", "made.up"],
@@ -95,7 +95,7 @@ def test_a82_webhook_endpoints_emit_signature_delivery_and_isolation(client, db_
         WEBHOOKS_BASE,
         headers=org_a["org_headers"],
         json={
-            "url": "https://example.test/hooks/non-matching",
+            "url": "https://example.com/hooks/non-matching",
             "name": "Non matching",
             "secret": "secret2",
             "event_types": ["deadline.overdue"],
@@ -164,6 +164,31 @@ def test_a82_webhook_endpoints_emit_signature_delivery_and_isolation(client, db_
     list_org_b = client.get(WEBHOOKS_BASE, headers=org_b["org_headers"])
     assert list_org_b.status_code == 200
     assert all(row["organization_id"] == org_b["organization_id"] for row in list_org_b.json())
+
+
+def test_webhook_endpoint_rejects_ssrf_targets(client):
+    org = bootstrap_org_user(client, email_prefix="webhook-ssrf")
+
+    for bad_url in [
+        "http://169.254.169.254/latest/meta-data/",
+        "http://metadata.google.internal/computeMetadata/v1/",
+        "http://127.0.0.1:8000/internal",
+        "http://localhost/internal",
+        "http://[::1]/internal",
+        "http://2130706433/internal",
+        "http://0177.0.0.1/internal",
+    ]:
+        created = client.post(
+            WEBHOOKS_BASE,
+            headers=org["org_headers"],
+            json={
+                "url": bad_url,
+                "name": "Blocked",
+                "secret": "topsecret",
+                "event_types": ["issue.created"],
+            },
+        )
+        assert created.status_code == 422, (bad_url, created.text)
 
 
 def test_a83_offboarding_validate_run_transaction_and_guards(client, db_session):
@@ -358,7 +383,7 @@ def test_webhook_delivery_retries_and_fails(client, db_session, monkeypatch):
         WEBHOOKS_BASE,
         headers=org["org_headers"],
         json={
-            "url": "https://example.test/hooks/fail",
+                "url": "https://example.com/hooks/fail",
             "name": "Failing Hook",
             "secret": "secret",
             "event_types": ["issue.created"],
@@ -401,7 +426,7 @@ def test_webhook_delivery_trigger_endpoint(client, db_session, monkeypatch):
         WEBHOOKS_BASE,
         headers=org["org_headers"],
         json={
-            "url": "https://example.test/hooks/trigger",
+                "url": "https://example.com/hooks/trigger",
             "name": "Trigger Hook",
             "secret": "secret",
             "event_types": ["risk.critical"],
@@ -444,4 +469,3 @@ def test_webhook_delivery_trigger_endpoint(client, db_session, monkeypatch):
         )
     ).scalar_one()
     assert audit is not None
-

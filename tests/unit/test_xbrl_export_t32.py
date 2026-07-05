@@ -155,7 +155,11 @@ def test_t32_xbrl_export_rejects_internal_taxonomy_schema_url_ssrf(client):
     for bad_url in [
         "http://127.0.0.1:8000/internal.xsd",
         "http://localhost/internal.xsd",
+        "http://[::1]/internal.xsd",
+        "http://2130706433/internal.xsd",
+        "http://0177.0.0.1/internal.xsd",
         "http://169.254.169.254/latest/meta-data/",
+        "http://metadata.google.internal/computeMetadata/v1/",
         "ftp://xbrl.ifrs.org/taxonomy.xsd",
     ]:
         response = client.post(

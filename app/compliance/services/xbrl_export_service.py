@@ -1,10 +1,7 @@
 import hashlib
-import ipaddress
 import re
-import socket
 import tempfile
 import urllib.error
-import urllib.parse
 import urllib.request
 import uuid
 from datetime import UTC, datetime
@@ -15,6 +12,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.url_security import UnsafeURLTargetError, assert_public_http_url
 from app.models.compliance_report import ComplianceReport
 from app.models.export_job import ExportJob
 from app.repositories.report_repository import ReportRepository
@@ -39,6 +37,11 @@ class XBRLValidationFailedError(RuntimeError):
     def __init__(self, errors: list[str]) -> None:
         self.errors = errors
         super().__init__(", ".join(errors))
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        raise TaxonomySourceRejectedError("taxonomy_schema_url redirects are not allowed")
 
 
 class XBRLExportService:
@@ -155,45 +158,25 @@ class XBRLExportService:
     def _reject_if_internal_target(taxonomy_schema_url: str) -> None:
         """Block SSRF: the taxonomy schema URL is caller-supplied and the server fetches it
         directly, so refuse anything that doesn't resolve to a public host/scheme."""
-        parsed = urllib.parse.urlsplit(taxonomy_schema_url)
-        if parsed.scheme not in ("http", "https"):
-            raise TaxonomySourceRejectedError("taxonomy_schema_url must use http or https")
-        hostname = parsed.hostname
-        if not hostname:
-            raise TaxonomySourceRejectedError("taxonomy_schema_url is missing a hostname")
         try:
-            addr_infos = socket.getaddrinfo(hostname, None)
-        except OSError as exc:
-            raise TaxonomySourceUnavailableError("taxonomy source hostname could not be resolved") from exc
-        for family, _, _, _, sockaddr in addr_infos:
-            ip_text = sockaddr[0]
-            try:
-                ip = ipaddress.ip_address(ip_text)
-            except ValueError:
-                continue
-            if (
-                ip.is_private
-                or ip.is_loopback
-                or ip.is_link_local
-                or ip.is_multicast
-                or ip.is_reserved
-                or ip.is_unspecified
-            ):
-                raise TaxonomySourceRejectedError("taxonomy_schema_url must not resolve to an internal or private address")
+            assert_public_http_url(taxonomy_schema_url, field_name="taxonomy_schema_url")
+        except UnsafeURLTargetError as exc:
+            raise TaxonomySourceRejectedError(str(exc)) from exc
 
     @staticmethod
     def _check_taxonomy_source(taxonomy_schema_url: str) -> None:
         XBRLExportService._reject_if_internal_target(taxonomy_schema_url)
+        opener = urllib.request.build_opener(_NoRedirectHandler)
         request = urllib.request.Request(taxonomy_schema_url, method="HEAD")
         try:
-            with urllib.request.urlopen(request, timeout=15) as response:
+            with opener.open(request, timeout=15) as response:
                 if response.status >= 400:
                     raise TaxonomySourceUnavailableError("taxonomy source returned an error status")
         except urllib.error.HTTPError as exc:
             if exc.code == 405:
                 get_request = urllib.request.Request(taxonomy_schema_url, method="GET", headers={"Range": "bytes=0-0"})
                 try:
-                    with urllib.request.urlopen(get_request, timeout=15) as response:
+                    with opener.open(get_request, timeout=15) as response:
                         if response.status >= 400:
                             raise TaxonomySourceUnavailableError("taxonomy source returned an error status") from exc
                 except (OSError, TimeoutError, urllib.error.URLError) as nested_exc:

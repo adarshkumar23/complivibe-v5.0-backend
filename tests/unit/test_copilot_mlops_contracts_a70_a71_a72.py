@@ -159,6 +159,33 @@ def test_a70_ai_copilot_draft_mode(client, db_session, monkeypatch):
     assert validated.draft_type == "eu_act_conformity_narrative"
 
 
+def test_ai_copilot_draft_rejects_cross_org_ai_system_context(client, monkeypatch):
+    org_a = bootstrap_org_user(client, email_prefix="a70-leak-a")
+    org_b = bootstrap_org_user(client, email_prefix="a70-leak-b")
+    system_a_id = _create_system(
+        client,
+        org_a["org_headers"],
+        org_a["user_id"],
+        "CONFIDENTIAL Org A Revenue Model",
+    )
+
+    enabled = client.post(f"{DRAFT_BASE}/ai-config/enable", headers=org_b["org_headers"])
+    assert enabled.status_code == 200
+
+    def _should_not_call(self, system_prompt, user_prompt):  # noqa: ANN001
+        raise AssertionError(f"cross-org prompt leaked to model: {user_prompt}")
+
+    monkeypatch.setattr(AIDraftingService, "_call_azure_openai", _should_not_call)
+
+    for path in ["ai-risk-assessment", "model-card"]:
+        response = client.post(
+            f"{DRAFT_BASE}/{path}",
+            headers=org_b["org_headers"],
+            json={"ai_system_id": system_a_id},
+        )
+        assert response.status_code == 404, (path, response.text)
+
+
 def test_a71_mlops_integration_sync_workflow(client, db_session, monkeypatch):
     org = bootstrap_org_user(client, email_prefix="a71-org")
 

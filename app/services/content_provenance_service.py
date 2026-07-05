@@ -1,7 +1,13 @@
 import uuid
+import base64
+import binascii
+import copy
+import json
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -66,6 +72,56 @@ class ContentProvenanceService:
                     return hash_value.strip()
         return None
 
+    @staticmethod
+    def _decode_signature_bytes(value: str) -> bytes:
+        stripped = value.strip()
+        try:
+            return base64.b64decode(stripped, validate=True)
+        except (binascii.Error, ValueError):
+            try:
+                return bytes.fromhex(stripped)
+            except ValueError as exc:
+                raise ValueError("signature value is not base64 or hex") from exc
+
+    @staticmethod
+    def _canonical_claim_bytes(manifest: dict) -> bytes:
+        claim = copy.deepcopy(manifest)
+        claim.pop("signature_info", None)
+        claim.pop("signature", None)
+        return json.dumps(claim, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+    @classmethod
+    def _verify_signature_block(cls, manifest: dict, signature_block: dict) -> bool:
+        """Verify an Ed25519 signature over the canonical claim JSON.
+
+        The signed payload is the submitted manifest with its signature block removed.
+        That makes claim tampering fail verification even when the signature remains
+        syntactically well-formed.
+        """
+        algorithm = signature_block.get("algorithm") or signature_block.get("alg")
+        signature_value = signature_block.get("signature") or signature_block.get("value")
+        public_key_value = signature_block.get("public_key") or signature_block.get("publicKey")
+        if (
+            not isinstance(algorithm, str)
+            or algorithm.strip().lower() not in {"ed25519", "eddsa-ed25519"}
+            or not isinstance(signature_value, str)
+            or not signature_value.strip()
+            or not isinstance(public_key_value, str)
+            or not public_key_value.strip()
+        ):
+            return False
+
+        try:
+            public_key_bytes = cls._decode_signature_bytes(public_key_value)
+            signature_bytes = cls._decode_signature_bytes(signature_value)
+            Ed25519PublicKey.from_public_bytes(public_key_bytes).verify(
+                signature_bytes,
+                cls._canonical_claim_bytes(manifest),
+            )
+        except (ValueError, InvalidSignature):
+            return False
+        return True
+
     def _validate_c2pa_structure(
         self, manifest: dict, content_sha256: str | None = None
     ) -> tuple[str, str | None, str | None, str | None, int | None]:
@@ -116,14 +172,7 @@ class ContentProvenanceService:
         if not isinstance(signature_block, dict):
             return "invalid", "tampered_signature", spec_version, claim_generator, len(assertions)
 
-        algorithm = signature_block.get("algorithm") or signature_block.get("alg")
-        signature_value = signature_block.get("signature") or signature_block.get("value")
-        if (
-            not isinstance(algorithm, str)
-            or not algorithm.strip()
-            or not isinstance(signature_value, str)
-            or not signature_value.strip()
-        ):
+        if not self._verify_signature_block(manifest, signature_block):
             return "invalid", "tampered_signature", spec_version, claim_generator, len(assertions)
 
         if content_sha256 is not None:
