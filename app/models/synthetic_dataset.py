@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, String, Text, Uuid
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -38,6 +38,15 @@ class SyntheticDataset(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMix
         Index("ix_synthetic_datasets_org_validation_status", "organization_id", "validation_status"),
         Index("ix_synthetic_datasets_org_privacy_technique", "organization_id", "privacy_technique"),
         Index("ix_synthetic_datasets_org_gap_flag", "organization_id", "governance_gap_flag"),
+        CheckConstraint(
+            "reidentification_risk_score IS NULL OR "
+            "(reidentification_risk_score >= 0.0 AND reidentification_risk_score <= 1.0)",
+            name="ck_synthetic_datasets_risk_score_range",
+        ),
+        CheckConstraint(
+            "privacy_parameter IS NULL OR privacy_parameter > 0.0",
+            name="ck_synthetic_datasets_privacy_parameter_positive",
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -46,6 +55,14 @@ class SyntheticDataset(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMix
         Uuid, *_SOURCE_DATASET_FK_ARGS, nullable=True
     )
     privacy_technique: Mapped[str] = mapped_column(String(50), nullable=False, default="none")
+    # Quantified privacy parameter behind privacy_technique: k (equivalence-class
+    # size) for k_anonymity, or epsilon for differential_privacy. None for 'none'.
+    privacy_parameter: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Estimated worst-case re-identification / membership-inference probability
+    # (0.0-1.0), computed from privacy_technique + privacy_parameter using
+    # established bounds (1/k for k-anonymity; e^eps/(1+e^eps) for eps-DP
+    # membership inference). Recomputed on every write; never hand-entered.
+    reidentification_risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     validation_status: Mapped[str] = mapped_column(String(50), nullable=False, default="unvalidated")
     validation_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     governance_gap_flag: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
