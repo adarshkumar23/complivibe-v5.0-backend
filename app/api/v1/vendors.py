@@ -215,7 +215,7 @@ def _vendor_criticality_setting_read(row, organization_id: uuid.UUID) -> VendorC
     )
 
 
-def _vendor_criticality_profile_read(row, payload: dict | None = None) -> VendorCriticalityProfileRead:
+def _vendor_criticality_profile_read(row, payload: dict | None = None, priority_context: dict | None = None) -> VendorCriticalityProfileRead:
     if payload is not None:
         return VendorCriticalityProfileRead(**payload)
     return VendorCriticalityProfileRead(
@@ -229,6 +229,7 @@ def _vendor_criticality_profile_read(row, payload: dict | None = None) -> Vendor
         criticality_score=row.criticality_score,
         criticality_tier=row.criticality_tier,
         score_explanation_json=row.score_explanation_json,
+        priority_context=priority_context or {},
         notes=row.notes,
         updated_by_user_id=row.updated_by_user_id,
         created_at=row.created_at,
@@ -389,11 +390,12 @@ def get_vendor_criticality_profile(
     _: Membership = Depends(require_permission("vendor_criticality:read")),
 ) -> VendorCriticalityProfileRead:
     service = VendorCriticalityService(db)
-    service.require_vendor_in_org(organization.id, vendor_id)
+    vendor = service.require_vendor_in_org(organization.id, vendor_id)
     row = service.get_profile(organization.id, vendor_id)
     if row is None:
-        return _vendor_criticality_profile_read(None, service.default_profile_payload(organization.id, vendor_id))
-    return _vendor_criticality_profile_read(row)
+        return _vendor_criticality_profile_read(None, service.default_profile_payload(organization.id, vendor))
+    priority_context = service.build_priority_context(vendor, row.criticality_tier)
+    return _vendor_criticality_profile_read(row, priority_context=priority_context)
 
 
 @router.put("/{vendor_id}/criticality", response_model=VendorCriticalityProfileRead)
@@ -406,7 +408,8 @@ def upsert_vendor_criticality_profile(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("vendor_criticality:manage")),
 ) -> VendorCriticalityProfileRead:
-    row = VendorCriticalityService(db).upsert_profile(
+    service = VendorCriticalityService(db)
+    row = service.upsert_profile(
         organization_id=organization.id,
         vendor_id=vendor_id,
         payload=payload,
@@ -416,7 +419,9 @@ def upsert_vendor_criticality_profile(
     )
     db.commit()
     db.refresh(row)
-    return _vendor_criticality_profile_read(row)
+    vendor = service.require_vendor_in_org(organization.id, vendor_id)
+    priority_context = service.build_priority_context(vendor, row.criticality_tier)
+    return _vendor_criticality_profile_read(row, priority_context=priority_context)
 
 
 @router.patch("/{vendor_id}", response_model=VendorRead)

@@ -16,8 +16,9 @@ from app.models.aml_kyc_check import AmlKycCheck
 from app.models.vendor_external_rating import VendorExternalRating
 from app.models.vendor_threat_intelligence import VendorThreatIntelligence
 from app.satellites.tprm_intelligence.kyb_verification import KYBVerificationService
+from app.satellites.tprm_intelligence.security_rating_monitoring import record_vendor_security_rating
 from app.satellites.tprm_intelligence.threat_intelligence import ThreatIntelligenceService
-from app.satellites.tprm_intelligence.vendor_security_rating import VendorSecurityRatingService, normalize_domain
+from app.satellites.tprm_intelligence.vendor_security_rating import normalize_domain
 from app.services.audit_service import AuditService
 from app.services.vendor_service import VendorService
 from app.services.vendor_supply_chain_service import VendorSupplyChainService
@@ -97,50 +98,16 @@ def compute_vendor_security_rating(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
-    result = VendorSecurityRatingService().compute(domain)
-    row = VendorExternalRating(
+    row = record_vendor_security_rating(
+        db,
         organization_id=organization.id,
-        vendor_id=vendor.id,
-        domain=result["domain"],
-        signals_used=result["signals_used"],
-        composite_score=Decimal(str(result["composite_score"])),
-    )
-    db.add(row)
-    db.flush()
-    AuditService(db).write_audit_log(
-        action="vendor.security_rating.computed",
-        entity_type="vendor_external_rating",
-        entity_id=row.id,
-        organization_id=organization.id,
+        vendor=vendor,
+        domain=domain,
         actor_user_id=current_user.id,
-        after_json={"vendor_id": str(vendor.id), "domain": row.domain, "composite_score": float(row.composite_score)},
-        metadata_json={"source": "tprm_intelligence_satellite"},
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
+        source="tprm_intelligence_satellite",
     )
-    if float(row.composite_score) < 70.0:
-        severity = "high" if float(row.composite_score) < 50.0 else "medium"
-        alerts = VendorSupplyChainService(db).propagate_vendor_signal(
-            organization_id=organization.id,
-            triggering_vendor_id=vendor.id,
-            signal_type="security_rating_degraded",
-            severity=severity,
-            explanation=f"security rating score {float(row.composite_score):.2f} is below the 70.00 monitoring threshold",
-            source_entity_type="vendor_external_rating",
-            source_entity_id=row.id,
-        )
-        for alert in alerts:
-            AuditService(db).write_audit_log(
-                action="vendor_supply_chain.alert_propagated",
-                entity_type="vendor_supply_chain_alert",
-                entity_id=alert.id,
-                organization_id=organization.id,
-                actor_user_id=current_user.id,
-                after_json={"parent_vendor_id": str(alert.parent_vendor_id), "triggering_vendor_id": str(vendor.id), "signal_type": alert.signal_type, "severity": alert.severity},
-                metadata_json={"source": "vendor.security_rating.computed"},
-                ip_address=request.client.host if request.client else None,
-                user_agent=request.headers.get("user-agent"),
-            )
     db.commit()
     db.refresh(row)
     return _rating_payload(row)
@@ -162,6 +129,49 @@ def get_vendor_security_rating(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor security rating not found")
     return _rating_payload(row)
+
+
+@router.get("/{vendor_id}/security-rating/history")
+def get_vendor_security_rating_history(
+    vendor_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("vendors:read")),
+    limit: int = 50,
+) -> dict:
+    """Return the rating trend over time so a reviewer sees drift, not just a snapshot."""
+    VendorService(db).require_vendor_in_org(organization.id, vendor_id)
+    bounded_limit = max(1, min(limit, 200))
+    rows = db.execute(
+        select(VendorExternalRating)
+        .where(VendorExternalRating.organization_id == organization.id, VendorExternalRating.vendor_id == vendor_id)
+        .order_by(VendorExternalRating.computed_at.desc(), VendorExternalRating.id.desc())
+        .limit(bounded_limit)
+    ).scalars().all()
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor security rating not found")
+
+    history = [_rating_payload(row) for row in rows]  # newest first
+    latest_score = history[0]["composite_score"]
+    oldest_score = history[-1]["composite_score"]
+    score_delta = round(latest_score - oldest_score, 2)
+    if len(history) < 2:
+        trend = "insufficient_data"
+    elif score_delta > 1.0:
+        trend = "improving"
+    elif score_delta < -1.0:
+        trend = "declining"
+    else:
+        trend = "stable"
+
+    return {
+        "vendor_id": str(vendor_id),
+        "count": len(history),
+        "latest_score": latest_score,
+        "score_delta_over_window": score_delta,
+        "trend": trend,
+        "history": history,
+    }
 
 
 @router.post("/{vendor_id}/threat-intelligence/compute", status_code=status.HTTP_201_CREATED)
@@ -230,6 +240,27 @@ def compute_vendor_threat_intelligence(
                 organization_id=organization.id,
                 actor_user_id=current_user.id,
                 after_json={"parent_vendor_id": str(alert.parent_vendor_id), "triggering_vendor_id": str(vendor.id), "signal_type": alert.signal_type, "severity": alert.severity},
+                metadata_json={"source": "vendor.threat_intelligence.computed"},
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+    else:
+        # Score is back below threshold: close any previously propagated nth-party
+        # alerts/flags for this signal so they don't stay stuck on a stale finding.
+        resolved = VendorSupplyChainService(db).resolve_vendor_signal(
+            organization_id=organization.id,
+            triggering_vendor_id=vendor.id,
+            signal_type="threat_intelligence_elevated",
+            actor_user_id=current_user.id,
+        )
+        for alert in resolved:
+            AuditService(db).write_audit_log(
+                action="vendor_supply_chain.alert_propagation_cleared",
+                entity_type="vendor_supply_chain_alert",
+                entity_id=alert.id,
+                organization_id=organization.id,
+                actor_user_id=current_user.id,
+                after_json={"parent_vendor_id": str(alert.parent_vendor_id), "triggering_vendor_id": str(vendor.id), "signal_type": alert.signal_type},
                 metadata_json={"source": "vendor.threat_intelligence.computed"},
                 ip_address=request.client.host if request.client else None,
                 user_agent=request.headers.get("user-agent"),

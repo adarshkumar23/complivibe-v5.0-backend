@@ -121,6 +121,101 @@ def test_t1_6_recompute_creates_single_risk_register_entry_for_breach(client, db
     assert len(detection_audits) == 1
 
 
+def test_t1_6_auto_refreshes_when_new_supply_chain_link_created(client, db_session):
+    """Once an org has opted in (computed at least once), adding a new critical
+    dependency link must refresh the persisted detection immediately -- an
+    officer should not have to remember to click recompute after every T1-3
+    change for the stored HHI/status to reflect reality.
+    """
+    org = bootstrap_org_user(client, email_prefix="t16-autolink")
+
+    shared = _create_vendor(client, org["org_headers"], org["user_id"], name="Autolink Shared Platform")
+    app_a = _create_vendor(client, org["org_headers"], org["user_id"], name="Autolink App A")
+    app_b = _create_vendor(client, org["org_headers"], org["user_id"], name="Autolink App B")
+    _link_dependency(client, org["org_headers"], parent_vendor_id=app_a["id"], sub_vendor_id=shared["id"])
+
+    baseline = client.post(f"{CONCENTRATION_BASE}/recompute", headers=org["org_headers"], json={})
+    assert baseline.status_code == 200, baseline.text
+    baseline_body = baseline.json()
+    baseline_hhi = baseline_body["detection"]["hhi_score"]
+
+    app_c = _create_vendor(client, org["org_headers"], org["user_id"], name="Autolink App C")
+    link_response = _link_dependency(client, org["org_headers"], parent_vendor_id=app_c["id"], sub_vendor_id=shared["id"])
+    assert link_response["sub_vendor_id"] == shared["id"]
+
+    refreshed = client.get(CONCENTRATION_BASE, headers=org["org_headers"])
+    assert refreshed.status_code == 200, refreshed.text
+    refreshed_detection = refreshed.json()
+    assert refreshed_detection["hhi_score"] != baseline_hhi
+    assert refreshed_detection["status"] == "breach"
+    assert refreshed_detection["top_vendor_id"] == shared["id"]
+    assert refreshed_detection["risk_id"] is not None
+
+    recompute_audits = db_session.execute(
+        select(AuditLog).where(
+            AuditLog.organization_id == uuid.UUID(org["organization_id"]),
+            AuditLog.action == "vendor_concentration_risk.recomputed",
+        )
+    ).scalars().all()
+    assert len(recompute_audits) == 2
+    assert recompute_audits[-1].metadata_json["source"] == "vendor_supply_chain.link_created"
+
+
+def test_t1_6_auto_refreshes_when_critical_vendor_archived(client, db_session):
+    """Archiving the concentrated critical vendor (T1-4 lifecycle state) must clear
+    the breach without a manual recompute call.
+    """
+    org = bootstrap_org_user(client, email_prefix="t16-autoarchive")
+
+    shared = _create_vendor(client, org["org_headers"], org["user_id"], name="Autoarchive Shared Platform")
+    app_a = _create_vendor(client, org["org_headers"], org["user_id"], name="Autoarchive App A")
+    app_b = _create_vendor(client, org["org_headers"], org["user_id"], name="Autoarchive App B")
+    _link_dependency(client, org["org_headers"], parent_vendor_id=app_a["id"], sub_vendor_id=shared["id"])
+    _link_dependency(client, org["org_headers"], parent_vendor_id=app_b["id"], sub_vendor_id=shared["id"])
+
+    recompute = client.post(f"{CONCENTRATION_BASE}/recompute", headers=org["org_headers"], json={})
+    assert recompute.status_code == 200, recompute.text
+    assert recompute.json()["detection"]["status"] == "breach"
+
+    archive = client.post(
+        f"{VENDORS_BASE}/{app_a['id']}/archive",
+        headers=org["org_headers"],
+        json={"reason": "no longer used"},
+    )
+    assert archive.status_code == 200, archive.text
+
+    archive2 = client.post(
+        f"{VENDORS_BASE}/{app_b['id']}/archive",
+        headers=org["org_headers"],
+        json={"reason": "no longer used"},
+    )
+    assert archive2.status_code == 200, archive2.text
+
+    archive3 = client.post(
+        f"{VENDORS_BASE}/{shared['id']}/archive",
+        headers=org["org_headers"],
+        json={"reason": "decommissioned"},
+    )
+    assert archive3.status_code == 200, archive3.text
+
+    refreshed = client.get(CONCENTRATION_BASE, headers=org["org_headers"])
+    assert refreshed.status_code == 200, refreshed.text
+    refreshed_detection = refreshed.json()
+    assert refreshed_detection["exposure_count"] == 0
+    assert refreshed_detection["status"] == "below_threshold"
+
+    audit_actions = [
+        row.action
+        for row in db_session.execute(
+            select(AuditLog).where(
+                AuditLog.organization_id == uuid.UUID(org["organization_id"]),
+                AuditLog.action == "vendor_concentration_risk.recomputed",
+            )
+        ).scalars().all()
+    ]
+    assert audit_actions.count("vendor_concentration_risk.recomputed") >= 3
+
+
 def test_t1_6_no_exposures_recompute_does_not_create_risk(client, db_session):
     org = bootstrap_org_user(client, email_prefix="t16-empty")
 
