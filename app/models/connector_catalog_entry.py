@@ -37,6 +37,14 @@ class ConnectorOrgEnablement(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
     connector_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("connector_catalog_entries.id", ondelete="CASCADE"), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     config_values_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # connection_status reflects configuration-schema validation only (required fields present and
+    # correctly typed per the connector's config_schema). It is NOT a live network probe of the
+    # third-party system -- this environment has no outbound credentials to Salesforce/Workday/etc.
+    # Values: "unconfigured" (never validated), "validated" (config satisfies schema),
+    # "invalid" (config fails schema), "disconnected" (explicitly disabled).
+    connection_status: Mapped[str] = mapped_column(String(20), nullable=False, default="unconfigured")
+    connection_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    connection_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

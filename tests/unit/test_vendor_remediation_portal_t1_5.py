@@ -271,3 +271,84 @@ def test_t1_5_internal_permissions_use_dedicated_portal_permissions(client, db_s
         },
     )
     assert denied.status_code == 403
+
+
+def test_t1_5_cross_tenant_token_management_isolated(client, db_session):
+    org_a = bootstrap_org_user(client, email_prefix="t15x-a")
+    org_b = bootstrap_org_user(client, email_prefix="t15x-b")
+    vendor_a, case_a, _action_a, _internal_a = _setup_case_with_actions(client, org_a)
+    token_a = _create_token(client, org_a["org_headers"], case_a["id"])
+
+    resp = client.get(f"{PORTAL_BASE}/tokens/{token_a['token_id']}", headers=org_b["org_headers"])
+    assert resp.status_code == 404
+
+    resp = client.post(f"{PORTAL_BASE}/tokens/{token_a['token_id']}/revoke", headers=org_b["org_headers"])
+    assert resp.status_code == 404
+
+    resp = client.get(f"{PORTAL_BASE}/tokens", headers=org_b["org_headers"])
+    ids = [t["id"] for t in resp.json()]
+    assert token_a["token_id"] not in ids
+
+    portal_headers = {"Authorization": f"Bearer {token_a['plaintext_token']}"}
+    me = client.get(f"{PORTAL_BASE}/me", headers=portal_headers)
+    assert me.status_code == 200
+    assert me.json()["vendor"]["id"] == vendor_a["id"]
+
+
+def test_t1_5_malformed_and_replayed_tokens_handled_gracefully(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="t15x-mal")
+    _vendor, case, _action, _internal_action = _setup_case_with_actions(client, org)
+    created = _create_token(client, org["org_headers"], case["id"])
+
+    resp = client.get(f"{PORTAL_BASE}/me")
+    assert resp.status_code in (401, 422)
+
+    resp = client.get(f"{PORTAL_BASE}/me", headers={"Authorization": created["plaintext_token"]})
+    assert resp.status_code == 401
+
+    resp = client.get(f"{PORTAL_BASE}/me", headers={"Authorization": "Bearer "})
+    assert resp.status_code == 401
+
+    resp = client.get(f"{PORTAL_BASE}/me", headers={"Authorization": "Bearer " + ("x" * 100000)})
+    assert resp.status_code == 401
+
+    resp = client.get(f"{PORTAL_BASE}/me", headers={"Authorization": "Bearer ' OR '1'='1"})
+    assert resp.status_code == 401
+
+    revoke = client.post(f"{PORTAL_BASE}/tokens/{created['token_id']}/revoke", headers=org["org_headers"])
+    assert revoke.status_code == 200
+    resp = client.get(f"{PORTAL_BASE}/me", headers={"Authorization": f"Bearer {created['plaintext_token']}"})
+    assert resp.status_code == 403
+
+
+def test_t1_5_escalated_case_blocks_portal_evidence_submission(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="t15x-closed")
+    _vendor, case, action, _internal_action = _setup_case_with_actions(client, org)
+    created = _create_token(client, org["org_headers"], case["id"], [action["id"]])
+    portal_headers = {"Authorization": f"Bearer {created['plaintext_token']}"}
+
+    in_progress = client.post(
+        f"{MITIGATION_BASE}/cases/{case['id']}/transition",
+        headers=org["org_headers"],
+        json={"new_status": "in_progress"},
+    )
+    assert in_progress.status_code == 200
+
+    escalate = client.post(
+        f"{MITIGATION_BASE}/cases/{case['id']}/escalate",
+        headers=org["org_headers"],
+        json={"reason": "Vendor unresponsive, escalating to leadership"},
+    )
+    assert escalate.status_code == 200
+    assert escalate.json()["status"] == "escalated"
+
+    submit = client.post(
+        f"{PORTAL_BASE}/actions/{action['id']}/submit-evidence",
+        headers=portal_headers,
+        json={"remediation_notes": "trying to submit after escalation"},
+    )
+    assert submit.status_code == 409
+    assert "escalated" in submit.json()["detail"]
+
+    action_row = db_session.get(VendorMitigationAction, uuid.UUID(action["id"]))
+    assert action_row.status == "open"

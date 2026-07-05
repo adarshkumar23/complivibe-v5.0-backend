@@ -295,6 +295,13 @@ class VendorRemediationPortalService:
         action_id: uuid.UUID,
         payload: VendorRemediationPortalEvidenceSubmitRequest,
     ) -> tuple[VendorMitigationAction, EvidenceItem]:
+        case = self._require_case(token.organization_id, token.case_id)
+        if case.status in {"closed", "cancelled", "escalated"}:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Mitigation case is {case.status} and is no longer accepting vendor evidence submissions",
+            )
+
         actions = {row.id: row for row in self.get_portal_actions(token)}
         row = actions.get(action_id)
         if row is None:
@@ -358,7 +365,6 @@ class VendorRemediationPortalService:
         row.status = "evidence_submitted"
         row.evidence_submitted_at = now
 
-        case = self._require_case(token.organization_id, token.case_id)
         case_before_status = case.status
         if case.status not in {"closed", "cancelled", "escalated"}:
             case.status = "pending_vendor_evidence"
