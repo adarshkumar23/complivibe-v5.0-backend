@@ -226,6 +226,7 @@ from app.models.sanctions_screen_result import SanctionsScreenResult
 from app.models.vendor import Vendor
 from app.models.vendor_external_rating import VendorExternalRating
 from app.models.vendor_threat_intelligence import VendorThreatIntelligence
+from app.models.vendor_supply_chain import VendorSupplyChainAlert, VendorSupplyChainLink
 from app.models.vendor_assessment import VendorAssessment
 from app.models.vendor_assessment_question import VendorAssessmentQuestion
 from app.models.vendor_risk_score import VendorRiskScore
@@ -371,6 +372,12 @@ from app.models.audit_finding import AuditFinding
 from app.models.audit_schedule import AuditSchedule
 from app.models.evidence_package import EvidencePackage
 from app.models.evidence_package_item import EvidencePackageItem
+from app.models.legal_matter import LegalMatter
+from app.models.ip_asset import IPAsset
+from app.models.ip_asset_settings import IPAssetSettings
+from app.models.content_provenance_record import ContentProvenanceRecord
+from app.models.training_dataset import TrainingDataset
+from app.models.synthetic_dataset import SyntheticDataset
 
 __all__ = [
     "Organization",
@@ -531,6 +538,8 @@ __all__ = [
     "Vendor",
     "VendorExternalRating",
     "VendorThreatIntelligence",
+    "VendorSupplyChainAlert",
+    "VendorSupplyChainLink",
     "VendorAssessment",
     "VendorAssessmentQuestion",
     "VendorRiskScore",
@@ -679,4 +688,10 @@ __all__ = [
     "AuditSchedule",
     "EvidencePackage",
     "EvidencePackageItem",
+    "LegalMatter",
+    "IPAsset",
+    "IPAssetSettings",
+    "ContentProvenanceRecord",
+    "TrainingDataset",
+    "SyntheticDataset",
 ]

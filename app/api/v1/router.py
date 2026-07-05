@@ -69,6 +69,12 @@ from app.privacy.routers import notification_preferences as privacy_notification
 from app.privacy.routers import digest as privacy_digest
 from app.satellites.tprm_intelligence import router as tprm_intelligence_router
 from app.satellites.tprm_intelligence import sanctions_router as tprm_sanctions_router
+from app.api.v1 import vendor_supply_chain
+from app.api.v1 import legal_matters
+from app.api.v1 import ip_assets
+from app.api.v1 import content_provenance
+from app.api.v1 import training_datasets
+from app.api.v1 import synthetic_datasets
 
 from app.api.v1 import (
     admin_email_config,
@@ -311,6 +317,7 @@ api_router.include_router(exports.router)
 api_router.include_router(attestations.router)
 api_router.include_router(email.router)
 api_router.include_router(vendors.router)
+api_router.include_router(vendor_supply_chain.router)
 api_router.include_router(tprm_intelligence_router.router)
 api_router.include_router(tprm_sanctions_router.router)
 api_router.include_router(questionnaire_templates.router)
@@ -336,3 +343,8 @@ api_router.include_router(webhooks.router)
 api_router.include_router(offboarding.router)
 api_router.include_router(carbon_accounting.router)
 api_router.include_router(connector_marketplace.router)
+api_router.include_router(legal_matters.router)
+api_router.include_router(ip_assets.router)
+api_router.include_router(content_provenance.router)
+api_router.include_router(training_datasets.router)
+api_router.include_router(synthetic_datasets.router)
