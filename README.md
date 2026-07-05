@@ -50,6 +50,28 @@ uvicorn app.main:app --reload
 - `ACTIVATION_TOKEN_EXPIRE_HOURS`: invite activation token TTL (default 72)
 - `BACKEND_CORS_ORIGINS`: comma-separated CORS origins
 
+## Required local setup: Secrets vault
+
+This project requires a running OpenBao/Vault-compatible dev server for local development and testing. Run `./scripts/setup_dev_vault.sh`, start the printed local dev server command, and add the resulting `VAULT_ADDR`/`VAULT_TOKEN` to your `.env` BEFORE running tests or starting the server. Without this, any feature touching encrypted secrets (SES email, OIDC/SSO, PAM sessions, security scan ingestion, carbon accounting API keys, and others) will fail with `SecretsBackendError`.
+
+```bash
+chmod +x scripts/setup_dev_vault.sh
+./scripts/setup_dev_vault.sh
+```
+
+In a separate terminal, start the printed local OpenBao command:
+
+```bash
+.dev_vault/bin/bao server -dev -dev-listen-address=127.0.0.1:8210 -dev-root-token-id=dev-root-token
+```
+
+Add the printed values to `.env`:
+
+```bash
+VAULT_ADDR=http://127.0.0.1:8210
+VAULT_TOKEN=dev-root-token
+```
+
 ## Run Tests
 
 ```bash

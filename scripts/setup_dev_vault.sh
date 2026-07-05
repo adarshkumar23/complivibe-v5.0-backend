@@ -13,6 +13,8 @@ VAULT_DIR="$REPO_ROOT/.dev_vault"
 BIN_DIR="$VAULT_DIR/bin"
 BAO_VERSION="2.5.5"
 BAO_BIN="$BIN_DIR/bao"
+DEV_VAULT_ADDR="http://127.0.0.1:8210"
+DEV_VAULT_TOKEN="dev-root-token"
 
 mkdir -p "$BIN_DIR"
 
@@ -27,5 +29,9 @@ if [ ! -x "$BAO_BIN" ]; then
 fi
 
 echo "OpenBao binary ready at $BAO_BIN"
-echo "Start it with:"
-echo "  $BAO_BIN server -dev -dev-listen-address=127.0.0.1:8210 -dev-root-token-id=dev-root-token"
+echo "Start the local dev server with:"
+echo "  $BAO_BIN server -dev -dev-listen-address=127.0.0.1:8210 -dev-root-token-id=$DEV_VAULT_TOKEN"
+echo
+echo "Add these values to .env:"
+echo "  VAULT_ADDR=$DEV_VAULT_ADDR"
+echo "  VAULT_TOKEN=$DEV_VAULT_TOKEN"
