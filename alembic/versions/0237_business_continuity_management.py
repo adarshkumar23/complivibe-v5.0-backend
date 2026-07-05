@@ -1,7 +1,7 @@
-"""add crisis management playbooks and activations
+"""add business continuity management (BCM/BIA)
 
-Revision ID: 0232_crisis_management_playbooks
-Revises: 0231_business_continuity_management
+Revision ID: 0237_business_continuity_management
+Revises: 0236_dora_risk_link
 Create Date: 2026-07-05 00:00:00.000000
 """
 
@@ -13,20 +13,20 @@ import uuid
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0232_crisis_management_playbooks"
-down_revision: str | None = "0231_business_continuity_management"
+revision: str = "0237_business_continuity_management"
+down_revision: str | None = "0236_dora_risk_link"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 PERMISSIONS = [
     (
-        "crisis_management:read",
-        "Read crisis management playbooks and activations",
+        "bcm:read",
+        "Read business continuity processes and BIA assessments",
         ("owner", "admin", "compliance_manager", "reviewer", "auditor", "readonly"),
     ),
     (
-        "crisis_management:manage",
-        "Create playbooks and activate/resolve crisis events",
+        "bcm:manage",
+        "Create and update business continuity processes and BIA assessments",
         ("owner", "admin", "compliance_manager"),
     ),
 ]
@@ -60,69 +60,66 @@ def _ensure_permissions() -> None:
 
 def upgrade() -> None:
     op.create_table(
-        "crisis_playbooks",
+        "business_processes",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("organization_id", sa.Uuid(), nullable=False),
         sa.Column("name", sa.String(length=255), nullable=False),
-        sa.Column("scenario_type", sa.String(length=50), nullable=False),
-        sa.Column("trigger_conditions_json", sa.JSON(), nullable=True),
-        sa.Column("steps_json", sa.JSON(), nullable=False),
-        sa.Column("owner_team", sa.String(length=255), nullable=True),
+        sa.Column("description", sa.Text(), nullable=True),
+        sa.Column("owner_user_id", sa.Uuid(), nullable=True),
+        sa.Column("criticality_tier", sa.String(length=32), nullable=False, server_default="tier_3_standard"),
+        sa.Column("recovery_time_objective_hours", sa.Integer(), nullable=False),
+        sa.Column("recovery_point_objective_hours", sa.Integer(), nullable=False),
+        sa.Column("dependencies_json", sa.JSON(), nullable=True),
         sa.Column("status", sa.String(length=32), nullable=False, server_default="active"),
         sa.Column("created_by_user_id", sa.Uuid(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.CheckConstraint(
-            "scenario_type IN ("
-            "'cyber_incident', 'natural_disaster', 'pandemic', 'financial_crisis', "
-            "'supply_chain_disruption', 'data_breach', 'regulatory_action', "
-            "'reputational_crisis', 'other')",
-            name="ck_crisis_playbooks_scenario_type",
+            "criticality_tier IN ('tier_1_critical', 'tier_2_high', 'tier_3_standard')",
+            name="ck_business_processes_criticality_tier",
         ),
         sa.CheckConstraint(
-            "status IN ('active', 'archived', 'draft')",
-            name="ck_crisis_playbooks_status",
+            "status IN ('active', 'archived')",
+            name="ck_business_processes_status",
         ),
         sa.ForeignKeyConstraint(["organization_id"], ["organizations.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["owner_user_id"], ["users.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["created_by_user_id"], ["users.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_crisis_playbooks_org_scenario_type",
-        "crisis_playbooks",
-        ["organization_id", "scenario_type"],
+        "ix_business_processes_org_criticality",
+        "business_processes",
+        ["organization_id", "criticality_tier"],
         unique=False,
     )
 
     op.create_table(
-        "crisis_activations",
+        "bia_assessments",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("organization_id", sa.Uuid(), nullable=False),
-        sa.Column("playbook_id", sa.Uuid(), nullable=False),
-        sa.Column("activated_by_user_id", sa.Uuid(), nullable=True),
-        sa.Column("activated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("status", sa.String(length=32), nullable=False, server_default="active"),
-        sa.Column("resolution_notes", sa.Text(), nullable=True),
-        sa.Column("resolved_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("resolved_by_user_id", sa.Uuid(), nullable=True),
-        sa.Column("linked_processes_json", sa.JSON(), nullable=True),
-        sa.Column("linked_risks_json", sa.JSON(), nullable=True),
+        sa.Column("process_id", sa.Uuid(), nullable=False),
+        sa.Column("impact_analysis_json", sa.JSON(), nullable=False),
+        sa.Column("financial_impact_tier", sa.String(length=32), nullable=True),
+        sa.Column("review_frequency_months", sa.Integer(), nullable=False, server_default="12"),
+        sa.Column("last_reviewed_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column("reviewed_by_user_id", sa.Uuid(), nullable=True),
+        sa.Column("notes", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.CheckConstraint(
-            "status IN ('active', 'resolved', 'cancelled')",
-            name="ck_crisis_activations_status",
+            "financial_impact_tier IS NULL OR financial_impact_tier IN ('low', 'medium', 'high', 'severe')",
+            name="ck_bia_assessments_financial_impact_tier",
         ),
         sa.ForeignKeyConstraint(["organization_id"], ["organizations.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["playbook_id"], ["crisis_playbooks.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["activated_by_user_id"], ["users.id"], ondelete="SET NULL"),
-        sa.ForeignKeyConstraint(["resolved_by_user_id"], ["users.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(["process_id"], ["business_processes.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["reviewed_by_user_id"], ["users.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_crisis_activations_org_status",
-        "crisis_activations",
-        ["organization_id", "status"],
+        "ix_bia_assessments_org_process",
+        "bia_assessments",
+        ["organization_id", "process_id"],
         unique=False,
     )
 
@@ -137,8 +134,8 @@ def downgrade() -> None:
             bind.execute(sa.text("DELETE FROM role_permissions WHERE permission_id = :permission_id"), {"permission_id": permission_id})
             bind.execute(sa.text("DELETE FROM permissions WHERE id = :permission_id"), {"permission_id": permission_id})
 
-    op.drop_index("ix_crisis_activations_org_status", table_name="crisis_activations")
-    op.drop_table("crisis_activations")
+    op.drop_index("ix_bia_assessments_org_process", table_name="bia_assessments")
+    op.drop_table("bia_assessments")
 
-    op.drop_index("ix_crisis_playbooks_org_scenario_type", table_name="crisis_playbooks")
-    op.drop_table("crisis_playbooks")
+    op.drop_index("ix_business_processes_org_criticality", table_name="business_processes")
+    op.drop_table("business_processes")

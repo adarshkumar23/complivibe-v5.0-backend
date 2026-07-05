@@ -4,8 +4,8 @@ Cadence rules: Regulation (EU) 2022/2554 (DORA), Articles 24 and 26; Joint
 RTS on Threat-Led Penetration Testing, Commission Delegated Regulation
 (EU) 2025/1190.
 
-Revision ID: 0234_dora_resilience_testing
-Revises: 0233_risk_quantification
+Revision ID: 0240_dora_resilience_testing
+Revises: 0239_risk_quantification
 Create Date: 2026-07-05 00:00:00.000000
 """
 
@@ -17,8 +17,8 @@ import uuid
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0234_dora_resilience_testing"
-down_revision: str | None = "0233_risk_quantification"
+revision: str = "0240_dora_resilience_testing"
+down_revision: str | None = "0239_risk_quantification"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

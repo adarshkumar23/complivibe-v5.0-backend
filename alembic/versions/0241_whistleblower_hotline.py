@@ -1,7 +1,13 @@
-"""add business continuity management (BCM/BIA)
+"""add whistleblower hotline reports and messages
 
-Revision ID: 0231_business_continuity_management
-Revises: 0230_vendor_remediation_portal
+Reporter anonymity is a hard invariant of this migration: the
+whistleblower_reports table has no created_by/submitter user FK, no IP
+address column, and no session reference. The only reporter credential is
+a high-entropy tracking code, stored here only as its sha256 hash
+(tracking_code_hash) -- the raw code is never persisted.
+
+Revision ID: 0241_whistleblower_hotline
+Revises: 0240_dora_resilience_testing
 Create Date: 2026-07-05 00:00:00.000000
 """
 
@@ -13,20 +19,19 @@ import uuid
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0231_business_continuity_management"
-down_revision: str | None = "0230_vendor_remediation_portal"
+revision: str = "0241_whistleblower_hotline"
+down_revision: str | None = "0240_dora_resilience_testing"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+# Only owner/admin/compliance_manager may investigate whistleblower reports.
+# This is intentionally NOT granted to reviewer/auditor/readonly by default
+# given the sensitivity of this data; revisit if a read-only "auditor can
+# view whistleblower cases" need emerges later.
 PERMISSIONS = [
     (
-        "bcm:read",
-        "Read business continuity processes and BIA assessments",
-        ("owner", "admin", "compliance_manager", "reviewer", "auditor", "readonly"),
-    ),
-    (
-        "bcm:manage",
-        "Create and update business continuity processes and BIA assessments",
+        "whistleblower:investigate",
+        "Investigate and respond to whistleblower hotline reports",
         ("owner", "admin", "compliance_manager"),
     ),
 ]
@@ -41,7 +46,6 @@ def _ensure_permissions() -> None:
                 sa.text("INSERT INTO permissions (id, key, description) VALUES (:id, :key, :description) RETURNING id"),
                 {"id": str(uuid.uuid4()), "key": key, "description": description},
             ).scalar_one()
-
         role_ids = bind.execute(
             sa.text(f"SELECT id FROM roles WHERE name IN ({','.join(':r' + str(i) for i in range(len(roles)))}) AND is_active = TRUE"),
             {f"r{i}": name for i, name in enumerate(roles)},
@@ -60,66 +64,61 @@ def _ensure_permissions() -> None:
 
 def upgrade() -> None:
     op.create_table(
-        "business_processes",
+        "whistleblower_reports",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("organization_id", sa.Uuid(), nullable=False),
-        sa.Column("name", sa.String(length=255), nullable=False),
-        sa.Column("description", sa.Text(), nullable=True),
-        sa.Column("owner_user_id", sa.Uuid(), nullable=True),
-        sa.Column("criticality_tier", sa.String(length=32), nullable=False, server_default="tier_3_standard"),
-        sa.Column("recovery_time_objective_hours", sa.Integer(), nullable=False),
-        sa.Column("recovery_point_objective_hours", sa.Integer(), nullable=False),
-        sa.Column("dependencies_json", sa.JSON(), nullable=True),
-        sa.Column("status", sa.String(length=32), nullable=False, server_default="active"),
-        sa.Column("created_by_user_id", sa.Uuid(), nullable=True),
+        sa.Column("anonymous_id", sa.String(length=64), nullable=False),
+        sa.Column("tracking_code_hash", sa.String(length=64), nullable=False),
+        sa.Column("category", sa.String(length=50), nullable=False),
+        sa.Column("description", sa.Text(), nullable=False),
+        sa.Column("status", sa.String(length=32), nullable=False, server_default="submitted"),
+        sa.Column("assigned_investigator_user_id", sa.Uuid(), nullable=True),
+        sa.Column("resolution_summary", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.CheckConstraint(
-            "criticality_tier IN ('tier_1_critical', 'tier_2_high', 'tier_3_standard')",
-            name="ck_business_processes_criticality_tier",
+            "category IN ('fraud', 'corruption', 'harassment', 'safety_violation', 'data_privacy', "
+            "'financial_misconduct', 'discrimination', 'retaliation', 'other')",
+            name="ck_whistleblower_reports_category",
         ),
         sa.CheckConstraint(
-            "status IN ('active', 'archived')",
-            name="ck_business_processes_status",
+            "status IN ('submitted', 'under_review', 'investigating', 'resolved', 'closed', 'dismissed')",
+            name="ck_whistleblower_reports_status",
         ),
         sa.ForeignKeyConstraint(["organization_id"], ["organizations.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["owner_user_id"], ["users.id"], ondelete="SET NULL"),
-        sa.ForeignKeyConstraint(["created_by_user_id"], ["users.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(["assigned_investigator_user_id"], ["users.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("anonymous_id", name="uq_whistleblower_reports_anonymous_id"),
+        sa.UniqueConstraint("tracking_code_hash", name="uq_whistleblower_reports_tracking_code_hash"),
     )
     op.create_index(
-        "ix_business_processes_org_criticality",
-        "business_processes",
-        ["organization_id", "criticality_tier"],
+        "ix_whistleblower_reports_org_status",
+        "whistleblower_reports",
+        ["organization_id", "status"],
         unique=False,
     )
 
     op.create_table(
-        "bia_assessments",
+        "whistleblower_messages",
         sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("organization_id", sa.Uuid(), nullable=False),
-        sa.Column("process_id", sa.Uuid(), nullable=False),
-        sa.Column("impact_analysis_json", sa.JSON(), nullable=False),
-        sa.Column("financial_impact_tier", sa.String(length=32), nullable=True),
-        sa.Column("review_frequency_months", sa.Integer(), nullable=False, server_default="12"),
-        sa.Column("last_reviewed_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("reviewed_by_user_id", sa.Uuid(), nullable=True),
-        sa.Column("notes", sa.Text(), nullable=True),
+        sa.Column("report_id", sa.Uuid(), nullable=False),
+        sa.Column("sender_type", sa.String(length=20), nullable=False),
+        sa.Column("sender_user_id", sa.Uuid(), nullable=True),
+        sa.Column("content", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.CheckConstraint(
-            "financial_impact_tier IS NULL OR financial_impact_tier IN ('low', 'medium', 'high', 'severe')",
-            name="ck_bia_assessments_financial_impact_tier",
+            "sender_type IN ('reporter', 'investigator')",
+            name="ck_whistleblower_messages_sender_type",
         ),
-        sa.ForeignKeyConstraint(["organization_id"], ["organizations.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["process_id"], ["business_processes.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["reviewed_by_user_id"], ["users.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(["report_id"], ["whistleblower_reports.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["sender_user_id"], ["users.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_bia_assessments_org_process",
-        "bia_assessments",
-        ["organization_id", "process_id"],
+        "ix_whistleblower_messages_report_created",
+        "whistleblower_messages",
+        ["report_id", "created_at"],
         unique=False,
     )
 
@@ -134,8 +133,7 @@ def downgrade() -> None:
             bind.execute(sa.text("DELETE FROM role_permissions WHERE permission_id = :permission_id"), {"permission_id": permission_id})
             bind.execute(sa.text("DELETE FROM permissions WHERE id = :permission_id"), {"permission_id": permission_id})
 
-    op.drop_index("ix_bia_assessments_org_process", table_name="bia_assessments")
-    op.drop_table("bia_assessments")
-
-    op.drop_index("ix_business_processes_org_criticality", table_name="business_processes")
-    op.drop_table("business_processes")
+    op.drop_index("ix_whistleblower_messages_report_created", table_name="whistleblower_messages")
+    op.drop_table("whistleblower_messages")
+    op.drop_index("ix_whistleblower_reports_org_status", table_name="whistleblower_reports")
+    op.drop_table("whistleblower_reports")

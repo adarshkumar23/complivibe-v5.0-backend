@@ -15,8 +15,8 @@ the TPRM sanctions satellite's `SanctionsEntity` denied-party dataset and
 matching helpers rather than duplicating them. This is an initial
 screening signal, not a final legal export-control determination.
 
-Revision ID: 0237_export_control_compliance
-Revises: 0236_bribery_risk_assessment
+Revision ID: 0243_export_control_compliance
+Revises: 0242_bribery_risk_assessment
 Create Date: 2026-07-05 00:00:00.000000
 """
 
@@ -28,8 +28,8 @@ import uuid
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0237_export_control_compliance"
-down_revision: str | None = "0236_bribery_risk_assessment"
+revision: str = "0243_export_control_compliance"
+down_revision: str | None = "0242_bribery_risk_assessment"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
