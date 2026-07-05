@@ -159,6 +159,7 @@ from app.api.v1 import (
     offboarding,
     attestations,
     carbon_accounting,
+    connector_marketplace,
 )
 
 api_router = APIRouter()
@@ -334,3 +335,4 @@ api_router.include_router(scheduler_admin.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(offboarding.router)
 api_router.include_router(carbon_accounting.router)
+api_router.include_router(connector_marketplace.router)
