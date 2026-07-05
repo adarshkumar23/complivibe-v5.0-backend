@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     AZURE_OPENAI_API_VERSION: str | None = None
     GROQ_API_KEY: str = ""
     MLOPS_CONFIG_ENCRYPTION_KEY: str | None = None
+    OTEL_ENABLED: bool = False
+    OTEL_SERVICE_NAME: str = "complivibe-backend"
+    OTEL_EXPORTER_OTLP_ENDPOINT: str | None = None
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
