@@ -15,11 +15,16 @@ For a given AI system:
    acceptable_use|data_retention|incident_response|access_control|
    change_management|business_continuity|other), so per-org auto-detection
    uses the convention that an "acceptable_use" policy is the org's AI usage
-   policy: the most recently effective, non-archived, non-deleted
+   policy: the most recently effective, non-archived, approved
    CompliancePolicy with policy_type == 'acceptable_use' (ties broken by
-   created_at desc). Callers may instead pass an explicit policy_id (e.g. if
-   an org links a specific policy per AI-system-category) which always wins.
-   If no policy can be resolved at all -> 'non_compliant_no_policy'.
+   created_at desc). A policy still in 'draft'/'under_review'/'deprecated'
+   status does not count -- only 'approved' is treated as the org's live
+   policy, matching the convention used elsewhere for resolving "the"
+   effective policy (see kri_calculator.py, inbound_questionnaire_service.py).
+   Callers may instead pass an explicit policy_id (e.g. if an org links a
+   specific policy per AI-system-category) which always wins, but must still
+   itself be 'approved' to count. If no (approved) policy can be resolved at
+   all -> 'non_compliant_no_policy'.
 
 2. If a policy is resolved, find its attestation campaigns via
    PolicyAttestationService.list_campaigns(org_id, policy_id=...), newest
@@ -101,12 +106,24 @@ class AiUsagePolicyService:
     # Policy resolution
     # ------------------------------------------------------------------
     def _resolve_policy(self, org_id: uuid.UUID, policy_id: uuid.UUID | None) -> CompliancePolicy | None:
+        # Only an "approved" policy can anchor a compliance determination --
+        # a draft/under_review/deprecated policy is not yet the org's live,
+        # enforceable policy. This mirrors the same convention used
+        # elsewhere in the platform for resolving "the" effective policy
+        # (see app/compliance/services/kri_calculator.py and
+        # app/compliance/services/inbound_questionnaire_service.py, both of
+        # which filter on CompliancePolicy.status == "approved"). Without
+        # this filter, an org could have only ever drafted an AI-usage
+        # policy (never approved it) and this check would still report
+        # "policy exists" -- which is materially misleading for a compliance
+        # officer relying on this signal.
         if policy_id is not None:
             return self.db.execute(
                 select(CompliancePolicy).where(
                     CompliancePolicy.organization_id == org_id,
                     CompliancePolicy.id == policy_id,
                     CompliancePolicy.archived_at.is_(None),
+                    CompliancePolicy.status == "approved",
                 )
             ).scalar_one_or_none()
 
@@ -119,6 +136,7 @@ class AiUsagePolicyService:
                 CompliancePolicy.organization_id == org_id,
                 CompliancePolicy.policy_type == "acceptable_use",
                 CompliancePolicy.archived_at.is_(None),
+                CompliancePolicy.status == "approved",
             )
             .order_by(CompliancePolicy.created_at.desc())
         )
