@@ -250,6 +250,7 @@ PERMISSIONS: dict[str, str] = {
     "anti_bribery:manage": "Create and compute anti-bribery and corruption risk assessments",
     "export_control:read": "Read export control classification and denied-party screening results",
     "export_control:manage": "Create and compute export control classification and denied-party screening",
+    "search:read": "Search across risks, controls, vendors, issues, compliance policies, and obligations",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {
@@ -398,6 +399,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "anti_bribery:manage",
         "export_control:read",
         "export_control:manage",
+        "search:read",
     },
     "reviewer": {
         "frameworks:read",
@@ -481,6 +483,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "resilience_testing:read",
         "anti_bribery:read",
         "export_control:read",
+        "search:read",
     },
     "auditor": {
         "frameworks:read",
@@ -541,6 +544,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "resilience_testing:read",
         "anti_bribery:read",
         "export_control:read",
+        "search:read",
     },
     "readonly": {
         "frameworks:read",
@@ -595,6 +599,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "resilience_testing:read",
         "anti_bribery:read",
         "export_control:read",
+        "search:read",
     },
 }
 

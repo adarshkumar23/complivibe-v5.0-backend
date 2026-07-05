@@ -24,6 +24,7 @@ from app.core.pbc_scheduler import register_pbc_scheduler
 from app.core.rate_limiter import build_rate_limit_exceeded_response, rate_limiter
 from app.core.security import decode_access_token
 from app.core.startup import register_event_listeners
+from app.core.telemetry import instrument_app
 from app.core.validation import InvalidChoiceError
 from app.platform.routers.billing import webhook_router as billing_webhook_router
 
@@ -197,6 +198,7 @@ def create_application() -> FastAPI:
 
     app.include_router(api_router, prefix=settings.API_V1_PREFIX)
     app.include_router(billing_webhook_router)
+    instrument_app(app)
     return app
 
 

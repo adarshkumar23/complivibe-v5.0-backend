@@ -1,4 +1,3 @@
-import base64
 import hashlib
 import json
 import secrets
@@ -7,12 +6,10 @@ from collections import deque
 from datetime import UTC, datetime
 from typing import Any
 
-from cryptography.fernet import Fernet
 from fastapi import HTTPException, status
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
 from app.data_observability.integrations.openlineage_receiver import OpenLineageReceiver
 from app.data_observability.integrations.openmetadata_client import OpenMetadataClient
 from app.models.data_asset import DataAsset
@@ -20,6 +17,7 @@ from app.models.data_lineage_edge import DataLineageEdge
 from app.models.data_lineage_node import DataLineageNode
 from app.models.openmetadata_integration import OpenMetadataIntegration
 from app.services.audit_service import AuditService
+from app.services.secrets_service import SecretsService, legacy_key_from_named_setting
 from app.core.validation import validate_choice
 
 ALLOWED_NODE_TYPES = {
@@ -46,20 +44,29 @@ class LineageService:
         return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _fernet() -> Fernet:
-        settings = get_settings()
-        key_value = getattr(settings, "OPENMETADATA_CONFIG_ENCRYPTION_KEY", None) or settings.SECRET_KEY
-        digest = hashlib.sha256(key_value.encode("utf-8")).digest()
-        return Fernet(base64.urlsafe_b64encode(digest))
+    def _secrets(db: Session, organization_id: uuid.UUID) -> SecretsService:
+        return SecretsService(
+            db,
+            organization_id=organization_id,
+            legacy_key_resolver=legacy_key_from_named_setting("OPENMETADATA_CONFIG_ENCRYPTION_KEY"),
+        )
 
     @classmethod
-    def encrypt_config(cls, config: dict) -> str:
+    def encrypt_config(
+        cls, config: dict, *, db: Session, organization_id: uuid.UUID, entity_id: uuid.UUID | None = None
+    ) -> str:
         payload = json.dumps(config, sort_keys=True)
-        return cls._fernet().encrypt(payload.encode("utf-8")).decode("utf-8")
+        return cls._secrets(db, organization_id).encrypt(
+            payload, secret_name="openmetadata_integration_config", entity_id=entity_id
+        )
 
     @classmethod
-    def decrypt_config(cls, config_json: str) -> dict:
-        raw = cls._fernet().decrypt(config_json.encode("utf-8")).decode("utf-8")
+    def decrypt_config(
+        cls, config_json: str, *, db: Session, organization_id: uuid.UUID, entity_id: uuid.UUID | None = None
+    ) -> dict:
+        raw = cls._secrets(db, organization_id).decrypt(
+            config_json, secret_name="openmetadata_integration_config", entity_id=entity_id
+        )
         return json.loads(raw)
 
     def _require_asset(self, org_id: uuid.UUID, asset_id: uuid.UUID) -> DataAsset:
@@ -349,7 +356,7 @@ class LineageService:
             row = OpenMetadataIntegration(
                 organization_id=org_id,
                 base_url=base_url,
-                config_json=self.encrypt_config(config_payload),
+                config_json=self.encrypt_config(config_payload, db=self.db, organization_id=org_id),
                 last_synced_at=None,
                 sync_status=None,
                 last_sync_error=None,
@@ -361,7 +368,9 @@ class LineageService:
             self.db.add(row)
         else:
             row.base_url = base_url
-            row.config_json = self.encrypt_config(config_payload)
+            row.config_json = self.encrypt_config(
+                config_payload, db=self.db, organization_id=org_id, entity_id=row.id
+            )
             row.is_active = True
             row.updated_at = now
         self.db.flush()
@@ -385,7 +394,10 @@ class LineageService:
         integrations = self.list_active_openmetadata_integrations()
         for integration in integrations:
             try:
-                config = self.decrypt_config(integration.config_json)
+                config = self.decrypt_config(
+                    integration.config_json, db=self.db, organization_id=integration.organization_id,
+                    entity_id=integration.id,
+                )
             except Exception:
                 continue
             if config.get("org_api_key_hash") == key_hash:
@@ -466,7 +478,9 @@ class LineageService:
         self.db.flush()
 
         try:
-            config = self.decrypt_config(integration.config_json)
+            config = self.decrypt_config(
+                integration.config_json, db=self.db, organization_id=org_id, entity_id=integration.id
+            )
             client = OpenMetadataClient(base_url=integration.base_url, jwt_token=str(config["jwt_token"]))
 
             tables = client.list_tables(limit=100, offset=0)

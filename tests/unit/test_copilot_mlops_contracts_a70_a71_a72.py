@@ -212,7 +212,7 @@ def test_a71_mlops_integration_sync_workflow(client, db_session, monkeypatch):
     assert get_resp.status_code == 200
     assert "config_json" not in get_resp.json()
 
-    monkeypatch.setattr("app.ai_governance.services.mlops_sync_service.get_adapter", lambda integration: _FakeAdapter())
+    monkeypatch.setattr("app.ai_governance.services.mlops_sync_service.get_adapter", lambda integration, db=None: _FakeAdapter())
 
     synced = client.post(f"{MLOPS_BASE}/{integration_id}/sync", headers=org["org_headers"])
     assert synced.status_code == 200
@@ -248,7 +248,7 @@ def test_a71_mlops_integration_sync_workflow(client, db_session, monkeypatch):
     service = MLOPSSyncService(db_session)
     monkeypatch.setattr(
         "app.ai_governance.services.mlops_sync_service.get_adapter",
-        lambda integration: (_ for _ in ()).throw(RuntimeError("simulated sync failure")),
+        lambda integration, db=None: (_ for _ in ()).throw(RuntimeError("simulated sync failure")),
     )
     with pytest.raises(RuntimeError):
         service.sync(uuid.UUID(org["organization_id"]), uuid.UUID(integration_id), uuid.UUID(org["user_id"]))

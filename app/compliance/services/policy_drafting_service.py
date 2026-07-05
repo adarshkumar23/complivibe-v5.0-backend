@@ -209,9 +209,17 @@ class PolicyDraftingService:
         row.is_active = is_active
 
         if groq_api_key is not None:
-            row.groq_api_key_encrypted = self.ai_provider.encrypt_credential(groq_api_key) if groq_api_key else None
+            row.groq_api_key_encrypted = (
+                self.ai_provider.encrypt_credential(groq_api_key, organization_id=org_id, entity_id=row.id)
+                if groq_api_key
+                else None
+            )
         if azure_api_key is not None:
-            row.azure_api_key_encrypted = self.ai_provider.encrypt_credential(azure_api_key) if azure_api_key else None
+            row.azure_api_key_encrypted = (
+                self.ai_provider.encrypt_credential(azure_api_key, organization_id=org_id, entity_id=row.id)
+                if azure_api_key
+                else None
+            )
         if azure_endpoint is not None:
             row.azure_endpoint = azure_endpoint
         if azure_deployment_name is not None:

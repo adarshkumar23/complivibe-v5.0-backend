@@ -92,7 +92,9 @@ def test_admin_email_config_upsert_encrypts_credentials_and_updates_status(clien
 
     from app.privacy.services.email_config_service import EmailConfigService
 
-    decrypted = EmailConfigService.decrypt_config(row.config_json)
+    decrypted = EmailConfigService.decrypt_config(
+        row.config_json, db=db_session, organization_id=uuid.UUID(org["organization_id"])
+    )
     assert decrypted["aws_access_key_id"] == "AKIA_TEST"
     assert decrypted["from_address"] == "alerts@example.com"
 

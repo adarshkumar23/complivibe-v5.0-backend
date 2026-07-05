@@ -127,8 +127,12 @@ def upsert_email_config(
         assert payload.aws_access_key_id is not None
         assert payload.aws_secret_access_key is not None
         assert payload.from_email is not None
-        row.aws_access_key_id_enc = service.encrypt_credential(payload.aws_access_key_id)
-        row.aws_secret_key_enc = service.encrypt_credential(payload.aws_secret_access_key)
+        row.aws_access_key_id_enc = service.encrypt_credential(
+            payload.aws_access_key_id, db=db, organization_id=organization.id, entity_id=row.id
+        )
+        row.aws_secret_key_enc = service.encrypt_credential(
+            payload.aws_secret_access_key, db=db, organization_id=organization.id, entity_id=row.id
+        )
         # Keep legacy field populated for existing services still reading config_json.
         row.config_json = EmailConfigService.encrypt_config(
             {
@@ -136,7 +140,10 @@ def upsert_email_config(
                 "aws_secret_access_key": payload.aws_secret_access_key,
                 "region": row.aws_region,
                 "from_address": str(payload.from_email),
-            }
+            },
+            db=db,
+            organization_id=organization.id,
+            entity_id=row.id,
         )
 
     db.flush()
@@ -250,8 +257,12 @@ def verify_sender(
     ses = SESService()
 
     if row is not None and not row.use_platform_ses and row.aws_access_key_id_enc and row.aws_secret_key_enc and row.from_email:
-        access_key = ses.decrypt_credential(row.aws_access_key_id_enc)
-        secret_key = ses.decrypt_credential(row.aws_secret_key_enc)
+        access_key = ses.decrypt_credential(
+            row.aws_access_key_id_enc, db=db, organization_id=organization.id, entity_id=row.id
+        )
+        secret_key = ses.decrypt_credential(
+            row.aws_secret_key_enc, db=db, organization_id=organization.id, entity_id=row.id
+        )
         result = ses.verify_credentials(
             access_key_id=access_key,
             secret_access_key=secret_key,
