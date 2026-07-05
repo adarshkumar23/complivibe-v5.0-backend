@@ -21,8 +21,22 @@ meilisearch>=0.31.0,<1.0.0
 
 langfuse==4.13.0
 deepeval==4.0.7
+numpy==1.26.4
+pandas==2.3.3
+scipy==1.11.4
+scikit-learn==1.9.0
+matplotlib==3.11.0
+statsmodels==0.14.6
+seaborn==0.13.2
 giskard==2.19.1
-pymc>=6.0.1,<7.0.0
+pymc==5.25.1
+pytensor==2.31.7
+arviz==0.23.4
+xarray==2026.4.0
+xarray-einstats==0.9.1
+h5netcdf==1.8.1
+h5py==3.16.0
+platformdirs==4.10.0
 aif360==0.6.1
 fairlearn==0.14.0
 evidently==0.7.21
