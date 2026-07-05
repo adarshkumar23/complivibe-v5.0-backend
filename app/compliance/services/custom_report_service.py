@@ -2,13 +2,14 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
 from app.compliance.templates.esg_disclosure_templates import ESG_DISCLOSURE_TEMPLATES, ESG_TEMPLATE_TYPES
 from app.compliance.services.custom_report_generator import SECTION_NAMES, CustomReportGenerator
 from app.models.custom_report_template import CustomReportTemplate
 from app.models.membership import Membership
+from app.models.role import Role
 from app.services.audit_service import AuditService
 
 
@@ -36,11 +37,24 @@ class CustomReportService:
             )
 
     def _default_created_by_for_seed(self, org_id: uuid.UUID) -> uuid.UUID | None:
-        return self.db.execute(
+        # Prefer the earliest active owner/admin membership, then the earliest active
+        # member. The user id tie-breaker keeps the seed actor deterministic.
+        row = self.db.execute(
             select(Membership.user_id)
-            .where(Membership.organization_id == org_id, Membership.status == "active")
-            .order_by(Membership.created_at.asc())
-        ).scalar_one_or_none()
+            .join(Role, Role.id == Membership.role_id)
+            .where(
+                Membership.organization_id == org_id,
+                Membership.status == "active",
+                Role.is_active.is_(True),
+            )
+            .order_by(
+                case((Role.name == "owner", 0), (Role.name == "admin", 1), else_=2),
+                Membership.created_at.asc(),
+                Membership.user_id.asc(),
+            )
+            .limit(1)
+        ).first()
+        return row[0] if row else None
 
     def ensure_esg_templates(self, org_id: uuid.UUID) -> list[CustomReportTemplate]:
         created_by = self._default_created_by_for_seed(org_id)

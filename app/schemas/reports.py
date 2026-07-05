@@ -116,16 +116,16 @@ class XBRLDataPoint(BaseModel):
 class XBRLExportRequest(BaseModel):
     entity_identifier: str = Field(min_length=1, max_length=255)
     taxonomy_namespace: str = Field(
-        default="https://xbrl.ifrs.org/taxonomy/2024-04-30/issb",
+        default="https://xbrl.ifrs.org/taxonomy/2024-04-26/ifrs-sds",
         min_length=8,
         max_length=500,
     )
     taxonomy_schema_url: str = Field(
-        default="https://xbrl.ifrs.org/taxonomy/2024-04-30/issb.xsd",
+        default="https://xbrl.ifrs.org/taxonomy/ifrs_sds/2024-04-26/ifrs_sds_2024-04-26.xsd",
         min_length=8,
         max_length=500,
     )
-    taxonomy_prefix: str = Field(default="issb", min_length=1, max_length=20)
+    taxonomy_prefix: str = Field(default="ifrs-sds", min_length=1, max_length=20)
     data_points: list[XBRLDataPoint] = Field(min_length=1, max_length=500)
 
 

@@ -177,6 +177,7 @@ class ConnectorMarketplaceService:
             .join(ConnectorCatalogEntry, ConnectorCatalogEntry.id == ConnectorOrgEnablement.connector_id)
             .where(
                 ConnectorOrgEnablement.organization_id == org_id,
+                ConnectorOrgEnablement.enabled.is_(True),
                 ConnectorCatalogEntry.deleted_at.is_(None),
             )
             .order_by(ConnectorCatalogEntry.name.asc())
