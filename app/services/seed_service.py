@@ -248,6 +248,8 @@ PERMISSIONS: dict[str, str] = {
     "whistleblower:investigate": "Investigate and respond to whistleblower hotline reports",
     "anti_bribery:read": "Read anti-bribery and corruption risk assessments for vendors/third parties",
     "anti_bribery:manage": "Create and compute anti-bribery and corruption risk assessments",
+    "export_control:read": "Read export control classification and denied-party screening results",
+    "export_control:manage": "Create and compute export control classification and denied-party screening",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {
@@ -394,6 +396,8 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "whistleblower:investigate",
         "anti_bribery:read",
         "anti_bribery:manage",
+        "export_control:read",
+        "export_control:manage",
     },
     "reviewer": {
         "frameworks:read",
@@ -476,6 +480,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "financial_risk:read",
         "resilience_testing:read",
         "anti_bribery:read",
+        "export_control:read",
     },
     "auditor": {
         "frameworks:read",
@@ -535,6 +540,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "financial_risk:read",
         "resilience_testing:read",
         "anti_bribery:read",
+        "export_control:read",
     },
     "readonly": {
         "frameworks:read",
@@ -588,6 +594,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "financial_risk:read",
         "resilience_testing:read",
         "anti_bribery:read",
+        "export_control:read",
     },
 }
 

@@ -71,6 +71,7 @@ from app.privacy.routers import digest as privacy_digest
 from app.satellites.tprm_intelligence import router as tprm_intelligence_router
 from app.satellites.tprm_intelligence import sanctions_router as tprm_sanctions_router
 from app.satellites.tprm_intelligence import bribery_router as tprm_bribery_router
+from app.satellites.tprm_intelligence import export_control_router as tprm_export_control_router
 from app.api.v1 import bcm
 from app.api.v1 import crisis_management
 from app.api.v1 import vendor_supply_chain
@@ -336,6 +337,7 @@ api_router.include_router(vendor_concentration_risk.router)
 api_router.include_router(tprm_intelligence_router.router)
 api_router.include_router(tprm_sanctions_router.router)
 api_router.include_router(tprm_bribery_router.router)
+api_router.include_router(tprm_export_control_router.router)
 api_router.include_router(questionnaire_templates.router)
 api_router.include_router(questionnaire_responses.router)
 api_router.include_router(scoring_rules.router)

@@ -224,6 +224,7 @@ from app.models.aml_kyc_check import AmlKycCheck
 from app.models.sanctions_entity import SanctionsEntity
 from app.models.sanctions_screen_result import SanctionsScreenResult
 from app.models.bribery_risk_assessment import BriberyRiskAssessment
+from app.models.export_control_check import ExportControlCheck
 from app.models.vendor import Vendor
 from app.models.vendor_external_rating import VendorExternalRating
 from app.models.vendor_threat_intelligence import VendorThreatIntelligence
@@ -553,6 +554,7 @@ __all__ = [
     "SanctionsEntity",
     "SanctionsScreenResult",
     "BriberyRiskAssessment",
+    "ExportControlCheck",
     "Vendor",
     "VendorExternalRating",
     "VendorThreatIntelligence",
