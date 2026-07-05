@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.models.vendor import Vendor
 from app.models.vendor_supply_chain import VendorSupplyChainAlert, VendorSupplyChainLink
+from app.services.audit_service import AuditService
 from app.services.vendor_service import VendorService
 
 MAX_GRAPH_DEPTH = 10
@@ -142,21 +143,23 @@ class VendorSupplyChainService:
         explanation: str,
         source_entity_type: str | None = None,
         source_entity_id: uuid.UUID | None = None,
+        actor_user_id: uuid.UUID | None = None,
+        max_depth: int = MAX_GRAPH_DEPTH,
     ) -> list[VendorSupplyChainAlert]:
         triggering_vendor = self.vendor_service.require_vendor_in_org(organization_id, triggering_vendor_id)
-        links = self.db.execute(
-            select(VendorSupplyChainLink).where(
-                VendorSupplyChainLink.organization_id == organization_id,
-                VendorSupplyChainLink.sub_vendor_id == triggering_vendor_id,
-                VendorSupplyChainLink.is_active.is_(True),
-            )
-        ).scalars().all()
         created: list[VendorSupplyChainAlert] = []
-        for link in links:
+        ancestor_ids = self._upstream_vendor_ids(
+            organization_id=organization_id,
+            triggering_vendor_id=triggering_vendor_id,
+            max_depth=max_depth,
+        )
+        now = datetime.now(UTC)
+        audit = AuditService(self.db)
+        for parent_vendor_id in ancestor_ids:
             existing = self.db.execute(
                 select(VendorSupplyChainAlert).where(
                     VendorSupplyChainAlert.organization_id == organization_id,
-                    VendorSupplyChainAlert.parent_vendor_id == link.parent_vendor_id,
+                    VendorSupplyChainAlert.parent_vendor_id == parent_vendor_id,
                     VendorSupplyChainAlert.triggering_vendor_id == triggering_vendor_id,
                     VendorSupplyChainAlert.signal_type == signal_type,
                     VendorSupplyChainAlert.status == "open",
@@ -164,26 +167,123 @@ class VendorSupplyChainService:
             ).scalar_one_or_none()
             text = f"{triggering_vendor.name} triggered {signal_type}: {explanation}"
             if existing is not None:
+                before = {
+                    "severity": existing.severity,
+                    "explanation": existing.explanation,
+                    "source_entity_type": existing.source_entity_type,
+                    "source_entity_id": str(existing.source_entity_id) if existing.source_entity_id else None,
+                }
                 existing.severity = severity
                 existing.explanation = text
                 existing.source_entity_type = source_entity_type
                 existing.source_entity_id = source_entity_id
+                self.db.flush()
+                audit.write_audit_log(
+                    action="vendor_supply_chain.alert_updated",
+                    entity_type="vendor_supply_chain_alert",
+                    entity_id=existing.id,
+                    organization_id=organization_id,
+                    actor_user_id=actor_user_id,
+                    before_json=before,
+                    after_json={
+                        "parent_vendor_id": str(existing.parent_vendor_id),
+                        "triggering_vendor_id": str(triggering_vendor_id),
+                        "signal_type": signal_type,
+                        "severity": severity,
+                    },
+                    metadata_json={"source": "vendor_supply_chain.propagation"},
+                )
                 created.append(existing)
-                continue
-            alert = VendorSupplyChainAlert(
-                organization_id=organization_id,
-                parent_vendor_id=link.parent_vendor_id,
-                triggering_vendor_id=triggering_vendor_id,
-                signal_type=signal_type,
-                severity=severity,
-                explanation=text,
-                source_entity_type=source_entity_type,
-                source_entity_id=source_entity_id,
-            )
-            self.db.add(alert)
+            else:
+                alert = VendorSupplyChainAlert(
+                    organization_id=organization_id,
+                    parent_vendor_id=parent_vendor_id,
+                    triggering_vendor_id=triggering_vendor_id,
+                    signal_type=signal_type,
+                    severity=severity,
+                    explanation=text,
+                    source_entity_type=source_entity_type,
+                    source_entity_id=source_entity_id,
+                )
+                self.db.add(alert)
+                self.db.flush()
+                audit.write_audit_log(
+                    action="vendor_supply_chain.alert_created",
+                    entity_type="vendor_supply_chain_alert",
+                    entity_id=alert.id,
+                    organization_id=organization_id,
+                    actor_user_id=actor_user_id,
+                    after_json={
+                        "parent_vendor_id": str(alert.parent_vendor_id),
+                        "triggering_vendor_id": str(triggering_vendor_id),
+                        "signal_type": signal_type,
+                        "severity": severity,
+                    },
+                    metadata_json={"source": "vendor_supply_chain.propagation"},
+                )
+                created.append(alert)
+
+            parent_vendor = self.vendor_service.require_vendor_in_org(organization_id, parent_vendor_id)
+            flag_before = {
+                "nth_party_risk_flag": parent_vendor.nth_party_risk_flag,
+                "nth_party_risk_severity": parent_vendor.nth_party_risk_severity,
+                "nth_party_risk_signal_type": parent_vendor.nth_party_risk_signal_type,
+                "nth_party_risk_updated_at": parent_vendor.nth_party_risk_updated_at.isoformat() if parent_vendor.nth_party_risk_updated_at else None,
+            }
+            parent_vendor.nth_party_risk_flag = True
+            parent_vendor.nth_party_risk_severity = severity
+            parent_vendor.nth_party_risk_signal_type = signal_type
+            parent_vendor.nth_party_risk_updated_at = now
             self.db.flush()
-            created.append(alert)
+            audit.write_audit_log(
+                action="vendor_supply_chain.nth_party_flag_updated",
+                entity_type="vendor",
+                entity_id=parent_vendor.id,
+                organization_id=organization_id,
+                actor_user_id=actor_user_id,
+                before_json=flag_before,
+                after_json={
+                    "nth_party_risk_flag": parent_vendor.nth_party_risk_flag,
+                    "nth_party_risk_severity": parent_vendor.nth_party_risk_severity,
+                    "nth_party_risk_signal_type": parent_vendor.nth_party_risk_signal_type,
+                    "triggering_vendor_id": str(triggering_vendor_id),
+                },
+                metadata_json={"source": "vendor_supply_chain.propagation"},
+            )
         return created
+
+    def _upstream_vendor_ids(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        triggering_vendor_id: uuid.UUID,
+        max_depth: int,
+    ) -> list[uuid.UUID]:
+        if max_depth < 1 or max_depth > MAX_GRAPH_DEPTH:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"max_depth must be between 1 and {MAX_GRAPH_DEPTH}")
+
+        ordered: list[uuid.UUID] = []
+        seen: set[uuid.UUID] = {triggering_vendor_id}
+        queue: deque[tuple[uuid.UUID, int, list[uuid.UUID]]] = deque([(triggering_vendor_id, 0, [triggering_vendor_id])])
+        while queue:
+            current_id, current_depth, path = queue.popleft()
+            if current_depth >= max_depth:
+                continue
+            links = self.db.execute(
+                select(VendorSupplyChainLink).where(
+                    VendorSupplyChainLink.organization_id == organization_id,
+                    VendorSupplyChainLink.sub_vendor_id == current_id,
+                    VendorSupplyChainLink.is_active.is_(True),
+                )
+            ).scalars().all()
+            for link in links:
+                parent_id = link.parent_vendor_id
+                if parent_id in path or parent_id in seen:
+                    continue
+                seen.add(parent_id)
+                ordered.append(parent_id)
+                queue.append((parent_id, current_depth + 1, path + [parent_id]))
+        return ordered
 
     @staticmethod
     def _vendor_node(vendor: Vendor) -> dict[str, Any]:

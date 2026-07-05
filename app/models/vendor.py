@@ -32,6 +32,10 @@ class Vendor(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, Base):
     data_access: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     processes_personal_data: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sub_processor: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    nth_party_risk_flag: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    nth_party_risk_severity: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    nth_party_risk_signal_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    nth_party_risk_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     tags_json: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
