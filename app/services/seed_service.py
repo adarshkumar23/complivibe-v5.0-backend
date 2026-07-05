@@ -237,6 +237,8 @@ PERMISSIONS: dict[str, str] = {
     "drafts:use": "Create, review, and apply AI-assisted drafting outputs",
     "webhooks:read": "Read outbound webhook endpoints and delivery history",
     "webhooks:write": "Create and manage outbound webhook endpoints and test emissions",
+    "bcm:read": "Read business continuity processes and BIA assessments",
+    "bcm:manage": "Create and update business continuity processes and BIA assessments",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {
@@ -372,6 +374,8 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "ai_usage_policy:write",
         "training_analytics:read",
         "training_analytics:write",
+        "bcm:read",
+        "bcm:manage",
     },
     "reviewer": {
         "frameworks:read",
@@ -449,6 +453,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "ai_usage_policy:write",
         "training_analytics:read",
         "training_analytics:write",
+        "bcm:read",
     },
     "auditor": {
         "frameworks:read",
@@ -503,6 +508,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "ot_ics_assets:read",
         "ai_usage_policy:read",
         "training_analytics:read",
+        "bcm:read",
     },
     "readonly": {
         "frameworks:read",
@@ -551,6 +557,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "ot_ics_assets:read",
         "ai_usage_policy:read",
         "training_analytics:read",
+        "bcm:read",
     },
 }
 
