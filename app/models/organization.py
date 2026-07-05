@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, String, Uuid
+from sqlalchemy import Boolean, DateTime, Numeric, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -24,6 +25,7 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     subscription_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     razorpay_customer_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     razorpay_subscription_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    sanctions_match_threshold: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False, default=Decimal("0.8500"))
     onboarding_completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     onboarding_step: Mapped[str | None] = mapped_column(String(30), nullable=True, default="not_started")

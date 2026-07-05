@@ -5,6 +5,7 @@ import json
 import base64
 import binascii
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import and_, func, or_, select
@@ -2350,6 +2351,7 @@ def update_organization(
         "sdf_category": current_org.sdf_category,
         "dpdp_registration_number": current_org.dpdp_registration_number,
         "consent_manager_registered": current_org.consent_manager_registered,
+        "sanctions_match_threshold": float(current_org.sanctions_match_threshold),
     }
 
     if payload.name is not None:
@@ -2364,6 +2366,8 @@ def update_organization(
         current_org.dpdp_registration_number = payload.dpdp_registration_number
     if payload.consent_manager_registered is not None:
         current_org.consent_manager_registered = payload.consent_manager_registered
+    if payload.sanctions_match_threshold is not None:
+        current_org.sanctions_match_threshold = Decimal(str(payload.sanctions_match_threshold))
 
     db.flush()
 
@@ -2375,6 +2379,7 @@ def update_organization(
         "sdf_category": current_org.sdf_category,
         "dpdp_registration_number": current_org.dpdp_registration_number,
         "consent_manager_registered": current_org.consent_manager_registered,
+        "sanctions_match_threshold": float(current_org.sanctions_match_threshold),
     }
     audit = AuditService(db).write_audit_log(
         action="organization.updated",

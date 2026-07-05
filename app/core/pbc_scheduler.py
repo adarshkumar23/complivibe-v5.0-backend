@@ -27,6 +27,7 @@ from app.privacy.services.dsar_service import run_daily_dsr_sla_sweep
 from app.privacy.services.consent_service import run_daily_consent_expiry_sweep
 from app.privacy.services.dpa_service import run_daily_dpa_expiry_sweep
 from app.compliance.services.digest_service import run_daily_digest_send_sweep, run_weekly_digest_send_sweep
+from app.satellites.tprm_intelligence.sanctions_screening import run_daily_sanctions_dataset_refresh
 from app.core.scheduler_logger import SchedulerJobLogger
 from app.core.config import get_settings
 from app.db.session import get_session_maker
@@ -58,6 +59,7 @@ SCHEDULER_JOB_IDS: list[str] = [
     "daily_digest_send",
     "weekly_digest_send",
     "control_exception_expiry_sweep",
+    "sanctions_dataset_refresh",
 ]
 
 
@@ -588,6 +590,29 @@ def _run_control_exception_expiry_job() -> None:
     )
 
 
+def _run_sanctions_dataset_refresh_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_sanctions_dataset_refresh(db)
+        db.commit()
+        logger.info("Sanctions dataset refresh complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception as exc:
+        db.rollback()
+        _capture_scheduler_exception(exc)
+        logger.exception("Sanctions dataset refresh failed")
+        raise
+
+
+def _run_sanctions_dataset_refresh_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="sanctions_dataset_refresh",
+        job_fn=_run_sanctions_dataset_refresh_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
 def register_pbc_scheduler(app: FastAPI) -> None:
     settings = get_settings()
     if settings.APP_ENV == "test":
@@ -753,6 +778,13 @@ def register_pbc_scheduler(app: FastAPI) -> None:
         _run_control_exception_expiry_job,
         trigger=CronTrigger(hour=2, minute=30),
         id="control_exception_expiry_sweep",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_sanctions_dataset_refresh_job,
+        trigger=CronTrigger(hour=3, minute=0),
+        id="sanctions_dataset_refresh",
         replace_existing=True,
         coalesce=True,
     )

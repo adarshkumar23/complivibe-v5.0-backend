@@ -15,6 +15,7 @@ class OrganizationRead(UUIDTimestampSchema):
     sdf_category: str | None = None
     dpdp_registration_number: str | None = None
     consent_manager_registered: bool
+    sanctions_match_threshold: float = 0.85
 
 
 class OrganizationSummary(BaseModel):
@@ -30,6 +31,7 @@ class OrganizationUpdateRequest(BaseModel):
     sdf_category: str | None = Field(default=None, max_length=100)
     dpdp_registration_number: str | None = Field(default=None, max_length=100)
     consent_manager_registered: bool | None = None
+    sanctions_match_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class OrganizationUpdateResponse(BaseModel):
