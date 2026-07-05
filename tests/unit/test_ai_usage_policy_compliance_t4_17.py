@@ -3,16 +3,19 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
+from app.core.security import get_password_hash
 from app.models.ai_system import AISystem
 from app.models.ai_usage_policy_check import AiUsagePolicyCheck  # noqa: F401  (ensures table registered on Base.metadata)
 from app.models.audit_log import AuditLog
 from app.models.compliance_policy import CompliancePolicy
+from app.models.membership import Membership
 from app.models.permission import Permission
 from app.models.policy_attestation_campaign import PolicyAttestationCampaign
 from app.models.policy_attestation_record import PolicyAttestationRecord
 from app.models.role import Role
 from app.models.role_permission import RolePermission
-from tests.helpers.auth_org import bootstrap_org_user
+from app.models.user import User
+from tests.helpers.auth_org import bootstrap_org_user, login_user, org_headers
 
 BASE = "/api/v1/ai-usage-compliance"
 
@@ -258,7 +261,43 @@ def test_audit_log_rows_exist_for_bulk_run(client, db_session):
 
 
 def test_permission_enforcement_write_requires_permission(client, db_session):
-    org = _bootstrap(client, db_session, "aup-perm", codes=(_READ_PERMISSION,))
+    # The org owner/admin roles get every registered permission automatically
+    # (full permission set), so exercising the owner role here would be a
+    # tautological test now that ai_usage_policy:read/write are genuinely
+    # registered in seed_service.py. Use a role that only carries the read
+    # permission instead -- "readonly" gets ai_usage_policy:read but not
+    # ai_usage_policy:write per seed_service.py's ROLE_PERMISSION_MAP.
+    org = _bootstrap(client, db_session, "aup-perm", codes=(_READ_PERMISSION, _WRITE_PERMISSION))
 
-    response = client.post(f"{BASE}/run", headers=org["org_headers"])
+    email = "aup-perm-readonly@example.com"
+    user = User(
+        email=email,
+        full_name="aup-perm-readonly",
+        hashed_password=get_password_hash("Pass1234!@"),
+        status="active",
+        is_active=True,
+        is_superuser=False,
+    )
+    db_session.add(user)
+    db_session.flush()
+    role = db_session.query(Role).filter(
+        Role.organization_id == uuid.UUID(org["organization_id"]), Role.name == "readonly"
+    ).one()
+    db_session.add(
+        Membership(
+            organization_id=uuid.UUID(org["organization_id"]),
+            user_id=user.id,
+            role_id=role.id,
+            status="active",
+        )
+    )
+    db_session.commit()
+
+    token = login_user(client, email)
+    headers = org_headers(token, org["organization_id"])
+
+    response = client.post(f"{BASE}/run", headers=headers)
     assert response.status_code == 403
+
+    summary_response = client.get(f"{BASE}/summary", headers=headers)
+    assert summary_response.status_code == 200
