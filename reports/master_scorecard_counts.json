@@ -1,0 +1,39 @@
+{
+  "total_features": 158,
+  "counts": {
+    "BROKEN": 0,
+    "WEAK": 10,
+    "SOLID": 130,
+    "EXCELLENT": 5,
+    "RESOLVED": 3,
+    "NEEDS RE-VERIFICATION": 10
+  },
+  "remaining_broken": {},
+  "remaining_weak": {
+    "AI Governance": [
+      "AI System AIBOM (Bill of Materials)",
+      "AI System Model Cards",
+      "AI Drafting (Compliance Copilot)",
+      "Governance Autopilot",
+      "AI Governance Contracts & Dashboard"
+    ],
+    "Compliance Frameworks & Obligations": [
+      "Framework Content & Coverage"
+    ],
+    "Reports, Exports & Dashboards": [
+      "Regulatory Reports (CCPA)"
+    ],
+    "Governance Automation": [
+      "Automation Rules & Executions"
+    ],
+    "Platform / Security / Administration": [
+      "SSO (SAML/OIDC/endpoints)",
+      "Webhooks"
+    ]
+  },
+  "fixed_tonight": [
+    "MLOps & MLflow Integration",
+    "Audit Findings",
+    "IP Allowlist"
+  ]
+}
