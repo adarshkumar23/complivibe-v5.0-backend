@@ -28,7 +28,6 @@ def test_verify_template_apply_creates_real_policy_version(client, db_session):
     assert version.policy_id == uuid.UUID(body["policy_id"])
     assert version.content_snapshot_json["source"] == "policy_template"
     assert version.content_snapshot_json["content"], "BUG: template content not persisted into the real version"
-<<<<<<< HEAD
 
     api_versions = client.get(
         f"/api/v1/compliance/policies/{body['policy_id']}/versions",
@@ -41,5 +40,3 @@ def test_verify_template_apply_creates_real_policy_version(client, db_session):
     assert matched is not None, "BUG: template-created version not returned by GET policy versions"
     assert matched["content_snapshot_json"]["source"] == "policy_template"
     assert matched["content_snapshot_json"]["content"] == version.content_snapshot_json["content"]
-=======
->>>>>>> 3253d04 (Part D items 6-10: schedule history scoping, vendor-assessment complete)
