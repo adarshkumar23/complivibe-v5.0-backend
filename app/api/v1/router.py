@@ -72,6 +72,7 @@ from app.satellites.tprm_intelligence import sanctions_router as tprm_sanctions_
 
 from app.api.v1 import (
     admin_email_config,
+    access_certifications,
     ai_governance,
     ai_systems,
     compliance_contracts,
@@ -247,6 +248,7 @@ api_router.include_router(users.router)
 api_router.include_router(memberships.router)
 api_router.include_router(non_human_identities.router)
 api_router.include_router(pam_sessions.router)
+api_router.include_router(access_certifications.router)
 api_router.include_router(roles.router)
 api_router.include_router(audit_logs.router)
 api_router.include_router(frameworks.router)
