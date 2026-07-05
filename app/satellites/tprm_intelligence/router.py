@@ -277,6 +277,39 @@ def compute_vendor_kyb_check(
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
+    offshore_found = bool(row.offshore_links_found.get("found")) if isinstance(row.offshore_links_found, dict) else False
+    if row.adverse_media_found or offshore_found:
+        if offshore_found and row.adverse_media_found:
+            severity = "critical"
+            explanation = f"KYB check for {row.company_name} found both offshore leak links and adverse media coverage"
+        elif offshore_found:
+            severity = "critical"
+            explanation = f"KYB check for {row.company_name} found offshore leak (ICIJ) links requiring beneficial-ownership review"
+        else:
+            severity = "high"
+            explanation = f"KYB check for {row.company_name} found adverse media coverage requiring review"
+        alerts = VendorSupplyChainService(db).propagate_vendor_signal(
+            organization_id=organization.id,
+            triggering_vendor_id=vendor.id,
+            signal_type="kyb_aml_risk_flagged",
+            severity=severity,
+            explanation=explanation,
+            source_entity_type="aml_kyc_check",
+            source_entity_id=row.id,
+            actor_user_id=current_user.id,
+        )
+        for alert in alerts:
+            AuditService(db).write_audit_log(
+                action="vendor_supply_chain.alert_propagated",
+                entity_type="vendor_supply_chain_alert",
+                entity_id=alert.id,
+                organization_id=organization.id,
+                actor_user_id=current_user.id,
+                after_json={"parent_vendor_id": str(alert.parent_vendor_id), "triggering_vendor_id": str(vendor.id), "signal_type": alert.signal_type, "severity": alert.severity},
+                metadata_json={"source": "vendor.kyb_check.computed"},
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
     db.commit()
     db.refresh(row)
     return _kyb_payload(row)

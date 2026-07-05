@@ -56,6 +56,12 @@ class CustomReportGenerator:
     def _today() -> date:
         return datetime.now(UTC).date()
 
+    @staticmethod
+    def _as_aware_utc(value: datetime) -> datetime:
+        # Some SQLite-backed sessions round-trip DateTime(timezone=True) columns
+        # as naive datetimes; normalize to UTC-aware before comparing.
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
     def _framework_ids_in_scope(self, org_id: uuid.UUID, framework_filter: list[str] | list[uuid.UUID] | dict | None) -> list[uuid.UUID]:
         stmt = (
             select(Framework.id)
@@ -560,14 +566,124 @@ class CustomReportGenerator:
             "active_ai_systems": active,
         }
 
+    _ESG_STOPWORDS = {
+        "and",
+        "the",
+        "of",
+        "in",
+        "for",
+        "related",
+        "to",
+        "or",
+        "on",
+        "with",
+        "a",
+        "an",
+        "into",
+    }
+    _ESG_PRIORITY_KEYWORDS = ("emission", "ghg", "governance", "workforce", "corruption", "climate")
+
     def _build_esg_disclosure_template(
         self,
         org_id: uuid.UUID,
         _framework_filter: list[str] | list[uuid.UUID] | dict | None,
         _date_range_days: int,
     ) -> dict:
+        # Retained for interface parity with SECTION_BUILDER_MAP; the real
+        # analysis (which needs the template's disclosure_structure) is done
+        # by _analyze_esg_disclosure_coverage and wired in generate().
         _ = org_id
         return {}
+
+    def _analyze_esg_disclosure_coverage(self, org_id: uuid.UUID, disclosure_sections: list[dict]) -> dict:
+        """Cross-reference each ESG disclosure point against the org's actual evidence.
+
+        This turns the static ESG template checklist into an actionable readiness
+        report: for every disclosure point we look for evidence items whose title
+        or description plausibly speak to that point (keyword match), and flag
+        whether that evidence is still fresh (not expired / not marked stale).
+        """
+        now = self._now()
+        evidence_rows = self.db.execute(
+            select(
+                EvidenceItem.id,
+                EvidenceItem.title,
+                EvidenceItem.description,
+                EvidenceItem.valid_until,
+                EvidenceItem.freshness_status,
+            ).where(
+                EvidenceItem.organization_id == org_id,
+                EvidenceItem.status == "active",
+            )
+        ).all()
+
+        analyzed_sections: list[dict] = []
+        total_points = 0
+        covered_points = 0
+        stale_points = 0
+        priority_gaps: list[dict] = []
+
+        for section in disclosure_sections:
+            analyzed_points = []
+            for point in section.get("disclosure_points", []):
+                total_points += 1
+                title_lower = str(point.get("title", "")).lower()
+                keywords = {
+                    word.strip(".,()")
+                    for word in title_lower.split()
+                    if len(word) >= 4 and word not in self._ESG_STOPWORDS
+                }
+                matches = [
+                    row
+                    for row in evidence_rows
+                    if keywords
+                    and any(keyword in f"{row.title or ''} {row.description or ''}".lower() for keyword in keywords)
+                ]
+
+                if not matches:
+                    evidence_status = "gap"
+                else:
+                    is_fresh = any(
+                        (row.valid_until is None or self._as_aware_utc(row.valid_until) >= now)
+                        and row.freshness_status != "expired"
+                        for row in matches
+                    )
+                    evidence_status = "covered" if is_fresh else "stale"
+
+                if evidence_status == "covered":
+                    covered_points += 1
+                elif evidence_status == "stale":
+                    stale_points += 1
+
+                if evidence_status != "covered" and any(kw in title_lower for kw in self._ESG_PRIORITY_KEYWORDS):
+                    priority_gaps.append(
+                        {
+                            "code": point.get("code"),
+                            "title": point.get("title"),
+                            "evidence_status": evidence_status,
+                        }
+                    )
+
+                analyzed_points.append(
+                    {
+                        **point,
+                        "evidence_status": evidence_status,
+                        "matched_evidence_count": len(matches),
+                        "matched_evidence_ids": [str(row.id) for row in matches[:3]],
+                    }
+                )
+            analyzed_sections.append({**section, "disclosure_points": analyzed_points})
+
+        readiness_pct = round((covered_points / total_points) * 100.0, 2) if total_points else 0.0
+        return {
+            "sections": analyzed_sections,
+            "readiness_pct": readiness_pct,
+            "total_disclosure_points": total_points,
+            "covered_points": covered_points,
+            "stale_points": stale_points,
+            "gap_points": total_points - covered_points - stale_points,
+            "priority_gaps": priority_gaps,
+        }
 
     SECTION_BUILDER_MAP = {
         "executive_summary": _build_executive_summary,
@@ -611,14 +727,24 @@ class CustomReportGenerator:
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Unsupported section: {section_name}")
             builder = self.SECTION_BUILDER_MAP[section_name]
             if section_name == "esg_disclosure_template":
+                raw_sections = (
+                    (template.disclosure_structure or {}).get("sections", [])
+                    if isinstance(template.disclosure_structure, dict)
+                    else template.disclosure_structure or []
+                )
+                coverage = self._analyze_esg_disclosure_coverage(org_id, raw_sections)
                 result[section_name] = {
                     "template_type": template.template_type,
                     "standard": (template.disclosure_structure or {}).get("standard")
                     if isinstance(template.disclosure_structure, dict)
                     else None,
-                    "sections": (template.disclosure_structure or {}).get("sections", [])
-                    if isinstance(template.disclosure_structure, dict)
-                    else template.disclosure_structure or [],
+                    "sections": coverage["sections"],
+                    "readiness_pct": coverage["readiness_pct"],
+                    "total_disclosure_points": coverage["total_disclosure_points"],
+                    "covered_points": coverage["covered_points"],
+                    "stale_points": coverage["stale_points"],
+                    "gap_points": coverage["gap_points"],
+                    "priority_gaps": coverage["priority_gaps"],
                 }
             else:
                 result[section_name] = builder(self, org_id, template.framework_filter, int(template.date_range_days))

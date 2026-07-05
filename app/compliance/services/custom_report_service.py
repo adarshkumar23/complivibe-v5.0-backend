@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy import case, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.compliance.templates.esg_disclosure_templates import ESG_DISCLOSURE_TEMPLATES, ESG_TEMPLATE_TYPES
@@ -75,7 +76,7 @@ class CustomReportService:
                 "sections": payload["sections"],
             }
             if row is None:
-                row = CustomReportTemplate(
+                candidate = CustomReportTemplate(
                     organization_id=org_id,
                     name=payload["name"],
                     template_type=template_type,
@@ -86,21 +87,39 @@ class CustomReportService:
                     date_range_days=365,
                     created_by=created_by,
                 )
-                self.db.add(row)
-                self.db.flush()
-                AuditService(self.db).write_audit_log(
-                    action="custom_report_template.seeded",
-                    entity_type="custom_report_template",
-                    entity_id=row.id,
-                    organization_id=org_id,
-                    actor_user_id=created_by,
-                    after_json={
-                        "name": row.name,
-                        "template_type": row.template_type,
-                        "system_template_key": row.system_template_key,
-                    },
-                    metadata_json={"source": "seed", "standard": payload["standard"]},
-                )
+                try:
+                    with self.db.begin_nested():
+                        self.db.add(candidate)
+                        self.db.flush()
+                except IntegrityError:
+                    # A concurrent request already seeded this template (the
+                    # partial unique index on organization_id+system_template_key
+                    # rejects the duplicate insert) — fetch the winner instead
+                    # of surfacing a 500 for what is really a race, not an error.
+                    row = self.db.execute(
+                        select(CustomReportTemplate).where(
+                            CustomReportTemplate.organization_id == org_id,
+                            CustomReportTemplate.system_template_key == payload["system_template_key"],
+                            CustomReportTemplate.deleted_at.is_(None),
+                        )
+                    ).scalar_one_or_none()
+                    if row is None:
+                        raise
+                else:
+                    row = candidate
+                    AuditService(self.db).write_audit_log(
+                        action="custom_report_template.seeded",
+                        entity_type="custom_report_template",
+                        entity_id=row.id,
+                        organization_id=org_id,
+                        actor_user_id=created_by,
+                        after_json={
+                            "name": row.name,
+                            "template_type": row.template_type,
+                            "system_template_key": row.system_template_key,
+                        },
+                        metadata_json={"source": "seed", "standard": payload["standard"]},
+                    )
             else:
                 before = {
                     "name": row.name,

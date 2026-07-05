@@ -188,6 +188,104 @@ def test_t4_5_vendor_kyb_check_persists_skips_and_audits(client, db_session, mon
     assert audit.organization_id == UUID(org["organization_id"])
 
 
+def test_t4_5_vendor_kyb_check_offshore_and_adverse_media_propagates_nth_party_alert(client, db_session, monkeypatch):
+    org = bootstrap_org_user(client, email_prefix="t4-kyb-alert")
+    first_party = _create_vendor(client, org, name="Critical Payments Co", website="https://critical-pay.example")
+    fourth_party = _create_vendor(client, org, name="Shell Holdings Ltd", website="https://shell-holdings.example")
+
+    linked = client.post(
+        f"{SATELLITE_BASE}/{first_party['id']}/supply-chain-links",
+        headers=org["org_headers"],
+        json={"sub_vendor_id": fourth_party["id"], "relationship_type": "cdn_dependency"},
+    )
+    assert linked.status_code == 201, linked.text
+
+    def fake_compute(self, company_name: str) -> dict:
+        return {
+            "company_name": company_name,
+            "signals_used": {"icij_offshore_leaks": {"status": "available", "match_count": 1, "results": [{"name": "match"}]}},
+            "offshore_links_found": {"source": "icij_offshore_leaks", "found": True, "matches": [{"name": "match"}], "status": "available"},
+            "ubo_data": {"source": "openownership", "status": "available", "coverage_limitation": "", "statements": []},
+            "adverse_media_found": True,
+        }
+
+    monkeypatch.setattr(KYBVerificationService, "compute", fake_compute)
+    computed = client.post(f"{SATELLITE_BASE}/{fourth_party['id']}/kyb-check/compute", headers=org["org_headers"])
+    assert computed.status_code == 201, computed.text
+
+    graph = client.get(f"{SATELLITE_BASE}/{first_party['id']}/supply-chain-graph?depth=5", headers=org["org_headers"])
+    assert graph.status_code == 200
+    alerts = graph.json()["open_alerts"]
+    match = next((a for a in alerts if a["signal_type"] == "kyb_aml_risk_flagged"), None)
+    assert match is not None, "expected kyb_aml_risk_flagged alert to propagate to first party vendor"
+    assert match["severity"] == "critical"
+    assert match["triggering_vendor_id"] == fourth_party["id"]
+
+    audit_rows = db_session.execute(
+        select(AuditLog).where(AuditLog.action == "vendor_supply_chain.alert_propagated")
+    ).scalars().all()
+    kyb_audit = [r for r in audit_rows if r.metadata_json.get("source") == "vendor.kyb_check.computed"]
+    assert len(kyb_audit) >= 1
+    assert kyb_audit[0].organization_id == UUID(org["organization_id"])
+
+
+def test_t4_5_vendor_kyb_check_clean_result_does_not_propagate_alert(client, db_session, monkeypatch):
+    org = bootstrap_org_user(client, email_prefix="t4-kyb-clean")
+    vendor = _create_vendor(client, org, name="Clean Co", website="https://clean.example")
+
+    def fake_compute(self, company_name: str) -> dict:
+        return {
+            "company_name": company_name,
+            "signals_used": {},
+            "offshore_links_found": {"source": "icij_offshore_leaks", "found": False, "matches": [], "status": "available"},
+            "ubo_data": {"source": "openownership", "status": "available", "coverage_limitation": "", "statements": []},
+            "adverse_media_found": False,
+        }
+
+    monkeypatch.setattr(KYBVerificationService, "compute", fake_compute)
+    computed = client.post(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check/compute", headers=org["org_headers"])
+    assert computed.status_code == 201, computed.text
+
+    audit_rows = db_session.execute(
+        select(AuditLog).where(AuditLog.action == "vendor_supply_chain.alert_propagated")
+    ).scalars().all()
+    assert audit_rows == []
+
+
+def test_t4_5_vendor_kyb_check_empty_company_name_rejected(client):
+    org = bootstrap_org_user(client, email_prefix="t4-kyb-empty")
+    vendor = _create_vendor(client, org, name="   ", website="https://blankname.example")
+    resp = client.post(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check/compute", headers=org["org_headers"])
+    assert resp.status_code == 422, resp.text
+
+
+def test_t4_5_vendor_kyb_check_archived_vendor_rejected(client):
+    org = bootstrap_org_user(client, email_prefix="t4-kyb-archived")
+    vendor = _create_vendor(client, org, name="Archived Co", website="https://archived.example")
+    archive = client.post(
+        f"{VENDORS_BASE}/{vendor['id']}/archive",
+        headers=org["org_headers"],
+        json={"reason": "no longer used"},
+    )
+    assert archive.status_code == 200, archive.text
+    resp = client.post(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check/compute", headers=org["org_headers"])
+    assert resp.status_code == 400, resp.text
+
+
+def test_t4_5_vendor_kyb_check_cross_org_blocked(client):
+    org_a = bootstrap_org_user(client, email_prefix="t4-kyb-cross-a")
+    org_b = bootstrap_org_user(client, email_prefix="t4-kyb-cross-b")
+    vendor = _create_vendor(client, org_a)
+    resp = client.post(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check/compute", headers=org_b["org_headers"])
+    assert resp.status_code == 404, resp.text
+
+
+def test_t4_5_vendor_kyb_check_malformed_vendor_id(client):
+    org = bootstrap_org_user(client, email_prefix="t4-kyb-malformed")
+    resp = client.post(f"{SATELLITE_BASE}/not-a-uuid/kyb-check/compute", headers=org["org_headers"])
+    assert resp.status_code == 422, resp.text
+
+
 def _seed_sberbank_entity(db_session):
     row = SanctionsEntity(
         id="NK-SBERBANK-EUROPE-AG",

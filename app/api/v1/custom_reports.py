@@ -109,7 +109,7 @@ def generate_custom_report(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("reports:read")),
+    _: Membership = Depends(require_permission("reports:generate")),
 ) -> CustomReportGenerateResponse:
     report = CustomReportService(db).generate_from_template(organization.id, template_id, db, current_user.id)
     db.commit()
