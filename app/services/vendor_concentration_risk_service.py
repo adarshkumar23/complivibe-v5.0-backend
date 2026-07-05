@@ -34,6 +34,28 @@ class VendorConcentrationRiskService:
             )
         ).scalar_one_or_none()
 
+    def recompute_if_tracked(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        actor_user_id: uuid.UUID | None,
+    ) -> tuple[VendorConcentrationRiskDetection, bool, bool] | None:
+        """Recompute concentration risk only for orgs that already have a detection on record.
+
+        Used by other satellites (e.g. sanctions screening) to keep the concentration
+        detection fresh whenever an underlying input (vendor risk_tier, supply-chain links)
+        changes, without forcing every organization into concentration tracking just because
+        an unrelated signal fired.
+        """
+        existing = self.current(organization_id)
+        if existing is None:
+            return None
+        return self.recompute(
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+            threshold_hhi_score=existing.threshold_hhi_score or HHI_HIGHLY_CONCENTRATED_THRESHOLD,
+        )
+
     def recompute(
         self,
         *,

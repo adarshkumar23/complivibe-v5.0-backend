@@ -227,6 +227,45 @@ def test_cross_org_business_unit_returns_404_no_orphan(client, db_session):
     assert orphan_count == 0
 
 
+def test_user_id_must_be_active_member_of_org(client, db_session):
+    """create_record must validate user_id like it already validates business_unit_id --
+    otherwise a caller can assign training to a user from a different org (tenancy leak) or a
+    non-existent user (raw FK failure on Postgres, silently accepted on SQLite)."""
+    org1 = _bootstrap(client, db_session, "ta-userval-a")
+    org2 = _bootstrap(client, db_session, "ta-userval-b")
+    now = datetime.now(UTC)
+
+    cross_org = client.post(
+        BASE + "/records",
+        headers=org1["org_headers"],
+        json={
+            "user_id": org2["user_id"],
+            "training_type": "security_awareness",
+            "due_date": _iso(now + timedelta(days=10)),
+        },
+    )
+    assert cross_org.status_code == 400
+    assert "active member" in cross_org.json()["detail"]
+
+    nonexistent = client.post(
+        BASE + "/records",
+        headers=org1["org_headers"],
+        json={
+            "user_id": str(uuid.uuid4()),
+            "training_type": "security_awareness",
+            "due_date": _iso(now + timedelta(days=10)),
+        },
+    )
+    assert nonexistent.status_code == 400
+
+    orphan_count = (
+        db_session.query(TrainingCompletionRecord)
+        .filter(TrainingCompletionRecord.organization_id == uuid.UUID(org1["organization_id"]))
+        .count()
+    )
+    assert orphan_count == 0
+
+
 def test_permission_enforcement_403(client, db_session):
     org = _bootstrap(client, db_session, "ta-perm")
     reader = _create_read_only_user(db_session, org["organization_id"], "ta-reader@example.com")

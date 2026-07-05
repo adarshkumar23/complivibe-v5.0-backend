@@ -65,6 +65,7 @@ class DORAICTRegisterRead(BaseModel):
     status: str = Field(pattern=DORA_STATUS_PATTERN)
     owner_id: UUID
     created_by: UUID
+    risk_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None = None

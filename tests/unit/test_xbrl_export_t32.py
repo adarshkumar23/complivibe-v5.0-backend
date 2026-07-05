@@ -143,3 +143,39 @@ def test_t32_xbrl_export_returns_service_error_when_taxonomy_source_unreachable(
     assert response.status_code == 503
     assert response.json()["detail"]["message"] == "XBRL taxonomy source unreachable"
     assert "arelle" not in str(response.json()).lower()
+
+
+def test_t32_xbrl_export_rejects_internal_taxonomy_schema_url_ssrf(client):
+    """taxonomy_schema_url is caller-supplied and fetched server-side; it must not be
+    usable to reach loopback/private/link-local addresses (SSRF)."""
+    token = _register(client, "t32-owner4@example.com", "Pass1234!@", "T32 XBRL Org4")
+    org_id = _org_id(client, token)
+    report_id = _create_report(client, token, org_id)
+
+    for bad_url in [
+        "http://127.0.0.1:8000/internal.xsd",
+        "http://localhost/internal.xsd",
+        "http://169.254.169.254/latest/meta-data/",
+        "ftp://xbrl.ifrs.org/taxonomy.xsd",
+    ]:
+        response = client.post(
+            f"/api/v1/reports/{report_id}/xbrl-export",
+            headers=_headers(token, org_id),
+            json={
+                "entity_identifier": "T32-XBRL-ORG4",
+                "taxonomy_schema_url": bad_url,
+                "data_points": [
+                    {
+                        "name": "Climate transition plan description",
+                        "taxonomy_concept": "ifrs-sds:ClimaterelatedTransitionPlanExplanatory",
+                        "value": "Transition plan approved by the board.",
+                        "period_start": "2026-01-01T00:00:00Z",
+                        "period_end": "2026-12-31T00:00:00Z",
+                    },
+                ],
+            },
+        )
+        assert response.status_code == 422, (bad_url, response.text)
+        detail = response.json()["detail"]
+        assert detail["message"] == "XBRL validation failed"
+        assert any(err["field"] == "taxonomy_schema_url" for err in detail["validation_errors"]), (bad_url, detail)

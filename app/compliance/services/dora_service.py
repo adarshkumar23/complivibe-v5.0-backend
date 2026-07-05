@@ -9,6 +9,9 @@ from sqlalchemy.orm import Session
 from app.models.dora_ict_register import DORAICTRegister
 from app.models.user import User
 from app.services.audit_service import AuditService
+from app.services.risk_service import RiskService
+
+DORA_ASSESSMENT_OVERDUE_DAYS = 365
 
 
 class DORAService:
@@ -18,6 +21,86 @@ class DORAService:
     @staticmethod
     def utcnow() -> datetime:
         return datetime.now(UTC)
+
+    @classmethod
+    def _is_register_gap(cls, row: DORAICTRegister, *, now: datetime) -> tuple[bool, str]:
+        """Mirror the two findings already surfaced in get_ict_register_report per-entry.
+
+        A non-critical function is out of scope: DORA Art. 28 concentrates on critical/
+        important functions, and flagging every minor provider as a register gap would
+        bury the signal a compliance officer actually needs to act on.
+        """
+        if not row.is_critical_function:
+            return False, ""
+        if not row.exit_strategy_documented:
+            return True, "missing_exit_strategy"
+        overdue_cutoff = now - timedelta(days=DORA_ASSESSMENT_OVERDUE_DAYS)
+        if row.last_assessed_at is not None and row.last_assessed_at < overdue_cutoff:
+            return True, "assessment_overdue"
+        return False, ""
+
+    def _sync_risk_register(self, org_id: uuid.UUID, row: DORAICTRegister, *, actor_user_id: uuid.UUID | None) -> None:
+        """Create a Risk register entry the first time a critical ICT provider is found
+        with a DORA Art. 28 gap (no exit strategy, or assessment lapsed past the
+        recurring cadence). Without this, get_ict_register_report's aggregate counts
+        were the only place these findings surfaced -- nothing actually landed in the
+        risk register a compliance officer works from day to day, and nothing paged
+        anyone when a previously-compliant entry drifted into gap state.
+
+        Idempotent per entry (guarded by DORAICTRegister.risk_id) so repeated writes
+        to an already-flagged entry don't spawn duplicate risks; once a human is
+        tracking the risk, we don't want to spam the register on every unrelated edit.
+        """
+        now = self.utcnow()
+        is_gap, reason = self._is_register_gap(row, now=now)
+        if not is_gap or row.risk_id is not None:
+            return
+
+        if reason == "missing_exit_strategy":
+            description = (
+                f"Critical ICT third-party '{row.counterparty_name}' (DORA {row.dora_article}) has no "
+                "documented exit strategy. Art. 28 requires a documented exit strategy for critical/"
+                "important function providers so the relationship can be unwound without disrupting "
+                "operations."
+            )
+        else:
+            description = (
+                f"Critical ICT third-party '{row.counterparty_name}' (DORA {row.dora_article}) has not "
+                f"been reassessed in over {DORA_ASSESSMENT_OVERDUE_DAYS} days "
+                f"(last assessed {row.last_assessed_at.isoformat() if row.last_assessed_at else 'never'})."
+            )
+
+        risk = RiskService(self.db).create_risk_from_service(
+            organization_id=org_id,
+            title=f"DORA ICT register gap: {row.counterparty_name}",
+            description=description,
+            category="third_party",
+            likelihood=4,
+            impact=4,
+            treatment_strategy="mitigate",
+            risk_context_external=(
+                "Regulation (EU) 2022/2554 (DORA) Article 28 - management of ICT third-party risk, "
+                "critical/important function exit strategy and periodic reassessment requirements."
+            ),
+            metadata_json={
+                "source": "dora_ict_register",
+                "dora_ict_register_id": str(row.id),
+                "reason": reason,
+            },
+            created_by_user_id=actor_user_id,
+            audit_source="dora_ict_register",
+        )
+        row.risk_id = risk.id
+        self.db.flush()
+        AuditService(self.db).write_audit_log(
+            action="dora.ict_entry_risk_linked",
+            entity_type="dora_ict_register",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=actor_user_id,
+            after_json={"risk_id": str(risk.id), "reason": reason},
+            metadata_json={"source": "dora_ict_register"},
+        )
 
     def _require_user(self, user_id: uuid.UUID) -> None:
         row = self.db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
@@ -75,6 +158,7 @@ class DORAService:
             },
             metadata_json={"source": "api"},
         )
+        self._sync_risk_register(org_id, row, actor_user_id=created_by)
         return row
 
     def get_ict_entry(self, org_id: uuid.UUID, entry_id: uuid.UUID) -> DORAICTRegister:
@@ -122,6 +206,7 @@ class DORAService:
             },
             metadata_json={"source": "api"},
         )
+        self._sync_risk_register(org_id, row, actor_user_id=user_id)
         return row
 
     def soft_delete_ict_entry(self, org_id: uuid.UUID, entry_id: uuid.UUID, user_id: uuid.UUID) -> DORAICTRegister:

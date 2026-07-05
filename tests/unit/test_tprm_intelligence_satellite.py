@@ -80,6 +80,36 @@ def test_t1_1_vendor_security_rating_persists_skips_and_audits(client, db_sessio
     assert audit.organization_id == UUID(org["organization_id"])
 
 
+def test_t1_1_security_rating_get_survives_multiple_computes(client, monkeypatch):
+    """GET must not crash with MultipleResultsFound once a vendor has 2+ rating rows."""
+    org = bootstrap_org_user(client, email_prefix="t1-rating-multi")
+    vendor = _create_vendor(client, org, website="https://example.com/multi")
+
+    scores = iter([70.0, 40.0])
+
+    def fake_compute(self, domain: str) -> dict:
+        return {
+            "domain": domain,
+            "composite_score": next(scores),
+            "signals_used": {
+                "mozilla_observatory": {"status": "skipped", "source": "mozilla_observatory", "score": None, "message": "skipped"},
+                "gdelt_adverse_media": {"status": "skipped", "source": "gdelt", "score": None, "message": "skipped"},
+                "abuseipdb": {"status": "skipped", "source": "abuseipdb", "score": None, "message": "skipped"},
+                "hibp": {"status": "skipped", "source": "hibp", "score": None, "message": "skipped"},
+            },
+        }
+
+    monkeypatch.setattr(VendorSecurityRatingService, "compute", fake_compute)
+    first = client.post(f"{SATELLITE_BASE}/{vendor['id']}/security-rating/compute", headers=org["org_headers"])
+    assert first.status_code == 201, first.text
+    second = client.post(f"{SATELLITE_BASE}/{vendor['id']}/security-rating/compute", headers=org["org_headers"])
+    assert second.status_code == 201, second.text
+
+    latest = client.get(f"{SATELLITE_BASE}/{vendor['id']}/security-rating", headers=org["org_headers"])
+    assert latest.status_code == 200, latest.text
+    assert latest.json()["id"] == second.json()["id"]
+
+
 def test_t1_1_security_rating_cross_org_blocked(client, monkeypatch):
     org_a = bootstrap_org_user(client, email_prefix="t1-rating-a")
     org_b = bootstrap_org_user(client, email_prefix="t1-rating-b")
@@ -188,6 +218,135 @@ def test_t4_5_vendor_kyb_check_persists_skips_and_audits(client, db_session, mon
     assert audit.organization_id == UUID(org["organization_id"])
 
 
+def test_t4_5_vendor_kyb_check_get_survives_multiple_computes(client, monkeypatch):
+    """GET must not crash with MultipleResultsFound once a vendor has 2+ KYB check rows."""
+    org = bootstrap_org_user(client, email_prefix="t4-kyb-multi")
+    vendor = _create_vendor(client, org, name="Repeat Check Co", website="https://repeat-check.example")
+
+    def fake_compute(self, company_name: str) -> dict:
+        return {
+            "company_name": company_name,
+            "signals_used": {
+                "opencorporates": {"status": "skipped", "source": "opencorporates", "message": "skipped"},
+                "gleif": {"status": "skipped", "source": "gleif", "message": "skipped"},
+                "icij_offshore_leaks": {"status": "skipped", "source": "icij_offshore_leaks", "message": "skipped"},
+                "openownership": {"status": "skipped", "source": "openownership", "message": "skipped"},
+                "gdelt_adverse_media": {"status": "skipped", "source": "gdelt", "message": "skipped"},
+            },
+            "offshore_links_found": {"source": "icij_offshore_leaks", "found": False, "matches": [], "status": "skipped"},
+            "ubo_data": {"source": "openownership", "status": "skipped", "statements": []},
+            "adverse_media_found": False,
+        }
+
+    monkeypatch.setattr(KYBVerificationService, "compute", fake_compute)
+    first = client.post(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check/compute", headers=org["org_headers"])
+    assert first.status_code == 201, first.text
+    second = client.post(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check/compute", headers=org["org_headers"])
+    assert second.status_code == 201, second.text
+
+    latest = client.get(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check", headers=org["org_headers"])
+    assert latest.status_code == 200, latest.text
+    assert latest.json()["id"] == second.json()["id"]
+
+
+def test_t4_5_vendor_kyb_check_offshore_and_adverse_media_propagates_nth_party_alert(client, db_session, monkeypatch):
+    org = bootstrap_org_user(client, email_prefix="t4-kyb-alert")
+    first_party = _create_vendor(client, org, name="Critical Payments Co", website="https://critical-pay.example")
+    fourth_party = _create_vendor(client, org, name="Shell Holdings Ltd", website="https://shell-holdings.example")
+
+    linked = client.post(
+        f"{SATELLITE_BASE}/{first_party['id']}/supply-chain-links",
+        headers=org["org_headers"],
+        json={"sub_vendor_id": fourth_party["id"], "relationship_type": "cdn_dependency"},
+    )
+    assert linked.status_code == 201, linked.text
+
+    def fake_compute(self, company_name: str) -> dict:
+        return {
+            "company_name": company_name,
+            "signals_used": {"icij_offshore_leaks": {"status": "available", "match_count": 1, "results": [{"name": "match"}]}},
+            "offshore_links_found": {"source": "icij_offshore_leaks", "found": True, "matches": [{"name": "match"}], "status": "available"},
+            "ubo_data": {"source": "openownership", "status": "available", "coverage_limitation": "", "statements": []},
+            "adverse_media_found": True,
+        }
+
+    monkeypatch.setattr(KYBVerificationService, "compute", fake_compute)
+    computed = client.post(f"{SATELLITE_BASE}/{fourth_party['id']}/kyb-check/compute", headers=org["org_headers"])
+    assert computed.status_code == 201, computed.text
+
+    graph = client.get(f"{SATELLITE_BASE}/{first_party['id']}/supply-chain-graph?depth=5", headers=org["org_headers"])
+    assert graph.status_code == 200
+    alerts = graph.json()["open_alerts"]
+    match = next((a for a in alerts if a["signal_type"] == "kyb_aml_risk_flagged"), None)
+    assert match is not None, "expected kyb_aml_risk_flagged alert to propagate to first party vendor"
+    assert match["severity"] == "critical"
+    assert match["triggering_vendor_id"] == fourth_party["id"]
+
+    audit_rows = db_session.execute(
+        select(AuditLog).where(AuditLog.action == "vendor_supply_chain.alert_propagated")
+    ).scalars().all()
+    kyb_audit = [r for r in audit_rows if r.metadata_json.get("source") == "vendor.kyb_check.computed"]
+    assert len(kyb_audit) >= 1
+    assert kyb_audit[0].organization_id == UUID(org["organization_id"])
+
+
+def test_t4_5_vendor_kyb_check_clean_result_does_not_propagate_alert(client, db_session, monkeypatch):
+    org = bootstrap_org_user(client, email_prefix="t4-kyb-clean")
+    vendor = _create_vendor(client, org, name="Clean Co", website="https://clean.example")
+
+    def fake_compute(self, company_name: str) -> dict:
+        return {
+            "company_name": company_name,
+            "signals_used": {},
+            "offshore_links_found": {"source": "icij_offshore_leaks", "found": False, "matches": [], "status": "available"},
+            "ubo_data": {"source": "openownership", "status": "available", "coverage_limitation": "", "statements": []},
+            "adverse_media_found": False,
+        }
+
+    monkeypatch.setattr(KYBVerificationService, "compute", fake_compute)
+    computed = client.post(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check/compute", headers=org["org_headers"])
+    assert computed.status_code == 201, computed.text
+
+    audit_rows = db_session.execute(
+        select(AuditLog).where(AuditLog.action == "vendor_supply_chain.alert_propagated")
+    ).scalars().all()
+    assert audit_rows == []
+
+
+def test_t4_5_vendor_kyb_check_empty_company_name_rejected(client):
+    org = bootstrap_org_user(client, email_prefix="t4-kyb-empty")
+    vendor = _create_vendor(client, org, name="   ", website="https://blankname.example")
+    resp = client.post(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check/compute", headers=org["org_headers"])
+    assert resp.status_code == 422, resp.text
+
+
+def test_t4_5_vendor_kyb_check_archived_vendor_rejected(client):
+    org = bootstrap_org_user(client, email_prefix="t4-kyb-archived")
+    vendor = _create_vendor(client, org, name="Archived Co", website="https://archived.example")
+    archive = client.post(
+        f"{VENDORS_BASE}/{vendor['id']}/archive",
+        headers=org["org_headers"],
+        json={"reason": "no longer used"},
+    )
+    assert archive.status_code == 200, archive.text
+    resp = client.post(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check/compute", headers=org["org_headers"])
+    assert resp.status_code == 400, resp.text
+
+
+def test_t4_5_vendor_kyb_check_cross_org_blocked(client):
+    org_a = bootstrap_org_user(client, email_prefix="t4-kyb-cross-a")
+    org_b = bootstrap_org_user(client, email_prefix="t4-kyb-cross-b")
+    vendor = _create_vendor(client, org_a)
+    resp = client.post(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check/compute", headers=org_b["org_headers"])
+    assert resp.status_code == 404, resp.text
+
+
+def test_t4_5_vendor_kyb_check_malformed_vendor_id(client):
+    org = bootstrap_org_user(client, email_prefix="t4-kyb-malformed")
+    resp = client.post(f"{SATELLITE_BASE}/not-a-uuid/kyb-check/compute", headers=org["org_headers"])
+    assert resp.status_code == 422, resp.text
+
+
 def _seed_sberbank_entity(db_session):
     row = SanctionsEntity(
         id="NK-SBERBANK-EUROPE-AG",
@@ -252,6 +411,102 @@ def test_t4_6_vendor_sanctions_screen_local_dataset_match_clear_and_audit(client
     ).scalar_one_or_none()
     assert clear_audit is not None
     assert clear_audit.organization_id == UUID(org["organization_id"])
+
+
+def test_t4_6_vendor_sanctions_match_escalates_own_risk_tier_and_clear_restores_it(client, db_session, monkeypatch):
+    org = bootstrap_org_user(client, email_prefix="t4-sanctions-escalate")
+    vendor = _create_vendor(client, org, name="Sberbank Europe AG", website="https://sberbank-escalate.example")
+    _seed_sberbank_entity(db_session)
+
+    before = client.get(f"{VENDORS_BASE}/{vendor['id']}", headers=org["org_headers"])
+    assert before.status_code == 200
+    assert before.json()["risk_tier"] == "not_assessed"
+
+    monkeypatch.setattr(
+        SanctionsScreeningService,
+        "_watchman_search",
+        lambda self, name, *, limit=10: WatchmanSearchResult(available=False, matches=[], error="docker unavailable in test"),
+    )
+    computed = client.post(f"{SATELLITE_BASE}/{vendor['id']}/sanctions-screen/compute", headers=org["org_headers"])
+    assert computed.status_code == 201, computed.text
+    assert computed.json()["match_found"] is True
+
+    after_hit = client.get(f"{VENDORS_BASE}/{vendor['id']}", headers=org["org_headers"])
+    assert after_hit.status_code == 200
+    assert after_hit.json()["risk_tier"] == "critical"
+
+    escalation_audit = db_session.execute(
+        select(AuditLog).where(AuditLog.action == "vendor.risk_tier_escalated")
+    ).scalar_one_or_none()
+    assert escalation_audit is not None
+    assert escalation_audit.organization_id == UUID(org["organization_id"])
+    assert escalation_audit.entity_id == UUID(vendor["id"])
+    assert escalation_audit.before_json["risk_tier"] == "not_assessed"
+    assert escalation_audit.after_json["risk_tier"] == "critical"
+
+    result_id = computed.json()["id"]
+    cleared = client.post(f"{SATELLITE_BASE}/{vendor['id']}/sanctions-screen/{result_id}/clear", headers=org["org_headers"])
+    assert cleared.status_code == 200, cleared.text
+
+    after_clear = client.get(f"{VENDORS_BASE}/{vendor['id']}", headers=org["org_headers"])
+    assert after_clear.status_code == 200
+    assert after_clear.json()["risk_tier"] == "not_assessed"
+
+    restore_audits = db_session.execute(
+        select(AuditLog).where(AuditLog.action == "vendor.risk_tier_escalated")
+    ).scalars().all()
+    assert any(row.after_json.get("reason") == "sanctions_match_cleared" and row.after_json["risk_tier"] == "not_assessed" for row in restore_audits)
+
+
+def test_t4_6_periodic_rescreen_sweep_catches_vendor_newly_added_to_sanctions_list(client, db_session, monkeypatch):
+    from app.satellites.tprm_intelligence.sanctions_screening import (
+        WatchmanSearchResult as _WatchmanSearchResult,
+        run_periodic_vendor_sanctions_rescreen_sweep,
+    )
+
+    org = bootstrap_org_user(client, email_prefix="t4-sanctions-rescreen")
+    vendor = _create_vendor(client, org, name="Later Sanctioned Corp", website="https://later-sanctioned.example")
+    _seed_sberbank_entity(db_session)  # unrelated entity so the local dataset isn't empty
+
+    monkeypatch.setattr(
+        SanctionsScreeningService,
+        "_watchman_search",
+        lambda self, name, *, limit=10: _WatchmanSearchResult(available=False, matches=[], error="docker unavailable in test"),
+    )
+
+    # At onboarding time the vendor is clean: no sanctions dataset entry yet.
+    onboarding = client.post(f"{SATELLITE_BASE}/{vendor['id']}/sanctions-screen/compute", headers=org["org_headers"])
+    assert onboarding.status_code == 201, onboarding.text
+    assert onboarding.json()["match_found"] is False
+
+    before = client.get(f"{VENDORS_BASE}/{vendor['id']}", headers=org["org_headers"])
+    assert before.json()["risk_tier"] == "not_assessed"
+
+    # The vendor is later added to a sanctions list (dataset refresh picked it up).
+    db_session.add(
+        SanctionsEntity(
+            id="NK-LATER-SANCTIONED-CORP",
+            caption="Later Sanctioned Corp",
+            schema_type="Company",
+            countries=["ru"],
+            datasets=["us_ofac_sdn"],
+            properties={"target": True, "topics": ["sanction"]},
+        )
+    )
+    db_session.commit()
+
+    # Nobody manually re-triggers screening; the periodic sweep must catch it.
+    result = run_periodic_vendor_sanctions_rescreen_sweep(db_session)
+    assert result["vendors_screened"] >= 1
+    assert result["positive_matches_found"] >= 1
+    assert result["errors"] == 0
+
+    latest = client.get(f"{SATELLITE_BASE}/{vendor['id']}/sanctions-screen", headers=org["org_headers"])
+    assert latest.status_code == 200
+    assert latest.json()["match_found"] is True
+
+    after = client.get(f"{VENDORS_BASE}/{vendor['id']}", headers=org["org_headers"])
+    assert after.json()["risk_tier"] == "critical"
 
 
 def test_t4_6_vendor_sanctions_screen_unrelated_name_no_false_match(client, db_session, monkeypatch):

@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.business_unit import BusinessUnit
+from app.models.membership import Membership
 from app.models.training_completion_record import TrainingCompletionRecord
 from app.schemas.training_analytics import (
     BusinessUnitTrainingSummary,
@@ -76,9 +77,24 @@ class TrainingAnalyticsService:
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Business unit not found")
 
+    def _ensure_user_is_active_member(self, org_id: uuid.UUID, user_id: uuid.UUID) -> None:
+        membership = self.db.execute(
+            select(Membership).where(
+                Membership.organization_id == org_id,
+                Membership.user_id == user_id,
+                Membership.status == "active",
+            )
+        ).scalar_one_or_none()
+        if membership is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="user_id must be an active member of the organization",
+            )
+
     def create_record(
         self, org_id: uuid.UUID, data: TrainingCompletionRecordCreate, created_by: uuid.UUID | None
     ) -> TrainingCompletionRecord:
+        self._ensure_user_is_active_member(org_id, data.user_id)
         if data.business_unit_id is not None:
             self._business_unit_in_org(org_id, data.business_unit_id)
 

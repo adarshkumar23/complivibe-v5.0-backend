@@ -515,3 +515,99 @@ def test_d87_cookie_registry_scan_and_public_banner(client, db_session):
     assert body["organization_slug"] == slug
     assert isinstance(body["cookie_categories"], list)
     assert "analytics" in body["cookie_categories"]
+
+
+def test_t1_15_google_consent_mode_v2_status_resolves_current_state_with_staleness_and_regional_risk(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="t115-gcm-status")
+
+    # No signal yet for this subject/domain -> resolver reports no signal, not an error.
+    empty_status = client.get(
+        f"{CONSENT_BASE}/google-consent-mode-v2/status",
+        headers=org["org_headers"],
+        params={"domain": "unknown-example.com", "subject_identifier": "brand-new-user"},
+    )
+    assert empty_status.status_code == 200
+    assert empty_status.json()["has_signal"] is False
+    assert empty_status.json()["is_stale"] is False
+
+    # Earliest event for an EEA visitor already shows ad_storage granted -> should be
+    # flagged as a default-state risk (Google requires denied-by-default in the EEA).
+    from app.privacy.services.consent_service import ConsentService
+
+    svc = ConsentService(db_session)
+    org_uuid = uuid.UUID(org["organization_id"])
+
+    from app.privacy.schemas.consent import GoogleConsentModeV2Create
+
+    first_event = GoogleConsentModeV2Create(
+        subject_identifier="eea-user-1",
+        domain="risky-example.com",
+        region="DE",
+        event_name="consent_default",
+        ad_storage="granted",
+        analytics_storage="denied",
+        ad_user_data="denied",
+        ad_personalization="denied",
+    )
+    svc.record_google_consent_mode_v2(org_uuid, first_event)
+    db_session.commit()
+
+    status_resp = client.get(
+        f"{CONSENT_BASE}/google-consent-mode-v2/status",
+        headers=org["org_headers"],
+        params={"domain": "risky-example.com", "subject_identifier": "eea-user-1"},
+    )
+    assert status_resp.status_code == 200
+    status_body = status_resp.json()
+    assert status_body["has_signal"] is True
+    assert status_body["regional_default_expected"] == "denied"
+    assert status_body["default_state_risk"] is True
+    assert "ad_storage" in status_body["default_state_risk_detail"]
+    assert status_body["is_stale"] is False
+
+    # Backdate the (only) recorded event beyond the re-consent window and confirm
+    # the resolver flags it stale.
+    from app.models.google_consent_mode_event import GoogleConsentModeEvent
+
+    row = (
+        db_session.query(GoogleConsentModeEvent)
+        .filter(
+            GoogleConsentModeEvent.organization_id == org_uuid,
+            GoogleConsentModeEvent.domain == "risky-example.com",
+        )
+        .one()
+    )
+    row.created_at = datetime.now(UTC) - timedelta(days=400)
+    db_session.commit()
+
+    stale_resp = client.get(
+        f"{CONSENT_BASE}/google-consent-mode-v2/status",
+        headers=org["org_headers"],
+        params={"domain": "risky-example.com", "subject_identifier": "eea-user-1"},
+    )
+    assert stale_resp.status_code == 200
+    assert stale_resp.json()["is_stale"] is True
+
+    # Non-EEA region with all-granted default is not flagged as a risk.
+    us_event = GoogleConsentModeV2Create(
+        subject_identifier="us-user-1",
+        domain="risky-example.com",
+        region="US",
+        event_name="consent_default",
+        ad_storage="granted",
+        analytics_storage="granted",
+        ad_user_data="granted",
+        ad_personalization="granted",
+    )
+    svc.record_google_consent_mode_v2(org_uuid, us_event)
+    db_session.commit()
+
+    us_status = client.get(
+        f"{CONSENT_BASE}/google-consent-mode-v2/status",
+        headers=org["org_headers"],
+        params={"domain": "risky-example.com", "subject_identifier": "us-user-1"},
+    )
+    assert us_status.status_code == 200
+    us_body = us_status.json()
+    assert us_body["regional_default_expected"] == "granted"
+    assert us_body["default_state_risk"] is False

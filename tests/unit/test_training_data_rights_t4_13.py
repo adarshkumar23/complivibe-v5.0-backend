@@ -171,6 +171,66 @@ def test_t4_13_rights_gaps_classification(client, db_session):
     assert body["no_dataset_linked_count"] >= 1
 
 
+def test_t4_13_rights_gaps_flags_lapsed_rights_separately(client, db_session):
+    """A dataset that WAS documented but has since expired/been revoked must be
+    flagged distinctly from a system that was never documented at all."""
+    org = bootstrap_org_user(client, email_prefix="t413-lapsed")
+    headers = org["org_headers"]
+
+    revoked_system = _create_ai_system(client, headers, name="Revoked Rights System")
+    expired_by_date_system = _create_ai_system(client, headers, name="Expired By Date System")
+    still_active_system = _create_ai_system(client, headers, name="Still Active System")
+
+    revoked_resp = _create_dataset(
+        client,
+        headers,
+        ai_system_id=revoked_system["id"],
+        name="Revoked Dataset",
+        license_type="commercial_license",
+        consent_basis="contractual",
+        rights_status="revoked",
+    )
+    assert revoked_resp.status_code == 201, revoked_resp.text
+
+    expired_resp = _create_dataset(
+        client,
+        headers,
+        ai_system_id=expired_by_date_system["id"],
+        name="Expired Dataset",
+        license_type="commercial_license",
+        consent_basis="contractual",
+        rights_status="active",
+        rights_expires_at="2020-01-01",
+    )
+    assert expired_resp.status_code == 201, expired_resp.text
+
+    active_resp = _create_dataset(
+        client,
+        headers,
+        ai_system_id=still_active_system["id"],
+        name="Still Valid Dataset",
+        license_type="commercial_license",
+        consent_basis="contractual",
+        rights_status="active",
+        rights_expires_at="2099-01-01",
+    )
+    assert active_resp.status_code == 201, active_resp.text
+
+    gaps_resp = client.get(f"{BASE}/rights-gaps", headers=headers)
+    assert gaps_resp.status_code == 200, gaps_resp.text
+    body = gaps_resp.json()
+
+    lapsed_ids = {item["id"] for item in body["rights_lapsed"]}
+    documented_ids_excluded_from = lapsed_ids | {item["id"] for item in body["unclear_rights"]} | {
+        item["id"] for item in body["no_dataset_linked"]
+    }
+
+    assert revoked_system["id"] in lapsed_ids
+    assert expired_by_date_system["id"] in lapsed_ids
+    assert still_active_system["id"] not in documented_ids_excluded_from
+    assert body["rights_lapsed_count"] >= 2
+
+
 def test_t4_13_link_to_missing_or_cross_org_ai_system_returns_404_no_orphan(client, db_session):
     from sqlalchemy import select
 

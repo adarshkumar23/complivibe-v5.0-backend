@@ -14,11 +14,15 @@ from typing import Any
 
 import httpx
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.control_obligation_mapping import ControlObligationMapping
 from app.models.framework import Framework
+from app.models.obligation import Obligation
 from app.models.organization_framework import OrganizationFramework
+from app.models.organization_obligation_state import OrganizationObligationState
 from app.models.regulatory_change_alert import RegulatoryChangeAlert
 from app.services.audit_service import AuditService
 
@@ -115,6 +119,71 @@ class RegulatoryIntelligenceService:
         if framework_code is not None:
             stmt = stmt.where(RegulatoryChangeAlert.framework_code == framework_code)
         return self.db.execute(stmt.order_by(RegulatoryChangeAlert.detected_at.desc())).scalars().all()
+
+    def get_framework_impact(self, org_id: uuid.UUID, framework_code: str | None) -> dict[str, Any]:
+        """Compute, live, which of the org's own obligations/controls this framework change actually touches.
+
+        Recomputed on every read (not cached at alert-creation time) because an org's obligation
+        applicability/implementation status changes independently of when the regulatory change was
+        detected — a stale snapshot would mislead a compliance officer about current exposure.
+        """
+        empty: dict[str, Any] = {
+            "impacted_obligation_count": 0,
+            "impacted_open_obligation_count": 0,
+            "impacted_control_count": 0,
+            "impacted_obligation_samples": [],
+        }
+        if framework_code is None:
+            return empty
+        framework = self.db.execute(select(Framework).where(Framework.code == framework_code)).scalar_one_or_none()
+        if framework is None:
+            return empty
+        obligations = self.db.execute(
+            select(Obligation).where(Obligation.framework_id == framework.id, Obligation.status == "active")
+        ).scalars().all()
+        if not obligations:
+            return empty
+        obligation_ids = [o.id for o in obligations]
+        states = {
+            s.obligation_id: s
+            for s in self.db.execute(
+                select(OrganizationObligationState).where(
+                    OrganizationObligationState.organization_id == org_id,
+                    OrganizationObligationState.obligation_id.in_(obligation_ids),
+                )
+            ).scalars().all()
+        }
+        # An obligation with no org state yet is "pending" review (not yet ruled out) — treat as
+        # in-scope until the org explicitly marks it not_applicable.
+        applicable = [o for o in obligations if states.get(o.id) is None or states[o.id].applicability_status != "not_applicable"]
+        open_obligations = [
+            o for o in applicable if states.get(o.id) is None or states[o.id].implementation_status != "implemented"
+        ]
+        control_count = 0
+        if applicable:
+            control_count = self.db.execute(
+                select(func.count(func.distinct(ControlObligationMapping.control_id))).where(
+                    ControlObligationMapping.organization_id == org_id,
+                    ControlObligationMapping.obligation_id.in_([o.id for o in applicable]),
+                    ControlObligationMapping.status == "active",
+                )
+            ).scalar_one()
+        return {
+            "impacted_obligation_count": len(applicable),
+            "impacted_open_obligation_count": len(open_obligations),
+            "impacted_control_count": int(control_count or 0),
+            "impacted_obligation_samples": [
+                {"reference_code": o.reference_code, "title": o.title} for o in open_obligations[:5]
+            ],
+        }
+
+    def _severity_for_impact(self, impact: dict[str, Any]) -> str:
+        open_count = impact["impacted_open_obligation_count"]
+        if open_count >= 5:
+            return "high"
+        if open_count >= 1:
+            return "medium"
+        return "low"
 
     def acknowledge_alert(self, org_id: uuid.UUID, alert_id: uuid.UUID, actor_user_id: uuid.UUID) -> RegulatoryChangeAlert:
         row = self.db.execute(
@@ -237,6 +306,14 @@ class RegulatoryIntelligenceService:
         if existing is not None:
             return False
         keywords = ", ".join(FRAMEWORK_KEYWORDS.get(framework_code, [])[:4])
+        impact = self.get_framework_impact(org_id, framework_code)
+        severity = self._severity_for_impact(impact)
+        match_reason = (
+            f"Matched active framework {framework_code} using keywords: {keywords}. "
+            f"Org exposure at detection time: {impact['impacted_obligation_count']} applicable obligation(s), "
+            f"{impact['impacted_open_obligation_count']} not yet fully implemented, "
+            f"{impact['impacted_control_count']} active control(s) mapped."
+        )
         row = RegulatoryChangeAlert(
             organization_id=org_id,
             source_key=item.source_key,
@@ -249,12 +326,22 @@ class RegulatoryIntelligenceService:
             item_url=item.item_url,
             published_at=item.published_at,
             status="new",
-            severity="medium",
-            match_reason=f"Matched active framework {framework_code} using keywords: {keywords}",
+            severity=severity,
+            match_reason=match_reason,
             raw_item_json=item.raw,
         )
-        self.db.add(row)
-        self.db.flush()
+        try:
+            with self.db.begin_nested():
+                self.db.add(row)
+                self.db.flush()
+        except IntegrityError:
+            # Two concurrent poll runs raced on the same (org, source, item, framework) tuple;
+            # the unique constraint caught it, so this item is already recorded — not an error.
+            logger.info(
+                "Duplicate regulatory alert suppressed by unique constraint",
+                extra={"organization_id": str(org_id), "source_key": item.source_key, "framework_code": framework_code},
+            )
+            return False
         AuditService(self.db).write_audit_log(
             action="regulatory_alert.created",
             entity_type="regulatory_change_alert",

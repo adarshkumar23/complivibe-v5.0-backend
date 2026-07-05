@@ -92,6 +92,22 @@ class GoogleConsentModeV2Create(BaseModel):
         return normalized
 
 
+class GoogleConsentModeV2StatusRead(BaseModel):
+    has_signal: bool
+    domain: str
+    region: str | None
+    ad_storage: str | None
+    analytics_storage: str | None
+    ad_user_data: str | None
+    ad_personalization: str | None
+    last_event_at: datetime | None
+    is_stale: bool
+    stale_after_days: int
+    regional_default_expected: str | None
+    default_state_risk: bool
+    default_state_risk_detail: str | None
+
+
 class GoogleConsentModeV2Read(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

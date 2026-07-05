@@ -88,3 +88,23 @@ class MonitoringDashboardItem(BaseModel):
 class MonitoringDashboardRead(BaseModel):
     configs: list[MonitoringDashboardItem]
     recent_breaches: list[MonitoringReadingRead]
+
+
+class MonitoringReadingHistorySummary(BaseModel):
+    count_in_page: int
+    min_value: Decimal | None
+    max_value: Decimal | None
+    avg_value: Decimal | None
+    breach_count_in_page: int
+    trend_direction: str | None
+    breach_streak: int
+    sustained_degradation: bool
+    pct_from_baseline: float | None
+
+
+class MonitoringReadingHistoryRead(BaseModel):
+    config_id: uuid.UUID
+    metric_type: str
+    total: int
+    readings: list[MonitoringReadingRead]
+    summary: MonitoringReadingHistorySummary

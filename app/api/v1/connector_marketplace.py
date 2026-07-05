@@ -16,6 +16,7 @@ from app.schemas.connector_marketplace import (
     ConnectorOrgEnablementRead,
 )
 from app.services.connector_marketplace_service import ConnectorMarketplaceService
+from app.services.seed_service import SeedService
 
 router = APIRouter(prefix="/connectors", tags=["connector-marketplace"])
 
@@ -31,6 +32,9 @@ def _enablement_read(row: ConnectorOrgEnablement, connector: ConnectorCatalogEnt
         connector_id=row.connector_id,
         enabled=row.enabled,
         config_values_json=row.config_values_json,
+        connection_status=row.connection_status,
+        connection_checked_at=row.connection_checked_at,
+        connection_error=row.connection_error,
         updated_by_user_id=row.updated_by_user_id,
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -45,6 +49,8 @@ def list_connectors(
     db: Session = Depends(get_db),
     _: Membership = Depends(require_permission("connectors:read")),
 ) -> list[ConnectorCatalogRead]:
+    SeedService.ensure_connector_catalog(db)
+    db.commit()
     rows = ConnectorMarketplaceService(db).list_catalog(category=category, enabled=enabled)
     return [_catalog_read(row) for row in rows]
 
@@ -145,6 +151,27 @@ def disable_connector(
 ) -> ConnectorOrgEnablementRead:
     service = ConnectorMarketplaceService(db)
     row = service.set_org_enablement(organization.id, connector_id, enabled=False, config_values_json=None, user_id=current_user.id)
+    connector = service._require_entry(connector_id)
+    db.commit()
+    db.refresh(row)
+    return _enablement_read(row, connector)
+
+
+@router.post("/{connector_id}/test-connection", response_model=ConnectorOrgEnablementRead)
+def test_connector_connection(
+    connector_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("connectors:write")),
+) -> ConnectorOrgEnablementRead:
+    """Re-validate the organization's stored config for this connector against its config_schema.
+
+    This checks configuration completeness/shape only; it does not perform a live network call
+    to the underlying third-party system.
+    """
+    service = ConnectorMarketplaceService(db)
+    row = service.test_connection(organization.id, connector_id, current_user.id)
     connector = service._require_entry(connector_id)
     db.commit()
     db.refresh(row)

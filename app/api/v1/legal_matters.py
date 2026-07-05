@@ -14,6 +14,7 @@ from app.schemas.legal_matter import (
     LegalMatterLinkIssueRequest,
     LegalMatterLinkRiskRequest,
     LegalMatterResponse,
+    LegalMatterStatusChangeRequest,
     LegalMatterUpdate,
 )
 from app.services.legal_matter_service import LegalMatterService
@@ -143,6 +144,21 @@ def unlink_issue_from_matter(
     _: Membership = Depends(require_permission("legal_matters:write")),
 ) -> LegalMatterResponse:
     row = LegalMatterService(db).unlink_issue(organization.id, matter_id, current_user.id)
+    db.commit()
+    db.refresh(row)
+    return _read(db, organization.id, row)
+
+
+@router.post("/{matter_id}/status", response_model=LegalMatterResponse)
+def change_legal_matter_status(
+    matter_id: uuid.UUID,
+    payload: LegalMatterStatusChangeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("legal_matters:write")),
+) -> LegalMatterResponse:
+    row = LegalMatterService(db).change_status(organization.id, matter_id, payload.new_status, current_user.id)
     db.commit()
     db.refresh(row)
     return _read(db, organization.id, row)

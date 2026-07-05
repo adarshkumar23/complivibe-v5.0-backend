@@ -27,6 +27,8 @@ def _read(service: SyntheticDatasetService, row: SyntheticDataset) -> SyntheticD
         generation_method=row.generation_method,
         source_dataset_id=row.source_dataset_id,
         privacy_technique=row.privacy_technique,
+        privacy_parameter=row.privacy_parameter,
+        reidentification_risk_score=row.reidentification_risk_score,
         validation_status=row.validation_status,
         validation_notes=row.validation_notes,
         governance_gap_flag=row.governance_gap_flag,

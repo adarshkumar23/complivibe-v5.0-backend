@@ -153,6 +153,36 @@ def test_gaps_shows_no_policy_reason(client, db_session):
     assert gaps[0]["compliance_status"] == "non_compliant_no_policy"
 
 
+def test_draft_policy_not_treated_as_org_ai_usage_policy(client, db_session):
+    # A policy that was created but never approved (still "draft") must NOT
+    # count as satisfying "an AI-usage policy exists" -- only an "approved"
+    # policy is the org's live, enforceable policy. Regression test for a
+    # verifier-found gap where _resolve_policy omitted the status filter
+    # that every sibling policy-resolution service in the platform applies
+    # (kri_calculator.py, inbound_questionnaire_service.py both require
+    # status == "approved").
+    org = _bootstrap(client, db_session, "aup-draft")
+    ai_system = _create_ai_system(db_session, org["organization_id"], name="Draft Policy System")
+    draft_policy = CompliancePolicy(
+        organization_id=uuid.UUID(org["organization_id"]),
+        title="Unapproved AI Acceptable Use Policy",
+        policy_type="acceptable_use",
+        owner_user_id=uuid.UUID(org["user_id"]),
+        status="draft",
+    )
+    db_session.add(draft_policy)
+    db_session.commit()
+
+    run_resp = client.post(f"{BASE}/run", headers=org["org_headers"])
+    assert run_resp.status_code == 200
+
+    gaps = client.get(f"{BASE}/gaps", headers=org["org_headers"]).json()["gaps"]
+    assert len(gaps) == 1
+    assert gaps[0]["ai_system_id"] == str(ai_system.id)
+    assert gaps[0]["compliance_status"] == "non_compliant_no_policy"
+    assert gaps[0]["policy_id"] is None
+
+
 def test_gaps_shows_expired_attestation_reason(client, db_session):
     org = _bootstrap(client, db_session, "aup-expired")
     ai_system = _create_ai_system(db_session, org["organization_id"], name="Expired Attestation System")

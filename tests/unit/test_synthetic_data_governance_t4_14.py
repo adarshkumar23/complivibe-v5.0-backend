@@ -1,5 +1,7 @@
 import uuid
 
+import pytest
+
 from app.core.security import get_password_hash
 from app.models.audit_log import AuditLog
 from app.models.membership import Membership
@@ -91,11 +93,15 @@ def test_happy_path_crud_and_validate_with_privacy_technique(client, db_session)
         name="DP Synthetic Dataset",
         generation_method="differential_privacy_gan",
         privacy_technique="differential_privacy",
+        privacy_parameter=0.5,
     )
     assert created.status_code == 201
     body = created.json()
     dataset_id = body["id"]
     assert body["privacy_technique"] == "differential_privacy"
+    assert body["privacy_parameter"] == 0.5
+    # risk score = e^0.5 / (1 + e^0.5) ~= 0.6225 (membership-inference upper bound)
+    assert body["reidentification_risk_score"] == pytest.approx(0.6225, abs=0.001)
     assert body["validation_status"] == "unvalidated"
     assert body["governance_gap_flag"] is False
     assert body["governance_gap_reason"] is None
@@ -188,15 +194,40 @@ def test_governance_gap_flagged_on_validate_and_clears_on_privacy_technique_upda
     assert filtered.status_code == 200
     assert any(item["id"] == dataset_id for item in filtered.json())
 
-    # now patch privacy_technique to k_anonymity -> gap should clear
-    patched = client.patch(
+    # patch privacy_technique to k_anonymity WITHOUT a parameter -> gap stays
+    # flagged (a technique name alone doesn't quantify risk; still validated)
+    patched_no_param = client.patch(
         f"{BASE}/{dataset_id}",
         headers=headers,
         json={"privacy_technique": "k_anonymity"},
     )
+    assert patched_no_param.status_code == 200
+    assert patched_no_param.json()["privacy_technique"] == "k_anonymity"
+    assert patched_no_param.json()["governance_gap_flag"] is True
+    assert "no privacy_parameter" in patched_no_param.json()["governance_gap_reason"]
+
+    # weak k (below the k>=5 floor) still flagged, with the specific reason
+    weak_k = client.patch(
+        f"{BASE}/{dataset_id}",
+        headers=headers,
+        json={"privacy_parameter": 2},
+    )
+    assert weak_k.status_code == 200
+    assert weak_k.json()["governance_gap_flag"] is True
+    assert "k=2" in weak_k.json()["governance_gap_reason"]
+    assert weak_k.json()["reidentification_risk_score"] == pytest.approx(0.5, abs=0.001)
+
+    # now patch to a strong k (>=5) -> gap should clear
+    patched = client.patch(
+        f"{BASE}/{dataset_id}",
+        headers=headers,
+        json={"privacy_parameter": 10},
+    )
     assert patched.status_code == 200
     pbody = patched.json()
     assert pbody["privacy_technique"] == "k_anonymity"
+    assert pbody["privacy_parameter"] == 10
+    assert pbody["reidentification_risk_score"] == pytest.approx(0.1, abs=0.001)
     assert pbody["governance_gap_flag"] is False
     assert pbody["governance_gap_reason"] is None
 
@@ -351,6 +382,119 @@ def test_audit_log_rows_written_for_create_and_contradiction_validate(client, db
     assert validate_log.metadata_json.get("reason") == GOVERNANCE_GAP_REASON
     assert validate_log.after_json["governance_gap_flag"] is True
     assert validate_log.after_json["validation_status"] == "validated"
+
+
+def test_high_risk_ai_system_context_applies_stricter_privacy_threshold(client, db_session):
+    """A synthetic dataset whose source training dataset feeds a high-risk-
+    classified AI system must clear a stricter privacy bar (k>=10, eps<=1)
+    than the standard bar (k>=5, eps<=10) before it can be 'validated' without
+    a governance gap -- this is the context-awareness link from synthetic
+    dataset -> source training dataset -> consuming AI system's risk_tier."""
+    from app.models.ai_system import AISystem
+
+    org = bootstrap_org_user(client, email_prefix="t414-ctx")
+    headers = org["org_headers"]
+
+    ai_system = _create_ai_system(client, headers, name="High Risk AI System")
+    ai_system_row = db_session.query(AISystem).filter_by(id=uuid.UUID(ai_system["id"])).one()
+    ai_system_row.risk_tier = "high"
+    db_session.commit()
+
+    training_dataset = _create_training_dataset(
+        client, headers, linked_ai_system_id=ai_system["id"], name="High Risk Source Dataset"
+    )
+
+    # k=7 clears the STANDARD floor (>=5) but not the STRICT floor (>=10) that
+    # applies because the source dataset feeds a high-risk AI system.
+    created = _create_synthetic_dataset(
+        client,
+        headers,
+        name="Synthetic For High Risk System",
+        generation_method="ctgan",
+        source_dataset_id=training_dataset["id"],
+        privacy_technique="k_anonymity",
+        privacy_parameter=7,
+    )
+    assert created.status_code == 201
+    dataset_id = created.json()["id"]
+
+    validated = client.post(
+        f"{BASE}/{dataset_id}/validate",
+        headers=headers,
+        json={"validation_status": "validated"},
+    )
+    assert validated.status_code == 200
+    vbody = validated.json()
+    assert vbody["governance_gap_flag"] is True
+    assert "high-risk-classified AI system" in vbody["governance_gap_reason"]
+    assert "minimum threshold of 10" in vbody["governance_gap_reason"]
+
+    # bump to k=12 -> now clears even the strict floor
+    patched = client.patch(
+        f"{BASE}/{dataset_id}",
+        headers=headers,
+        json={"privacy_parameter": 12},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["governance_gap_flag"] is False
+    assert patched.json()["governance_gap_reason"] is None
+
+    # the same k=7 would NOT be flagged for a standard (non-high-risk) system
+    ai_system_2 = _create_ai_system(client, headers, name="Standard AI System")
+    training_dataset_2 = _create_training_dataset(
+        client, headers, linked_ai_system_id=ai_system_2["id"], name="Standard Source Dataset"
+    )
+    created_2 = _create_synthetic_dataset(
+        client,
+        headers,
+        name="Synthetic For Standard System",
+        generation_method="ctgan",
+        source_dataset_id=training_dataset_2["id"],
+        privacy_technique="k_anonymity",
+        privacy_parameter=7,
+    )
+    assert created_2.status_code == 201
+    validated_2 = client.post(
+        f"{BASE}/{created_2.json()['id']}/validate",
+        headers=headers,
+        json={"validation_status": "validated"},
+    )
+    assert validated_2.status_code == 200
+    assert validated_2.json()["governance_gap_flag"] is False
+
+
+def test_privacy_parameter_consistency_validation(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="t414-param")
+    headers = org["org_headers"]
+
+    # technique='none' with a parameter is a contradiction -> specific 422, no orphan row
+    rejected = _create_synthetic_dataset(
+        client,
+        headers,
+        privacy_technique="none",
+        privacy_parameter=5,
+    )
+    assert rejected.status_code == 422
+    assert "only applicable" in rejected.json()["detail"]
+
+    # zero/negative parameter rejected at the schema layer
+    bad_param = _create_synthetic_dataset(
+        client,
+        headers,
+        privacy_technique="k_anonymity",
+        privacy_parameter=0,
+    )
+    assert bad_param.status_code == 422
+
+    # sanity: a consistent payload succeeds and score is computed
+    ok = _create_synthetic_dataset(
+        client,
+        headers,
+        privacy_technique="differential_privacy",
+        privacy_parameter=2.0,
+    )
+    assert ok.status_code == 201
+    assert ok.json()["reidentification_risk_score"] == pytest.approx(0.8808, abs=0.001)
 
 
 def test_user_without_permission_gets_403(client, db_session):

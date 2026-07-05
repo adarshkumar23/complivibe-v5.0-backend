@@ -1,4 +1,5 @@
 import importlib
+import math
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -16,6 +17,31 @@ GOVERNANCE_GAP_REASON = (
     "logical contradiction and should be reviewed by governance."
 )
 
+# Minimum/maximum privacy-parameter thresholds below/above which a technique is
+# considered too weak to defensibly support a 'validated' status. Two tiers:
+# STANDARD applies by default; STRICT applies when the synthetic dataset's
+# source training dataset is linked to an AI system classified as
+# high/prohibited risk under the org's EU-AI-Act-style risk_tier -- higher-risk
+# AI systems warrant a materially stronger anonymization bar before the
+# synthetic data feeding them can be signed off as privacy-validated.
+#
+# k-anonymity: max re-identification probability is bounded by 1/k (Samarati &
+# Sweeney, 1998 k-anonymity model). k>=5 is a commonly-cited regulatory floor
+# (e.g. HIPAA expert-determination practice); we require k>=10 for high-risk
+# AI systems.
+# Differential privacy: for eps-DP, the worst-case membership-inference
+# attacker's success probability is bounded by e^eps/(1+e^eps) (Dwork et al.;
+# Yeom et al. 2018 membership-inference bound). eps<=10 is a widely-used
+# "still offers some protection" ceiling; eps<=1 is the stricter bar commonly
+# recommended for meaningful protection, which we require for high-risk AI
+# systems.
+STANDARD_MIN_K = 5
+STANDARD_MAX_EPSILON = 10.0
+STRICT_MIN_K = 10
+STRICT_MAX_EPSILON = 1.0
+
+HIGH_RISK_AI_TIERS = {"high", "prohibited", "unacceptable"}
+
 
 def _load_training_dataset_model() -> Any | None:
     """Best-effort import of TrainingDataset (T4-13), which may not have landed yet.
@@ -29,6 +55,33 @@ def _load_training_dataset_model() -> Any | None:
     except ModuleNotFoundError:
         return None
     return getattr(module, "TrainingDataset", None)
+
+
+def _load_ai_system_model() -> Any | None:
+    try:
+        module = importlib.import_module("app.models.ai_system")
+    except ModuleNotFoundError:
+        return None
+    return getattr(module, "AISystem", None)
+
+
+def compute_reidentification_risk_score(privacy_technique: str, privacy_parameter: float | None) -> float | None:
+    """Estimate worst-case re-identification / membership-inference risk in [0, 1].
+
+    - 'none': no protection applied -> maximal risk (1.0), regardless of parameter.
+    - 'k_anonymity': risk bounded by 1/k. None/invalid parameter -> unknown (None).
+    - 'differential_privacy': risk bounded by e^eps/(1+e^eps). None/invalid -> unknown (None).
+    """
+    if privacy_technique == "none":
+        return 1.0
+    if privacy_parameter is None or privacy_parameter <= 0:
+        return None
+    if privacy_technique == "k_anonymity":
+        return round(min(1.0, 1.0 / privacy_parameter), 6)
+    if privacy_technique == "differential_privacy":
+        exp_eps = math.exp(min(privacy_parameter, 700))  # avoid overflow for extreme inputs
+        return round(exp_eps / (1.0 + exp_eps), 6)
+    return None
 
 
 class SyntheticDatasetService:
@@ -70,22 +123,118 @@ class SyntheticDatasetService:
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source training dataset not found")
 
+    def _consuming_ai_system_risk_tier(
+        self, organization_id: uuid.UUID, source_dataset_id: uuid.UUID | None
+    ) -> str | None:
+        """Resolve the risk_tier of the AI system that consumes this synthetic
+        dataset's source training dataset, if any -- this is what makes the
+        governance-gap logic below context-aware of AI system risk elsewhere
+        in the platform rather than judging privacy_technique in isolation.
+        """
+        if source_dataset_id is None:
+            return None
+        training_dataset_model = _load_training_dataset_model()
+        ai_system_model = _load_ai_system_model()
+        if training_dataset_model is None or ai_system_model is None:
+            return None
+        linked_ai_system_id = self.db.execute(
+            select(training_dataset_model.linked_ai_system_id).where(
+                training_dataset_model.id == source_dataset_id,
+                training_dataset_model.organization_id == organization_id,
+            )
+        ).scalar_one_or_none()
+        if linked_ai_system_id is None:
+            return None
+        return self.db.execute(
+            select(ai_system_model.risk_tier).where(
+                ai_system_model.id == linked_ai_system_id,
+                ai_system_model.organization_id == organization_id,
+            )
+        ).scalar_one_or_none()
+
+    @staticmethod
+    def _validate_parameter_consistency(privacy_technique: str, privacy_parameter: float | None) -> None:
+        if privacy_technique == "none" and privacy_parameter is not None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="privacy_parameter is only applicable when privacy_technique is "
+                "'differential_privacy' (epsilon) or 'k_anonymity' (k) -- it must be omitted "
+                "when privacy_technique is 'none'.",
+            )
+
     # -- governance gap logic ------------------------------------------------------
 
     @staticmethod
-    def _check_governance_contradiction(privacy_technique: str, validation_status: str) -> bool:
-        return validation_status == "validated" and privacy_technique == "none"
-
-    @staticmethod
-    def _governance_gap_reason(row: SyntheticDataset) -> str | None:
-        if row.governance_gap_flag:
-            return GOVERNANCE_GAP_REASON
+    def _weak_parameter_reason(
+        privacy_technique: str, privacy_parameter: float | None, risk_score: float | None, *, strict: bool
+    ) -> str | None:
+        """Return a specific reason string if the quantified privacy_parameter is
+        too weak (or missing) to defensibly support 'validated', else None."""
+        if privacy_technique not in ("k_anonymity", "differential_privacy"):
+            return None
+        if privacy_parameter is None:
+            return (
+                f"Dataset validated with privacy_technique='{privacy_technique}' but no "
+                "privacy_parameter (k or epsilon) was recorded, so re-identification risk "
+                "cannot be quantified."
+            )
+        if privacy_technique == "k_anonymity":
+            min_k = STRICT_MIN_K if strict else STANDARD_MIN_K
+            if privacy_parameter < min_k:
+                context = " (source data feeds a high-risk-classified AI system)" if strict else ""
+                return (
+                    f"Dataset validated with k_anonymity but k={privacy_parameter:g} is below the "
+                    f"minimum threshold of {min_k}{context} -- estimated re-identification risk is "
+                    f"{risk_score:.0%}, too weak to support a 'validated' status."
+                )
+        if privacy_technique == "differential_privacy":
+            max_eps = STRICT_MAX_EPSILON if strict else STANDARD_MAX_EPSILON
+            if privacy_parameter > max_eps:
+                context = " (source data feeds a high-risk-classified AI system)" if strict else ""
+                return (
+                    f"Dataset validated with differential_privacy but epsilon={privacy_parameter:g} exceeds "
+                    f"the maximum threshold of {max_eps:g}{context} -- estimated membership-inference risk is "
+                    f"{risk_score:.0%}, too weak to support a 'validated' status."
+                )
         return None
 
-    def _recompute_gap_flag(self, row: SyntheticDataset) -> bool:
+    def _evaluate_gap(self, row: SyntheticDataset, *, strict: bool) -> tuple[bool, str | None]:
+        if row.validation_status != "validated":
+            return False, None
+        if row.privacy_technique == "none":
+            return True, GOVERNANCE_GAP_REASON
+        weak_reason = self._weak_parameter_reason(
+            row.privacy_technique, row.privacy_parameter, row.reidentification_risk_score, strict=strict
+        )
+        if weak_reason is not None:
+            return True, weak_reason
+        return False, None
+
+    def _recompute_gap_flag(self, row: SyntheticDataset, organization_id: uuid.UUID) -> bool:
+        row.reidentification_risk_score = compute_reidentification_risk_score(
+            row.privacy_technique, row.privacy_parameter
+        )
+        strict = self._consuming_ai_system_risk_tier(organization_id, row.source_dataset_id) in HIGH_RISK_AI_TIERS
         was_flagged = row.governance_gap_flag
-        row.governance_gap_flag = self._check_governance_contradiction(row.privacy_technique, row.validation_status)
+        flagged, reason = self._evaluate_gap(row, strict=strict)
+        row.governance_gap_flag = flagged
+        row._governance_gap_reason_cache = reason  # noqa: SLF001 -- transient, not persisted
         return was_flagged != row.governance_gap_flag
+
+    def gap_reason(self, row: SyntheticDataset) -> str | None:
+        cached = getattr(row, "_governance_gap_reason_cache", None)
+        if cached is not None:
+            return cached
+        # Fallback for rows fetched without a recompute in this request (e.g.
+        # plain GET/list): re-derive deterministically from persisted fields.
+        if not row.governance_gap_flag:
+            return None
+        if row.privacy_technique == "none":
+            return GOVERNANCE_GAP_REASON
+        strict = self._consuming_ai_system_risk_tier(row.organization_id, row.source_dataset_id) in HIGH_RISK_AI_TIERS
+        return self._weak_parameter_reason(
+            row.privacy_technique, row.privacy_parameter, row.reidentification_risk_score, strict=strict
+        )
 
     # -- snapshots / audit ----------------------------------------------------------
 
@@ -96,6 +245,8 @@ class SyntheticDatasetService:
             "generation_method": row.generation_method,
             "source_dataset_id": str(row.source_dataset_id) if row.source_dataset_id else None,
             "privacy_technique": row.privacy_technique,
+            "privacy_parameter": row.privacy_parameter,
+            "reidentification_risk_score": row.reidentification_risk_score,
             "validation_status": row.validation_status,
             "validation_notes": row.validation_notes,
             "governance_gap_flag": row.governance_gap_flag,
@@ -133,6 +284,9 @@ class SyntheticDatasetService:
         data: dict[str, Any],
     ) -> SyntheticDataset:
         self._validate_source_dataset(organization_id, data.get("source_dataset_id"))
+        privacy_technique = data.get("privacy_technique", "none")
+        privacy_parameter = data.get("privacy_parameter")
+        self._validate_parameter_consistency(privacy_technique, privacy_parameter)
 
         row = SyntheticDataset(
             organization_id=organization_id,
@@ -140,12 +294,13 @@ class SyntheticDatasetService:
             name=data["name"],
             generation_method=data["generation_method"],
             source_dataset_id=data.get("source_dataset_id"),
-            privacy_technique=data.get("privacy_technique", "none"),
+            privacy_technique=privacy_technique,
+            privacy_parameter=privacy_parameter,
             validation_status=data.get("validation_status", "unvalidated"),
             validation_notes=data.get("validation_notes"),
             governance_gap_flag=False,
         )
-        self._recompute_gap_flag(row)
+        self._recompute_gap_flag(row, organization_id)
         self.db.add(row)
         self.db.flush()
 
@@ -155,7 +310,7 @@ class SyntheticDatasetService:
                 "source": "api",
                 "governance_gap": True,
                 "severity": "high",
-                "reason": GOVERNANCE_GAP_REASON,
+                "reason": self.gap_reason(row),
             }
         self._write_audit(
             action="synthetic_dataset.created",
@@ -201,10 +356,15 @@ class SyntheticDatasetService:
             self._validate_source_dataset(organization_id, changes["source_dataset_id"])
 
         before = self._snapshot(row)
+
+        effective_technique = changes.get("privacy_technique", row.privacy_technique)
+        effective_parameter = changes.get("privacy_parameter", row.privacy_parameter)
+        self._validate_parameter_consistency(effective_technique, effective_parameter)
+
         for field, value in changes.items():
             setattr(row, field, value)
 
-        gap_changed = self._recompute_gap_flag(row)
+        gap_changed = self._recompute_gap_flag(row, organization_id)
         self.db.flush()
 
         metadata_json = {"source": "api"}
@@ -213,7 +373,7 @@ class SyntheticDatasetService:
                 "source": "api",
                 "governance_gap": True,
                 "severity": "high",
-                "reason": GOVERNANCE_GAP_REASON,
+                "reason": self.gap_reason(row),
             }
         self._write_audit(
             action="synthetic_dataset.updated",
@@ -242,18 +402,18 @@ class SyntheticDatasetService:
         if notes is not None:
             row.validation_notes = notes
 
-        contradiction = self._check_governance_contradiction(row.privacy_technique, row.validation_status)
-        self._recompute_gap_flag(row)
+        gap_changed = self._recompute_gap_flag(row, organization_id)
         self.db.flush()
 
         metadata_json: dict[str, Any] = {"source": "api", "action": "validate"}
-        if contradiction:
+        if row.governance_gap_flag:
             metadata_json.update(
                 {
                     "governance_gap": True,
                     "severity": "high",
-                    "flag": "logical_contradiction",
-                    "reason": GOVERNANCE_GAP_REASON,
+                    "flag": "logical_contradiction" if row.privacy_technique == "none" else "weak_privacy_parameter",
+                    "reason": self.gap_reason(row),
+                    "gap_newly_flagged": gap_changed,
                 }
             )
         self._write_audit(
@@ -296,6 +456,3 @@ class SyntheticDatasetService:
         )
         rows = self.db.execute(stmt.order_by(SyntheticDataset.created_at.desc())).scalars().all()
         return list(rows)
-
-    def gap_reason(self, row: SyntheticDataset) -> str | None:
-        return self._governance_gap_reason(row)

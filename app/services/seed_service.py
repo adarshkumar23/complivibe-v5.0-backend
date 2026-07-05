@@ -224,6 +224,8 @@ PERMISSIONS: dict[str, str] = {
     "ai_governance:read": "Read AI governance dashboard summary",
     "ai_governance:write": "Create and update AI governance reviews and classifications",
     "ai_governance:approve": "Approve or reject AI governance reviews and conditional approvals",
+    "llm_observability:read": "Read LLM observability events: tracing, hallucination checks, cost readings, RAG evaluations",
+    "llm_observability:write": "Record LLM observability events: tracing polls, hallucination checks, cost readings, RAG evaluations",
     "integrations:read": "Read MLOps integrations and sync logs",
     "integrations:write": "Create and manage MLOps integrations and sync operations",
     "data:read": "Read data observability assets and classification summaries",
@@ -338,6 +340,8 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "escalations:write",
         "ai_governance:read",
         "ai_governance:write",
+        "llm_observability:read",
+        "llm_observability:write",
         "integrations:read",
         "integrations:write",
         "data:read",
@@ -420,6 +424,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "issues:read",
         "escalations:read",
         "ai_governance:read",
+        "llm_observability:read",
         "integrations:read",
         "data:read",
         "privacy:read",
@@ -485,6 +490,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "risk_indicators:read",
         "escalations:read",
         "ai_governance:read",
+        "llm_observability:read",
         "integrations:read",
         "data:read",
         "privacy:read",
@@ -5589,4 +5595,117 @@ class SeedService:
                 row.is_active = True
             seeded.append(row)
         db.flush()
+        return seeded
+
+    @staticmethod
+    def ensure_connector_catalog(db: Session) -> list["ConnectorCatalogEntry"]:
+        """Idempotently seed the connector marketplace catalog with real third-party systems.
+
+        The marketplace's purpose is to list actual integration targets (Salesforce, Workday,
+        ServiceNow, Okta, OpenMetadata, etc.) that a compliance org can enable and configure --
+        these names are intentionally real, not scrubbed placeholders.
+        """
+        from app.models.connector_catalog_entry import ConnectorCatalogEntry
+
+        catalog: tuple[tuple[str, str, str, dict], ...] = (
+            (
+                "Carbon accounting file ingest",
+                "sustainability",
+                "CSV or file-based greenhouse gas emissions import.",
+                {
+                    "type": "object",
+                    "required": ["file_format"],
+                    "properties": {"file_format": {"type": "string"}, "scope_mapping": {"type": "object"}},
+                },
+            ),
+            (
+                "XBRL disclosure export",
+                "reporting",
+                "Structured ESG disclosure export configuration.",
+                {
+                    "type": "object",
+                    "required": ["taxonomy"],
+                    "properties": {"taxonomy": {"type": "string"}, "entity_identifier": {"type": "string"}},
+                },
+            ),
+            (
+                "OpenMetadata",
+                "data_governance",
+                "Data catalog and lineage metadata sync via OpenMetadata's REST API.",
+                {
+                    "type": "object",
+                    "required": ["base_url", "jwt_token"],
+                    "properties": {"base_url": {"type": "string"}, "jwt_token": {"type": "string"}},
+                },
+            ),
+            (
+                "Okta",
+                "identity_governance",
+                "Identity provider sync for access review and segregation-of-duties evidence via Okta's API.",
+                {
+                    "type": "object",
+                    "required": ["org_url", "api_token"],
+                    "properties": {"org_url": {"type": "string"}, "api_token": {"type": "string"}},
+                },
+            ),
+            (
+                "Salesforce",
+                "crm",
+                "Customer relationship data sync for third-party risk and customer compliance context.",
+                {
+                    "type": "object",
+                    "required": ["instance_url", "client_id", "client_secret"],
+                    "properties": {
+                        "instance_url": {"type": "string"},
+                        "client_id": {"type": "string"},
+                        "client_secret": {"type": "string"},
+                    },
+                },
+            ),
+            (
+                "Workday",
+                "hr",
+                "Human capital management sync for employee lifecycle and access review evidence.",
+                {
+                    "type": "object",
+                    "required": ["tenant_url", "client_id", "client_secret"],
+                    "properties": {
+                        "tenant_url": {"type": "string"},
+                        "client_id": {"type": "string"},
+                        "client_secret": {"type": "string"},
+                    },
+                },
+            ),
+            (
+                "ServiceNow",
+                "itsm",
+                "IT service management sync for compliance issue and incident tracking.",
+                {
+                    "type": "object",
+                    "required": ["instance_url", "username", "password"],
+                    "properties": {
+                        "instance_url": {"type": "string"},
+                        "username": {"type": "string"},
+                        "password": {"type": "string"},
+                    },
+                },
+            ),
+        )
+        existing_names = {
+            row.name for row in db.execute(select(ConnectorCatalogEntry)).scalars().all()
+        }
+        seeded: list[ConnectorCatalogEntry] = []
+        for name, category, description, config_schema in catalog:
+            if name in existing_names:
+                continue
+            row = ConnectorCatalogEntry(
+                name=name,
+                category=category,
+                description=description,
+                config_schema=config_schema,
+                enabled=True,
+            )
+            db.add(row)
+            db.flush()
+            seeded.append(row)
         return seeded

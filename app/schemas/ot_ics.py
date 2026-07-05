@@ -105,6 +105,10 @@ class OtIcsFindingIngestResponse(BaseModel):
     detected_at: datetime
 
 
+class OtIcsFindingResolveRequest(BaseModel):
+    resolution_note: str | None = Field(default=None, max_length=2000)
+
+
 class OtIcsAssetSegmentConcentration(BaseModel):
     network_segment: str
     open_high_or_critical_count: int

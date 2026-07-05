@@ -22,6 +22,7 @@ from app.models.organization_framework import OrganizationFramework
 from app.models.organization_obligation_state import OrganizationObligationState
 from app.models.organization_export_setting import OrganizationExportSetting
 from app.models.risk import Risk
+from app.models.user import User
 from app.repositories.control_repository import ControlRepository
 from app.repositories.risk_repository import RiskRepository
 from app.services.compliance_dashboard_service import ComplianceDashboardService
@@ -93,6 +94,23 @@ class ExportContentBuilder:
             primary_color_hex=row.primary_color_hex or "#1F4B99",
         )
 
+    def _owner_insight(self, owner_user_id: uuid.UUID | None) -> str | None:
+        """Flag when an entity's owner has been deactivated elsewhere in the platform.
+
+        Exports are frequently pulled well after the fact (audits, board packets); a
+        deactivated owner means nobody is actively accountable for the item and that
+        needs to be visible on the document itself, not just inferred by a reader who
+        happens to also check the user directory.
+        """
+        if owner_user_id is None:
+            return "No owner assigned - accountability gap."
+        owner = self.db.get(User, owner_user_id)
+        if owner is None:
+            return "Assigned owner no longer exists in this organization."
+        if not owner.is_active or owner.status != "active":
+            return f"Assigned owner ({owner.email}) is deactivated - reassign before relying on this record."
+        return None
+
     @staticmethod
     def _to_rows(payload: dict[str, Any], prefix: str = "") -> list[tuple[str, str]]:
         rows: list[tuple[str, str]] = []
@@ -126,6 +144,27 @@ class ExportContentBuilder:
                 ],
             )
         ]
+
+        insights: list[str] = []
+        today = datetime.now(UTC).date()
+        if policy.archived_at is not None:
+            insights.append("This policy is archived - do not present as current guidance.")
+        if policy.review_due_date is not None and policy.review_due_date < today and policy.archived_at is None:
+            days_overdue = (today - policy.review_due_date).days
+            insights.append(
+                f"Review is overdue by {days_overdue} day(s) (due {policy.review_due_date}) - "
+                "content may no longer reflect current practice."
+            )
+        if policy.status == "draft" and policy.effective_date is not None and policy.effective_date <= today:
+            insights.append(
+                f"Effective date ({policy.effective_date}) has passed but the policy is still in draft status."
+            )
+        owner_flag = self._owner_insight(policy.owner_user_id)
+        if owner_flag:
+            insights.append(owner_flag)
+        if insights:
+            sections.append(ExportSection(title="Insights", items=insights))
+
         return ExportDocumentContent(
             organization_id=org_id,
             title=f"Compliance Policy Export: {policy.title}",
@@ -160,6 +199,23 @@ class ExportContentBuilder:
                 ],
             )
         ]
+
+        insights: list[str] = []
+        if control.criticality in {"high", "critical"} and control.status not in {"implemented", "effective"}:
+            insights.append(
+                f"Criticality is {control.criticality} but status is '{control.status}' - "
+                "this control is not yet operating effectively."
+            )
+        if control.criticality in {"high", "critical"} and not (control.testing_procedure or "").strip():
+            insights.append(
+                f"Criticality is {control.criticality} but no testing procedure is documented."
+            )
+        owner_flag = self._owner_insight(control.owner_user_id)
+        if owner_flag:
+            insights.append(owner_flag)
+        if insights:
+            sections.append(ExportSection(title="Insights", items=insights))
+
         return ExportDocumentContent(
             organization_id=org_id,
             title=f"Control Export: {control.title}",
@@ -195,6 +251,38 @@ class ExportContentBuilder:
                 ],
             )
         ]
+
+        insights: list[str] = []
+        now = datetime.now(UTC)
+        if risk.review_due_at is not None:
+            review_due = risk.review_due_at if risk.review_due_at.tzinfo else risk.review_due_at.replace(tzinfo=UTC)
+            if review_due < now and risk.status not in {"closed", "accepted"}:
+                insights.append(
+                    f"Risk review is overdue (was due {review_due.isoformat()}) - "
+                    "scoring may be stale."
+                )
+        if risk.residual_score is None:
+            insights.append("Residual risk has not been assessed - only inherent risk is quantified here.")
+        elif risk.residual_score >= risk.inherent_score:
+            insights.append(
+                "Residual score is not lower than inherent score - documented treatment has not "
+                "measurably reduced this risk."
+            )
+        if (
+            risk.treatment_strategy == "accept"
+            and risk.severity in {"high", "critical"}
+            and not risk.residual_risk_acceptable
+        ):
+            insights.append(
+                f"Severity is {risk.severity} and treatment is 'accept' but there is no recorded "
+                "acceptance sign-off (residual_risk_acceptable is not set)."
+            )
+        owner_flag = self._owner_insight(risk.owner_user_id)
+        if owner_flag:
+            insights.append(owner_flag)
+        if insights:
+            sections.append(ExportSection(title="Insights", items=insights))
+
         return ExportDocumentContent(
             organization_id=org_id,
             title=f"Risk Export: {risk.title}",
@@ -227,6 +315,26 @@ class ExportContentBuilder:
                 ],
             )
         ]
+
+        insights: list[str] = []
+        if vendor.risk_tier == "not_assessed" and (vendor.data_access or vendor.processes_personal_data):
+            insights.append(
+                "Vendor has data access or processes personal data but has not been risk-assessed."
+            )
+        if vendor.nth_party_risk_flag:
+            severity = vendor.nth_party_risk_severity or "unspecified"
+            insights.append(f"Nth-party risk signal flagged (severity: {severity}) - review sub-processor chain.")
+        if vendor.sub_processor and vendor.risk_tier in {"not_assessed", "low"}:
+            insights.append(
+                "Vendor relies on sub-processors but is rated low/not-assessed risk - "
+                "verify sub-processor due diligence coverage."
+            )
+        owner_flag = self._owner_insight(vendor.owner_user_id)
+        if owner_flag:
+            insights.append(owner_flag)
+        if insights:
+            sections.append(ExportSection(title="Insights", items=insights))
+
         return ExportDocumentContent(
             organization_id=org_id,
             title=f"Vendor Export: {vendor.name}",

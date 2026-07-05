@@ -197,19 +197,71 @@ class AIMonitoringService:
         )
         return row
 
-    def _create_breach_alert(self, config: AIMonitoringConfig, value: Decimal) -> ControlMonitoringAlert:
+    def _compute_degradation_trend(self, config: AIMonitoringConfig, *, lookback: int = 5) -> dict:
+        """Reason about degradation over time, not just the single latest value.
+
+        Looks at the most recent `lookback` readings (including the one just
+        recorded) to compute a consecutive-breach streak and, when a baseline
+        is configured, how far the current value has drifted from it. This is
+        what lets an alert say "3 consecutive breaches, 42% worse than
+        baseline" instead of a single point-in-time threshold comparison.
+        """
+        recent = self.db.execute(
+            select(AIMonitoringReading)
+            .where(
+                AIMonitoringReading.organization_id == config.organization_id,
+                AIMonitoringReading.config_id == config.id,
+            )
+            .order_by(AIMonitoringReading.created_at.desc())
+            .limit(lookback)
+        ).scalars().all()
+
+        breach_streak = 0
+        for reading in recent:
+            if reading.within_threshold is False:
+                breach_streak += 1
+            else:
+                break
+
+        pct_from_baseline = None
+        if config.baseline_value is not None and config.baseline_value != 0 and recent:
+            latest_value = recent[0].value
+            pct_from_baseline = float((latest_value - config.baseline_value) / abs(config.baseline_value) * 100)
+
+        return {
+            "breach_streak": breach_streak,
+            "sustained_degradation": breach_streak >= 3,
+            "pct_from_baseline": pct_from_baseline,
+        }
+
+    def _create_breach_alert(self, config: AIMonitoringConfig, value: Decimal, trend: dict) -> ControlMonitoringAlert:
         direction_text = "above" if config.comparison_direction == "above" else "below"
         description = (
             f"AI monitoring breach: {config.metric_type} = {value} "
             f"({direction_text} threshold {config.threshold_value})"
         )
+        breach_streak = trend["breach_streak"]
+        if trend["sustained_degradation"]:
+            description += f" — sustained degradation: {breach_streak} consecutive breaches"
+        pct_from_baseline = trend["pct_from_baseline"]
+        if pct_from_baseline is not None:
+            description += f"; {pct_from_baseline:+.1f}% vs baseline {config.baseline_value}"
+
+        severity = self._severity_for_metric(config.metric_type)
+        if trend["sustained_degradation"]:
+            # A single blip and a multi-reading sustained drift are not the same
+            # risk: escalate severity so a trend doesn't get lost among one-offs.
+            severity_rank = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+            escalated = "critical" if severity_rank.get(severity, 0) >= 2 else "high"
+            severity = escalated
+
         alert = ControlMonitoringAlert(
             organization_id=config.organization_id,
             rule_id=None,
             definition_id=None,
             control_id=None,
             alert_type="ai_monitoring",
-            severity=self._severity_for_metric(config.metric_type),
+            severity=severity,
             status="open",
             title=f"AI monitoring breach: {config.metric_type}",
             description=description,
@@ -220,6 +272,9 @@ class AIMonitoringService:
                 "value": str(value),
                 "threshold_value": str(config.threshold_value),
                 "comparison_direction": config.comparison_direction,
+                "breach_streak": breach_streak,
+                "sustained_degradation": trend["sustained_degradation"],
+                "pct_from_baseline": pct_from_baseline,
             },
         )
         self.db.add(alert)
@@ -287,7 +342,8 @@ class AIMonitoringService:
         )
 
         if not within_threshold and config.alert_on_breach:
-            alert = self._create_breach_alert(config, value)
+            trend = self._compute_degradation_trend(config)
+            alert = self._create_breach_alert(config, value, trend)
             AIGovernanceEventService.log(
                 self.db,
                 org_id,
@@ -364,6 +420,72 @@ class AIMonitoringService:
             reading_source="api_report",
             source_tool=source_tool,
         )
+
+    def list_readings(
+        self,
+        org_id: uuid.UUID,
+        config_id: uuid.UUID,
+        *,
+        skip: int = 0,
+        limit: int = 50,
+    ) -> dict:
+        """Time-series history for a single metric, plus a trend summary.
+
+        This is the actual visualization/summary source for a metric such as
+        `output_drift` or `bias_parity_gap`: callers can chart `readings` over
+        time, and `trend` gives a computed direction/magnitude so the caller
+        doesn't have to re-derive it client-side.
+        """
+        config = self._require_config(org_id, config_id)
+
+        total = self.db.execute(
+            select(func.count()).select_from(AIMonitoringReading).where(
+                AIMonitoringReading.organization_id == org_id,
+                AIMonitoringReading.config_id == config_id,
+            )
+        ).scalar_one()
+
+        readings = self.db.execute(
+            select(AIMonitoringReading)
+            .where(
+                AIMonitoringReading.organization_id == org_id,
+                AIMonitoringReading.config_id == config_id,
+            )
+            .order_by(AIMonitoringReading.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+        ).scalars().all()
+
+        values = [r.value for r in readings]
+        breach_count = sum(1 for r in readings if not r.within_threshold)
+        trend_direction = None
+        if len(values) >= 2:
+            # values are newest-first; compare newest to oldest in this page.
+            delta = values[0] - values[-1]
+            if delta > 0:
+                trend_direction = "increasing"
+            elif delta < 0:
+                trend_direction = "decreasing"
+            else:
+                trend_direction = "flat"
+
+        trend = self._compute_degradation_trend(config)
+        return {
+            "config": config,
+            "readings": readings,
+            "total": int(total),
+            "summary": {
+                "count_in_page": len(readings),
+                "min_value": min(values) if values else None,
+                "max_value": max(values) if values else None,
+                "avg_value": (sum(values) / len(values)) if values else None,
+                "breach_count_in_page": breach_count,
+                "trend_direction": trend_direction,
+                "breach_streak": trend["breach_streak"],
+                "sustained_degradation": trend["sustained_degradation"],
+                "pct_from_baseline": trend["pct_from_baseline"],
+            },
+        }
 
     def get_monitoring_dashboard(self, org_id: uuid.UUID, system_id: uuid.UUID) -> dict:
         self._require_ai_system(org_id, system_id)

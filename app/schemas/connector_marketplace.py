@@ -45,6 +45,9 @@ class ConnectorOrgEnablementRead(BaseModel):
     connector_id: UUID
     enabled: bool
     config_values_json: dict | None
+    connection_status: str
+    connection_checked_at: datetime | None
+    connection_error: str | None
     updated_by_user_id: UUID | None
     created_at: datetime
     updated_at: datetime

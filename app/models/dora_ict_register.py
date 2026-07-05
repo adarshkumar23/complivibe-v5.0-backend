@@ -42,3 +42,7 @@ class DORAICTRegister(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixi
     owner_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Links to an auto-created Risk register entry when this entry is flagged as a
+    # critical-function gap (missing exit strategy or overdue assessment). Nullable:
+    # most entries never breach the gap criteria and never get one.
+    risk_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("risks.id", ondelete="SET NULL"), nullable=True)

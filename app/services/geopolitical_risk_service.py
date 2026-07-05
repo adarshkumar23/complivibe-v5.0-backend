@@ -55,6 +55,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.audit_log import AuditLog
 from app.models.business_unit import BusinessUnit
 from app.models.geopolitical_risk_signal import GeopoliticalRiskSignal
 from app.models.vendor import Vendor
@@ -67,6 +68,15 @@ GDELT_DOC_API_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 GDELT_HTTP_TIMEOUT_SECONDS = 10.0
 
 SEVERITY_ORDER: dict[str, int] = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+# GDELT is a near-real-time news feed (typically indexed within minutes of
+# publication). If this org has not run a *successful* ingest for a given
+# region string in this many days, the exposure summary for that region is
+# treated as stale monitoring coverage rather than a current "all clear" --
+# a Fortune-500 risk officer relying on this feature must be told "we
+# haven't checked lately" rather than silently seeing an empty/quiet-looking
+# region and assuming it was recently confirmed safe.
+STALE_MONITORING_THRESHOLD_DAYS = 14
 
 # Keyword heuristic tables. Order matters: first category/severity whose
 # keyword set matches the (lowercased) headline wins.
@@ -431,6 +441,44 @@ class GeopoliticalRiskService:
             if SEVERITY_ORDER.get(signal.severity, 0) > SEVERITY_ORDER.get(stats["max_severity"], 0):
                 stats["max_severity"] = signal.severity
 
+        # 1b. Monitoring freshness per region string: the most recent
+        # *successful* ingest (``geopolitical_risk.ingested`` audit action)
+        # for that exact region query. A region with zero signal rows can
+        # mean either "checked recently, genuinely quiet" or "never
+        # checked at all" -- those are very different for a risk officer,
+        # so freshness is derived from ingest history, not from signal
+        # presence/absence.
+        now = self.utcnow()
+        last_ingested_by_region: dict[str, datetime] = {}
+        ingest_audit_rows = self.db.execute(
+            select(AuditLog).where(
+                AuditLog.organization_id == org_id,
+                AuditLog.action == "geopolitical_risk.ingested",
+            )
+        ).scalars().all()
+        for audit_row in ingest_audit_rows:
+            region_query = (audit_row.metadata_json or {}).get("region_query")
+            if not region_query:
+                continue
+            existing = last_ingested_by_region.get(region_query)
+            audit_created_at = audit_row.created_at
+            if audit_created_at.tzinfo is None:
+                audit_created_at = audit_created_at.replace(tzinfo=UTC)
+            if existing is None or audit_created_at > existing:
+                last_ingested_by_region[region_query] = audit_created_at
+
+        def _freshness(region: str) -> dict[str, Any]:
+            last_ingested_at = last_ingested_by_region.get(region)
+            if last_ingested_at is None:
+                return {"monitoring_status": "never_monitored", "last_ingested_at": None, "is_stale": True}
+            age_days = (now - last_ingested_at).total_seconds() / 86400.0
+            is_stale = age_days >= STALE_MONITORING_THRESHOLD_DAYS
+            return {
+                "monitoring_status": "stale" if is_stale else "fresh",
+                "last_ingested_at": last_ingested_at,
+                "is_stale": is_stale,
+            }
+
         # 2. This org's vendors (optionally filtered) and their declared
         #    region exposures.
         vendor_stmt = select(Vendor).where(Vendor.organization_id == org_id)
@@ -459,19 +507,42 @@ class GeopoliticalRiskService:
 
         exposed_vendors: list[dict[str, Any]] = []
         highest_severity_observed: str | None = None
+        unmonitored_exposures: list[dict[str, Any]] = []
         for vid, vendor_exposures in exposures_by_vendor.items():
             regions_at_risk = []
             overall_max_severity = "low"
             total_signal_count = 0
             for exposure in vendor_exposures:
                 stats = region_stats.get(exposure.region)
+                freshness = _freshness(exposure.region)
                 if stats is None:
+                    # Zero signal rows for this region is ambiguous on its
+                    # own -- it could mean "checked recently, genuinely
+                    # quiet" or "never checked at all". Only the latter (or
+                    # a check that has since gone stale) is worth surfacing:
+                    # it's a monitoring coverage gap, not a risk signal, so
+                    # it is reported separately rather than inflating
+                    # exposed_vendors with vendors that have no actual risk
+                    # evidence.
+                    if freshness["monitoring_status"] != "fresh":
+                        vendor_for_gap = vendor_by_id[vid]
+                        unmonitored_exposures.append(
+                            {
+                                "vendor_id": vendor_for_gap.id,
+                                "vendor_name": vendor_for_gap.name,
+                                "region": exposure.region,
+                                "monitoring_status": freshness["monitoring_status"],
+                                "last_ingested_at": freshness["last_ingested_at"],
+                            }
+                        )
                     continue
                 regions_at_risk.append(
                     {
                         "region": exposure.region,
                         "signal_count": stats["count"],
                         "max_severity": stats["max_severity"],
+                        "last_ingested_at": freshness["last_ingested_at"],
+                        "is_stale": freshness["is_stale"],
                     }
                 )
                 total_signal_count += stats["count"]
@@ -498,6 +569,13 @@ class GeopoliticalRiskService:
                 highest_severity_observed = overall_max_severity
 
         exposed_vendors.sort(key=lambda item: SEVERITY_ORDER.get(item["overall_max_severity"], 0), reverse=True)
+        unmonitored_exposures.sort(key=lambda item: (item["vendor_name"], item["region"]))
+
+        # Stale-feed flag on the regions that DO have signal history: any
+        # region whose most recent successful ingest is past the threshold.
+        stale_regions = sorted(
+            region for region in region_stats if _freshness(region)["is_stale"]
+        )
 
         return {
             "organization_id": org_id,
@@ -505,4 +583,6 @@ class GeopoliticalRiskService:
             "exposed_vendors": exposed_vendors,
             "vendor_count_exposed": len(exposed_vendors),
             "highest_severity_observed": highest_severity_observed,
+            "stale_regions": stale_regions,
+            "unmonitored_exposures": unmonitored_exposures,
         }

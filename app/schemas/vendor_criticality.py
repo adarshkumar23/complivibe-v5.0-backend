@@ -60,6 +60,7 @@ class VendorCriticalityProfileRead(BaseModel):
     criticality_score: int
     criticality_tier: str = Field(pattern=CRITICALITY_TIER_PATTERN)
     score_explanation_json: dict | list
+    priority_context: dict = Field(default_factory=dict)
     notes: str | None = None
     updated_by_user_id: UUID | None = None
     created_at: datetime | None = None

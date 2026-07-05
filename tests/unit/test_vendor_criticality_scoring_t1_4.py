@@ -94,8 +94,17 @@ def test_t1_4_weighted_formula_updates_vendor_tier_and_audits(client, db_session
     assert body["score_explanation_json"]["weights"]["revenue_dependency_weight"] == "0.4000"
     assert body["score_explanation_json"]["sources"]
 
+    # Business criticality is an independent dimension from Vendor.risk_tier (owned by
+    # VendorRiskService / questionnaire scoring, which reflect assessed likelihood x impact
+    # risk, not business importance). Since this vendor was never risk-assessed, risk_tier
+    # must stay "not_assessed" - criticality must NEVER overwrite it.
     refreshed_vendor = db_session.get(Vendor, uuid.UUID(vendor["id"]))
-    assert refreshed_vendor.risk_tier == "critical"
+    assert refreshed_vendor.risk_tier == "not_assessed"
+
+    # The response instead surfaces a cross-signal recommendation flagging that a
+    # business-critical vendor has no risk assessment on file yet.
+    assert body["priority_context"]["current_risk_tier"] == "not_assessed"
+    assert "no risk assessment on file" in body["priority_context"]["recommendation"]
 
     audits = db_session.execute(
         select(AuditLog).where(
@@ -103,6 +112,58 @@ def test_t1_4_weighted_formula_updates_vendor_tier_and_audits(client, db_session
             AuditLog.action.in_(["vendor_criticality_profile.updated", "vendor.risk_tier.updated"]),
         )
     ).scalars().all()
-    assert {row.action for row in audits} == {"vendor_criticality_profile.updated", "vendor.risk_tier.updated"}
-    tier_audit = next(row for row in audits if row.action == "vendor.risk_tier.updated")
-    assert tier_audit.after_json["criticality_score"] == 78
+    # Only the criticality profile itself is audited - vendor.risk_tier is untouched by
+    # this endpoint, so no vendor.risk_tier.updated row should exist.
+    assert {row.action for row in audits} == {"vendor_criticality_profile.updated"}
+
+
+def test_t1_4_criticality_never_clobbers_real_risk_assessment(client, db_session):
+    """Regression test: a real likelihood x impact risk assessment must survive an
+    unrelated (low) business-criticality profile update. Previously the criticality
+    endpoint overwrote Vendor.risk_tier directly, so a routine business-criticality
+    questionnaire (low revenue dependency, no data, low operational importance) would
+    silently downgrade a vendor's assessed "critical" risk to "low"."""
+    org = bootstrap_org_user(client, email_prefix="t14-noclobber")
+    vendor = _create_vendor(client, org, name="Assessed Vendor")
+
+    risk_resp = client.post(
+        f"{VENDORS_BASE}/{vendor['id']}/risk-scores",
+        headers=org["org_headers"],
+        json={"likelihood": "very_high", "impact": "very_high"},
+    )
+    assert risk_resp.status_code == 201, risk_resp.text
+    assert risk_resp.json()["risk_level"] == "critical"
+
+    vendor_after_risk = db_session.get(Vendor, uuid.UUID(vendor["id"]))
+    assert vendor_after_risk.risk_tier == "critical"
+
+    crit_resp = client.put(
+        f"{VENDORS_BASE}/{vendor['id']}/criticality",
+        headers=org["org_headers"],
+        json={
+            "revenue_dependency_pct": "0.00",
+            "data_volume_tier": "none",
+            "operational_criticality": "low",
+            "substitutability_score": 1,
+        },
+    )
+    assert crit_resp.status_code == 200, crit_resp.text
+    body = crit_resp.json()
+    assert body["criticality_tier"] == "low"
+
+    vendor_after_crit = db_session.get(Vendor, uuid.UUID(vendor["id"]))
+    assert vendor_after_crit.risk_tier == "critical", "criticality update must never clobber the real risk assessment"
+
+    # Cross-signal insight: the vendor's assessed risk exceeds its business criticality.
+    assert body["priority_context"]["current_risk_tier"] == "critical"
+    assert "exceeds its business criticality tier" in body["priority_context"]["recommendation"]
+
+    audits = db_session.execute(
+        select(AuditLog).where(
+            AuditLog.organization_id == uuid.UUID(org["organization_id"]),
+            AuditLog.action == "vendor.risk_tier.updated",
+        )
+    ).scalars().all()
+    # Exactly one risk_tier audit row - from the real risk assessment, not from criticality.
+    assert len(audits) == 1
+    assert audits[0].metadata_json["source"] == "vendor_risk_score"

@@ -16,6 +16,9 @@ class SyntheticDatasetCreate(BaseModel):
     generation_method: str = Field(min_length=1, max_length=255)
     source_dataset_id: UUID | None = None
     privacy_technique: PrivacyTechnique = "none"
+    # k (equivalence-class size) for k_anonymity, or epsilon for
+    # differential_privacy. Must be omitted/None when privacy_technique='none'.
+    privacy_parameter: float | None = Field(default=None, gt=0)
     validation_status: ValidationStatus = "unvalidated"
     validation_notes: str | None = None
 
@@ -25,6 +28,7 @@ class SyntheticDatasetUpdate(BaseModel):
     generation_method: str | None = Field(default=None, min_length=1, max_length=255)
     source_dataset_id: UUID | None = None
     privacy_technique: PrivacyTechnique | None = None
+    privacy_parameter: float | None = Field(default=None, gt=0)
     validation_status: ValidationStatus | None = None
     validation_notes: str | None = None
 
@@ -41,6 +45,8 @@ class SyntheticDatasetRead(BaseModel):
     generation_method: str
     source_dataset_id: UUID | None = None
     privacy_technique: str
+    privacy_parameter: float | None = None
+    reidentification_risk_score: float | None = None
     validation_status: str
     validation_notes: str | None = None
     governance_gap_flag: bool

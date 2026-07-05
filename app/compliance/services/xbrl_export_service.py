@@ -1,7 +1,10 @@
 import hashlib
+import ipaddress
 import re
+import socket
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import UTC, datetime
@@ -25,6 +28,10 @@ TAXONOMY_SOURCE_ERROR_CODES = {"FileNotLoadable", "IOError", "webCache:retrieval
 
 
 class TaxonomySourceUnavailableError(RuntimeError):
+    pass
+
+
+class TaxonomySourceRejectedError(RuntimeError):
     pass
 
 
@@ -145,7 +152,38 @@ class XBRLExportService:
         return ET.tostring(root, encoding="unicode", xml_declaration=True)
 
     @staticmethod
+    def _reject_if_internal_target(taxonomy_schema_url: str) -> None:
+        """Block SSRF: the taxonomy schema URL is caller-supplied and the server fetches it
+        directly, so refuse anything that doesn't resolve to a public host/scheme."""
+        parsed = urllib.parse.urlsplit(taxonomy_schema_url)
+        if parsed.scheme not in ("http", "https"):
+            raise TaxonomySourceRejectedError("taxonomy_schema_url must use http or https")
+        hostname = parsed.hostname
+        if not hostname:
+            raise TaxonomySourceRejectedError("taxonomy_schema_url is missing a hostname")
+        try:
+            addr_infos = socket.getaddrinfo(hostname, None)
+        except OSError as exc:
+            raise TaxonomySourceUnavailableError("taxonomy source hostname could not be resolved") from exc
+        for family, _, _, _, sockaddr in addr_infos:
+            ip_text = sockaddr[0]
+            try:
+                ip = ipaddress.ip_address(ip_text)
+            except ValueError:
+                continue
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_reserved
+                or ip.is_unspecified
+            ):
+                raise TaxonomySourceRejectedError("taxonomy_schema_url must not resolve to an internal or private address")
+
+    @staticmethod
     def _check_taxonomy_source(taxonomy_schema_url: str) -> None:
+        XBRLExportService._reject_if_internal_target(taxonomy_schema_url)
         request = urllib.request.Request(taxonomy_schema_url, method="HEAD")
         try:
             with urllib.request.urlopen(request, timeout=15) as response:
@@ -206,6 +244,20 @@ class XBRLExportService:
         xbrl_content = self._build_xbrl(report, payload)
         try:
             self._engine_parse_check(xbrl_content, payload.taxonomy_schema_url)
+        except TaxonomySourceRejectedError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "message": "XBRL validation failed",
+                    "validation_errors": [
+                        {
+                            "data_point_index": None,
+                            "field": "taxonomy_schema_url",
+                            "message": "taxonomy_schema_url must be a public http(s) URL; internal or private addresses are not allowed.",
+                        }
+                    ],
+                },
+            ) from exc
         except TaxonomySourceUnavailableError as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

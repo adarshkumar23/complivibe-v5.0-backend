@@ -6,6 +6,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 LEGAL_MATTER_TYPE_PATTERN = "^(litigation|regulatory_inquiry|contract_dispute|ip_dispute|employment|other)$"
 LEGAL_MATTER_STATUS_PATTERN = "^(open|in_progress|on_hold|closed)$"
+# Status changes must never flow through the generic PATCH update (that would bypass the
+# open-linked-issue guard and skip closed_at/closed_by bookkeeping). Only these
+# non-terminal statuses are reachable via the dedicated /status transition endpoint;
+# "closed" is only reachable via /close, which enforces the confirm guard.
+LEGAL_MATTER_TRANSITIONABLE_STATUS_PATTERN = "^(open|in_progress|on_hold)$"
 
 
 class LegalMatterCreate(BaseModel):
@@ -23,7 +28,6 @@ class LegalMatterUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     matter_type: str | None = Field(default=None, pattern=LEGAL_MATTER_TYPE_PATTERN)
-    status: str | None = Field(default=None, pattern=LEGAL_MATTER_STATUS_PATTERN)
     opposing_party: str | None = None
     outside_counsel: str | None = None
     budget: Decimal | None = Field(default=None, ge=0)
@@ -41,6 +45,10 @@ class LegalMatterLinkIssueRequest(BaseModel):
 
 class LegalMatterCloseRequest(BaseModel):
     confirm: bool = False
+
+
+class LegalMatterStatusChangeRequest(BaseModel):
+    new_status: str = Field(pattern=LEGAL_MATTER_TRANSITIONABLE_STATUS_PATTERN)
 
 
 class LegalMatterResponse(BaseModel):

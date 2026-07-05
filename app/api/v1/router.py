@@ -11,6 +11,7 @@ from app.ai_governance.routers import guardrails as ai_governance_guardrails
 from app.ai_governance.routers import approval_envelopes as ai_governance_approval_envelopes
 from app.ai_governance.routers import ai_risk_assessments as ai_governance_risk_assessments
 from app.ai_governance.routers import monitoring as ai_governance_monitoring
+from app.ai_governance.routers import llm_observability as ai_governance_llm_observability
 from app.ai_governance.routers import risk_signals as ai_governance_risk_signals
 from app.ai_governance.routers import recommendations as ai_governance_recommendations
 from app.ai_governance.routers import diagnostics as ai_governance_events_diagnostics
@@ -190,6 +191,7 @@ api_router.include_router(ai_governance_guardrails.events_router)
 api_router.include_router(ai_governance_approval_envelopes.router)
 api_router.include_router(ai_governance_monitoring.router)
 api_router.include_router(ai_governance_monitoring.inbound_router)
+api_router.include_router(ai_governance_llm_observability.router)
 api_router.include_router(ai_governance_risk_signals.router)
 api_router.include_router(ai_governance_recommendations.router)
 api_router.include_router(ai_governance_events_diagnostics.router)

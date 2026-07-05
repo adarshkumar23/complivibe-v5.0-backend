@@ -11,7 +11,12 @@ from app.models.membership import Membership
 from app.models.organization import Organization
 from app.models.sanctions_screen_result import SanctionsScreenResult
 from app.models.user import User
-from app.satellites.tprm_intelligence.sanctions_screening import SanctionsDatasetUnavailable, SanctionsScreeningService
+from app.satellites.tprm_intelligence.sanctions_screening import (
+    SANCTIONS_ESCALATED_RISK_TIER,
+    SanctionsDatasetUnavailable,
+    SanctionsScreeningService,
+    screen_vendor_and_apply_effects,
+)
 from app.services.audit_service import AuditService
 from app.services.vendor_service import VendorService
 from app.services.vendor_supply_chain_service import VendorSupplyChainService
@@ -50,48 +55,17 @@ def compute_vendor_sanctions_screen(
     if vendor.status == "archived":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Archived vendors cannot be sanctions screened")
     try:
-        row = SanctionsScreeningService(db).screen_vendor(organization, vendor)
+        row = screen_vendor_and_apply_effects(
+            db,
+            organization,
+            vendor,
+            actor_user_id=current_user.id,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
     except SanctionsDatasetUnavailable as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
-    AuditService(db).write_audit_log(
-        action="vendor.sanctions_screen.computed",
-        entity_type="sanctions_screen_result",
-        entity_id=row.id,
-        organization_id=organization.id,
-        actor_user_id=current_user.id,
-        after_json={
-            "vendor_id": str(vendor.id),
-            "match_found": row.match_found,
-            "top_score": (row.match_details or {}).get("top_score"),
-            "source": (row.match_details or {}).get("source"),
-        },
-        metadata_json={"source": "tprm_intelligence_satellite"},
-        ip_address=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-    )
-    if row.match_found:
-        alerts = VendorSupplyChainService(db).propagate_vendor_signal(
-            organization_id=organization.id,
-            triggering_vendor_id=vendor.id,
-            signal_type="sanctions_match_found",
-            severity="critical",
-            explanation="positive sanctions screening match requires immediate first-party vendor review",
-            source_entity_type="sanctions_screen_result",
-            source_entity_id=row.id,
-        )
-        for alert in alerts:
-            AuditService(db).write_audit_log(
-                action="vendor_supply_chain.alert_propagated",
-                entity_type="vendor_supply_chain_alert",
-                entity_id=alert.id,
-                organization_id=organization.id,
-                actor_user_id=current_user.id,
-                after_json={"parent_vendor_id": str(alert.parent_vendor_id), "triggering_vendor_id": str(vendor.id), "signal_type": alert.signal_type, "severity": alert.severity},
-                metadata_json={"source": "vendor.sanctions_screen.computed"},
-                ip_address=request.client.host if request.client else None,
-                user_agent=request.headers.get("user-agent"),
-            )
     db.commit()
     db.refresh(row)
     return _result_payload(row)
@@ -121,7 +95,7 @@ def clear_vendor_sanctions_screen(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("vendors:write")),
 ) -> dict:
-    VendorService(db).require_vendor_in_org(organization.id, vendor_id)
+    vendor = VendorService(db).require_vendor_in_org(organization.id, vendor_id)
     service = SanctionsScreeningService(db)
     row = service.get_result(organization.id, vendor_id, result_id)
     if row is None:
@@ -147,6 +121,47 @@ def clear_vendor_sanctions_screen(
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
+    # This match auto-escalated the vendor's own risk tier to "critical". Since a human
+    # has now reviewed and confirmed it was a false positive, restore the tier the vendor
+    # had immediately before that escalation (only if nothing else has since re-escalated
+    # it away from "critical").
+    pre_escalation_tier = (row.match_details or {}).get("pre_escalation_risk_tier")
+    if pre_escalation_tier and vendor.risk_tier == SANCTIONS_ESCALATED_RISK_TIER:
+        tier_before = vendor.risk_tier
+        vendor.risk_tier = pre_escalation_tier
+        db.flush()
+        AuditService(db).write_audit_log(
+            action="vendor.risk_tier_escalated",
+            entity_type="vendor",
+            entity_id=vendor.id,
+            organization_id=organization.id,
+            actor_user_id=current_user.id,
+            before_json={"risk_tier": tier_before},
+            after_json={"risk_tier": pre_escalation_tier, "reason": "sanctions_match_cleared"},
+            metadata_json={"source": "tprm_intelligence_satellite", "sanctions_screen_result_id": str(row.id)},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    # A human has reviewed and cleared the match: close the nth-party alert/flag this
+    # match propagated upstream so first-party vendors aren't stuck flagged forever.
+    resolved = VendorSupplyChainService(db).resolve_vendor_signal(
+        organization_id=organization.id,
+        triggering_vendor_id=vendor_id,
+        signal_type="sanctions_match_found",
+        actor_user_id=current_user.id,
+    )
+    for alert in resolved:
+        AuditService(db).write_audit_log(
+            action="vendor_supply_chain.alert_propagation_cleared",
+            entity_type="vendor_supply_chain_alert",
+            entity_id=alert.id,
+            organization_id=organization.id,
+            actor_user_id=current_user.id,
+            after_json={"parent_vendor_id": str(alert.parent_vendor_id), "triggering_vendor_id": str(vendor_id), "signal_type": alert.signal_type},
+            metadata_json={"source": "vendor.sanctions_screen.cleared"},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
     db.commit()
     db.refresh(row)
     return _result_payload(row)
