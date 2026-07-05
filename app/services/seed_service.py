@@ -246,6 +246,8 @@ PERMISSIONS: dict[str, str] = {
     "resilience_testing:read": "Read DORA resilience test records and overdue-test status",
     "resilience_testing:manage": "Create and update DORA resilience test records",
     "whistleblower:investigate": "Investigate and respond to whistleblower hotline reports",
+    "anti_bribery:read": "Read anti-bribery and corruption risk assessments for vendors/third parties",
+    "anti_bribery:manage": "Create and compute anti-bribery and corruption risk assessments",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {
@@ -390,6 +392,8 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "resilience_testing:read",
         "resilience_testing:manage",
         "whistleblower:investigate",
+        "anti_bribery:read",
+        "anti_bribery:manage",
     },
     "reviewer": {
         "frameworks:read",
@@ -471,6 +475,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "crisis_management:read",
         "financial_risk:read",
         "resilience_testing:read",
+        "anti_bribery:read",
     },
     "auditor": {
         "frameworks:read",
@@ -529,6 +534,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "crisis_management:read",
         "financial_risk:read",
         "resilience_testing:read",
+        "anti_bribery:read",
     },
     "readonly": {
         "frameworks:read",
@@ -581,6 +587,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "crisis_management:read",
         "financial_risk:read",
         "resilience_testing:read",
+        "anti_bribery:read",
     },
 }
 
