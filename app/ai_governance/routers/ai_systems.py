@@ -407,7 +407,7 @@ def create_model_card(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("ai_governance:write")),
+    _: Membership = Depends(require_permission("model_registry:write")),
 ) -> ModelCardRead:
     row = ModelCardService(db).create_card(organization.id, system_id, payload, current_user.id)
     db.commit()
@@ -420,7 +420,7 @@ def get_active_model_card(
     system_id: uuid.UUID,
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("ai_governance:read")),
+    _: Membership = Depends(require_permission("model_registry:read")),
 ) -> ModelCardRead:
     row = ModelCardService(db).get_active_card(organization.id, system_id)
     return ModelCardRead.model_validate(row)
@@ -432,7 +432,7 @@ def list_model_cards(
     status_filter: str | None = Query(default=None, alias="status"),
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("ai_governance:read")),
+    _: Membership = Depends(require_permission("model_registry:read")),
 ) -> list[ModelCardRead]:
     rows = ModelCardService(db).list_cards(organization.id, system_id=system_id, status_filter=status_filter)
     return [ModelCardRead.model_validate(row) for row in rows]
@@ -445,7 +445,7 @@ def update_model_card(
     payload: ModelCardUpdate,
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("ai_governance:write")),
+    _: Membership = Depends(require_permission("model_registry:write")),
 ) -> ModelCardRead:
     service = ModelCardService(db)
     card = service.get_card(organization.id, card_id)
@@ -466,7 +466,7 @@ def publish_model_card(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("ai_governance:write")),
+    _: Membership = Depends(require_permission("model_registry:write")),
 ) -> ModelCardRead:
     service = ModelCardService(db)
     card = service.get_card(organization.id, card_id)
@@ -487,7 +487,7 @@ def create_aibom(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("ai_governance:write")),
+    _: Membership = Depends(require_permission("ai_bom:write")),
 ) -> AIBOMRecordRead:
     row = AIBOMService(db).create_aibom(
         organization.id,
@@ -506,7 +506,7 @@ def get_latest_aibom(
     system_id: uuid.UUID,
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("ai_governance:read")),
+    _: Membership = Depends(require_permission("ai_bom:read")),
 ) -> AIBOMWithComponentsRead:
     row, components = AIBOMService(db).get_latest_aibom(organization.id, system_id)
     return AIBOMWithComponentsRead(
@@ -522,7 +522,7 @@ def add_aibom_component(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("ai_governance:write")),
+    _: Membership = Depends(require_permission("ai_bom:write")),
 ) -> AIBOMComponentRead:
     service = AIBOMService(db)
     latest, _ = service.get_latest_aibom(organization.id, system_id)
@@ -539,7 +539,7 @@ def diff_aibom_versions(
     v2: int = Query(..., ge=1),
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("ai_governance:read")),
+    _: Membership = Depends(require_permission("ai_bom:read")),
 ) -> AIBOMDiffRead:
     payload = AIBOMService(db).diff_versions(organization.id, system_id, v1, v2)
     return AIBOMDiffRead(**payload)
