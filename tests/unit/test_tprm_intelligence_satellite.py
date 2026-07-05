@@ -298,3 +298,75 @@ def test_t4_6_organization_sanctions_threshold_is_configurable_and_audited(clien
     ).scalar_one_or_none()
     assert audit is not None
     assert audit.after_json["sanctions_match_threshold"] == 0.92
+
+
+def test_t1_3_supply_chain_graph_detects_cycle_and_rejects_bad_links(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="t1-supply-chain")
+    vendor_a = _create_vendor(client, org, name="First Party A", website="https://a.example")
+    vendor_b = _create_vendor(client, org, name="Fourth Party B", website="https://b.example")
+    vendor_c = _create_vendor(client, org, name="Fifth Party C", website="https://c.example")
+
+    self_link = client.post(
+        f"{SATELLITE_BASE}/{vendor_a['id']}/supply-chain-links",
+        headers=org["org_headers"],
+        json={"sub_vendor_id": vendor_a["id"], "relationship_type": "hosting"},
+    )
+    assert self_link.status_code == 422
+    assert "cannot depend on itself" in self_link.text
+
+    for parent, child in [(vendor_a, vendor_b), (vendor_b, vendor_c), (vendor_c, vendor_a)]:
+        response = client.post(
+            f"{SATELLITE_BASE}/{parent['id']}/supply-chain-links",
+            headers=org["org_headers"],
+            json={"sub_vendor_id": child["id"], "relationship_type": "hosting"},
+        )
+        assert response.status_code == 201, response.text
+
+    duplicate = client.post(
+        f"{SATELLITE_BASE}/{vendor_a['id']}/supply-chain-links",
+        headers=org["org_headers"],
+        json={"sub_vendor_id": vendor_b["id"], "relationship_type": "hosting"},
+    )
+    assert duplicate.status_code == 409
+
+    graph = client.get(f"{SATELLITE_BASE}/{vendor_a['id']}/supply-chain-graph?depth=5", headers=org["org_headers"])
+    assert graph.status_code == 200, graph.text
+    body = graph.json()
+    assert len(body["nodes"]) == 3
+    assert len(body["edges"]) == 3
+    assert body["data_quality_findings"][0]["type"] == "cycle_detected"
+    assert vendor_a["id"] in body["data_quality_findings"][0]["vendor_ids"]
+
+    audit = db_session.execute(select(AuditLog).where(AuditLog.action == "vendor_supply_chain.link_created")).scalars().all()
+    assert len(audit) == 3
+
+
+def test_t1_3_supply_chain_propagates_nth_party_signal_to_first_party(client, db_session, monkeypatch):
+    org = bootstrap_org_user(client, email_prefix="t1-supply-chain-signal")
+    first_party = _create_vendor(client, org, name="Critical SaaS", website="https://critical.example")
+    nth_party = _create_vendor(client, org, name="Risky CDN", website="https://risky.example")
+    linked = client.post(
+        f"{SATELLITE_BASE}/{first_party['id']}/supply-chain-links",
+        headers=org["org_headers"],
+        json={"sub_vendor_id": nth_party["id"], "relationship_type": "cdn_dependency"},
+    )
+    assert linked.status_code == 201, linked.text
+
+    def degraded_rating(self, domain: str) -> dict:
+        return {"domain": domain, "composite_score": 42.0, "signals_used": {"mozilla_observatory": {"status": "available", "score": 42}}}
+
+    monkeypatch.setattr(VendorSecurityRatingService, "compute", degraded_rating)
+    computed = client.post(f"{SATELLITE_BASE}/{nth_party['id']}/security-rating/compute", headers=org["org_headers"])
+    assert computed.status_code == 201, computed.text
+
+    graph = client.get(f"{SATELLITE_BASE}/{first_party['id']}/supply-chain-graph", headers=org["org_headers"])
+    assert graph.status_code == 200
+    alerts = graph.json()["open_alerts"]
+    assert len(alerts) == 1
+    assert alerts[0]["signal_type"] == "security_rating_degraded"
+    assert alerts[0]["severity"] == "high"
+    assert "Risky CDN" in alerts[0]["explanation"]
+
+    audit = db_session.execute(select(AuditLog).where(AuditLog.action == "vendor_supply_chain.alert_propagated")).scalar_one_or_none()
+    assert audit is not None
+    assert audit.after_json["parent_vendor_id"] == first_party["id"]

@@ -19,6 +19,7 @@ from app.satellites.tprm_intelligence.threat_intelligence import ThreatIntellige
 from app.satellites.tprm_intelligence.vendor_security_rating import VendorSecurityRatingService, normalize_domain
 from app.services.audit_service import AuditService
 from app.services.vendor_service import VendorService
+from app.services.vendor_supply_chain_service import VendorSupplyChainService
 
 router = APIRouter(prefix="/vendors", tags=["tprm-intelligence"])
 
@@ -101,6 +102,29 @@ def compute_vendor_security_rating(
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
+    if float(row.composite_score) < 70.0:
+        severity = "high" if float(row.composite_score) < 50.0 else "medium"
+        alerts = VendorSupplyChainService(db).propagate_vendor_signal(
+            organization_id=organization.id,
+            triggering_vendor_id=vendor.id,
+            signal_type="security_rating_degraded",
+            severity=severity,
+            explanation=f"security rating score {float(row.composite_score):.2f} is below the 70.00 monitoring threshold",
+            source_entity_type="vendor_external_rating",
+            source_entity_id=row.id,
+        )
+        for alert in alerts:
+            AuditService(db).write_audit_log(
+                action="vendor_supply_chain.alert_propagated",
+                entity_type="vendor_supply_chain_alert",
+                entity_id=alert.id,
+                organization_id=organization.id,
+                actor_user_id=current_user.id,
+                after_json={"parent_vendor_id": str(alert.parent_vendor_id), "triggering_vendor_id": str(vendor.id), "signal_type": alert.signal_type, "severity": alert.severity},
+                metadata_json={"source": "vendor.security_rating.computed"},
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
     db.commit()
     db.refresh(row)
     return _rating_payload(row)
@@ -163,6 +187,29 @@ def compute_vendor_threat_intelligence(
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
+    if float(row.threat_score) >= 50.0:
+        severity = "critical" if float(row.threat_score) >= 80.0 else "high"
+        alerts = VendorSupplyChainService(db).propagate_vendor_signal(
+            organization_id=organization.id,
+            triggering_vendor_id=vendor.id,
+            signal_type="threat_intelligence_elevated",
+            severity=severity,
+            explanation=f"threat intelligence score {float(row.threat_score):.2f} reached the 50.00 monitoring threshold",
+            source_entity_type="vendor_threat_intelligence",
+            source_entity_id=row.id,
+        )
+        for alert in alerts:
+            AuditService(db).write_audit_log(
+                action="vendor_supply_chain.alert_propagated",
+                entity_type="vendor_supply_chain_alert",
+                entity_id=alert.id,
+                organization_id=organization.id,
+                actor_user_id=current_user.id,
+                after_json={"parent_vendor_id": str(alert.parent_vendor_id), "triggering_vendor_id": str(vendor.id), "signal_type": alert.signal_type, "severity": alert.severity},
+                metadata_json={"source": "vendor.threat_intelligence.computed"},
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
     db.commit()
     db.refresh(row)
     return _threat_payload(row)

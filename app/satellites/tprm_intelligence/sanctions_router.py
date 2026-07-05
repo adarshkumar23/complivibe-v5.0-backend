@@ -14,6 +14,7 @@ from app.models.user import User
 from app.satellites.tprm_intelligence.sanctions_screening import SanctionsDatasetUnavailable, SanctionsScreeningService
 from app.services.audit_service import AuditService
 from app.services.vendor_service import VendorService
+from app.services.vendor_supply_chain_service import VendorSupplyChainService
 
 router = APIRouter(prefix="/vendors", tags=["tprm-intelligence"])
 
@@ -69,6 +70,28 @@ def compute_vendor_sanctions_screen(
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
+    if row.match_found:
+        alerts = VendorSupplyChainService(db).propagate_vendor_signal(
+            organization_id=organization.id,
+            triggering_vendor_id=vendor.id,
+            signal_type="sanctions_match_found",
+            severity="critical",
+            explanation="positive sanctions screening match requires immediate first-party vendor review",
+            source_entity_type="sanctions_screen_result",
+            source_entity_id=row.id,
+        )
+        for alert in alerts:
+            AuditService(db).write_audit_log(
+                action="vendor_supply_chain.alert_propagated",
+                entity_type="vendor_supply_chain_alert",
+                entity_id=alert.id,
+                organization_id=organization.id,
+                actor_user_id=current_user.id,
+                after_json={"parent_vendor_id": str(alert.parent_vendor_id), "triggering_vendor_id": str(vendor.id), "signal_type": alert.signal_type, "severity": alert.severity},
+                metadata_json={"source": "vendor.sanctions_screen.computed"},
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
     db.commit()
     db.refresh(row)
     return _result_payload(row)
