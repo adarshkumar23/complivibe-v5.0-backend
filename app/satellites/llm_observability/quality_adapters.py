@@ -12,6 +12,7 @@ from deepeval.metrics import HallucinationMetric
 from deepeval.models.base_model import DeepEvalBaseLLM
 from deepeval.test_case import LLMTestCase
 
+from app.satellites.llm_observability.ingest_client import decimal_from_float
 from app.satellites.llm_observability.models import ObservabilityResult
 
 
@@ -57,6 +58,55 @@ class DeepEvalHallucinationAdapter:
             value=score,
             source_tool="deepeval",
             details={"success": metric.success, "reason": metric.reason, "threshold": threshold},
+        )
+
+
+_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "have", "how",
+    "in", "is", "it", "of", "on", "or", "that", "the", "this", "to", "was", "what", "when",
+    "where", "which", "who", "why", "will", "with",
+}
+
+
+def _keyword_set(text: str) -> set[str]:
+    tokens = "".join(ch.lower() if ch.isalnum() else " " for ch in text).split()
+    return {token for token in tokens if token not in _STOPWORDS and len(token) > 1}
+
+
+class RAGRetrievalQualityAdapter:
+    """Deterministic retrieval-quality scoring for RAG pipelines: are the retrieved chunks
+    actually relevant to the query? This is independent of (and complements) hallucination/
+    faithfulness scoring, which only checks whether the *answer* is supported by whatever was
+    retrieved -- a bad retriever that returns irrelevant chunks would not show up there.
+    """
+
+    def score_retrieval_relevance(self, *, query: str, retrieved_contexts: list[str]) -> ObservabilityResult:
+        if not query.strip():
+            raise ValueError("query is required")
+        if not retrieved_contexts:
+            raise ValueError("retrieved_contexts must contain at least one chunk")
+
+        query_tokens = _keyword_set(query)
+        per_chunk_scores: list[float] = []
+        for chunk in retrieved_contexts:
+            chunk_tokens = _keyword_set(chunk)
+            if not query_tokens or not chunk_tokens:
+                per_chunk_scores.append(0.0)
+                continue
+            overlap = len(query_tokens & chunk_tokens) / len(query_tokens)
+            per_chunk_scores.append(overlap)
+
+        relevance_score = sum(per_chunk_scores) / len(per_chunk_scores) if per_chunk_scores else 0.0
+        low_relevance_chunks = sum(1 for score in per_chunk_scores if score < 0.2)
+        return ObservabilityResult(
+            metric_type="retrieval_relevance_score",
+            value=decimal_from_float(relevance_score),
+            source_tool="heuristic_retrieval_quality",
+            details={
+                "chunk_count": len(retrieved_contexts),
+                "per_chunk_scores": [round(s, 6) for s in per_chunk_scores],
+                "low_relevance_chunk_count": low_relevance_chunks,
+            },
         )
 
 

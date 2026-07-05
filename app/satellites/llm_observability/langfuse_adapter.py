@@ -74,3 +74,46 @@ class LangfuseTraceAdapter:
             ObservabilityResult("langfuse_error_rate", decimal_from_float(error_rate), "langfuse", details),
             ObservabilityResult("langfuse_avg_latency", decimal_from_float(avg_latency), "langfuse", details),
         ]
+
+    def poll_generation_spans(
+        self,
+        *,
+        from_timestamp: datetime | None = None,
+        to_timestamp: datetime | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Returns real per-call LLM spans (one row per generation): model, prompt/completion
+        token counts, and latency -- the actual per-call tracing data, as opposed to
+        poll_trace_metrics' trace-level aggregates.
+        """
+        response = self.client.api.observations.get_many(
+            type="GENERATION",
+            fields="core,basic,usage,model,metrics",
+            from_start_time=from_timestamp,
+            to_start_time=to_timestamp or datetime.now(timezone.utc),
+            limit=limit,
+        )
+        payload = _to_plain(response)
+        observations = payload.get("data") or []
+        if not isinstance(observations, list):
+            observations = []
+
+        spans: list[dict[str, Any]] = []
+        for obs in observations:
+            if not isinstance(obs, dict):
+                continue
+            usage = obs.get("usageDetails") or obs.get("usage") or {}
+            input_tokens = usage.get("input") or usage.get("promptTokens") or 0
+            output_tokens = usage.get("output") or usage.get("completionTokens") or 0
+            spans.append(
+                {
+                    "observation_id": obs.get("id"),
+                    "trace_id": obs.get("traceId"),
+                    "model": obs.get("providedModelName") or obs.get("model"),
+                    "input_tokens": int(input_tokens or 0),
+                    "output_tokens": int(output_tokens or 0),
+                    "latency_ms": float(obs.get("latency") or 0.0),
+                    "name": obs.get("name"),
+                }
+            )
+        return spans

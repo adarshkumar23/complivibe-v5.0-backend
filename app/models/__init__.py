@@ -318,6 +318,7 @@ from app.models.ai_approval_envelope import AIApprovalEnvelope
 from app.models.ai_envelope_approval import AIEnvelopeApproval
 from app.models.ai_monitoring_config import AIMonitoringConfig
 from app.models.ai_monitoring_reading import AIMonitoringReading
+from app.models.llm_observability_event import LLMObservabilityEvent
 from app.models.ai_risk_signal import AIRiskSignal
 from app.models.ai_risk_recommendation import AIRiskRecommendation
 from app.models.mlops_integration import MLOpsIntegration
