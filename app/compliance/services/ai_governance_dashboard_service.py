@@ -1,14 +1,17 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.ai_governance_review import AIGovernanceReview
 from app.models.ai_approval_envelope import AIApprovalEnvelope
+from app.models.ai_guardrail_event import AIGuardrailEvent
 from app.models.ai_monitoring_config import AIMonitoringConfig
 from app.models.ai_monitoring_reading import AIMonitoringReading
 from app.models.ai_system import AISystem
+from app.models.ai_system_risk_link import AISystemRiskLink
+from app.models.risk_control_link import RiskControlLink
 from app.models.shadow_ai_detection import ShadowAIDetection
 
 
@@ -51,8 +54,54 @@ class AIGovernanceDashboardService:
             pass
 
         try:
-            # Future: governance controls/attestations coverage query.
-            pass
+            # Governance coverage: % of assessed (non-unassessed) AI systems that have
+            # either an approved AI approval envelope or at least one active risk->control
+            # link via an AI-system risk mapping.
+            in_scope = (
+                select(func.count(AISystem.id))
+                .where(
+                    AISystem.organization_id == org_id,
+                    AISystem.deleted_at.is_(None),
+                    AISystem.risk_tier.isnot(None),
+                    AISystem.risk_tier != "unassessed",
+                )
+            ).scalar_subquery()
+
+            approved_envelope_exists = (
+                select(1)
+                .select_from(AIApprovalEnvelope)
+                .where(
+                    AIApprovalEnvelope.organization_id == org_id,
+                    AIApprovalEnvelope.ai_system_id == AISystem.id,
+                    AIApprovalEnvelope.status == "approved",
+                )
+            ).correlate(AISystem).exists().select()
+
+            active_control_exists = (
+                select(1)
+                .select_from(AISystemRiskLink)
+                .join(RiskControlLink, RiskControlLink.risk_id == AISystemRiskLink.risk_id)
+                .where(
+                    AISystemRiskLink.organization_id == org_id,
+                    AISystemRiskLink.ai_system_id == AISystem.id,
+                    AISystemRiskLink.status == "active",
+                    RiskControlLink.status == "active",
+                )
+            ).correlate(AISystem).exists().select()
+
+            covered_count = self.db.execute(
+                select(func.count(AISystem.id))
+                .where(
+                    AISystem.organization_id == org_id,
+                    AISystem.deleted_at.is_(None),
+                    AISystem.risk_tier.isnot(None),
+                    AISystem.risk_tier != "unassessed",
+                    or_(approved_envelope_exists, active_control_exists),
+                )
+            ).scalar_one()
+            total_in_scope = self.db.execute(select(in_scope)).scalar_one()
+            if total_in_scope > 0:
+                result["governance_coverage_pct"] = round((int(covered_count or 0) / total_in_scope) * 100, 2)
         except Exception:
             pass
 
@@ -70,8 +119,28 @@ class AIGovernanceDashboardService:
             pass
 
         try:
-            # Future: policy violation aggregate query.
-            pass
+            # Policy violations: count recent AI guardrail violation/blocked events.
+            # When guardrail events are absent, recent out-of-threshold AI monitoring
+            # readings are used as a real proxy for the same operational signal.
+            since = datetime.now(UTC) - timedelta(days=30)
+            event_count = self.db.execute(
+                select(func.count(AIGuardrailEvent.id)).where(
+                    AIGuardrailEvent.organization_id == org_id,
+                    AIGuardrailEvent.event_type.in_(["violation_detected", "blocked"]),
+                    AIGuardrailEvent.created_at >= since,
+                )
+            ).scalar_one()
+            if event_count:
+                result["policy_violations_count"] = int(event_count)
+            else:
+                proxy_count = self.db.execute(
+                    select(func.count(AIMonitoringReading.id)).where(
+                        AIMonitoringReading.organization_id == org_id,
+                        AIMonitoringReading.within_threshold.is_(False),
+                        AIMonitoringReading.created_at >= since,
+                    )
+                ).scalar_one()
+                result["policy_violations_count"] = int(proxy_count or 0)
         except Exception:
             pass
 
