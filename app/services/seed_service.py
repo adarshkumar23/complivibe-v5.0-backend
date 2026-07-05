@@ -243,6 +243,8 @@ PERMISSIONS: dict[str, str] = {
     "crisis_management:manage": "Create playbooks and activate/resolve crisis events",
     "financial_risk:read": "Read quantitative risk assessment (Monte Carlo/FAIR) runs",
     "financial_risk:manage": "Run quantitative risk assessments (Monte Carlo/FAIR)",
+    "resilience_testing:read": "Read DORA resilience test records and overdue-test status",
+    "resilience_testing:manage": "Create and update DORA resilience test records",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {
@@ -384,6 +386,8 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "crisis_management:manage",
         "financial_risk:read",
         "financial_risk:manage",
+        "resilience_testing:read",
+        "resilience_testing:manage",
     },
     "reviewer": {
         "frameworks:read",
@@ -464,6 +468,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "bcm:read",
         "crisis_management:read",
         "financial_risk:read",
+        "resilience_testing:read",
     },
     "auditor": {
         "frameworks:read",
@@ -521,6 +526,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "bcm:read",
         "crisis_management:read",
         "financial_risk:read",
+        "resilience_testing:read",
     },
     "readonly": {
         "frameworks:read",
@@ -572,6 +578,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "bcm:read",
         "crisis_management:read",
         "financial_risk:read",
+        "resilience_testing:read",
     },
 }
 
