@@ -5,8 +5,10 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.compliance.templates.esg_disclosure_templates import ESG_DISCLOSURE_TEMPLATES, ESG_TEMPLATE_TYPES
 from app.compliance.services.custom_report_generator import SECTION_NAMES, CustomReportGenerator
 from app.models.custom_report_template import CustomReportTemplate
+from app.models.membership import Membership
 from app.services.audit_service import AuditService
 
 
@@ -33,12 +35,101 @@ class CustomReportService:
                 detail=f"Unknown section(s): {', '.join(sorted(unknown))}",
             )
 
+    def _default_created_by_for_seed(self, org_id: uuid.UUID) -> uuid.UUID | None:
+        return self.db.execute(
+            select(Membership.user_id)
+            .where(Membership.organization_id == org_id, Membership.status == "active")
+            .order_by(Membership.created_at.asc())
+        ).scalar_one_or_none()
+
+    def ensure_esg_templates(self, org_id: uuid.UUID) -> list[CustomReportTemplate]:
+        created_by = self._default_created_by_for_seed(org_id)
+        if created_by is None:
+            return []
+
+        rows: list[CustomReportTemplate] = []
+        for template_type, payload in ESG_DISCLOSURE_TEMPLATES.items():
+            row = self.db.execute(
+                select(CustomReportTemplate).where(
+                    CustomReportTemplate.organization_id == org_id,
+                    CustomReportTemplate.system_template_key == payload["system_template_key"],
+                    CustomReportTemplate.deleted_at.is_(None),
+                )
+            ).scalar_one_or_none()
+            disclosure_structure = {
+                "standard": payload["standard"],
+                "sections": payload["sections"],
+            }
+            if row is None:
+                row = CustomReportTemplate(
+                    organization_id=org_id,
+                    name=payload["name"],
+                    template_type=template_type,
+                    system_template_key=payload["system_template_key"],
+                    sections=["esg_disclosure_template"],
+                    disclosure_structure=disclosure_structure,
+                    framework_filter=None,
+                    date_range_days=365,
+                    created_by=created_by,
+                )
+                self.db.add(row)
+                self.db.flush()
+                AuditService(self.db).write_audit_log(
+                    action="custom_report_template.seeded",
+                    entity_type="custom_report_template",
+                    entity_id=row.id,
+                    organization_id=org_id,
+                    actor_user_id=created_by,
+                    after_json={
+                        "name": row.name,
+                        "template_type": row.template_type,
+                        "system_template_key": row.system_template_key,
+                    },
+                    metadata_json={"source": "seed", "standard": payload["standard"]},
+                )
+            else:
+                before = {
+                    "name": row.name,
+                    "template_type": row.template_type,
+                    "sections": row.sections,
+                    "disclosure_structure": row.disclosure_structure,
+                    "date_range_days": row.date_range_days,
+                }
+                after = {
+                    "name": payload["name"],
+                    "template_type": template_type,
+                    "sections": ["esg_disclosure_template"],
+                    "disclosure_structure": disclosure_structure,
+                    "date_range_days": 365,
+                }
+                if before != after:
+                    row.name = payload["name"]
+                    row.template_type = template_type
+                    row.sections = ["esg_disclosure_template"]
+                    row.disclosure_structure = disclosure_structure
+                    row.date_range_days = 365
+                    self.db.flush()
+                    AuditService(self.db).write_audit_log(
+                        action="custom_report_template.seed_refreshed",
+                        entity_type="custom_report_template",
+                        entity_id=row.id,
+                        organization_id=org_id,
+                        actor_user_id=created_by,
+                        before_json=before,
+                        after_json=after,
+                        metadata_json={"source": "seed", "standard": payload["standard"]},
+                    )
+            rows.append(row)
+        return rows
+
     def create_template(self, org_id: uuid.UUID, data, created_by: uuid.UUID) -> CustomReportTemplate:
         self._validate_sections(data.sections)
         row = CustomReportTemplate(
             organization_id=org_id,
             name=data.name,
+            template_type=data.template_type,
             sections=data.sections,
+            disclosure_structure=data.disclosure_structure,
             framework_filter=self._normalize_framework_filter(data.framework_filter),
             date_range_days=data.date_range_days,
             created_by=created_by,
@@ -54,6 +145,7 @@ class CustomReportService:
             actor_user_id=created_by,
             after_json={
                 "name": row.name,
+                "template_type": row.template_type,
                 "sections": row.sections,
                 "date_range_days": row.date_range_days,
             },
@@ -73,30 +165,42 @@ class CustomReportService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Custom report template not found")
         return row
 
-    def list_templates(self, org_id: uuid.UUID) -> list[CustomReportTemplate]:
+    def list_templates(self, org_id: uuid.UUID, template_type: str | None = None) -> list[CustomReportTemplate]:
+        self.ensure_esg_templates(org_id)
+        stmt = select(CustomReportTemplate).where(
+            CustomReportTemplate.organization_id == org_id,
+            CustomReportTemplate.deleted_at.is_(None),
+        )
+        if template_type is not None:
+            if template_type not in {"custom", *ESG_TEMPLATE_TYPES}:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unknown template_type")
+            stmt = stmt.where(CustomReportTemplate.template_type == template_type)
         return self.db.execute(
-            select(CustomReportTemplate)
-            .where(
-                CustomReportTemplate.organization_id == org_id,
-                CustomReportTemplate.deleted_at.is_(None),
-            )
-            .order_by(CustomReportTemplate.created_at.desc())
+            stmt.order_by(CustomReportTemplate.created_at.desc(), CustomReportTemplate.name.asc())
         ).scalars().all()
 
     def update_template(self, org_id: uuid.UUID, template_id: uuid.UUID, data, user_id: uuid.UUID) -> CustomReportTemplate:
         row = self.get_template(org_id, template_id)
         before = {
             "name": row.name,
+            "template_type": row.template_type,
             "sections": row.sections,
+            "disclosure_structure": row.disclosure_structure,
             "framework_filter": row.framework_filter,
             "date_range_days": row.date_range_days,
         }
 
         if data.name is not None:
             row.name = data.name
+        if data.template_type is not None:
+            if row.system_template_key:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Seeded template type cannot be changed")
+            row.template_type = data.template_type
         if data.sections is not None:
             self._validate_sections(data.sections)
             row.sections = data.sections
+        if data.disclosure_structure is not None:
+            row.disclosure_structure = data.disclosure_structure
         if data.framework_filter is not None:
             row.framework_filter = self._normalize_framework_filter(data.framework_filter)
         if data.date_range_days is not None:
@@ -112,7 +216,9 @@ class CustomReportService:
             before_json=before,
             after_json={
                 "name": row.name,
+                "template_type": row.template_type,
                 "sections": row.sections,
+                "disclosure_structure": row.disclosure_structure,
                 "framework_filter": row.framework_filter,
                 "date_range_days": row.date_range_days,
             },

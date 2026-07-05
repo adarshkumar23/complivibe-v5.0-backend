@@ -40,6 +40,7 @@ SECTION_NAMES = {
     "open_issues",
     "policy_status",
     "ai_governance_summary",
+    "esg_disclosure_template",
 }
 
 
@@ -559,6 +560,15 @@ class CustomReportGenerator:
             "active_ai_systems": active,
         }
 
+    def _build_esg_disclosure_template(
+        self,
+        org_id: uuid.UUID,
+        _framework_filter: list[str] | list[uuid.UUID] | dict | None,
+        _date_range_days: int,
+    ) -> dict:
+        _ = org_id
+        return {}
+
     SECTION_BUILDER_MAP = {
         "executive_summary": _build_executive_summary,
         "framework_readiness": _build_framework_readiness,
@@ -569,6 +579,7 @@ class CustomReportGenerator:
         "open_issues": _build_open_issues,
         "policy_status": _build_policy_status,
         "ai_governance_summary": _build_ai_governance_summary,
+        "esg_disclosure_template": _build_esg_disclosure_template,
     }
 
     def generate(
@@ -599,13 +610,25 @@ class CustomReportGenerator:
 
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Unsupported section: {section_name}")
             builder = self.SECTION_BUILDER_MAP[section_name]
-            result[section_name] = builder(self, org_id, template.framework_filter, int(template.date_range_days))
+            if section_name == "esg_disclosure_template":
+                result[section_name] = {
+                    "template_type": template.template_type,
+                    "standard": (template.disclosure_structure or {}).get("standard")
+                    if isinstance(template.disclosure_structure, dict)
+                    else None,
+                    "sections": (template.disclosure_structure or {}).get("sections", [])
+                    if isinstance(template.disclosure_structure, dict)
+                    else template.disclosure_structure or [],
+                }
+            else:
+                result[section_name] = builder(self, org_id, template.framework_filter, int(template.date_range_days))
 
         result["_meta"] = {
             "template_id": str(template_id),
             "template_name": template.name,
             "sections_included": sections,
             "date_range_days": int(template.date_range_days),
+            "template_type": getattr(template, "template_type", "custom"),
             "generated_at": self._now().isoformat(),
         }
 

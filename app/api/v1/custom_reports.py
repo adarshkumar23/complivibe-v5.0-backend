@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.compliance.services.custom_report_service import CustomReportService
@@ -24,7 +24,10 @@ def _template_read(row: CustomReportTemplate) -> CustomReportTemplateRead:
         id=row.id,
         organization_id=row.organization_id,
         name=row.name,
+        template_type=getattr(row, "template_type", "custom"),
+        system_template_key=getattr(row, "system_template_key", None),
         sections=list(row.sections or []),
+        disclosure_structure=getattr(row, "disclosure_structure", None),
         framework_filter=row.framework_filter,
         date_range_days=row.date_range_days,
         created_by=row.created_by,
@@ -50,11 +53,13 @@ def create_custom_report_template(
 
 @router.get("", response_model=list[CustomReportTemplateRead])
 def list_custom_report_templates(
+    template_type: str | None = Query(default=None),
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("reports:read")),
 ) -> list[CustomReportTemplateRead]:
-    rows = CustomReportService(db).list_templates(organization.id)
+    rows = CustomReportService(db).list_templates(organization.id, template_type=template_type)
+    db.commit()
     return [_template_read(row) for row in rows]
 
 
