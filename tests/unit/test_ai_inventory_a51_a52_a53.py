@@ -122,6 +122,26 @@ def test_a51_ai_system_inventory_lifecycle_and_summary(client, db_session):
     assert list_b.status_code == 200
     assert all(row["organization_id"] == org_b["organization_id"] for row in list_b.json())
 
+    foreign_owner_create = client.post(
+        SYSTEMS_BASE,
+        headers=org["org_headers"],
+        json={
+            **_system_payload(org, name="foreign-owner-create"),
+            "owner_id": org_b["user_id"],
+        },
+    )
+    assert foreign_owner_create.status_code == 422
+    assert "owner_id" in foreign_owner_create.json()["detail"]
+
+    active_system_id = client.get(SYSTEMS_BASE, headers=org["org_headers"]).json()[0]["id"]
+    foreign_owner_update = client.patch(
+        f"{SYSTEMS_BASE}/{active_system_id}",
+        headers=org["org_headers"],
+        json={"owner_id": org_b["user_id"]},
+    )
+    assert foreign_owner_update.status_code == 422
+    assert "owner_id" in foreign_owner_update.json()["detail"]
+
 
 def test_a52_shadow_ai_discovery_flows(client, db_session):
     org = bootstrap_org_user(client, email_prefix="a52-org")
