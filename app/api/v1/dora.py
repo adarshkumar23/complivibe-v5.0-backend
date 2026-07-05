@@ -35,6 +35,7 @@ def _read(row: DORAICTRegister) -> DORAICTRegisterRead:
         status=row.status,
         owner_id=row.owner_id,
         created_by=row.created_by,
+        risk_id=row.risk_id,
         created_at=row.created_at,
         updated_at=row.updated_at,
         deleted_at=row.deleted_at,
