@@ -291,6 +291,7 @@ from app.models.bcm import BusinessProcess, BiaAssessment
 from app.models.crisis_management import CrisisPlaybook, CrisisActivation
 from app.models.risk_quantification import RiskQuantificationRun
 from app.models.resilience_testing import ResilienceTest
+from app.models.whistleblower import WhistleblowerReport, WhistleblowerMessage
 from app.models.issue_transition import IssueTransition
 from app.models.org_issue_settings import OrgIssueSettings
 from app.models.issue_policy_link import IssuePolicyLink

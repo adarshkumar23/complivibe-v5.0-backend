@@ -245,6 +245,7 @@ PERMISSIONS: dict[str, str] = {
     "financial_risk:manage": "Run quantitative risk assessments (Monte Carlo/FAIR)",
     "resilience_testing:read": "Read DORA resilience test records and overdue-test status",
     "resilience_testing:manage": "Create and update DORA resilience test records",
+    "whistleblower:investigate": "Investigate and respond to whistleblower hotline reports",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {
@@ -388,6 +389,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "financial_risk:manage",
         "resilience_testing:read",
         "resilience_testing:manage",
+        "whistleblower:investigate",
     },
     "reviewer": {
         "frameworks:read",

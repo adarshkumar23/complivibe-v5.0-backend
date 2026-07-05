@@ -85,6 +85,7 @@ from app.api.v1 import ai_usage_compliance
 from app.api.v1 import training_analytics
 from app.api.v1 import risk_quantification
 from app.api.v1 import resilience_testing
+from app.api.v1 import whistleblower
 
 from app.api.v1 import (
     admin_email_config,
@@ -371,3 +372,4 @@ api_router.include_router(bcm.router)
 api_router.include_router(crisis_management.router)
 api_router.include_router(risk_quantification.router)
 api_router.include_router(resilience_testing.router)
+api_router.include_router(whistleblower.router)
