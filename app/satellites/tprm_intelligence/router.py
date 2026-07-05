@@ -125,6 +125,7 @@ def get_vendor_security_rating(
         select(VendorExternalRating)
         .where(VendorExternalRating.organization_id == organization.id, VendorExternalRating.vendor_id == vendor_id)
         .order_by(VendorExternalRating.computed_at.desc(), VendorExternalRating.id.desc())
+        .limit(1)
     ).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor security rating not found")
@@ -356,6 +357,7 @@ def compute_vendor_kyb_check(
     row = AmlKycCheck(
         organization_id=organization.id,
         vendor_id=vendor.id,
+        checked_at=datetime.now(UTC),
         company_name=result["company_name"],
         signals_used=result["signals_used"],
         offshore_links_found=result["offshore_links_found"],
@@ -430,6 +432,7 @@ def get_vendor_kyb_check(
         select(AmlKycCheck)
         .where(AmlKycCheck.organization_id == organization.id, AmlKycCheck.vendor_id == vendor_id)
         .order_by(AmlKycCheck.checked_at.desc(), AmlKycCheck.id.desc())
+        .limit(1)
     ).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor KYB check not found")

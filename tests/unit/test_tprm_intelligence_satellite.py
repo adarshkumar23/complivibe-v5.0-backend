@@ -80,6 +80,36 @@ def test_t1_1_vendor_security_rating_persists_skips_and_audits(client, db_sessio
     assert audit.organization_id == UUID(org["organization_id"])
 
 
+def test_t1_1_security_rating_get_survives_multiple_computes(client, monkeypatch):
+    """GET must not crash with MultipleResultsFound once a vendor has 2+ rating rows."""
+    org = bootstrap_org_user(client, email_prefix="t1-rating-multi")
+    vendor = _create_vendor(client, org, website="https://example.com/multi")
+
+    scores = iter([70.0, 40.0])
+
+    def fake_compute(self, domain: str) -> dict:
+        return {
+            "domain": domain,
+            "composite_score": next(scores),
+            "signals_used": {
+                "mozilla_observatory": {"status": "skipped", "source": "mozilla_observatory", "score": None, "message": "skipped"},
+                "gdelt_adverse_media": {"status": "skipped", "source": "gdelt", "score": None, "message": "skipped"},
+                "abuseipdb": {"status": "skipped", "source": "abuseipdb", "score": None, "message": "skipped"},
+                "hibp": {"status": "skipped", "source": "hibp", "score": None, "message": "skipped"},
+            },
+        }
+
+    monkeypatch.setattr(VendorSecurityRatingService, "compute", fake_compute)
+    first = client.post(f"{SATELLITE_BASE}/{vendor['id']}/security-rating/compute", headers=org["org_headers"])
+    assert first.status_code == 201, first.text
+    second = client.post(f"{SATELLITE_BASE}/{vendor['id']}/security-rating/compute", headers=org["org_headers"])
+    assert second.status_code == 201, second.text
+
+    latest = client.get(f"{SATELLITE_BASE}/{vendor['id']}/security-rating", headers=org["org_headers"])
+    assert latest.status_code == 200, latest.text
+    assert latest.json()["id"] == second.json()["id"]
+
+
 def test_t1_1_security_rating_cross_org_blocked(client, monkeypatch):
     org_a = bootstrap_org_user(client, email_prefix="t1-rating-a")
     org_b = bootstrap_org_user(client, email_prefix="t1-rating-b")
@@ -186,6 +216,37 @@ def test_t4_5_vendor_kyb_check_persists_skips_and_audits(client, db_session, mon
     audit = db_session.execute(select(AuditLog).where(AuditLog.action == "vendor.kyb_check.computed")).scalar_one_or_none()
     assert audit is not None
     assert audit.organization_id == UUID(org["organization_id"])
+
+
+def test_t4_5_vendor_kyb_check_get_survives_multiple_computes(client, monkeypatch):
+    """GET must not crash with MultipleResultsFound once a vendor has 2+ KYB check rows."""
+    org = bootstrap_org_user(client, email_prefix="t4-kyb-multi")
+    vendor = _create_vendor(client, org, name="Repeat Check Co", website="https://repeat-check.example")
+
+    def fake_compute(self, company_name: str) -> dict:
+        return {
+            "company_name": company_name,
+            "signals_used": {
+                "opencorporates": {"status": "skipped", "source": "opencorporates", "message": "skipped"},
+                "gleif": {"status": "skipped", "source": "gleif", "message": "skipped"},
+                "icij_offshore_leaks": {"status": "skipped", "source": "icij_offshore_leaks", "message": "skipped"},
+                "openownership": {"status": "skipped", "source": "openownership", "message": "skipped"},
+                "gdelt_adverse_media": {"status": "skipped", "source": "gdelt", "message": "skipped"},
+            },
+            "offshore_links_found": {"source": "icij_offshore_leaks", "found": False, "matches": [], "status": "skipped"},
+            "ubo_data": {"source": "openownership", "status": "skipped", "statements": []},
+            "adverse_media_found": False,
+        }
+
+    monkeypatch.setattr(KYBVerificationService, "compute", fake_compute)
+    first = client.post(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check/compute", headers=org["org_headers"])
+    assert first.status_code == 201, first.text
+    second = client.post(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check/compute", headers=org["org_headers"])
+    assert second.status_code == 201, second.text
+
+    latest = client.get(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check", headers=org["org_headers"])
+    assert latest.status_code == 200, latest.text
+    assert latest.json()["id"] == second.json()["id"]
 
 
 def test_t4_5_vendor_kyb_check_offshore_and_adverse_media_propagates_nth_party_alert(client, db_session, monkeypatch):
