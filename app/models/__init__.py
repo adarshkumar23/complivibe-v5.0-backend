@@ -229,6 +229,7 @@ from app.models.vendor_threat_intelligence import VendorThreatIntelligence
 from app.models.vendor_supply_chain import VendorSupplyChainAlert, VendorSupplyChainLink
 from app.models.vendor_assessment import VendorAssessment
 from app.models.vendor_assessment_question import VendorAssessmentQuestion
+from app.models.vendor_criticality import VendorCriticalityProfile, VendorCriticalitySetting
 from app.models.vendor_risk_score import VendorRiskScore
 from app.models.vendor_control_link import VendorControlLink
 from app.models.questionnaire_template import QuestionnaireTemplate
@@ -549,6 +550,8 @@ __all__ = [
     "VendorSupplyChainLink",
     "VendorAssessment",
     "VendorAssessmentQuestion",
+    "VendorCriticalityProfile",
+    "VendorCriticalitySetting",
     "VendorRiskScore",
     "VendorControlLink",
     "QuestionnaireTemplate",
