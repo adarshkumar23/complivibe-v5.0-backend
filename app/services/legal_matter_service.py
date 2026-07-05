@@ -93,6 +93,9 @@ class LegalMatterService:
         self, org_id: uuid.UUID, matter_id: uuid.UUID, data: LegalMatterUpdate, actor_id: uuid.UUID | None = None
     ) -> LegalMatter:
         row = self.get_matter(org_id, matter_id)
+        # `status` is deliberately absent from LegalMatterUpdate: lifecycle transitions
+        # must go through change_status() / close_matter() so the open-linked-issue
+        # guard and closed_at/closed_by bookkeeping can never be bypassed by a plain PATCH.
         updates = data.model_dump(exclude_unset=True)
 
         before = {"title": row.title, "status": row.status, "matter_type": row.matter_type}
@@ -108,6 +111,37 @@ class LegalMatterService:
             actor_user_id=actor_id,
             before_json=before,
             after_json={"title": row.title, "status": row.status, "matter_type": row.matter_type},
+            metadata_json={"source": "api"},
+        )
+        return row
+
+    def change_status(
+        self, org_id: uuid.UUID, matter_id: uuid.UUID, new_status: str, actor_id: uuid.UUID | None = None
+    ) -> LegalMatter:
+        """Transition a matter between the non-terminal statuses (open/in_progress/on_hold),
+        including reopening a closed matter. Closing must go through close_matter()."""
+        row = self.get_matter(org_id, matter_id)
+        if row.status == new_status:
+            return row
+
+        was_closed = row.status == "closed"
+        before = {"status": row.status, "closed_at": row.closed_at.isoformat() if row.closed_at else None}
+        row.status = new_status
+        if was_closed:
+            # Reopening: clear stale closure bookkeeping so it doesn't misrepresent
+            # a reopened matter as still having a closed_at/closed_by.
+            row.closed_at = None
+            row.closed_by = None
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="legal_matter.reopened" if was_closed else "legal_matter.status_changed",
+            entity_type="legal_matter",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=actor_id,
+            before_json=before,
+            after_json={"status": row.status, "closed_at": None},
             metadata_json={"source": "api"},
         )
         return row
