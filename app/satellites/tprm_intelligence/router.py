@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -23,6 +24,12 @@ from app.services.vendor_supply_chain_service import VendorSupplyChainService
 
 router = APIRouter(prefix="/vendors", tags=["tprm-intelligence"])
 
+# A threat-intelligence finding is only as trustworthy as it is fresh: an old
+# "clean" score can mask a compromise that happened since it was computed.
+# Surface that staleness to the caller instead of presenting every finding as
+# equally current.
+THREAT_INTEL_STALE_AFTER_DAYS = 7
+
 
 def _rating_payload(row: VendorExternalRating) -> dict:
     return {
@@ -37,6 +44,12 @@ def _rating_payload(row: VendorExternalRating) -> dict:
 
 
 def _threat_payload(row: VendorThreatIntelligence) -> dict:
+    age_days: float | None = None
+    is_stale = True
+    if row.computed_at is not None:
+        computed_at = row.computed_at if row.computed_at.tzinfo else row.computed_at.replace(tzinfo=UTC)
+        age_days = round((datetime.now(UTC) - computed_at).total_seconds() / 86400.0, 2)
+        is_stale = age_days > THREAT_INTEL_STALE_AFTER_DAYS
     return {
         "id": str(row.id),
         "organization_id": str(row.organization_id),
@@ -46,6 +59,9 @@ def _threat_payload(row: VendorThreatIntelligence) -> dict:
         "threat_score": float(row.threat_score),
         "indicators_found": row.indicators_found,
         "computed_at": row.computed_at.isoformat() if row.computed_at else None,
+        "days_since_computed": age_days,
+        "is_stale": is_stale,
+        "stale_after_days": THREAT_INTEL_STALE_AFTER_DAYS,
     }
 
 
@@ -173,6 +189,14 @@ def compute_vendor_threat_intelligence(
         signals_used=result["signals_used"],
         threat_score=Decimal(str(result["threat_score"])),
         indicators_found=result["indicators_found"],
+        # Assign microsecond-precision computed_at in application code rather
+        # than relying on the DB's server_default(func.now()): the primary key
+        # is a random UUID (not time-ordered), so if two computes land in the
+        # same second (SQLite's CURRENT_TIMESTAMP resolution -- and possible
+        # even on Postgres under fast repeated rescoring), "latest" ordering by
+        # (computed_at desc, id desc) would silently pick an arbitrary row
+        # instead of the most recent one.
+        computed_at=datetime.fromisoformat(result["computed_at"]) if result.get("computed_at") else datetime.now(UTC),
     )
     db.add(row)
     db.flush()
@@ -227,10 +251,58 @@ def get_vendor_threat_intelligence(
         select(VendorThreatIntelligence)
         .where(VendorThreatIntelligence.organization_id == organization.id, VendorThreatIntelligence.vendor_id == vendor_id)
         .order_by(VendorThreatIntelligence.computed_at.desc(), VendorThreatIntelligence.id.desc())
+        .limit(1)
     ).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor threat intelligence not found")
     return _threat_payload(row)
+
+
+@router.get("/{vendor_id}/threat-intelligence/history")
+def get_vendor_threat_intelligence_history(
+    vendor_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("vendors:read")),
+    limit: int = 50,
+) -> dict:
+    """Return the threat-intel trend over time so a reviewer sees an escalating
+    or clearing pattern, not just an isolated snapshot -- and whether the
+    latest finding is stale relative to how often this vendor is rescored.
+    """
+    VendorService(db).require_vendor_in_org(organization.id, vendor_id)
+    bounded_limit = max(1, min(limit, 200))
+    rows = db.execute(
+        select(VendorThreatIntelligence)
+        .where(VendorThreatIntelligence.organization_id == organization.id, VendorThreatIntelligence.vendor_id == vendor_id)
+        .order_by(VendorThreatIntelligence.computed_at.desc(), VendorThreatIntelligence.id.desc())
+        .limit(bounded_limit)
+    ).scalars().all()
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor threat intelligence not found")
+
+    history = [_threat_payload(row) for row in rows]  # newest first
+    latest_score = history[0]["threat_score"]
+    oldest_score = history[-1]["threat_score"]
+    score_delta = round(latest_score - oldest_score, 2)
+    if len(history) < 2:
+        trend = "insufficient_data"
+    elif score_delta > 1.0:
+        trend = "escalating"
+    elif score_delta < -1.0:
+        trend = "improving"
+    else:
+        trend = "stable"
+
+    return {
+        "vendor_id": str(vendor_id),
+        "count": len(history),
+        "latest_score": latest_score,
+        "score_delta_over_window": score_delta,
+        "trend": trend,
+        "is_stale": history[0]["is_stale"],
+        "history": history,
+    }
 
 
 @router.post("/{vendor_id}/kyb-check/compute", status_code=status.HTTP_201_CREATED)
