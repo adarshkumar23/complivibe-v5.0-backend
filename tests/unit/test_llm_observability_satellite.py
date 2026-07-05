@@ -120,3 +120,36 @@ def test_giskard_scan_adapter_runs_real_scan_on_sample_data():
     assert result.source_tool == "giskard"
     assert result.value >= 0
     assert result.details["detectors"] == "performance"
+
+
+def test_aif360_fairness_adapter_computes_formal_metrics():
+    from app.satellites.llm_observability.fairness_adapters import AIF360FairnessAdapter, build_sample_fairness_dataframe
+
+    results = AIF360FairnessAdapter().assess_binary_classification(
+        dataframe=build_sample_fairness_dataframe(),
+        label_column="label",
+        prediction_column="prediction",
+        protected_attribute="protected",
+        privileged_value=1,
+        unprivileged_value=0,
+    )
+
+    metrics = {result.metric_type: result.value for result in results}
+    assert metrics["aif360_mean_difference"] == Decimal("-0.5")
+    assert metrics["aif360_disparate_impact"] == Decimal("0.333333")
+    assert metrics["aif360_equal_opportunity_difference"] == Decimal("0.333333")
+
+
+def test_fairlearn_monitoring_adapter_computes_lightweight_metrics():
+    from app.satellites.llm_observability.fairness_adapters import FairlearnMonitoringAdapter, build_sample_fairness_dataframe
+
+    data = build_sample_fairness_dataframe()
+    results = FairlearnMonitoringAdapter().assess_binary_classification(
+        y_true=data["label"].tolist(),
+        y_pred=data["prediction"].tolist(),
+        sensitive_features=data["protected"].tolist(),
+    )
+
+    metrics = {result.metric_type: result.value for result in results}
+    assert metrics["fairlearn_demographic_parity_difference"] == Decimal("0.0")
+    assert metrics["fairlearn_equalized_odds_difference"] == Decimal("0.333333")
