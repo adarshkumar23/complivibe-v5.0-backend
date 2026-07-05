@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy import inspect, select
 
+from app.models.ai_governance_event import AIGovernanceEvent
+from app.models.ai_system import AISystem
+from app.models.audit_log import AuditLog
 from app.models.atlas_technique import AtlasTechnique
 from tests.helpers.auth_org import bootstrap_org_user
 
@@ -69,7 +74,7 @@ def test_atlas_table_seed_and_endpoints(client, db_session):
     assert isinstance(detail.json()["mitigations"], list)
 
 
-def test_atlas_assessment_mitigations_and_org_isolation(client):
+def test_atlas_assessment_mitigations_and_org_isolation(client, db_session):
     org_a = bootstrap_org_user(client, email_prefix="atlas-a")
     org_b = bootstrap_org_user(client, email_prefix="atlas-b")
 
@@ -85,6 +90,29 @@ def test_atlas_assessment_mitigations_and_org_isolation(client):
     payload = assessment.json()
     assert "total_risk_score" in payload
     assert payload["risk_level"] in {"low", "medium", "high", "critical"}
+
+    persisted_system = db_session.get(AISystem, uuid.UUID(system_a))
+    assert persisted_system is not None
+    assert persisted_system.atlas_risk_score == payload["total_risk_score"]
+
+    event = db_session.execute(
+        select(AIGovernanceEvent).where(
+            AIGovernanceEvent.organization_id == uuid.UUID(org_a["organization_id"]),
+            AIGovernanceEvent.ai_system_id == uuid.UUID(system_a),
+            AIGovernanceEvent.event_type == "atlas.assessment_completed",
+        )
+    ).scalar_one()
+    assert event.actor_type == "system"
+    assert event.event_data["total_risk_score"] == payload["total_risk_score"]
+
+    audit_log = db_session.execute(
+        select(AuditLog).where(
+            AuditLog.organization_id == uuid.UUID(org_a["organization_id"]),
+            AuditLog.entity_id == uuid.UUID(system_a),
+            AuditLog.action == "atlas.assessment_completed",
+        )
+    ).scalar_one()
+    assert audit_log.after_json["risk_level"] == payload["risk_level"]
 
     mitigations = client.get(
         f"{SYSTEMS_BASE}/{system_a}/atlas-mitigations",

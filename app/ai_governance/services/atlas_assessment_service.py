@@ -7,8 +7,10 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.ai_governance.services.ai_governance_event_service import AIGovernanceEventService
 from app.ai_governance.services.ai_system_service import AISystemService
 from app.models.atlas_technique import AtlasTechnique
+from app.services.audit_service import AuditService
 
 
 ATLAS_TACTICS: list[str] = [
@@ -418,6 +420,31 @@ class AtlasAssessmentService:
             risk_level = "medium"
         else:
             risk_level = "low"
+
+        system.atlas_risk_score = total_score
+        self.db.flush()
+
+        assessment_event = {
+            "total_risk_score": total_score,
+            "risk_level": risk_level,
+            "tactic_scores": {tactic: values["risk_score"] for tactic, values in exposure.items()},
+        }
+        AIGovernanceEventService.log(
+            self.db,
+            org_id,
+            "atlas.assessment_completed",
+            actor_type="system",
+            ai_system_id=system_id,
+            event_data=assessment_event,
+        )
+        AuditService(self.db).write_audit_log(
+            action="atlas.assessment_completed",
+            entity_type="ai_system",
+            entity_id=system_id,
+            organization_id=org_id,
+            after_json=assessment_event,
+            metadata_json={"source": "atlas_assessment"},
+        )
 
         return {
             "system_id": str(system_id),
