@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 import re
 import uuid
@@ -9,7 +7,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import httpx
-from cryptography.fernet import Fernet
 from fastapi import HTTPException, status
 from openai import OpenAI
 from sqlalchemy import select
@@ -17,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.organization_ai_configuration import OrganizationAIConfiguration
+from app.services.secrets_service import SecretsService, legacy_key_from_fernet_secret_key
 
 
 @dataclass
@@ -55,23 +53,19 @@ class AIProviderService:
 
     def __init__(self, db: Session) -> None:
         self.db = db
-        self.fernet = Fernet(self._resolve_fernet_key())
 
-    @staticmethod
-    def _resolve_fernet_key() -> bytes:
-        settings = get_settings()
-        raw = (settings.FERNET_SECRET_KEY or "").strip()
-        if raw:
-            return raw.encode("utf-8")
+    def _secrets(self, organization_id: uuid.UUID) -> SecretsService:
+        return SecretsService(
+            self.db,
+            organization_id=organization_id,
+            legacy_key_resolver=legacy_key_from_fernet_secret_key,
+        )
 
-        digest = hashlib.sha256(settings.SECRET_KEY.encode("utf-8")).digest()
-        return base64.urlsafe_b64encode(digest)
+    def encrypt_credential(self, value: str, *, organization_id: uuid.UUID, entity_id: uuid.UUID | None = None) -> str:
+        return self._secrets(organization_id).encrypt(value, secret_name="ai_provider_credential", entity_id=entity_id)
 
-    def encrypt_credential(self, value: str) -> str:
-        return self.fernet.encrypt(value.encode("utf-8")).decode("utf-8")
-
-    def decrypt_credential(self, value: str) -> str:
-        return self.fernet.decrypt(value.encode("utf-8")).decode("utf-8")
+    def decrypt_credential(self, value: str, *, organization_id: uuid.UUID, entity_id: uuid.UUID | None = None) -> str:
+        return self._secrets(organization_id).decrypt(value, secret_name="ai_provider_credential", entity_id=entity_id)
 
     def get_or_create_org_config(self, org_id: uuid.UUID) -> OrganizationAIConfiguration:
         row = self.db.execute(
@@ -97,8 +91,16 @@ class AIProviderService:
         ).scalar_one_or_none()
 
         if row and row.use_byo_credentials and row.is_active:
-            groq = self.decrypt_credential(row.groq_api_key_encrypted) if row.groq_api_key_encrypted else None
-            azure = self.decrypt_credential(row.azure_api_key_encrypted) if row.azure_api_key_encrypted else None
+            groq = (
+                self.decrypt_credential(row.groq_api_key_encrypted, organization_id=org_id, entity_id=row.id)
+                if row.groq_api_key_encrypted
+                else None
+            )
+            azure = (
+                self.decrypt_credential(row.azure_api_key_encrypted, organization_id=org_id, entity_id=row.id)
+                if row.azure_api_key_encrypted
+                else None
+            )
             return ResolvedAICredentials(
                 use_byo_credentials=True,
                 groq_api_key=groq,

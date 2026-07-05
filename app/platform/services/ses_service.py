@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import base64
-import hashlib
 import uuid
 from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
-from cryptography.fernet import Fernet
 try:
     import sentry_sdk
 except Exception:  # pragma: no cover - optional in local test environments
@@ -17,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.org_email_config import OrgEmailConfig
+from app.services.secrets_service import SecretsService, legacy_key_from_fernet_secret_key
 
 
 class SESService:
@@ -30,24 +28,22 @@ class SESService:
         )
         self.platform_from_email = settings.AWS_SES_FROM_EMAIL
         self.platform_from_name = settings.AWS_SES_FROM_NAME
-        self.fernet = Fernet(self._resolve_fernet_key())
 
-    @staticmethod
-    def _resolve_fernet_key() -> bytes:
-        settings = get_settings()
-        raw = (settings.FERNET_SECRET_KEY or "").strip()
-        if raw:
-            return raw.encode("utf-8")
+    def encrypt_credential(
+        self, value: str, *, db: Session, organization_id: uuid.UUID, entity_id: uuid.UUID | None = None
+    ) -> str:
+        secrets = SecretsService(
+            db, organization_id=organization_id, legacy_key_resolver=legacy_key_from_fernet_secret_key
+        )
+        return secrets.encrypt(value, secret_name="ses_aws_credential", entity_id=entity_id)
 
-        # Backward-compatible fallback to a deterministic Fernet key from SECRET_KEY.
-        digest = hashlib.sha256(settings.SECRET_KEY.encode("utf-8")).digest()
-        return base64.urlsafe_b64encode(digest)
-
-    def encrypt_credential(self, value: str) -> str:
-        return self.fernet.encrypt(value.encode("utf-8")).decode("utf-8")
-
-    def decrypt_credential(self, value: str) -> str:
-        return self.fernet.decrypt(value.encode("utf-8")).decode("utf-8")
+    def decrypt_credential(
+        self, value: str, *, db: Session, organization_id: uuid.UUID, entity_id: uuid.UUID | None = None
+    ) -> str:
+        secrets = SecretsService(
+            db, organization_id=organization_id, legacy_key_resolver=legacy_key_from_fernet_secret_key
+        )
+        return secrets.decrypt(value, secret_name="ses_aws_credential", entity_id=entity_id)
 
     def send_email(
         self,
@@ -172,8 +168,12 @@ class SESService:
                 # New-format encrypted credentials take precedence.
                 if config.aws_access_key_id_enc and config.aws_secret_key_enc:
                     try:
-                        access_key = self.decrypt_credential(config.aws_access_key_id_enc)
-                        secret_key = self.decrypt_credential(config.aws_secret_key_enc)
+                        access_key = self.decrypt_credential(
+                            config.aws_access_key_id_enc, db=db, organization_id=org_id, entity_id=config.id
+                        )
+                        secret_key = self.decrypt_credential(
+                            config.aws_secret_key_enc, db=db, organization_id=org_id, entity_id=config.id
+                        )
                         org_client = boto3.client(
                             "ses",
                             region_name=config.aws_region or "ap-south-1",
@@ -194,7 +194,9 @@ class SESService:
                     try:
                         from app.privacy.services.email_config_service import EmailConfigService
 
-                        creds = EmailConfigService.decrypt_config(config.config_json)
+                        creds = EmailConfigService.decrypt_config(
+                            config.config_json, db=db, organization_id=org_id, entity_id=config.id
+                        )
                         org_client = boto3.client(
                             "ses",
                             region_name=creds.get("region") or "ap-south-1",

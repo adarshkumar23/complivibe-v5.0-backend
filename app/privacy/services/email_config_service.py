@@ -1,20 +1,17 @@
-import base64
-import hashlib
 import json
 import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
-from cryptography.fernet import Fernet
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
 from app.models.membership import Membership
 from app.models.org_email_config import OrgEmailConfig
 from app.models.role import Role
 from app.models.user import User
 from app.services.audit_service import AuditService
+from app.services.secrets_service import SecretsService, legacy_key_from_named_setting
 
 
 class EmailConfigService:
@@ -26,20 +23,25 @@ class EmailConfigService:
         return datetime.now(UTC)
 
     @staticmethod
-    def _fernet() -> Fernet:
-        settings = get_settings()
-        key_value = getattr(settings, "EMAIL_CONFIG_ENCRYPTION_KEY", None) or settings.SECRET_KEY
-        digest = hashlib.sha256(key_value.encode("utf-8")).digest()
-        return Fernet(base64.urlsafe_b64encode(digest))
+    def _secrets(db: Session, organization_id: uuid.UUID) -> SecretsService:
+        return SecretsService(
+            db,
+            organization_id=organization_id,
+            legacy_key_resolver=legacy_key_from_named_setting("EMAIL_CONFIG_ENCRYPTION_KEY"),
+        )
 
     @classmethod
-    def encrypt_config(cls, config: dict) -> str:
+    def encrypt_config(
+        cls, config: dict, *, db: Session, organization_id: uuid.UUID, entity_id: uuid.UUID | None = None
+    ) -> str:
         payload = json.dumps(config, sort_keys=True)
-        return cls._fernet().encrypt(payload.encode("utf-8")).decode("utf-8")
+        return cls._secrets(db, organization_id).encrypt(payload, secret_name="org_email_config", entity_id=entity_id)
 
     @classmethod
-    def decrypt_config(cls, config_json: str) -> dict:
-        raw = cls._fernet().decrypt(config_json.encode("utf-8")).decode("utf-8")
+    def decrypt_config(
+        cls, config_json: str, *, db: Session, organization_id: uuid.UUID, entity_id: uuid.UUID | None = None
+    ) -> dict:
+        raw = cls._secrets(db, organization_id).decrypt(config_json, secret_name="org_email_config", entity_id=entity_id)
         return json.loads(raw)
 
     def _require_admin_membership(self, membership: Membership) -> None:
@@ -62,17 +64,19 @@ class EmailConfigService:
         self._require_admin_membership(membership)
 
         payload = data.model_dump()
+        now = self.utcnow()
+        row = self.get_config(org_id)
         encrypted = self.encrypt_config(
             {
                 "aws_access_key_id": payload["aws_access_key_id"],
                 "aws_secret_access_key": payload["aws_secret_access_key"],
                 "region": payload["region"],
                 "from_address": str(payload["from_address"]),
-            }
+            },
+            db=self.db,
+            organization_id=org_id,
+            entity_id=row.id if row is not None else None,
         )
-
-        now = self.utcnow()
-        row = self.get_config(org_id)
         action = "org_email_config.created"
         if row is None:
             row = OrgEmailConfig(
@@ -118,7 +122,7 @@ class EmailConfigService:
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active email config found")
 
-        config = self.decrypt_config(row.config_json)
+        config = self.decrypt_config(row.config_json, db=self.db, organization_id=org_id, entity_id=row.id)
         destination = to_address
         if not destination:
             owner_user = self.db.execute(

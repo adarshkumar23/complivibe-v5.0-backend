@@ -113,16 +113,22 @@ def test_schema_columns_exist_for_org_email_configs_and_outbox(db_session):
     assert "retry_count" in outbox_cols
 
 
-def test_encrypt_decrypt_and_wrong_key_fails():
+def test_encrypt_decrypt_and_wrong_key_fails(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="ses-crypto")
+    org_id = uuid.UUID(org["organization_id"])
+
     svc = SESService()
     value = "secret-value"
-    enc = svc.encrypt_credential(value)
+    enc = svc.encrypt_credential(value, db=db_session, organization_id=org_id)
     assert enc != value
-    assert svc.decrypt_credential(enc) == value
+    assert enc.startswith("vault:")
+    assert svc.decrypt_credential(enc, db=db_session, organization_id=org_id) == value
 
+    # A legacy Fernet token encrypted under a different key must not decrypt.
     other = Fernet(Fernet.generate_key())
-    with pytest.raises(InvalidToken):
-        other.decrypt(enc.encode("utf-8"))
+    legacy_token = other.encrypt(value.encode("utf-8")).decode("utf-8")
+    with pytest.raises(Exception):
+        svc.decrypt_credential(legacy_token, db=db_session, organization_id=org_id)
 
 
 @patch("app.platform.services.ses_service.boto3.client")
@@ -198,8 +204,8 @@ def test_send_bulk_and_verify_credentials_and_org_custom_client(mock_boto_client
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
         use_platform_ses=False,
-        aws_access_key_id_enc=svc.encrypt_credential("org_key"),
-        aws_secret_key_enc=svc.encrypt_credential("org_secret"),
+        aws_access_key_id_enc=svc.encrypt_credential("org_key", db=db_session, organization_id=org_id),
+        aws_secret_key_enc=svc.encrypt_credential("org_secret", db=db_session, organization_id=org_id),
         aws_region="ap-south-1",
         from_email="sender@example.com",
         from_name="Org Sender",

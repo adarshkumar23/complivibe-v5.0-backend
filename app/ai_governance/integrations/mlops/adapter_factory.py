@@ -1,39 +1,44 @@
-import base64
-import hashlib
 import json
+import uuid
 
-from cryptography.fernet import Fernet
+from sqlalchemy.orm import Session
 
 from app.ai_governance.integrations.mlops.mlflow_adapter import MLflowAdapter
-from app.core.config import get_settings
 from app.models.mlops_integration import MLOpsIntegration
+from app.services.secrets_service import SecretsService, legacy_key_from_named_setting
 
 
-def _fernet() -> Fernet:
-    settings = get_settings()
-    key_value = getattr(settings, "MLOPS_CONFIG_ENCRYPTION_KEY", None) or settings.SECRET_KEY
-    digest = hashlib.sha256(key_value.encode("utf-8")).digest()
-    fernet_key = base64.urlsafe_b64encode(digest)
-    return Fernet(fernet_key)
+def _secrets(db: Session, organization_id: uuid.UUID) -> SecretsService:
+    return SecretsService(
+        db,
+        organization_id=organization_id,
+        legacy_key_resolver=legacy_key_from_named_setting("MLOPS_CONFIG_ENCRYPTION_KEY"),
+    )
 
 
-def encrypt_config(config: dict) -> str:
+def encrypt_config(
+    config: dict, *, db: Session, organization_id: uuid.UUID, entity_id: uuid.UUID | None = None
+) -> str:
     payload = json.dumps(config, sort_keys=True)
-    return _fernet().encrypt(payload.encode("utf-8")).decode("utf-8")
+    return _secrets(db, organization_id).encrypt(payload, secret_name="mlops_integration_config", entity_id=entity_id)
 
 
-def decrypt_config(config_json: str) -> dict:
-    raw = _fernet().decrypt(config_json.encode("utf-8")).decode("utf-8")
+def decrypt_config(
+    config_json: str, *, db: Session, organization_id: uuid.UUID, entity_id: uuid.UUID | None = None
+) -> dict:
+    raw = _secrets(db, organization_id).decrypt(config_json, secret_name="mlops_integration_config", entity_id=entity_id)
     return json.loads(raw)
 
 
-def get_adapter(integration: MLOpsIntegration):
+def get_adapter(integration: MLOpsIntegration, *, db: Session):
     """
     Decrypt config_json and return adapter.
     """
     from fastapi import HTTPException, status
 
-    config = decrypt_config(integration.config_json)
+    config = decrypt_config(
+        integration.config_json, db=db, organization_id=integration.organization_id, entity_id=integration.id
+    )
     if integration.integration_type == "mlflow":
         try:
             return MLflowAdapter(

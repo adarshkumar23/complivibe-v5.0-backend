@@ -47,7 +47,7 @@ class MLOPSSyncService:
             organization_id=org_id,
             integration_type=payload["integration_type"],
             name=payload["name"],
-            config_json=encrypt_config(dict(payload["config_json"])),
+            config_json=encrypt_config(dict(payload["config_json"]), db=self.db, organization_id=org_id),
             last_synced_at=None,
             sync_status=None,
             last_sync_error=None,
@@ -111,7 +111,9 @@ class MLOPSSyncService:
         if "is_active" in payload and payload["is_active"] is not None:
             row.is_active = bool(payload["is_active"])
         if "config_json" in payload and payload["config_json"] is not None:
-            row.config_json = encrypt_config(dict(payload["config_json"]))
+            row.config_json = encrypt_config(
+                dict(payload["config_json"]), db=self.db, organization_id=org_id, entity_id=row.id
+            )
         row.updated_at = self.utcnow()
         self.db.flush()
         return row
@@ -198,7 +200,7 @@ class MLOPSSyncService:
         )
 
         try:
-            adapter = get_adapter(integration)
+            adapter = get_adapter(integration, db=self.db)
             models = adapter.fetch_registered_models()
             components = adapter.map_to_aibom_components(models)
 

@@ -73,7 +73,7 @@ class OIDCService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OIDC SSO not active for this organization")
 
         auth_state = self._consume_state(config.organization_id, state, db)
-        token = self._fetch_token(config, code, auth_state.redirect_uri)
+        token = self._fetch_token(config, code, auth_state.redirect_uri, db)
         id_token = token.get("id_token")
         if not id_token:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="OIDC token response missing id_token")
@@ -143,10 +143,12 @@ class OIDCService:
         db.flush()
         return row
 
-    def _fetch_token(self, config: OIDCConfig, code: str, redirect_uri: str) -> dict[str, Any]:
+    def _fetch_token(self, config: OIDCConfig, code: str, redirect_uri: str, db: Session) -> dict[str, Any]:
         client = OAuth2Client(
             client_id=config.client_id,
-            client_secret=OIDCConfigService.decrypt_secret(config.client_secret_enc),
+            client_secret=OIDCConfigService(db).decrypt_secret(
+                config.client_secret_enc, organization_id=config.organization_id, entity_id=config.id
+            ),
             scope=" ".join(config.scopes or []),
             redirect_uri=redirect_uri,
         )

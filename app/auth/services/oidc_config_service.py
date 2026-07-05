@@ -1,21 +1,18 @@
 from __future__ import annotations
 
-import base64
-import hashlib
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from cryptography.fernet import Fernet
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.schemas.oidc import OIDCConfigCreate, OIDCConfigUpdate
-from app.core.config import get_settings
 from app.models.oidc_config import OIDCConfig
 from app.services.audit_service import AuditService
+from app.services.secrets_service import SecretsService, legacy_key_from_fernet_secret_key
 
 
 class OIDCConfigService:
@@ -28,22 +25,18 @@ class OIDCConfigService:
     def utcnow() -> datetime:
         return datetime.now(UTC)
 
-    @staticmethod
-    def _fernet() -> Fernet:
-        settings = get_settings()
-        raw = (settings.FERNET_SECRET_KEY or "").strip()
-        if raw:
-            return Fernet(raw.encode("utf-8"))
-        digest = hashlib.sha256(settings.SECRET_KEY.encode("utf-8")).digest()
-        return Fernet(base64.urlsafe_b64encode(digest))
+    def _secrets(self, organization_id: uuid.UUID) -> SecretsService:
+        return SecretsService(
+            self.db,
+            organization_id=organization_id,
+            legacy_key_resolver=legacy_key_from_fernet_secret_key,
+        )
 
-    @classmethod
-    def encrypt_secret(cls, value: str) -> str:
-        return cls._fernet().encrypt(value.encode("utf-8")).decode("utf-8")
+    def encrypt_secret(self, value: str, *, organization_id: uuid.UUID, entity_id: uuid.UUID | None = None) -> str:
+        return self._secrets(organization_id).encrypt(value, secret_name="oidc_client_secret", entity_id=entity_id)
 
-    @classmethod
-    def decrypt_secret(cls, value: str) -> str:
-        return cls._fernet().decrypt(value.encode("utf-8")).decode("utf-8")
+    def decrypt_secret(self, value: str, *, organization_id: uuid.UUID, entity_id: uuid.UUID | None = None) -> str:
+        return self._secrets(organization_id).decrypt(value, secret_name="oidc_client_secret", entity_id=entity_id)
 
     def create_config(
         self,
@@ -73,7 +66,7 @@ class OIDCConfigService:
             provider=payload["provider"],
             issuer_url=payload["issuer_url"],
             client_id=payload["client_id"],
-            client_secret_enc=self.encrypt_secret(payload["client_secret"]),
+            client_secret_enc=self.encrypt_secret(payload["client_secret"], organization_id=org_id),
             authorization_endpoint=endpoints["authorization_endpoint"],
             token_endpoint=endpoints["token_endpoint"],
             jwks_uri=endpoints["jwks_uri"],
@@ -134,7 +127,7 @@ class OIDCConfigService:
 
         for key, value in payload.items():
             if key == "client_secret":
-                config.client_secret_enc = self.encrypt_secret(value)
+                config.client_secret_enc = self.encrypt_secret(value, organization_id=org_id, entity_id=config.id)
             elif key in {"authorization_endpoint", "token_endpoint", "jwks_uri"}:
                 setattr(config, key, endpoints[key])
             else:

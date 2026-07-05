@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     MEILISEARCH_URL: str = "http://127.0.0.1:7700"
     MEILISEARCH_API_KEY: str | None = None
     MEILISEARCH_TIMEOUT_SECONDS: int = 3
+    VAULT_ADDR: str = ""
+    VAULT_TOKEN: str = ""
+    VAULT_TRANSIT_KEY_NAME: str = "complivibe-secrets"
+    VAULT_REQUEST_TIMEOUT_SECONDS: float = 5.0
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod

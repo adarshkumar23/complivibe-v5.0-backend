@@ -116,7 +116,10 @@ def test_oidc_config_discovery_encrypts_secret_and_initiate_persists_state(clien
     assert row.token_endpoint == f"{ISSUER}/token"
     assert row.jwks_uri == f"{ISSUER}/jwks"
     assert row.client_secret_enc != "super-secret-client-value"
-    assert OIDCConfigService.decrypt_secret(row.client_secret_enc) == "super-secret-client-value"
+    assert (
+        OIDCConfigService(db_session).decrypt_secret(row.client_secret_enc, organization_id=row.organization_id)
+        == "super-secret-client-value"
+    )
 
     state, nonce = _initiate(client, slug)
     state_rows = db_session.execute(select(OIDCAuthState).where(OIDCAuthState.organization_id == UUID(org["organization_id"]))).scalars().all()
@@ -138,7 +141,7 @@ def test_oidc_callback_existing_user_jwks_rotation_and_audit(client, db_session,
     monkeypatch.setattr(
         OIDCService,
         "_fetch_token",
-        lambda self, config, code, redirect_uri: {
+        lambda self, config, code, redirect_uri, db=None: {
             "id_token": _id_token(active_key["value"], nonce=nonce, email=org["email"], subject="existing-subject-1")
         },
     )
@@ -151,7 +154,7 @@ def test_oidc_callback_existing_user_jwks_rotation_and_audit(client, db_session,
     monkeypatch.setattr(
         OIDCService,
         "_fetch_token",
-        lambda self, config, code, redirect_uri: {
+        lambda self, config, code, redirect_uri, db=None: {
             "id_token": _id_token(active_key["value"], nonce=nonce_2, email=org["email"], subject="existing-subject-2")
         },
     )
@@ -179,7 +182,7 @@ def test_oidc_callback_jit_disabled_unknown_user_returns_401(client, db_session,
     monkeypatch.setattr(
         OIDCService,
         "_fetch_token",
-        lambda self, config, code, redirect_uri: {"id_token": _id_token(key, nonce=nonce, email="unknown-oidc@example.com")},
+        lambda self, config, code, redirect_uri, db=None: {"id_token": _id_token(key, nonce=nonce, email="unknown-oidc@example.com")},
     )
 
     callback = client.get(f"/api/v1/auth/oidc/{slug}/callback", params={"code": "code", "state": state})
@@ -223,7 +226,7 @@ def test_oidc_callback_rejects_invalid_state_nonce_claims_and_signature(client, 
         monkeypatch.setattr(
             OIDCService,
             "_fetch_token",
-            lambda self, config, code, redirect_uri, case=bad_case, key=signing_key, token_nonce=token_nonce: {
+            lambda self, config, code, redirect_uri, db=None, case=bad_case, key=signing_key, token_nonce=token_nonce: {
                 "id_token": _id_token(
                     key,
                     issuer=case.issuer,
@@ -247,7 +250,7 @@ def test_oidc_callback_jit_provisions_new_user(client, db_session, monkeypatch):
     monkeypatch.setattr(
         OIDCService,
         "_fetch_token",
-        lambda self, config, code, redirect_uri: {"id_token": _id_token(key, nonce=nonce, email="new-oidc@example.com")},
+        lambda self, config, code, redirect_uri, db=None: {"id_token": _id_token(key, nonce=nonce, email="new-oidc@example.com")},
     )
 
     callback = client.get(f"/api/v1/auth/oidc/{slug}/callback", params={"code": "code", "state": state})

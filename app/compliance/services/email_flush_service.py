@@ -31,7 +31,9 @@ class EmailFlushService:
         if config is None:
             return {"sent": 0, "failed": 0, "skipped": 1}
 
-        creds = EmailConfigService.decrypt_config(config.config_json)
+        creds = EmailConfigService.decrypt_config(
+            config.config_json, db=self.db, organization_id=org_id, entity_id=config.id
+        )
         from app.compliance.services.email_delivery_service import SESEmailDeliveryService
 
         sender = SESEmailDeliveryService(
