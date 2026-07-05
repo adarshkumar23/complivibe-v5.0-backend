@@ -186,3 +186,23 @@ def list_deliveries(
         limit=limit,
     )
     return [_delivery_read(row) for row in rows]
+
+
+@router.post("/{endpoint_id}/deliveries/{delivery_id}/deliver", response_model=WebhookDeliveryRead)
+def deliver_webhook(
+    endpoint_id: uuid.UUID,
+    delivery_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("webhooks:write")),
+) -> WebhookDeliveryRead:
+    service = WebhookService(db)
+    delivery = service.get_delivery(organization.id, delivery_id)
+    if delivery.endpoint_id != endpoint_id:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook delivery not found")
+    updated = service.deliver(delivery_id)
+    db.commit()
+    db.refresh(updated)
+    return _delivery_read(updated)

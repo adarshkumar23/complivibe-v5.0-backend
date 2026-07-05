@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import time
 import uuid
 from datetime import UTC, datetime
 
+import httpx
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -227,15 +229,119 @@ class WebhookService:
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook delivery not found")
 
-        row.attempts = int(row.attempts or 0) + 1
-        row.last_attempted_at = self.utcnow()
-        row.status = "skipped"
-        row.error_message = (
-            "HTTP delivery not yet implemented. "
-            "Delivery will be activated when the "
-            "webhook delivery agent is deployed."
-        )
+        endpoint = self.db.execute(
+            select(WebhookEndpoint).where(
+                WebhookEndpoint.id == row.endpoint_id,
+                WebhookEndpoint.deleted_at.is_(None),
+            )
+        ).scalar_one_or_none()
+
+        attempts = int(row.attempts or 0)
+
+        if endpoint is None:
+            row.attempts = attempts + 1
+            row.last_attempted_at = self.utcnow()
+            row.status = "failed"
+            row.error_message = "Webhook endpoint not found or deleted"
+            self.db.flush()
+            AuditService(self.db).write_audit_log(
+                action="webhook.delivery_failed",
+                entity_type="webhook_delivery",
+                entity_id=row.id,
+                organization_id=row.organization_id,
+                actor_user_id=None,
+                after_json={"status": "failed", "attempts": row.attempts, "error": row.error_message},
+                metadata_json={"source": "webhook_service"},
+            )
+            return row
+
+        payload = dict(row.payload or {})
+        headers = {
+            "Content-Type": "application/json",
+            "X-CompliVibe-Payload-Hash": row.payload_hash,
+            "X-CompliVibe-Signature": row.signature or "",
+        }
+
+        last_status: int | None = None
+        last_error: str | None = None
+
+        for attempt in range(3):
+            row.attempts = attempts + attempt + 1
+            row.last_attempted_at = self.utcnow()
+            self.db.flush()
+
+            try:
+                response = httpx.post(
+                    endpoint.url,
+                    json=payload,
+                    headers=headers,
+                    timeout=httpx.Timeout(10.0, connect=10.0),
+                )
+                last_status = response.status_code
+                response.raise_for_status()
+
+                row.status = "delivered"
+                row.delivered_at = self.utcnow()
+                row.response_code = response.status_code
+                row.error_message = None
+                self.db.flush()
+
+                AuditService(self.db).write_audit_log(
+                    action="webhook.delivered",
+                    entity_type="webhook_delivery",
+                    entity_id=row.id,
+                    organization_id=row.organization_id,
+                    actor_user_id=None,
+                    after_json={
+                        "endpoint_id": str(endpoint.id),
+                        "url": endpoint.url,
+                        "response_code": response.status_code,
+                        "attempts": row.attempts,
+                    },
+                    metadata_json={"source": "webhook_service"},
+                )
+                return row
+            except httpx.HTTPStatusError as exc:
+                last_status = exc.response.status_code
+                last_error = f"HTTP {exc.response.status_code}"
+            except Exception as exc:  # pragma: no cover - network/timeout errors
+                last_error = str(exc) or type(exc).__name__
+
+            if attempt < 2:
+                # Exponential backoff: 1s, then 3s.
+                time.sleep(1 if attempt == 0 else 3)
+
+        row.status = "failed"
+        row.response_code = last_status
+        row.error_message = last_error or "Delivery failed after 3 attempts"
         self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="webhook.delivery_failed",
+            entity_type="webhook_delivery",
+            entity_id=row.id,
+            organization_id=row.organization_id,
+            actor_user_id=None,
+            after_json={
+                "endpoint_id": str(endpoint.id),
+                "url": endpoint.url,
+                "response_code": last_status,
+                "attempts": row.attempts,
+                "error": row.error_message,
+            },
+            metadata_json={"source": "webhook_service"},
+        )
+        return row
+
+    def get_delivery(self, org_id: uuid.UUID, delivery_id: uuid.UUID) -> WebhookDelivery:
+        row = self.db.execute(
+            select(WebhookDelivery).where(
+                WebhookDelivery.id == delivery_id,
+                WebhookDelivery.organization_id == org_id,
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook delivery not found")
         return row
 
     def get_deliveries(

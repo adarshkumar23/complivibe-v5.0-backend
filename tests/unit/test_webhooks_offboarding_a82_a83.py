@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.compliance.services.webhook_service import WebhookService
 from app.core.security import get_password_hash
 from app.models.audit_engagement import AuditEngagement
+from app.models.audit_log import AuditLog
 from app.models.control import Control
 from app.models.membership import Membership
 from app.models.offboarding_record import OffboardingRecord
@@ -58,7 +59,7 @@ def _create_active_user_with_role(db_session, org_id: str, *, email: str, role_n
     return user
 
 
-def test_a82_webhook_endpoints_emit_signature_delivery_stub_and_isolation(client, db_session):
+def test_a82_webhook_endpoints_emit_signature_delivery_and_isolation(client, db_session, monkeypatch):
     org_a = bootstrap_org_user(client, email_prefix="a82-org-a")
     org_b = bootstrap_org_user(client, email_prefix="a82-org-b")
 
@@ -121,17 +122,32 @@ def test_a82_webhook_endpoints_emit_signature_delivery_stub_and_isolation(client
     expected_hash = hashlib.sha256(json.dumps({"test": True, "id": "abc"}, sort_keys=True, default=str).encode("utf-8")).hexdigest()
     assert delivery["payload_hash"] == expected_hash
 
-    # Delivery stub: skipped and no HTTP implementation.
+    # Delivery stub has been replaced with real outbound HTTP delivery.
     service = WebhookService(db_session)
-    updated = service.deliver(uuid.UUID(delivery["id"]))
-    db_session.commit()
-    assert updated.status == "skipped"
-    assert updated.error_message is not None
-    assert "not yet implemented" in updated.error_message
 
-    with open("app/compliance/services/webhook_service.py", "r", encoding="utf-8") as f:
-        source = f.read().lower()
-    assert "httpx" not in source
+    class _SuccessResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+    with monkeypatch.context() as mp:
+        mp.setattr("httpx.post", lambda *args, **kwargs: _SuccessResponse())
+        updated = service.deliver(uuid.UUID(delivery["id"]))
+        db_session.commit()
+
+    assert updated.status == "delivered"
+    assert updated.response_code == 200
+    assert updated.error_message is None
+    assert updated.attempts == 1
+
+    audit = db_session.execute(
+        select(AuditLog).where(
+            AuditLog.entity_id == uuid.UUID(delivery["id"]),
+            AuditLog.action == "webhook.delivered",
+        )
+    ).scalar_one()
+    assert audit is not None
 
     # Deactivate + soft delete guard.
     delete_active = client.delete(f"{WEBHOOKS_BASE}/{endpoint_id}", headers=org_a["org_headers"])
@@ -334,4 +350,98 @@ def test_a83_offboarding_org_isolation_and_admin_only(client, db_session):
     )
     assert isolation.status_code == 422
 
+
+def test_webhook_delivery_retries_and_fails(client, db_session, monkeypatch):
+    org = bootstrap_org_user(client, email_prefix="webhook-fail")
+
+    created = client.post(
+        WEBHOOKS_BASE,
+        headers=org["org_headers"],
+        json={
+            "url": "https://example.test/hooks/fail",
+            "name": "Failing Hook",
+            "secret": "secret",
+            "event_types": ["issue.created"],
+        },
+    )
+    assert created.status_code == 201
+    endpoint_id = created.json()["id"]
+
+    emit = client.post(
+        f"{WEBHOOKS_BASE}/test-emit",
+        headers=org["org_headers"],
+        json={"event_type": "issue.created", "test_payload": {"foo": "bar"}},
+    )
+    assert emit.status_code == 200
+    delivery_id = emit.json()[0]["id"]
+
+    monkeypatch.setattr("httpx.post", lambda *args, **kwargs: (_ for _ in ()).throw(Exception("boom")))
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+
+    updated = WebhookService(db_session).deliver(uuid.UUID(delivery_id))
+    db_session.commit()
+
+    assert updated.status == "failed"
+    assert updated.attempts == 3
+    assert "boom" in (updated.error_message or "")
+
+    audit = db_session.execute(
+        select(AuditLog).where(
+            AuditLog.entity_id == uuid.UUID(delivery_id),
+            AuditLog.action == "webhook.delivery_failed",
+        )
+    ).scalar_one()
+    assert audit.after_json["attempts"] == 3
+
+
+def test_webhook_delivery_trigger_endpoint(client, db_session, monkeypatch):
+    org = bootstrap_org_user(client, email_prefix="webhook-trigger")
+
+    created = client.post(
+        WEBHOOKS_BASE,
+        headers=org["org_headers"],
+        json={
+            "url": "https://example.test/hooks/trigger",
+            "name": "Trigger Hook",
+            "secret": "secret",
+            "event_types": ["risk.critical"],
+        },
+    )
+    assert created.status_code == 201
+    endpoint_id = created.json()["id"]
+
+    emit = client.post(
+        f"{WEBHOOKS_BASE}/test-emit",
+        headers=org["org_headers"],
+        json={"event_type": "risk.critical", "test_payload": {"severity": "high"}},
+    )
+    assert emit.status_code == 200
+    delivery_id = emit.json()[0]["id"]
+
+    class _CreatedResponse:
+        status_code = 201
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr("httpx.post", lambda *args, **kwargs: _CreatedResponse())
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+
+    trigger = client.post(
+        f"{WEBHOOKS_BASE}/{endpoint_id}/deliveries/{delivery_id}/deliver",
+        headers=org["org_headers"],
+    )
+    assert trigger.status_code == 200
+    body = trigger.json()
+    assert body["status"] == "delivered"
+    assert body["response_code"] == 201
+    assert body["attempts"] == 1
+
+    audit = db_session.execute(
+        select(AuditLog).where(
+            AuditLog.entity_id == uuid.UUID(delivery_id),
+            AuditLog.action == "webhook.delivered",
+        )
+    ).scalar_one()
+    assert audit is not None
 

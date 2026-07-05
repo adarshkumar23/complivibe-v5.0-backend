@@ -46,6 +46,7 @@ class WebhookDeliveryRead(BaseModel):
     status: str = Field(pattern=WEBHOOK_STATUS_PATTERN)
     attempts: int
     last_attempted_at: datetime | None = None
+    delivered_at: datetime | None = None
     response_code: int | None = None
     error_message: str | None = None
     created_at: datetime
