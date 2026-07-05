@@ -153,3 +153,33 @@ def test_fairlearn_monitoring_adapter_computes_lightweight_metrics():
     metrics = {result.metric_type: result.value for result in results}
     assert metrics["fairlearn_demographic_parity_difference"] == Decimal("0.0")
     assert metrics["fairlearn_equalized_odds_difference"] == Decimal("0.333333")
+
+
+def test_evidently_drift_adapter_computes_drift_metrics():
+    from app.satellites.llm_observability.drift_adapters import EvidentlyDriftAdapter, build_sample_drift_frames
+
+    reference, current = build_sample_drift_frames()
+    results = EvidentlyDriftAdapter().detect_data_drift(reference_data=reference, current_data=current)
+
+    metrics = {result.metric_type: result.value for result in results}
+    assert metrics["evidently_drifted_columns"] >= 1
+    assert metrics["evidently_drift_share"] >= 0
+
+
+def test_nannyml_performance_adapter_estimates_label_free_performance():
+    from app.satellites.llm_observability.drift_adapters import NannyMLPerformanceAdapter, build_sample_nannyml_frames
+
+    reference, analysis = build_sample_nannyml_frames()
+    result = NannyMLPerformanceAdapter().estimate_binary_performance(
+        reference_data=reference,
+        analysis_data=analysis,
+        y_pred_proba="y_pred_proba",
+        y_pred="y_pred",
+        y_true="y_true",
+        chunk_size=5,
+    )
+
+    assert result.metric_type == "nannyml_estimated_roc_auc"
+    assert result.source_tool == "nannyml"
+    assert result.value >= 0
+    assert result.details["chunk_count"] >= 1
