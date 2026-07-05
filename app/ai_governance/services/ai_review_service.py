@@ -10,6 +10,8 @@ from app.ai_governance.services.ai_review_criteria import criteria_for_review_ty
 from app.models.ai_governance_review import AIGovernanceReview
 from app.models.ai_review_criteria_response import AIReviewCriteriaResponse
 from app.models.ai_system import AISystem
+from app.models.membership import Membership
+from app.models.user import User
 from app.services.audit_service import AuditService
 
 
@@ -49,6 +51,23 @@ class AIReviewService:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="AI system not found")
         return row
 
+    def _validate_assigned_reviewer(self, org_id: uuid.UUID, reviewer_id: uuid.UUID) -> None:
+        reviewer = self.db.execute(
+            select(User.id)
+            .join(Membership, Membership.user_id == User.id)
+            .where(
+                User.id == reviewer_id,
+                User.is_active.is_(True),
+                Membership.organization_id == org_id,
+                Membership.status == "active",
+            )
+        ).scalar_one_or_none()
+        if reviewer is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="assigned_reviewer_id must be an active member of the organization",
+            )
+
     def _require_review(self, org_id: uuid.UUID, review_id: uuid.UUID) -> AIGovernanceReview:
         row = self.db.execute(
             select(AIGovernanceReview).where(
@@ -76,6 +95,7 @@ class AIReviewService:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid review_type")
         if created_by == data.assigned_reviewer_id:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Review creator cannot be assigned reviewer")
+        self._validate_assigned_reviewer(org_id, data.assigned_reviewer_id)
 
         row = AIGovernanceReview(
             organization_id=org_id,

@@ -80,6 +80,7 @@ def _full_responses_for_review(client, headers: dict[str, str], review_id: str) 
 
 def test_a54_review_workflow_and_four_eyes(client, db_session):
     org = bootstrap_org_user(client, email_prefix="a54-owner")
+    org_b = bootstrap_org_user(client, email_prefix="a54-owner-b")
     reviewer = _create_user_with_role(
         db_session,
         org["organization_id"],
@@ -97,6 +98,18 @@ def test_a54_review_workflow_and_four_eyes(client, db_session):
     admin_headers = org_headers(login_user(client, admin["email"]), org["organization_id"])
 
     system_id = _create_system(client, org["org_headers"], org["user_id"], name="Review Target")
+
+    foreign_reviewer = client.post(
+        REVIEWS_BASE,
+        headers=org["org_headers"],
+        json={
+            "system_id": system_id,
+            "review_type": "initial_review",
+            "assigned_reviewer_id": org_b["user_id"],
+        },
+    )
+    assert foreign_reviewer.status_code == 422
+    assert "assigned_reviewer_id" in foreign_reviewer.json()["detail"]
 
     create = client.post(
         REVIEWS_BASE,
