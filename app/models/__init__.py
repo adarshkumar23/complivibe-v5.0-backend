@@ -378,6 +378,13 @@ from app.models.ip_asset_settings import IPAssetSettings
 from app.models.content_provenance_record import ContentProvenanceRecord
 from app.models.training_dataset import TrainingDataset
 from app.models.synthetic_dataset import SyntheticDataset
+from app.models.geopolitical_risk_signal import GeopoliticalRiskSignal
+from app.models.vendor_geopolitical_exposure import VendorGeopoliticalExposure
+from app.models.ot_ics_agent import OtIcsAgent
+from app.models.ot_ics_asset import OtIcsAsset
+from app.models.ot_ics_finding import OtIcsFinding
+from app.models.ai_usage_policy_check import AiUsagePolicyCheck
+from app.models.training_completion_record import TrainingCompletionRecord
 
 __all__ = [
     "Organization",
@@ -694,4 +701,11 @@ __all__ = [
     "ContentProvenanceRecord",
     "TrainingDataset",
     "SyntheticDataset",
+    "GeopoliticalRiskSignal",
+    "VendorGeopoliticalExposure",
+    "OtIcsAgent",
+    "OtIcsAsset",
+    "OtIcsFinding",
+    "AiUsagePolicyCheck",
+    "TrainingCompletionRecord",
 ]
