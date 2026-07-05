@@ -162,6 +162,7 @@ from app.api.v1 import (
     trust_center_admin,
     ai_vendor_assessments,
     vendor_mitigation,
+    vendor_remediation_portal,
     ai_governance_dashboard,
     ai_drafting,
     scheduler_admin,
@@ -344,6 +345,7 @@ api_router.include_router(trust_center_public.router)
 api_router.include_router(trust_center_admin.router)
 api_router.include_router(ai_vendor_assessments.router)
 api_router.include_router(vendor_mitigation.router)
+api_router.include_router(vendor_remediation_portal.router)
 api_router.include_router(scheduler_admin.router)
 api_router.include_router(webhooks.router)
 api_router.include_router(offboarding.router)

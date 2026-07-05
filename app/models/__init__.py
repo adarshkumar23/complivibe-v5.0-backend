@@ -257,6 +257,7 @@ from app.models.trust_center_published_policy import TrustCenterPublishedPolicy
 from app.models.ai_vendor_assessment import AIVendorAssessment
 from app.models.vendor_mitigation_case import VendorMitigationCase
 from app.models.vendor_mitigation_action import VendorMitigationAction
+from app.models.vendor_remediation_portal_token import VendorRemediationPortalToken
 from app.models.control_monitoring_definition import ControlMonitoringDefinition
 from app.models.control_monitoring_result import ControlMonitoringResult
 from app.models.control_monitoring_rule import ControlMonitoringRule
@@ -580,6 +581,7 @@ __all__ = [
     "AIVendorAssessment",
     "VendorMitigationCase",
     "VendorMitigationAction",
+    "VendorRemediationPortalToken",
     "ControlMonitoringDefinition",
     "ControlMonitoringResult",
     "ControlMonitoringRule",
