@@ -75,6 +75,10 @@ from app.api.v1 import ip_assets
 from app.api.v1 import content_provenance
 from app.api.v1 import training_datasets
 from app.api.v1 import synthetic_datasets
+from app.api.v1 import geopolitical_risk
+from app.api.v1 import ot_ics
+from app.api.v1 import ai_usage_compliance
+from app.api.v1 import training_analytics
 
 from app.api.v1 import (
     admin_email_config,
@@ -348,3 +352,8 @@ api_router.include_router(ip_assets.router)
 api_router.include_router(content_provenance.router)
 api_router.include_router(training_datasets.router)
 api_router.include_router(synthetic_datasets.router)
+api_router.include_router(geopolitical_risk.router)
+api_router.include_router(ot_ics.router)
+api_router.include_router(ot_ics.ingest_router)
+api_router.include_router(ai_usage_compliance.router)
+api_router.include_router(training_analytics.router)
