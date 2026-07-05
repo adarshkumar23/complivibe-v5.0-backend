@@ -12,6 +12,8 @@ from app.models.control_monitoring_alert import ControlMonitoringAlert
 from app.models.data_access_anomaly_rule import DataAccessAnomalyRule
 from app.models.data_access_log import DataAccessLog
 from app.models.data_asset import DataAsset
+from app.models.membership import Membership
+from app.models.user import User
 from app.services.audit_service import AuditService
 from app.core.validation import validate_choice
 
@@ -47,6 +49,26 @@ class AccessMonitoringService:
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Data asset not found")
         return row
+
+    def _require_active_org_actor(self, org_id: uuid.UUID, actor_id: uuid.UUID | None) -> None:
+        if actor_id is None:
+            return
+        row = self.db.execute(
+            select(User)
+            .join(Membership, Membership.user_id == User.id)
+            .where(
+                User.id == actor_id,
+                User.is_active.is_(True),
+                User.status == "active",
+                Membership.organization_id == org_id,
+                Membership.status == "active",
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="actor_id must reference an active organization user",
+            )
 
     def _require_rule(self, org_id: uuid.UUID, rule_id: uuid.UUID) -> DataAccessAnomalyRule:
         row = self.db.execute(
@@ -110,6 +132,7 @@ class AccessMonitoringService:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid access_result")
 
         self._require_asset(org_id, data_asset_id)
+        self._require_active_org_actor(org_id, payload.get("actor_id"))
         row = DataAccessLog(
             organization_id=org_id,
             data_asset_id=data_asset_id,

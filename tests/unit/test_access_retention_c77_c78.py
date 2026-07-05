@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from app.models.data_access_log import DataAccessLog
 from app.models.data_asset import DataAsset
 from app.models.data_retention_review import DataRetentionReview
 from app.models.task import Task
@@ -252,6 +253,38 @@ def test_c77_data_access_monitoring(client):
     forbidden = client.get(f"{ACCESS_BASE}/logs?data_asset_id={spike_asset_id}", headers=org_b["org_headers"])
     assert forbidden.status_code == 200
     assert forbidden.json() == []
+
+
+def test_c77_ingest_rejects_cross_tenant_actor_id(client, db_session):
+    org_a = bootstrap_org_user(client, email_prefix="c77-actor-a")
+    org_b = bootstrap_org_user(client, email_prefix="c77-actor-b")
+    ingest_key = "c77-cross-actor-key"
+    _configure_ingest_key(client, org_a["org_headers"], ingest_key)
+    asset_id = _create_asset(client, org_a["org_headers"], org_a["user_id"], name="c77_cross_actor_asset")
+
+    response = client.post(
+        f"{ACCESS_BASE}/events",
+        headers={"X-CompliVibe-Key": ingest_key},
+        json={
+            "data_asset_id": asset_id,
+            "actor_id": org_b["user_id"],
+            "access_type": "read",
+            "access_result": "success",
+            "access_time": datetime.now(UTC).isoformat(),
+        },
+    )
+    assert response.status_code == 422
+    assert "actor_id" in response.json()["detail"]
+
+    persisted = (
+        db_session.query(DataAccessLog)
+        .filter(
+            DataAccessLog.organization_id == uuid.UUID(org_a["organization_id"]),
+            DataAccessLog.actor_id == uuid.UUID(org_b["user_id"]),
+        )
+        .count()
+    )
+    assert persisted == 0
 
 
 def test_c78_retention_policy_enforcement(client, db_session):

@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 
 from app.models.dpia import DPIA
 from app.models.dpia_checklist_item import DPIAChecklistItem
+from app.models.membership import Membership
 from app.models.processing_activity import ProcessingActivity
+from app.models.user import User
 from app.services.audit_service import AuditService
 from app.core.validation import validate_choice
 
@@ -74,6 +76,24 @@ class DPIAService:
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DPIA not found")
         return row
+
+    def _require_active_org_user(self, org_id: uuid.UUID, user_id: uuid.UUID, field_name: str) -> None:
+        row = self.db.execute(
+            select(User)
+            .join(Membership, Membership.user_id == User.id)
+            .where(
+                User.id == user_id,
+                User.is_active.is_(True),
+                User.status == "active",
+                Membership.organization_id == org_id,
+                Membership.status == "active",
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{field_name} must be an active organization user",
+            )
 
     def _list_checklist(self, org_id: uuid.UUID, dpia_id: uuid.UUID) -> list[DPIAChecklistItem]:
         return self.db.execute(
@@ -238,6 +258,7 @@ class DPIAService:
         row = self._require_dpia(org_id, dpia_id)
         if row.status not in {"draft", "in_progress", "rejected"}:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="DPIA cannot be submitted for review from current status")
+        self._require_active_org_user(org_id, reviewer_id, "reviewer_id")
 
         now = self.utcnow()
         row.status = "under_review"

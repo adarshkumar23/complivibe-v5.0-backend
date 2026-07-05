@@ -2,6 +2,7 @@ import uuid
 
 from app.core.security import get_password_hash
 from app.models.membership import Membership
+from app.models.organization_obligation_state import OrganizationObligationState
 from app.models.role import Role
 from app.models.user import User
 
@@ -233,3 +234,55 @@ def test_obligation_list_detail_and_state_update_rules(client):
     logs = client.get("/api/v1/audit-logs", headers=_headers(owner, org_id))
     assert logs.status_code == 200
     assert "obligation.state_updated" in [item["action"] for item in logs.json()]
+
+
+def test_obligation_state_rejects_cross_tenant_owner_user(client, db_session):
+    owner_a = _register(client, "p20-owner-cross-a@example.com", "Pass1234!@", "P20 Cross A")
+    owner_b_email = "p20-owner-cross-b@example.com"
+    _register(client, owner_b_email, "Pass1234!@", "P20 Cross B")
+    org_a = client.get("/api/v1/organizations/me", headers=_headers(owner_a)).json()[0]["id"]
+    org_b_user = db_session.query(User).filter(User.email == owner_b_email).one()
+    org_b_user_id = str(org_b_user.id)
+
+    frameworks = client.get("/api/v1/frameworks", headers=_headers(owner_a)).json()
+    framework_with_obligations = None
+    obligation_id = None
+    for fw in frameworks:
+        resp = client.get(f"/api/v1/frameworks/{fw['id']}/obligations", headers=_headers(owner_a))
+        if resp.status_code == 200 and resp.json():
+            framework_with_obligations = fw["id"]
+            obligation_id = resp.json()[0]["id"]
+            break
+
+    assert framework_with_obligations is not None
+    assert obligation_id is not None
+
+    activate = client.post(
+        f"/api/v1/frameworks/{framework_with_obligations}/activate",
+        headers=_headers(owner_a, org_a),
+        json={"notes": "activate for cross-owner check"},
+    )
+    assert activate.status_code == 200
+
+    response = client.patch(
+        f"/api/v1/obligations/{obligation_id}/state",
+        headers=_headers(owner_a, org_a),
+        json={
+            "applicability_status": "applicable",
+            "implementation_status": "in_progress",
+            "owner_user_id": org_b_user_id,
+        },
+    )
+    assert response.status_code == 400
+    assert "owner_user_id" in response.json()["detail"]
+
+    poisoned = (
+        db_session.query(OrganizationObligationState)
+        .filter(
+            OrganizationObligationState.organization_id == uuid.UUID(org_a),
+            OrganizationObligationState.obligation_id == uuid.UUID(obligation_id),
+            OrganizationObligationState.owner_user_id == uuid.UUID(org_b_user_id),
+        )
+        .count()
+    )
+    assert poisoned == 0

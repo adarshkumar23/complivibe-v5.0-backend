@@ -4,6 +4,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
+from app.models.business_unit import BusinessUnit
 from app.models.control_monitoring_alert import ControlMonitoringAlert
 from app.models.membership import Membership
 from app.models.risk import Risk
@@ -89,6 +90,23 @@ class RiskAppetiteService:
                     "Active threshold already exists for this scope and category. "
                     "Deactivate existing threshold before creating a new one."
                 ),
+            )
+
+    def ensure_scope_in_org(self, organization_id: uuid.UUID, scope_type: str, scope_id: uuid.UUID | None) -> None:
+        if scope_type != "business_unit":
+            return
+        business_unit = self.db.execute(
+            select(BusinessUnit.id).where(
+                BusinessUnit.id == scope_id,
+                BusinessUnit.organization_id == organization_id,
+                BusinessUnit.is_active.is_(True),
+                BusinessUnit.deleted_at.is_(None),
+            )
+        ).scalar_one_or_none()
+        if business_unit is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="scope_id must reference an active business unit in the organization",
             )
 
     def _resolve_most_specific_threshold(

@@ -147,6 +147,27 @@ def _rule_read(row: ObligationApplicabilityRule) -> ObligationApplicabilityRuleR
     )
 
 
+def _ensure_active_org_user(db: Session, organization_id: uuid.UUID, user_id: uuid.UUID | None, field_name: str) -> None:
+    if user_id is None:
+        return
+    row = db.execute(
+        select(User)
+        .join(Membership, Membership.user_id == User.id)
+        .where(
+            User.id == user_id,
+            User.is_active.is_(True),
+            User.status == "active",
+            Membership.organization_id == organization_id,
+            Membership.status == "active",
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be an active member of the organization",
+        )
+
+
 def _build_obligation_read(
     db: Session,
     obligation: Obligation,
@@ -830,6 +851,7 @@ def update_obligation_state(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Justification is required when applicability_status is not_applicable",
         )
+    _ensure_active_org_user(db, organization.id, payload.owner_user_id, "owner_user_id")
 
     state = db.execute(
         select(OrganizationObligationState).where(

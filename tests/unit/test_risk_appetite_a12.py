@@ -2,6 +2,7 @@ import uuid
 
 from app.compliance.services.risk_appetite_service import RiskAppetiteService
 from app.core.security import get_password_hash
+from app.models.business_unit import BusinessUnit
 from app.models.control_monitoring_alert import ControlMonitoringAlert
 from app.models.membership import Membership
 from app.models.permission import Permission
@@ -193,6 +194,45 @@ def test_a12_escalation_owner_must_be_active_org_member(client, db_session):
     assert "escalation_owner_id" in response.json()["detail"]
 
 
+def test_a12_business_unit_scope_must_belong_to_org(client, db_session):
+    org1 = bootstrap_org_user(client, email_prefix="a12-scope-a")
+    org2 = bootstrap_org_user(client, email_prefix="a12-scope-b")
+    escalation_owner = _create_active_user_with_role(db_session, org1["organization_id"], "a12-scope-owner@example.com", "admin")
+
+    foreign_bu = BusinessUnit(
+        organization_id=uuid.UUID(org2["organization_id"]),
+        name="Foreign BU",
+        code="FBU",
+        is_active=True,
+        created_by=uuid.UUID(org2["user_id"]),
+        deleted_at=None,
+    )
+    db_session.add(foreign_bu)
+    db_session.commit()
+
+    response = _create_threshold(
+        client,
+        org1["org_headers"],
+        scope_type="business_unit",
+        scope_id=str(foreign_bu.id),
+        risk_category="technology",
+        max_acceptable_score=10,
+        escalation_owner_id=str(escalation_owner.id),
+    )
+    assert response.status_code == 400
+    assert "scope_id" in response.json()["detail"]
+
+    poisoned = (
+        db_session.query(RiskAppetiteThreshold)
+        .filter(
+            RiskAppetiteThreshold.organization_id == uuid.UUID(org1["organization_id"]),
+            RiskAppetiteThreshold.scope_id == foreign_bu.id,
+        )
+        .count()
+    )
+    assert poisoned == 0
+
+
 def test_a12_duplicate_active_threshold_same_scope_category_returns_422(client, db_session):
     org = bootstrap_org_user(client, email_prefix="a12-dup")
     escalation_owner = _create_active_user_with_role(db_session, org["organization_id"], "a12-dup-owner@example.com", "admin")
@@ -266,7 +306,17 @@ def test_a12_summary_categories_without_threshold_and_breach_count(client, db_se
     )
     assert c1.status_code == 201
 
-    bu_scope = str(uuid.uuid4())
+    bu = BusinessUnit(
+        organization_id=org_id,
+        name="Summary BU",
+        code="SUM",
+        is_active=True,
+        created_by=uuid.UUID(org["user_id"]),
+        deleted_at=None,
+    )
+    db_session.add(bu)
+    db_session.commit()
+    bu_scope = str(bu.id)
     c2 = _create_threshold(
         client,
         org["org_headers"],

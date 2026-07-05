@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 from app.core.security import get_password_hash
 from app.models.membership import Membership
+from app.models.risk import Risk
 from app.models.role import Role
 from app.models.user import User
 
@@ -140,6 +141,39 @@ def test_risk_permissions_tenant_scoping_scoring_and_validation(client, db_sessi
     assert list2.status_code == 200
     assert any(item["id"] == risk_id for item in list1.json())
     assert list2.json() == []
+
+
+def test_risk_owner_rejects_inactive_same_org_user(client, db_session):
+    owner = _register(client, "p23-inactive-owner@example.com", "Pass1234!@", "P23 Inactive Owner Org")
+    org_id = _org_id(client, owner)
+    inactive_user = _create_active_user_with_role(db_session, org_id, "p23-inactive-member@example.com", "admin")
+    inactive_user.is_active = False
+    inactive_user.status = "inactive"
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/risks",
+        headers=_headers(owner, org_id),
+        json={
+            "title": "Inactive owner risk",
+            "category": "operational",
+            "likelihood": 3,
+            "impact": 4,
+            "owner_user_id": str(inactive_user.id),
+        },
+    )
+    assert response.status_code == 400
+    assert "owner_user_id" in response.json()["detail"]
+
+    persisted = (
+        db_session.query(Risk)
+        .filter(
+            Risk.organization_id == uuid.UUID(org_id),
+            Risk.owner_user_id == inactive_user.id,
+        )
+        .count()
+    )
+    assert persisted == 0
 
 
 def test_risk_create_update_exposes_and_validates_business_unit_id(client):
