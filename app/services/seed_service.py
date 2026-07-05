@@ -577,6 +577,8 @@ PILLAR1_AUDIT_ACTION_REGISTRY: dict[str, tuple[str, ...]] = {
         "webhook_endpoint.deactivated",
         "webhook_endpoint.deleted",
         "webhook.emitted",
+        "webhook.delivered",
+        "webhook.delivery_failed",
     ),
     "offboarding": (
         "offboarding.validated",
