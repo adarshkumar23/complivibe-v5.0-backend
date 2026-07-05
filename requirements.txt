@@ -17,6 +17,7 @@ weasyprint>=69.0,<70.0.0
 arelle-release>=2.41.0,<3.0.0
 apscheduler==3.10.4
 mlflow>=2.0.0,<3.0.0
+meilisearch>=0.31.0,<1.0.0
 
 langfuse==4.13.0
 deepeval==4.0.7

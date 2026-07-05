@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     OTEL_ENABLED: bool = False
     OTEL_SERVICE_NAME: str = "complivibe-backend"
     OTEL_EXPORTER_OTLP_ENDPOINT: str | None = None
+    MEILISEARCH_ENABLED: bool = True
+    MEILISEARCH_URL: str = "http://127.0.0.1:7700"
+    MEILISEARCH_API_KEY: str | None = None
+    MEILISEARCH_TIMEOUT_SECONDS: int = 3
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
