@@ -6,8 +6,13 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.compliance.services.issue_service import IssueService
 from app.models.dora_ict_register import DORAICTRegister
+from app.models.issue import Issue
+from app.models.membership import Membership
 from app.models.user import User
+from app.models.vendor import Vendor
+from app.schemas.issue import IssueCreate
 from app.services.audit_service import AuditService
 from app.services.risk_service import RiskService
 
@@ -70,6 +75,7 @@ class DORAService:
                 f"(last assessed {row.last_assessed_at.isoformat() if row.last_assessed_at else 'never'})."
             )
 
+        created_by = actor_user_id or row.created_by
         risk = RiskService(self.db).create_risk_from_service(
             organization_id=org_id,
             title=f"DORA ICT register gap: {row.counterparty_name}",
@@ -87,10 +93,33 @@ class DORAService:
                 "dora_ict_register_id": str(row.id),
                 "reason": reason,
             },
-            created_by_user_id=actor_user_id,
+            created_by_user_id=created_by,
             audit_source="dora_ict_register",
         )
         row.risk_id = risk.id
+        existing_issue = self.db.execute(
+            select(Issue).where(
+                Issue.organization_id == org_id,
+                Issue.source_type == "risk_assessment",
+                Issue.source_id == row.id,
+                Issue.deleted_at.is_(None),
+            )
+        ).scalar_one_or_none()
+        if existing_issue is None:
+            IssueService(self.db).create_issue(
+                org_id,
+                IssueCreate(
+                    title=f"DORA ICT register gap: {row.counterparty_name}",
+                    description=f"{description}\n\nLinked risk ID: {risk.id}",
+                    issue_type="vendor_failure",
+                    severity="high" if reason == "missing_exit_strategy" else "medium",
+                    source_type="risk_assessment",
+                    source_id=row.id,
+                    owner_id=row.owner_id,
+                    assigned_to=row.owner_id,
+                ),
+                created_by=created_by,
+            )
         self.db.flush()
         AuditService(self.db).write_audit_log(
             action="dora.ict_entry_risk_linked",
@@ -102,10 +131,34 @@ class DORAService:
             metadata_json={"source": "dora_ict_register"},
         )
 
-    def _require_user(self, user_id: uuid.UUID) -> None:
-        row = self.db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+    def _require_org_user(self, org_id: uuid.UUID, user_id: uuid.UUID, field_name: str) -> None:
+        row = self.db.execute(
+            select(User.id)
+            .join(Membership, Membership.user_id == User.id)
+            .where(
+                User.id == user_id,
+                User.is_active.is_(True),
+                User.status == "active",
+                Membership.organization_id == org_id,
+                Membership.status == "active",
+            )
+        ).scalar_one_or_none()
         if row is None:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="user_id not found")
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{field_name} must be an active organization user",
+            )
+
+    def _require_org_vendor(self, org_id: uuid.UUID, vendor_id: uuid.UUID) -> None:
+        row = self.db.execute(
+            select(Vendor.id).where(
+                Vendor.id == vendor_id,
+                Vendor.organization_id == org_id,
+                Vendor.archived_at.is_(None),
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor not found")
 
     def _require_entry(self, org_id: uuid.UUID, entry_id: uuid.UUID) -> DORAICTRegister:
         row = self.db.execute(
@@ -120,8 +173,10 @@ class DORAService:
         return row
 
     def create_ict_register_entry(self, org_id: uuid.UUID, data, created_by: uuid.UUID) -> DORAICTRegister:
-        self._require_user(created_by)
-        self._require_user(data.owner_id)
+        self._require_org_user(org_id, created_by, "created_by")
+        self._require_org_user(org_id, data.owner_id, "owner_id")
+        if data.vendor_id is not None:
+            self._require_org_vendor(org_id, data.vendor_id)
         row = DORAICTRegister(
             organization_id=org_id,
             vendor_id=data.vendor_id,
@@ -179,7 +234,9 @@ class DORAService:
         row = self._require_entry(org_id, entry_id)
         updates = data.model_dump(exclude_unset=True)
         if "owner_id" in updates and updates["owner_id"] is not None:
-            self._require_user(updates["owner_id"])
+            self._require_org_user(org_id, updates["owner_id"], "owner_id")
+        if "vendor_id" in updates and updates["vendor_id"] is not None:
+            self._require_org_vendor(org_id, updates["vendor_id"])
 
         before = {
             "counterparty_name": row.counterparty_name,

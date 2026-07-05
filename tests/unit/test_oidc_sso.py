@@ -4,7 +4,9 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 from uuid import UUID
 
+import pytest
 from authlib.jose import JsonWebKey, jwt
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.auth.services.oidc_config_service import OIDCConfigService
@@ -127,6 +129,18 @@ def test_oidc_config_discovery_encrypts_secret_and_initiate_persists_state(clien
     assert state_rows[0].state_hash == OIDCService._sha256(state)
     assert state_rows[0].nonce_hash == OIDCService._sha256(nonce)
     assert state_rows[0].expires_at is not None
+
+
+def test_oidc_discovery_rejects_internal_issuer_url(db_session):
+    with pytest.raises(HTTPException) as exc:
+        OIDCConfigService(db_session)._fetch_discovery_document("https://127.0.0.1:4443")
+    assert exc.value.status_code == 422
+
+
+def test_oidc_jwks_fetch_rejects_internal_url():
+    with pytest.raises(HTTPException) as exc:
+        OIDCService()._fetch_jwks("https://127.0.0.1:4443/jwks")
+    assert exc.value.status_code == 401
 
 
 def test_oidc_callback_existing_user_jwks_rotation_and_audit(client, db_session, monkeypatch):

@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.auth.services.oidc_config_service import OIDCConfigService
 from app.auth.services.sso_service import SSOService
 from app.core.config import get_settings
+from app.core.url_security import UnsafeURLTargetError, assert_public_http_url
 from app.models.oidc_auth_state import OIDCAuthState
 from app.models.oidc_config import OIDCConfig
 from app.models.organization import Organization
@@ -188,6 +189,10 @@ class OIDCService:
         return dict(claims)
 
     def _fetch_jwks(self, jwks_uri: str) -> dict[str, Any]:
+        try:
+            assert_public_http_url(jwks_uri, field_name="jwks_uri")
+        except UnsafeURLTargetError as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unable to fetch OIDC JWKS") from exc
         try:
             response = httpx.get(jwks_uri, timeout=10.0, follow_redirects=False)
             response.raise_for_status()

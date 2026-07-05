@@ -206,6 +206,9 @@ class SSOService:
         except Exception:
             decoded = saml_response
 
+        if "<Signature" not in decoded and "<ds:Signature" not in decoded:
+            return None
+
         for pattern in (
             r"<saml:NameID[^>]*>([^<]+)</saml:NameID>",
             r"<NameID[^>]*>([^<]+)</NameID>",

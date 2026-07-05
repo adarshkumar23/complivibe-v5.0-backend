@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.schemas.oidc import OIDCConfigCreate, OIDCConfigUpdate
+from app.core.url_security import UnsafeURLTargetError, assert_public_http_url, raise_unsafe_url_http_error
 from app.models.oidc_config import OIDCConfig
 from app.services.audit_service import AuditService
 from app.services.secrets_service import SecretsService, legacy_key_from_fernet_secret_key
@@ -257,6 +258,10 @@ class OIDCConfigService:
 
     def _fetch_discovery_document(self, issuer_url: str) -> dict[str, Any]:
         url = issuer_url.rstrip("/") + self.DISCOVERY_PATH
+        try:
+            assert_public_http_url(url, field_name="issuer_url")
+        except UnsafeURLTargetError as exc:
+            raise_unsafe_url_http_error(exc, field_name="issuer_url")
         try:
             response = httpx.get(url, timeout=10.0, follow_redirects=False)
             response.raise_for_status()

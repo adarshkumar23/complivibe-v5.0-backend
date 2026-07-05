@@ -83,6 +83,15 @@ def test_set_org_limit_and_my_limits(client, db_session):
     assert my_limits_no_jwt.status_code == 401
 
 
+def test_my_limits_requires_membership_in_requested_org(client, db_session):
+    org_a = bootstrap_org_user(client, email_prefix="rl-member-a")
+    org_b = bootstrap_org_user(client, email_prefix="rl-member-b")
+    mixed_headers = {**org_a["headers"], "X-Organization-ID": org_b["organization_id"]}
+
+    response = client.get("/api/v1/rate-limits/my-limits", headers=mixed_headers)
+    assert response.status_code == 403
+
+
 def test_rate_limit_service_behaviors(client, db_session):
     service = RateLimitService()
     org = bootstrap_org_user(client, email_prefix="rl-service")

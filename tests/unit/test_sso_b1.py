@@ -147,6 +147,22 @@ def test_sso_callback_jit_and_existing_user_and_audit_log(client, db_session, mo
     assert audit_row is not None
 
 
+def test_sso_callback_rejects_unsigned_forged_assertion(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="sso-forged")
+    _enable_sso_feature(db_session, org["organization_id"])
+    slug = _org_slug(client, org["headers"])
+
+    create_resp = client.post("/api/v1/sso-configs", headers=org["org_headers"], json=_sample_config_payload())
+    assert create_resp.status_code == 201
+    config_id = create_resp.json()["id"]
+    activate = client.post(f"/api/v1/sso-configs/{config_id}/activate", headers=org["org_headers"])
+    assert activate.status_code == 200
+
+    forged = "<saml:NameID>attacker@example.com</saml:NameID>"
+    callback = client.post(f"/api/v1/auth/sso/{slug}/callback", data={"SAMLResponse": forged})
+    assert callback.status_code == 400
+
+
 def test_sso_callback_jit_disabled_unknown_user_returns_401(client, db_session, monkeypatch):
     org = bootstrap_org_user(client, email_prefix="sso-disabled")
     _enable_sso_feature(db_session, org["organization_id"])
