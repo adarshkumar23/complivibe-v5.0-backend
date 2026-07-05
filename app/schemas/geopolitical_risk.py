@@ -67,6 +67,8 @@ class ExposedVendorRegion(BaseModel):
     region: str
     signal_count: int
     max_severity: str = Field(pattern=GEOPOLITICAL_SEVERITY_PATTERN)
+    last_ingested_at: datetime | None = None
+    is_stale: bool = False
 
 
 class ExposedVendorSummary(BaseModel):
@@ -78,9 +80,25 @@ class ExposedVendorSummary(BaseModel):
     total_signal_count: int
 
 
+class UnmonitoredVendorExposure(BaseModel):
+    """A vendor's declared regional exposure for which this org has never
+    run a successful GDELT ingest, or whose last successful ingest is stale
+    (past ``STALE_MONITORING_THRESHOLD_DAYS``). Zero risk signals for a
+    region is only a meaningful "all clear" if monitoring is fresh -- this
+    surfaces the coverage gap instead of silently omitting the vendor."""
+
+    vendor_id: UUID
+    vendor_name: str
+    region: str
+    monitoring_status: str = Field(pattern="^(never_monitored|stale)$")
+    last_ingested_at: datetime | None = None
+
+
 class GeopoliticalSummaryResponse(BaseModel):
     organization_id: UUID
     regions_with_signals: list[str]
     exposed_vendors: list[ExposedVendorSummary]
     vendor_count_exposed: int
     highest_severity_observed: str | None = None
+    stale_regions: list[str] = Field(default_factory=list)
+    unmonitored_exposures: list[UnmonitoredVendorExposure] = Field(default_factory=list)

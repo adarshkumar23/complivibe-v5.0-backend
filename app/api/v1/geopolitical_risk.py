@@ -14,6 +14,7 @@ from app.schemas.geopolitical_risk import (
     GeopoliticalIngestResponse,
     GeopoliticalRiskSignalResponse,
     GeopoliticalSummaryResponse,
+    UnmonitoredVendorExposure,
     VendorGeopoliticalExposureCreate,
     VendorGeopoliticalExposureResponse,
 )
@@ -87,6 +88,10 @@ def get_geopolitical_summary(
         ],
         vendor_count_exposed=summary["vendor_count_exposed"],
         highest_severity_observed=summary["highest_severity_observed"],
+        stale_regions=summary["stale_regions"],
+        unmonitored_exposures=[
+            UnmonitoredVendorExposure(**item) for item in summary["unmonitored_exposures"]
+        ],
     )
 
 

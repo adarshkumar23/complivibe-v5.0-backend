@@ -462,3 +462,88 @@ def test_read_only_role_forbidden_from_ingest(client, db_session):
         json={"vendor_id": str(uuid.uuid4()), "region": "Somewhere"},
     )
     assert forbidden_exposure.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# (f) monitoring freshness: stale/never-monitored regions are flagged, not
+# silently treated as "no risk"
+# ---------------------------------------------------------------------------
+
+
+def test_summary_flags_never_monitored_vendor_exposure(client, db_session):
+    """A vendor exposure region that has never had a successful ingest run
+    must be surfaced as a coverage gap, not silently omitted as if it were
+    confirmed risk-free."""
+    org = _bootstrap(client, db_session, "t415-nevermon")
+    vendor_id = _create_vendor(client, org, name="Never Monitored Vendor")
+
+    exposure_response = client.post(
+        f"{BASE}/vendor-exposures",
+        headers=org["org_headers"],
+        json={"vendor_id": vendor_id, "region": "Neverlandia"},
+    )
+    assert exposure_response.status_code == 201
+
+    summary = client.get(f"{BASE}/summary", headers=org["org_headers"])
+    assert summary.status_code == 200
+    body = summary.json()
+    assert body["vendor_count_exposed"] == 0  # no risk signal -> not "exposed"
+    assert len(body["unmonitored_exposures"]) == 1
+    gap = body["unmonitored_exposures"][0]
+    assert gap["vendor_id"] == vendor_id
+    assert gap["region"] == "Neverlandia"
+    assert gap["monitoring_status"] == "never_monitored"
+    assert gap["last_ingested_at"] is None
+
+
+def test_summary_flags_stale_region_and_last_ingested_at(client, db_session):
+    """A region whose most recent successful ingest is older than the
+    staleness threshold is flagged as stale, both at the top level
+    (stale_regions) and per exposed-vendor-region (is_stale)."""
+    org = _bootstrap(client, db_session, "t415-stalefeed")
+    vendor_id = _create_vendor(client, org, name="Stale Feed Vendor")
+
+    service = GeopoliticalRiskService(
+        db_session,
+        http_client=_FakeGdeltClientOk(
+            [
+                {
+                    "url": "https://example.test/old-conflict",
+                    "title": "Military conflict reported near border",
+                    "seendate": "20260101T000000Z",
+                }
+            ]
+        ),
+    )
+    service.ingest_from_gdelt(uuid.UUID(org["organization_id"]), "Oldregion", uuid.UUID(org["user_id"]))
+
+    # Backdate the ingest audit log itself (not just the article's
+    # seendate) to simulate this org not having re-checked GDELT in a long
+    # time -- this is what freshness is actually computed from.
+    from datetime import UTC, datetime, timedelta
+
+    from app.models.audit_log import AuditLog
+
+    audit_row = db_session.execute(
+        select(AuditLog).where(
+            AuditLog.organization_id == uuid.UUID(org["organization_id"]),
+            AuditLog.action == "geopolitical_risk.ingested",
+        )
+    ).scalar_one()
+    audit_row.created_at = datetime.now(UTC) - timedelta(days=30)
+    db_session.commit()
+
+    client.post(
+        f"{BASE}/vendor-exposures",
+        headers=org["org_headers"],
+        json={"vendor_id": vendor_id, "region": "Oldregion"},
+    )
+
+    summary = client.get(f"{BASE}/summary", headers=org["org_headers"])
+    assert summary.status_code == 200
+    body = summary.json()
+    assert "Oldregion" in body["stale_regions"]
+    assert body["vendor_count_exposed"] == 1
+    exposed_region = body["exposed_vendors"][0]["exposed_regions"][0]
+    assert exposed_region["is_stale"] is True
+    assert exposed_region["last_ingested_at"] is not None
