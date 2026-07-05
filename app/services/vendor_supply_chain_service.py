@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.models.vendor import Vendor
 from app.models.vendor_supply_chain import VendorSupplyChainAlert, VendorSupplyChainLink
 from app.services.audit_service import AuditService
+from app.services.vendor_concentration_risk_service import VendorConcentrationRiskService
 from app.services.vendor_service import VendorService
 
 MAX_GRAPH_DEPTH = 10
@@ -64,6 +65,11 @@ class VendorSupplyChainService:
             self.db.flush()
         except IntegrityError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Vendor supply-chain link conflicts with an existing link") from exc
+        self._refresh_concentration_risk(
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+            trigger="vendor_supply_chain.link_created",
+        )
         return row
 
     def deactivate_link(self, *, organization_id: uuid.UUID, link_id: uuid.UUID, actor_user_id: uuid.UUID) -> VendorSupplyChainLink:
@@ -80,7 +86,47 @@ class VendorSupplyChainService:
         row.deactivated_at = datetime.now(UTC)
         row.deactivated_by_user_id = actor_user_id
         self.db.flush()
+        self._refresh_concentration_risk(
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+            trigger="vendor_supply_chain.link_deactivated",
+        )
         return row
+
+    def _refresh_concentration_risk(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        actor_user_id: uuid.UUID | None,
+        trigger: str,
+    ) -> None:
+        """Keep T1-6 concentration detection current with T1-3 supply-chain changes.
+
+        No-ops for organizations that have never opted into concentration monitoring
+        (no detection row yet) so this stays cheap and side-effect-free by default.
+        """
+        outcome = VendorConcentrationRiskService(self.db).recompute_if_tracked(
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+        )
+        if outcome is None:
+            return
+        detection, risk_created, state_changed = outcome
+        if not state_changed:
+            return
+        AuditService(self.db).write_audit_log(
+            action="vendor_concentration_risk.recomputed",
+            entity_type="vendor_concentration_risk_detection",
+            entity_id=detection.id,
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+            after_json={
+                "status": detection.status,
+                "hhi_score": detection.hhi_score,
+                "risk_id": str(detection.risk_id) if detection.risk_id else None,
+            },
+            metadata_json={"source": trigger, "risk_created": risk_created},
+        )
 
     def build_graph(self, *, organization_id: uuid.UUID, root_vendor_id: uuid.UUID, depth: int) -> dict[str, Any]:
         root = self.vendor_service.require_vendor_in_org(organization_id, root_vendor_id)

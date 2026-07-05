@@ -49,9 +49,45 @@ from app.services.vendor_risk_service import VendorRiskService
 from app.schemas.vendor import VendorArchiveRequest, VendorCreate, VendorRead, VendorSummary, VendorUpdate
 from app.services.vendor_assessment_service import VendorAssessmentService
 from app.services.audit_service import AuditService
+from app.services.vendor_concentration_risk_service import VendorConcentrationRiskService
 from app.services.vendor_service import VendorService
 
 router = APIRouter(prefix="/compliance/vendors", tags=["vendors"])
+
+
+def _refresh_concentration_risk(
+    db: Session,
+    *,
+    organization_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    trigger: str,
+) -> None:
+    """Keep T1-6 concentration detection current when a vendor's criticality or
+    status changes (T1-4). No-ops for organizations that have never opted into
+    concentration monitoring (no detection row yet).
+    """
+    outcome = VendorConcentrationRiskService(db).recompute_if_tracked(
+        organization_id=organization_id,
+        actor_user_id=actor_user_id,
+    )
+    if outcome is None:
+        return
+    detection, risk_created, state_changed = outcome
+    if not state_changed:
+        return
+    AuditService(db).write_audit_log(
+        action="vendor_concentration_risk.recomputed",
+        entity_type="vendor_concentration_risk_detection",
+        entity_id=detection.id,
+        organization_id=organization_id,
+        actor_user_id=actor_user_id,
+        after_json={
+            "status": detection.status,
+            "hhi_score": detection.hhi_score,
+            "risk_id": str(detection.risk_id) if detection.risk_id else None,
+        },
+        metadata_json={"source": trigger, "risk_created": risk_created},
+    )
 
 
 def _vendor_read(row: Vendor) -> VendorRead:
@@ -452,6 +488,14 @@ def update_vendor(
         user_agent=request.headers.get("user-agent"),
     )
 
+    if "risk_tier" in changes or "status" in changes:
+        _refresh_concentration_risk(
+            db,
+            organization_id=organization.id,
+            actor_user_id=current_user.id,
+            trigger="vendor.updated",
+        )
+
     db.commit()
     db.refresh(row)
     return _vendor_read(row)
@@ -504,6 +548,13 @@ def archive_vendor(
         metadata_json={"source": "api", "reason": payload.reason},
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
+    )
+
+    _refresh_concentration_risk(
+        db,
+        organization_id=organization.id,
+        actor_user_id=current_user.id,
+        trigger="vendor.archived",
     )
 
     db.commit()

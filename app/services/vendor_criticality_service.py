@@ -158,7 +158,58 @@ class VendorCriticalityService:
         }
         return score, tier, explanation
 
-    def default_profile_payload(self, organization_id: uuid.UUID, vendor_id: uuid.UUID) -> dict[str, Any]:
+    @staticmethod
+    def build_priority_context(vendor: Vendor, criticality_tier: str) -> dict[str, Any]:
+        """Cross-reference business criticality against the vendor's independently
+        assessed risk state, without overwriting either signal.
+
+        ``Vendor.risk_tier`` is owned by ``VendorRiskService`` (manual likelihood x
+        impact scoring) and questionnaire answer-rule scoring - it reflects assessed
+        risk, not business importance. Criticality must never overwrite it (doing so
+        previously let a routine business-criticality update silently erase a
+        vendor's real "critical" risk assessment down to "low"). Instead we surface
+        an explicit recommendation when the two signals are misaligned or when other
+        platform state (nth-party risk flags) hasn't been reconciled with criticality.
+        Computed fresh on every read so it reflects the vendor's CURRENT state
+        (e.g. a sanctions hit or a T1-3 nth-party flag raised after this profile
+        was last saved).
+        """
+        risk_tier = (vendor.risk_tier or "not_assessed").lower()
+        elevated_criticality = criticality_tier in ("high", "critical")
+        elevated_risk = risk_tier in ("high", "critical")
+
+        if elevated_criticality and risk_tier == "not_assessed":
+            recommendation = (
+                "Business-critical vendor has no risk assessment on file - prioritize a "
+                "likelihood x impact review."
+            )
+        elif elevated_criticality and vendor.nth_party_risk_flag:
+            recommendation = (
+                "Business-critical vendor has an active nth-party risk flag "
+                f"({vendor.nth_party_risk_severity or 'unspecified'} severity) - escalate for review."
+            )
+        elif elevated_criticality and not elevated_risk:
+            recommendation = (
+                f"Business-critical vendor's assessed risk tier is only '{risk_tier}' - verify the "
+                "risk assessment is current."
+            )
+        elif not elevated_criticality and elevated_risk:
+            recommendation = (
+                f"Vendor's assessed risk tier ('{risk_tier}') exceeds its business criticality tier "
+                f"('{criticality_tier}') - risk drivers other than business importance are dominating; no "
+                "criticality action needed."
+            )
+        else:
+            recommendation = "Business criticality and assessed risk tier are aligned; no escalation signal."
+
+        return {
+            "current_risk_tier": vendor.risk_tier,
+            "nth_party_risk_flag": vendor.nth_party_risk_flag,
+            "nth_party_risk_severity": vendor.nth_party_risk_severity,
+            "recommendation": recommendation,
+        }
+
+    def default_profile_payload(self, organization_id: uuid.UUID, vendor: Vendor) -> dict[str, Any]:
         score, tier, explanation = self.compute_score_payload(
             revenue_dependency_pct=Decimal("0.00"),
             data_volume_tier="none",
@@ -170,7 +221,7 @@ class VendorCriticalityService:
         return {
             "id": None,
             "organization_id": organization_id,
-            "vendor_id": vendor_id,
+            "vendor_id": vendor.id,
             "revenue_dependency_pct": Decimal("0.00"),
             "data_volume_tier": "none",
             "operational_criticality": "low",
@@ -178,6 +229,7 @@ class VendorCriticalityService:
             "criticality_score": score,
             "criticality_tier": tier,
             "score_explanation_json": explanation,
+            "priority_context": self.build_priority_context(vendor, tier),
             "notes": None,
             "updated_by_user_id": None,
             "created_at": None,
@@ -280,26 +332,12 @@ class VendorCriticalityService:
             ip_address=ip_address,
             user_agent=user_agent,
         )
-        previous_tier = vendor.risk_tier
-        if previous_tier != tier:
-            vendor.risk_tier = tier
-            self.db.flush()
-            AuditService(self.db).write_audit_log(
-                action="vendor.risk_tier.updated",
-                entity_type="vendor",
-                entity_id=vendor.id,
-                organization_id=organization_id,
-                actor_user_id=actor_user_id,
-                before_json={"risk_tier": previous_tier},
-                after_json={
-                    "risk_tier": vendor.risk_tier,
-                    "vendor_criticality_profile_id": str(row.id),
-                    "criticality_score": row.criticality_score,
-                },
-                metadata_json={"source": "vendor_criticality_profile"},
-                ip_address=ip_address,
-                user_agent=user_agent,
-            )
+        # NOTE: business criticality intentionally never writes to Vendor.risk_tier
+        # (see build_priority_context docstring for why). Previously this method
+        # overwrote vendor.risk_tier with the criticality tier here, which meant a
+        # routine business-criticality update could silently erase a vendor's real
+        # "critical" risk assessment down to "low". That has been removed; the two
+        # signals are cross-referenced instead of clobbered.
         return row
 
     @staticmethod
