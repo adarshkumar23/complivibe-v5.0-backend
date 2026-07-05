@@ -28,3 +28,7 @@ class RegulatoryChangeAlertRead(BaseModel):
     error_message: str | None
     acknowledged_at: datetime | None
     acknowledged_by_user_id: uuid.UUID | None
+    impacted_obligation_count: int = 0
+    impacted_open_obligation_count: int = 0
+    impacted_control_count: int = 0
+    impacted_obligation_samples: list[dict] = []

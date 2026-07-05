@@ -15,6 +15,11 @@ from app.services.regulatory_intelligence_service import RegulatoryIntelligenceS
 router = APIRouter(prefix="/regulatory-alerts", tags=["regulatory-alerts"])
 
 
+def _serialize_with_impact(service: RegulatoryIntelligenceService, org_id: uuid.UUID, row) -> RegulatoryChangeAlertRead:
+    impact = service.get_framework_impact(org_id, row.framework_code)
+    return RegulatoryChangeAlertRead.model_validate({**RegulatoryChangeAlertRead.model_validate(row).model_dump(), **impact})
+
+
 @router.get("", response_model=list[RegulatoryChangeAlertRead])
 def list_regulatory_alerts(
     status: str | None = None,
@@ -23,8 +28,9 @@ def list_regulatory_alerts(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("compliance:read")),
 ) -> list[RegulatoryChangeAlertRead]:
-    rows = RegulatoryIntelligenceService(db).list_alerts(organization.id, status_filter=status, framework_code=framework_code)
-    return [RegulatoryChangeAlertRead.model_validate(row) for row in rows]
+    service = RegulatoryIntelligenceService(db)
+    rows = service.list_alerts(organization.id, status_filter=status, framework_code=framework_code)
+    return [_serialize_with_impact(service, organization.id, row) for row in rows]
 
 
 @router.post("/{alert_id}/acknowledge", response_model=RegulatoryChangeAlertRead)
@@ -35,7 +41,8 @@ def acknowledge_regulatory_alert(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("compliance:write")),
 ) -> RegulatoryChangeAlertRead:
-    row = RegulatoryIntelligenceService(db).acknowledge_alert(organization.id, alert_id, current_user.id)
+    service = RegulatoryIntelligenceService(db)
+    row = service.acknowledge_alert(organization.id, alert_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return RegulatoryChangeAlertRead.model_validate(row)
+    return _serialize_with_impact(service, organization.id, row)
