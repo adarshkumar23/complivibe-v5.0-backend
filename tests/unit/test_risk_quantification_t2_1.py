@@ -35,6 +35,20 @@ def _fair_payload(**overrides):
     return payload
 
 
+def _fair_bayesian_payload(**overrides):
+    payload = {
+        "methodology": "fair_bayesian",
+        "input_parameters": {
+            "threat_event_frequency": {"min": 1, "most_likely": 5, "max": 20},
+            "vulnerability": {"min": 0.05, "most_likely": 0.1, "max": 0.3},
+            "primary_loss_magnitude": {"min": 10000, "most_likely": 50000, "max": 500000},
+        },
+        "n_iterations": 5000,
+    }
+    payload.update(overrides)
+    return payload
+
+
 def _monte_carlo_payload(**overrides):
     payload = {
         "methodology": "monte_carlo",
@@ -107,6 +121,90 @@ def test_monte_carlo_quantification_happy_path(client, db_session):
 
     input_param_names = {"frequency", "loss_magnitude"}
     assert body["sensitivity_json"]["most_influential_parameter"] in input_param_names
+
+
+def test_fair_bayesian_quantification_happy_path(client, db_session):
+    org_user = bootstrap_org_user(client, email_prefix="rq-fair-bayes")
+    headers = org_user["org_headers"]
+    risk_id = _create_risk(client, headers)
+
+    resp = client.post(f"/api/v1/risks/{risk_id}/quantify", headers=headers, json=_fair_bayesian_payload())
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+
+    assert body["methodology"] == "fair_bayesian"
+    assert body["expected_annual_loss"] > 0
+    ci = body["confidence_intervals_json"]
+    assert ci["p05"] <= ci["p50"] <= ci["p95"]
+
+    curve = body["loss_exceedance_curve_json"]
+    assert len(curve) > 0
+    probs = [point["probability_of_exceedance"] for point in curve]
+    assert all(probs[i] >= probs[i + 1] for i in range(len(probs) - 1))
+
+    input_param_names = set(_fair_bayesian_payload()["input_parameters"].keys())
+    assert body["sensitivity_json"]["most_influential_parameter"] in input_param_names
+
+    # Persisted row should be retrievable via history, same as the other methodologies.
+    history_resp = client.get(f"/api/v1/risks/{risk_id}/quantification-history", headers=headers)
+    assert history_resp.status_code == 200, history_resp.text
+    assert history_resp.json()[0]["methodology"] == "fair_bayesian"
+
+
+def test_fair_bayesian_degenerate_input_min_greater_than_max_returns_422(client, db_session):
+    org_user = bootstrap_org_user(client, email_prefix="rq-bayes-bad-minmax")
+    headers = org_user["org_headers"]
+    risk_id = _create_risk(client, headers)
+
+    bad_payload = _fair_bayesian_payload()
+    bad_payload["input_parameters"]["threat_event_frequency"] = {"min": 20, "most_likely": 5, "max": 1}
+
+    resp = client.post(f"/api/v1/risks/{risk_id}/quantify", headers=headers, json=bad_payload)
+    assert resp.status_code == 422, resp.text
+    assert "threat_event_frequency" in resp.json()["detail"]
+
+    count = db_session.execute(
+        sa.select(sa.func.count()).select_from(RiskQuantificationRun).where(
+            RiskQuantificationRun.risk_id == uuid.UUID(risk_id)
+        )
+    ).scalar_one()
+    assert count == 0
+
+
+def test_fair_bayesian_n_iterations_over_cap_returns_422(client, db_session):
+    org_user = bootstrap_org_user(client, email_prefix="rq-bayes-toobig")
+    headers = org_user["org_headers"]
+    risk_id = _create_risk(client, headers)
+
+    bad_payload = _fair_bayesian_payload(n_iterations=50000)
+
+    resp = client.post(f"/api/v1/risks/{risk_id}/quantify", headers=headers, json=bad_payload)
+    assert resp.status_code == 422, resp.text
+    assert "n_iterations" in resp.json()["detail"]
+
+
+def test_fair_bayesian_with_secondary_loss(client, db_session):
+    org_user = bootstrap_org_user(client, email_prefix="rq-bayes-secondary")
+    headers = org_user["org_headers"]
+    risk_id = _create_risk(client, headers)
+
+    payload = _fair_bayesian_payload(
+        input_parameters={
+            "threat_event_frequency": {"min": 1, "most_likely": 5, "max": 20},
+            "vulnerability": {"min": 0.05, "most_likely": 0.1, "max": 0.3},
+            "primary_loss_magnitude": {"min": 10000, "most_likely": 50000, "max": 500000},
+            "secondary_loss_event_frequency": {"min": 0.1, "most_likely": 0.4, "max": 0.9},
+            "secondary_loss_magnitude": {"min": 5000, "most_likely": 20000, "max": 100000},
+        }
+    )
+
+    resp = client.post(f"/api/v1/risks/{risk_id}/quantify", headers=headers, json=payload)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["expected_annual_loss"] > 0
+    ranking_params = {entry["parameter"] for entry in body["sensitivity_json"]["ranking"]}
+    assert "secondary_loss_event_frequency" in ranking_params
+    assert "secondary_loss_magnitude" in ranking_params
 
 
 def test_degenerate_input_min_greater_than_max_returns_422(client, db_session):

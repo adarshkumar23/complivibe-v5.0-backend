@@ -32,7 +32,7 @@ class RiskQuantificationRun(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwn
     __tablename__ = "risk_quantification_runs"
     __table_args__ = (
         CheckConstraint(
-            "methodology IN ('monte_carlo', 'fair')",
+            "methodology IN ('monte_carlo', 'fair', 'fair_bayesian')",
             name="ck_risk_quantification_runs_methodology",
         ),
         CheckConstraint(

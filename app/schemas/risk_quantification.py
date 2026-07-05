@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 
 class RiskQuantificationRequest(BaseModel):
-    methodology: str = Field(pattern="^(monte_carlo|fair)$")
+    methodology: str = Field(pattern="^(monte_carlo|fair|fair_bayesian)$")
     input_parameters: dict[str, Any]
     n_iterations: int = Field(default=10000, ge=1000, le=200000)
 
