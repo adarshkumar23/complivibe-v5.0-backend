@@ -1,10 +1,12 @@
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.compliance.services.risk_scoring_service import RiskScoringService
 from app.compliance.services.risk_appetite_service import RiskAppetiteService
 from app.models.business_unit import BusinessUnit
 from app.models.control import Control
@@ -12,6 +14,7 @@ from app.models.evidence_item import EvidenceItem
 from app.models.membership import Membership
 from app.models.risk import Risk
 from app.models.risk_control_link import RiskControlLink
+from app.services.audit_service import AuditService
 
 
 class RiskService:
@@ -114,6 +117,92 @@ class RiskService:
             risk_category=appetite_category,
             actor_user_id=actor_user_id,
         )
+
+    def create_risk_from_service(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        title: str,
+        description: str | None,
+        category: str,
+        likelihood: int,
+        impact: int,
+        financial_impact: int | None = None,
+        brand_impact: int | None = None,
+        operational_impact: int | None = None,
+        composite_score_method: str = "standard",
+        treatment_strategy: str = "undecided",
+        treatment_option: str | None = None,
+        risk_context_internal: str | None = None,
+        risk_context_external: str | None = None,
+        residual_risk_acceptable: bool | None = None,
+        risk_communication_plan: str | None = None,
+        owner_user_id: uuid.UUID | None = None,
+        business_unit_id: uuid.UUID | None = None,
+        target_date: datetime | None = None,
+        metadata_json: dict[str, Any] | None = None,
+        created_by_user_id: uuid.UUID | None = None,
+        audit_source: str = "service",
+        audit_ip_address: str | None = None,
+        audit_user_agent: str | None = None,
+    ) -> Risk:
+        self.ensure_owner_is_active_member(organization_id, owner_user_id)
+        self.ensure_business_unit_in_org(organization_id, business_unit_id)
+        risk = Risk(
+            organization_id=organization_id,
+            title=title,
+            description=description,
+            category=category,
+            status="identified",
+            severity="low",
+            likelihood=likelihood,
+            impact=impact,
+            financial_impact=financial_impact,
+            brand_impact=brand_impact,
+            operational_impact=operational_impact,
+            composite_score_method=composite_score_method,
+            treatment_strategy=treatment_strategy,
+            treatment_option=treatment_option,
+            risk_context_internal=risk_context_internal,
+            risk_context_external=risk_context_external,
+            residual_risk_acceptable=residual_risk_acceptable,
+            risk_communication_plan=risk_communication_plan,
+            owner_user_id=owner_user_id,
+            business_unit_id=business_unit_id,
+            target_date=target_date,
+            metadata_json=metadata_json,
+            created_by_user_id=created_by_user_id,
+        )
+        settings = RiskScoringService.get_or_create_org_settings(organization_id, self.db)
+        inherent_score = RiskScoringService.compute_score(risk, settings)
+        risk.severity = self.score_to_severity(inherent_score)
+        risk.inherent_score = inherent_score
+        residual_likelihood, residual_impact, residual_score = RiskScoringService.compute_residual(risk, [], inherent_score)
+        risk.residual_likelihood = residual_likelihood
+        risk.residual_impact = residual_impact
+        risk.residual_score = residual_score
+        self.db.add(risk)
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="risk.created",
+            entity_type="risk",
+            entity_id=risk.id,
+            organization_id=organization_id,
+            actor_user_id=created_by_user_id,
+            after_json={
+                "title": risk.title,
+                "status": risk.status,
+                "severity": risk.severity,
+                "inherent_score": risk.inherent_score,
+                "business_unit_id": str(risk.business_unit_id) if risk.business_unit_id else None,
+            },
+            metadata_json={"source": audit_source},
+            ip_address=audit_ip_address,
+            user_agent=audit_user_agent,
+        )
+        self.check_appetite_breach(organization_id=organization_id, risk=risk, actor_user_id=created_by_user_id)
+        return risk
 
     def require_control_in_org(self, organization_id: uuid.UUID, control_id: uuid.UUID) -> Control:
         control = self.db.execute(

@@ -227,6 +227,7 @@ from app.models.vendor import Vendor
 from app.models.vendor_external_rating import VendorExternalRating
 from app.models.vendor_threat_intelligence import VendorThreatIntelligence
 from app.models.vendor_supply_chain import VendorSupplyChainAlert, VendorSupplyChainLink
+from app.models.vendor_concentration_risk import VendorConcentrationRiskDetection
 from app.models.vendor_assessment import VendorAssessment
 from app.models.vendor_assessment_question import VendorAssessmentQuestion
 from app.models.vendor_criticality import VendorCriticalityProfile, VendorCriticalitySetting
@@ -548,6 +549,7 @@ __all__ = [
     "VendorThreatIntelligence",
     "VendorSupplyChainAlert",
     "VendorSupplyChainLink",
+    "VendorConcentrationRiskDetection",
     "VendorAssessment",
     "VendorAssessmentQuestion",
     "VendorCriticalityProfile",

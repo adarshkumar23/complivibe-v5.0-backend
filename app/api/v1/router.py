@@ -70,6 +70,7 @@ from app.privacy.routers import digest as privacy_digest
 from app.satellites.tprm_intelligence import router as tprm_intelligence_router
 from app.satellites.tprm_intelligence import sanctions_router as tprm_sanctions_router
 from app.api.v1 import vendor_supply_chain
+from app.api.v1 import vendor_concentration_risk
 from app.api.v1 import legal_matters
 from app.api.v1 import ip_assets
 from app.api.v1 import content_provenance
@@ -322,6 +323,7 @@ api_router.include_router(attestations.router)
 api_router.include_router(email.router)
 api_router.include_router(vendors.router)
 api_router.include_router(vendor_supply_chain.router)
+api_router.include_router(vendor_concentration_risk.router)
 api_router.include_router(tprm_intelligence_router.router)
 api_router.include_router(tprm_sanctions_router.router)
 api_router.include_router(questionnaire_templates.router)
