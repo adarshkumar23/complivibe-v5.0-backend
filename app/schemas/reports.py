@@ -99,3 +99,47 @@ class ReportListQuery(BaseModel):
     framework_id: UUID | None = None
     limit: int = Field(default=50, ge=1, le=200)
     offset: int = Field(default=0, ge=0)
+
+
+class XBRLDataPoint(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    taxonomy_concept: str = Field(min_length=3, max_length=255)
+    value: str | int | float | bool
+    period_start: datetime | None = None
+    period_end: datetime | None = None
+    instant: datetime | None = None
+    unit: str | None = Field(default=None, max_length=64)
+    decimals: int | None = Field(default=None, ge=-12, le=12)
+    dimensions: dict[str, str] | None = None
+
+
+class XBRLExportRequest(BaseModel):
+    entity_identifier: str = Field(min_length=1, max_length=255)
+    taxonomy_namespace: str = Field(
+        default="https://xbrl.ifrs.org/taxonomy/2024-04-30/issb",
+        min_length=8,
+        max_length=500,
+    )
+    taxonomy_schema_url: str = Field(
+        default="https://xbrl.ifrs.org/taxonomy/2024-04-30/issb.xsd",
+        min_length=8,
+        max_length=500,
+    )
+    taxonomy_prefix: str = Field(default="issb", min_length=1, max_length=20)
+    data_points: list[XBRLDataPoint] = Field(min_length=1, max_length=500)
+
+
+class XBRLValidationError(BaseModel):
+    data_point_index: int | None = None
+    field: str
+    message: str
+
+
+class XBRLExportResponse(BaseModel):
+    report_id: UUID
+    export_job_id: UUID
+    validation_status: str
+    validation_errors: list[XBRLValidationError]
+    checksum_sha256: str
+    file_path: str
+    xbrl_content: str

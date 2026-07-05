@@ -43,6 +43,7 @@ ALLOWED_EXPORT_TYPES = {
     "audit_preparation_json",
     "compliance_report_pdf",
     "compliance_report_docx",
+    "compliance_report_xbrl",
 }
 
 INTEGRITY_ALGORITHM = "HMAC-SHA256"

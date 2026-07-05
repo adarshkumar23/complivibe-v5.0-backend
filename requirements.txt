@@ -9,6 +9,7 @@ sentry-sdk[fastapi]>=2.64.0,<3.0.0
 reportlab>=4.2.2,<5.0.0
 python-docx>=1.1.2,<2.0.0
 weasyprint>=69.0,<70.0.0
+arelle-release>=2.41.0,<3.0.0
 apscheduler==3.10.4
 mlflow>=2.0.0,<3.0.0
 

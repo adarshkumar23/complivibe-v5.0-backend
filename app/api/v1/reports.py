@@ -32,12 +32,15 @@ from app.schemas.reports import (
     ComplianceReportSectionRead,
     ComplianceReportSummary,
     FrameworkReadinessData,
+    XBRLExportRequest,
+    XBRLExportResponse,
 )
 from app.services.audit_service import AuditService
 from app.services.export_service import ExportService
 from app.services.report_service import ReportService
 from app.compliance.services.board_scorecard_service import BoardScorecardService
 from app.compliance.services.executive_narrative_service import ExecutiveNarrativeService
+from app.compliance.services.xbrl_export_service import XBRLExportService
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 compliance_router = APIRouter(prefix="/compliance/reports", tags=["compliance-reports"])
@@ -645,4 +648,48 @@ def export_report_docx(
         iter([content]),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f"attachment; filename=report_{report_id}.docx"},
+    )
+
+
+@router.post("/{report_id}/xbrl-export", response_model=XBRLExportResponse)
+def export_report_xbrl(
+    report_id: uuid.UUID,
+    payload: XBRLExportRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("reports:xbrl_export")),
+) -> XBRLExportResponse:
+    job, xbrl_content, checksum, file_path = XBRLExportService(db).export_report(
+        org_id=organization.id,
+        report_id=report_id,
+        payload=payload,
+        requested_by_user_id=current_user.id,
+    )
+    AuditService(db).write_audit_log(
+        action="report.exported_xbrl",
+        entity_type="compliance_report",
+        entity_id=report_id,
+        organization_id=organization.id,
+        actor_user_id=current_user.id,
+        after_json={
+            "export_job_id": str(job.id),
+            "checksum_sha256": checksum,
+            "file_path": file_path,
+            "format": "xbrl",
+        },
+        metadata_json={"source": "api"},
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    db.commit()
+    return XBRLExportResponse(
+        report_id=report_id,
+        export_job_id=job.id,
+        validation_status="valid",
+        validation_errors=[],
+        checksum_sha256=checksum,
+        file_path=file_path,
+        xbrl_content=xbrl_content,
     )
