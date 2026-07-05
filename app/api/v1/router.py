@@ -122,6 +122,7 @@ from app.api.v1 import (
     non_human_identities,
     obligations,
     organizations,
+    pam_sessions,
     regulatory_alerts,
     recertification,
     reports,
@@ -245,6 +246,7 @@ api_router.include_router(compliance_risk_recommendations.router)
 api_router.include_router(users.router)
 api_router.include_router(memberships.router)
 api_router.include_router(non_human_identities.router)
+api_router.include_router(pam_sessions.router)
 api_router.include_router(roles.router)
 api_router.include_router(audit_logs.router)
 api_router.include_router(frameworks.router)
