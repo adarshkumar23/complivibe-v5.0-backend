@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.models.ai_vendor_assessment import AIVendorAssessment
 from app.models.email_outbox import EmailOutbox
 from app.models.evidence_item import EvidenceItem
+from app.models.membership import Membership
 from app.models.vendor import Vendor
 from app.models.vendor_assessment import VendorAssessment
 from app.models.vendor_mitigation_action import VendorMitigationAction
@@ -119,9 +120,24 @@ class VendorMitigationService:
             if ai_assessment.vendor_id != vendor_id:
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="ai assessment vendor mismatch")
 
+    def _require_active_org_user(self, org_id: uuid.UUID, user_id: uuid.UUID | None, *, field_name: str) -> None:
+        if user_id is None:
+            return
+        row = self.db.execute(
+            select(User, Membership)
+            .join(Membership, Membership.user_id == User.id)
+            .where(User.id == user_id, Membership.organization_id == org_id)
+        ).first()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"{field_name} must belong to this organization")
+        user, membership = row
+        if not user.is_active or user.status != "active" or membership.status != "active":
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"{field_name} must be an active organization member")
+
     def create_case(self, org_id: uuid.UUID, data, created_by: uuid.UUID) -> VendorMitigationCase:
         self._require_vendor(org_id, data.vendor_id)
         self._validate_case_assessment_refs(org_id, data.vendor_id, data.assessment_id, data.ai_assessment_id)
+        self._require_active_org_user(org_id, data.assigned_owner_id, field_name="assigned_owner_id")
 
         row = VendorMitigationCase(
             organization_id=org_id,

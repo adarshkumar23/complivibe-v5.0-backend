@@ -3,12 +3,16 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime, timedelta
 
+from app.core.security import get_password_hash
 from app.compliance.services.vendor_mitigation_service import VendorMitigationService
 from app.models.ai_vendor_assessment import AIVendorAssessment
 from app.models.compliance_policy import CompliancePolicy
 from app.models.evidence_item import EvidenceItem
 from app.models.email_outbox import EmailOutbox
+from app.models.membership import Membership
+from app.models.role import Role
 from app.models.trust_center_access_request import TrustCenterAccessRequest
+from app.models.user import User
 from app.models.vendor_mitigation_action import VendorMitigationAction
 from app.models.vendor_mitigation_case import VendorMitigationCase
 from tests.helpers.auth_org import bootstrap_org_user
@@ -264,6 +268,61 @@ def test_a58_vendor_mitigation_workflow_and_sweep(client, db_session):
         },
     )
     assert no_assessment_case.status_code == 422
+
+    cross_org_owner_case = client.post(
+        f"{MITIGATION_BASE}/cases",
+        headers=org["org_headers"],
+        json={
+            "vendor_id": vendor["id"],
+            "ai_assessment_id": ai_assessment["id"],
+            "title": "Cross-org owner case",
+            "description": "Owner belongs to a different tenant",
+            "severity": "high",
+            "assigned_owner_id": org_b["user_id"],
+            "due_date": (date.today() + timedelta(days=3)).isoformat(),
+        },
+    )
+    assert cross_org_owner_case.status_code == 422
+    assert db_session.query(VendorMitigationCase).filter(VendorMitigationCase.title == "Cross-org owner case").count() == 0
+
+    inactive_owner = User(
+        email="a58-inactive-owner@example.com",
+        full_name="Inactive Mitigation Owner",
+        hashed_password=get_password_hash("Pass1234!@"),
+        status="active",
+        is_active=True,
+        is_superuser=False,
+    )
+    db_session.add(inactive_owner)
+    db_session.flush()
+    reviewer_role = db_session.query(Role).filter(
+        Role.organization_id == uuid.UUID(org["organization_id"]),
+        Role.name == "reviewer",
+    ).one()
+    inactive_membership = Membership(
+        organization_id=uuid.UUID(org["organization_id"]),
+        user_id=inactive_owner.id,
+        role_id=reviewer_role.id,
+        status="inactive",
+    )
+    db_session.add(inactive_membership)
+    db_session.commit()
+
+    inactive_owner_case = client.post(
+        f"{MITIGATION_BASE}/cases",
+        headers=org["org_headers"],
+        json={
+            "vendor_id": vendor["id"],
+            "ai_assessment_id": ai_assessment["id"],
+            "title": "Inactive owner case",
+            "description": "Owner has inactive org membership",
+            "severity": "high",
+            "assigned_owner_id": str(inactive_owner.id),
+            "due_date": (date.today() + timedelta(days=3)).isoformat(),
+        },
+    )
+    assert inactive_owner_case.status_code == 422
+    assert db_session.query(VendorMitigationCase).filter(VendorMitigationCase.title == "Inactive owner case").count() == 0
 
     case = client.post(
         f"{MITIGATION_BASE}/cases",

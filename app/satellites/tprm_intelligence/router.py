@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
@@ -13,6 +14,7 @@ from app.models.membership import Membership
 from app.models.organization import Organization
 from app.models.user import User
 from app.models.aml_kyc_check import AmlKycCheck
+from app.models.vendor import Vendor
 from app.models.vendor_external_rating import VendorExternalRating
 from app.models.vendor_threat_intelligence import VendorThreatIntelligence
 from app.satellites.tprm_intelligence.kyb_verification import KYBVerificationService
@@ -30,6 +32,9 @@ router = APIRouter(prefix="/vendors", tags=["tprm-intelligence"])
 # Surface that staleness to the caller instead of presenting every finding as
 # equally current.
 THREAT_INTEL_STALE_AFTER_DAYS = 7
+KYB_ESCALATION_METADATA_PREVIOUS_TIER = "_kyb_pre_escalation_risk_tier"
+KYB_ESCALATION_METADATA_ESCALATED_TO = "_kyb_escalated_to_risk_tier"
+RISK_TIER_RANK = {"not_assessed": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
 
 def _rating_payload(row: VendorExternalRating) -> dict:
@@ -78,6 +83,234 @@ def _kyb_payload(row: AmlKycCheck) -> dict:
         "adverse_media_found": row.adverse_media_found,
         "checked_at": row.checked_at.isoformat() if row.checked_at else None,
     }
+
+
+def _kyb_risk(result_or_row: dict | AmlKycCheck) -> tuple[bool, str | None, str | None]:
+    if isinstance(result_or_row, AmlKycCheck):
+        company_name = result_or_row.company_name
+        offshore_links_found = result_or_row.offshore_links_found
+        adverse_media_found = result_or_row.adverse_media_found
+    else:
+        company_name = result_or_row["company_name"]
+        offshore_links_found = result_or_row["offshore_links_found"]
+        adverse_media_found = result_or_row["adverse_media_found"]
+    offshore_found = bool(offshore_links_found.get("found")) if isinstance(offshore_links_found, dict) else False
+    if adverse_media_found or offshore_found:
+        if offshore_found and adverse_media_found:
+            return True, "critical", f"KYB check for {company_name} found both offshore leak links and adverse media coverage"
+        if offshore_found:
+            return True, "critical", f"KYB check for {company_name} found offshore leak links requiring beneficial-ownership review"
+        return True, "high", f"KYB check for {company_name} found adverse media coverage requiring review"
+    return False, None, None
+
+
+def _refresh_existing_concentration_detection(
+    db: Session,
+    *,
+    organization_id: uuid.UUID,
+    actor_user_id: uuid.UUID | None,
+    audit_source: str,
+) -> None:
+    from app.services.vendor_concentration_risk_service import VendorConcentrationRiskService
+
+    concentration_service = VendorConcentrationRiskService(db)
+    existing_detection = concentration_service.current(organization_id)
+    if existing_detection is None:
+        return
+    detection, risk_created, state_changed = concentration_service.recompute(
+        organization_id=organization_id,
+        actor_user_id=actor_user_id,
+        threshold_hhi_score=existing_detection.threshold_hhi_score,
+    )
+    if state_changed:
+        AuditService(db).write_audit_log(
+            action="vendor_concentration_risk.recomputed",
+            entity_type="vendor_concentration_risk_detection",
+            entity_id=detection.id,
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+            after_json={
+                "status": detection.status,
+                "hhi_score": detection.hhi_score,
+                "risk_id": str(detection.risk_id) if detection.risk_id else None,
+            },
+            metadata_json={"source": audit_source, "risk_created": risk_created},
+        )
+
+
+def _restore_kyb_escalated_vendor_tier(
+    db: Session,
+    *,
+    organization_id: uuid.UUID,
+    vendor: Vendor,
+    actor_user_id: uuid.UUID | None,
+    audit_source: str,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+) -> None:
+    prior_rows = db.execute(
+        select(AmlKycCheck)
+        .where(AmlKycCheck.organization_id == organization_id, AmlKycCheck.vendor_id == vendor.id)
+        .order_by(AmlKycCheck.checked_at.desc(), AmlKycCheck.id.desc())
+    ).scalars().all()
+    restore_tier = None
+    escalated_to = None
+    for prior in prior_rows:
+        signals = prior.signals_used if isinstance(prior.signals_used, dict) else {}
+        restore_tier = signals.get(KYB_ESCALATION_METADATA_PREVIOUS_TIER)
+        escalated_to = signals.get(KYB_ESCALATION_METADATA_ESCALATED_TO)
+        if restore_tier and escalated_to:
+            break
+    if not restore_tier or not escalated_to or vendor.risk_tier != escalated_to:
+        return
+    before_tier = vendor.risk_tier
+    vendor.risk_tier = restore_tier
+    db.flush()
+    AuditService(db).write_audit_log(
+        action="vendor.risk_tier_escalated",
+        entity_type="vendor",
+        entity_id=vendor.id,
+        organization_id=organization_id,
+        actor_user_id=actor_user_id,
+        before_json={"risk_tier": before_tier},
+        after_json={"risk_tier": restore_tier, "reason": "kyb_aml_risk_recovered"},
+        metadata_json={"source": audit_source},
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+    _refresh_existing_concentration_detection(
+        db,
+        organization_id=organization_id,
+        actor_user_id=actor_user_id,
+        audit_source=audit_source,
+    )
+
+
+def compute_vendor_kyb_check_and_apply_effects(
+    db: Session,
+    organization: Organization,
+    vendor: Vendor,
+    *,
+    actor_user_id: uuid.UUID | None,
+    audit_source: str = "tprm_intelligence_satellite",
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+) -> AmlKycCheck:
+    try:
+        result = KYBVerificationService().compute(vendor.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    has_risk, severity, explanation = _kyb_risk(result)
+    signals_used: dict[str, Any] = dict(result.get("signals_used") or {})
+    if has_risk and severity and RISK_TIER_RANK.get(severity, 0) > RISK_TIER_RANK.get(vendor.risk_tier, 0):
+        signals_used[KYB_ESCALATION_METADATA_PREVIOUS_TIER] = vendor.risk_tier
+        signals_used[KYB_ESCALATION_METADATA_ESCALATED_TO] = severity
+
+    row = AmlKycCheck(
+        organization_id=organization.id,
+        vendor_id=vendor.id,
+        checked_at=datetime.now(UTC),
+        company_name=result["company_name"],
+        signals_used=signals_used,
+        offshore_links_found=result["offshore_links_found"],
+        ubo_data=result["ubo_data"],
+        adverse_media_found=result["adverse_media_found"],
+    )
+    db.add(row)
+    db.flush()
+    audit = AuditService(db)
+    audit.write_audit_log(
+        action="vendor.kyb_check.computed",
+        entity_type="aml_kyc_check",
+        entity_id=row.id,
+        organization_id=organization.id,
+        actor_user_id=actor_user_id,
+        after_json={
+            "vendor_id": str(vendor.id),
+            "company_name": row.company_name,
+            "adverse_media_found": row.adverse_media_found,
+            "offshore_links_found": row.offshore_links_found.get("found") if isinstance(row.offshore_links_found, dict) else None,
+        },
+        metadata_json={"source": audit_source},
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+
+    if has_risk and severity and explanation:
+        if RISK_TIER_RANK.get(severity, 0) > RISK_TIER_RANK.get(vendor.risk_tier, 0):
+            before_tier = vendor.risk_tier
+            vendor.risk_tier = severity
+            db.flush()
+            audit.write_audit_log(
+                action="vendor.risk_tier_escalated",
+                entity_type="vendor",
+                entity_id=vendor.id,
+                organization_id=organization.id,
+                actor_user_id=actor_user_id,
+                before_json={"risk_tier": before_tier},
+                after_json={"risk_tier": severity, "reason": "kyb_aml_risk_flagged"},
+                metadata_json={"source": audit_source, "aml_kyc_check_id": str(row.id)},
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+            _refresh_existing_concentration_detection(
+                db,
+                organization_id=organization.id,
+                actor_user_id=actor_user_id,
+                audit_source=audit_source,
+            )
+        alerts = VendorSupplyChainService(db).propagate_vendor_signal(
+            organization_id=organization.id,
+            triggering_vendor_id=vendor.id,
+            signal_type="kyb_aml_risk_flagged",
+            severity=severity,
+            explanation=explanation,
+            source_entity_type="aml_kyc_check",
+            source_entity_id=row.id,
+            actor_user_id=actor_user_id,
+        )
+        for alert in alerts:
+            audit.write_audit_log(
+                action="vendor_supply_chain.alert_propagated",
+                entity_type="vendor_supply_chain_alert",
+                entity_id=alert.id,
+                organization_id=organization.id,
+                actor_user_id=actor_user_id,
+                after_json={"parent_vendor_id": str(alert.parent_vendor_id), "triggering_vendor_id": str(vendor.id), "signal_type": alert.signal_type, "severity": alert.severity},
+                metadata_json={"source": "vendor.kyb_check.computed"},
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+    else:
+        resolved_alerts = VendorSupplyChainService(db).resolve_vendor_signal(
+            organization_id=organization.id,
+            triggering_vendor_id=vendor.id,
+            signal_type="kyb_aml_risk_flagged",
+            actor_user_id=actor_user_id,
+        )
+        if resolved_alerts:
+            audit.write_audit_log(
+                action="vendor_supply_chain.alert_propagation_cleared",
+                entity_type="vendor",
+                entity_id=vendor.id,
+                organization_id=organization.id,
+                actor_user_id=actor_user_id,
+                after_json={"signal_type": "kyb_aml_risk_flagged", "resolved_alert_count": len(resolved_alerts)},
+                metadata_json={"source": "vendor.kyb_check.computed"},
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+        _restore_kyb_escalated_vendor_tier(
+            db,
+            organization_id=organization.id,
+            vendor=vendor,
+            actor_user_id=actor_user_id,
+            audit_source=audit_source,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+    return row
 
 
 @router.post("/{vendor_id}/security-rating/compute", status_code=status.HTTP_201_CREATED)
@@ -349,75 +582,58 @@ def compute_vendor_kyb_check(
     vendor = VendorService(db).require_vendor_in_org(organization.id, vendor_id)
     if vendor.status == "archived":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Archived vendors cannot be checked")
-    try:
-        result = KYBVerificationService().compute(vendor.name)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-
-    row = AmlKycCheck(
-        organization_id=organization.id,
-        vendor_id=vendor.id,
-        checked_at=datetime.now(UTC),
-        company_name=result["company_name"],
-        signals_used=result["signals_used"],
-        offshore_links_found=result["offshore_links_found"],
-        ubo_data=result["ubo_data"],
-        adverse_media_found=result["adverse_media_found"],
-    )
-    db.add(row)
-    db.flush()
-    AuditService(db).write_audit_log(
-        action="vendor.kyb_check.computed",
-        entity_type="aml_kyc_check",
-        entity_id=row.id,
-        organization_id=organization.id,
+    row = compute_vendor_kyb_check_and_apply_effects(
+        db,
+        organization,
+        vendor,
         actor_user_id=current_user.id,
-        after_json={
-            "vendor_id": str(vendor.id),
-            "company_name": row.company_name,
-            "adverse_media_found": row.adverse_media_found,
-            "offshore_links_found": row.offshore_links_found.get("found") if isinstance(row.offshore_links_found, dict) else None,
-        },
-        metadata_json={"source": "tprm_intelligence_satellite"},
+        audit_source="tprm_intelligence_satellite",
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
-    offshore_found = bool(row.offshore_links_found.get("found")) if isinstance(row.offshore_links_found, dict) else False
-    if row.adverse_media_found or offshore_found:
-        if offshore_found and row.adverse_media_found:
-            severity = "critical"
-            explanation = f"KYB check for {row.company_name} found both offshore leak links and adverse media coverage"
-        elif offshore_found:
-            severity = "critical"
-            explanation = f"KYB check for {row.company_name} found offshore leak (ICIJ) links requiring beneficial-ownership review"
-        else:
-            severity = "high"
-            explanation = f"KYB check for {row.company_name} found adverse media coverage requiring review"
-        alerts = VendorSupplyChainService(db).propagate_vendor_signal(
-            organization_id=organization.id,
-            triggering_vendor_id=vendor.id,
-            signal_type="kyb_aml_risk_flagged",
-            severity=severity,
-            explanation=explanation,
-            source_entity_type="aml_kyc_check",
-            source_entity_id=row.id,
-            actor_user_id=current_user.id,
-        )
-        for alert in alerts:
-            AuditService(db).write_audit_log(
-                action="vendor_supply_chain.alert_propagated",
-                entity_type="vendor_supply_chain_alert",
-                entity_id=alert.id,
-                organization_id=organization.id,
-                actor_user_id=current_user.id,
-                after_json={"parent_vendor_id": str(alert.parent_vendor_id), "triggering_vendor_id": str(vendor.id), "signal_type": alert.signal_type, "severity": alert.severity},
-                metadata_json={"source": "vendor.kyb_check.computed"},
-                ip_address=request.client.host if request.client else None,
-                user_agent=request.headers.get("user-agent"),
-            )
     db.commit()
     db.refresh(row)
     return _kyb_payload(row)
+
+
+def run_periodic_vendor_kyb_rescreen_sweep(db: Session) -> dict[str, int]:
+    vendor_ids = db.execute(
+        select(Vendor.id).where(Vendor.status != "archived").order_by(Vendor.organization_id, Vendor.id)
+    ).scalars().all()
+
+    screened = 0
+    risk_flags_found = 0
+    errors = 0
+    for vendor_id in vendor_ids:
+        try:
+            vendor = db.get(Vendor, vendor_id)
+            if vendor is None:
+                continue
+            organization = db.get(Organization, vendor.organization_id)
+            if organization is None:
+                continue
+            row = compute_vendor_kyb_check_and_apply_effects(
+                db,
+                organization,
+                vendor,
+                actor_user_id=None,
+                audit_source="kyb_rescreen_sweep",
+            )
+            db.commit()
+            screened += 1
+            has_risk, _, _ = _kyb_risk(row)
+            if has_risk:
+                risk_flags_found += 1
+        except Exception:
+            db.rollback()
+            errors += 1
+
+    return {
+        "vendors_screened": screened,
+        "risk_flags_found": risk_flags_found,
+        "errors": errors,
+        "records_processed": screened,
+    }
 
 
 @router.get("/{vendor_id}/kyb-check")
