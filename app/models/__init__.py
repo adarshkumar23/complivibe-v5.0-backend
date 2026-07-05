@@ -214,6 +214,7 @@ from app.models.score_snapshot import ScoreSnapshot
 from app.models.task import Task
 from app.models.user import User
 from app.models.user_session import UserSession
+from app.models.non_human_identity import NonHumanIdentity
 from app.models.aml_kyc_check import AmlKycCheck
 from app.models.sanctions_entity import SanctionsEntity
 from app.models.sanctions_screen_result import SanctionsScreenResult
@@ -652,6 +653,7 @@ __all__ = [
     "ScimToken",
     "OIDCConfig",
     "OIDCAuthState",
+    "NonHumanIdentity",
     "SecurityScanJob",
     "OpenSCAPRuleMapping",
     "PolicyTemplate",

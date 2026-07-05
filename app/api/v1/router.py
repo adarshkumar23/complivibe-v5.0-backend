@@ -119,6 +119,7 @@ from app.api.v1 import (
     frameworks,
     health,
     memberships,
+    non_human_identities,
     obligations,
     organizations,
     regulatory_alerts,
@@ -243,6 +244,7 @@ api_router.include_router(compliance_copilot_draft.router)
 api_router.include_router(compliance_risk_recommendations.router)
 api_router.include_router(users.router)
 api_router.include_router(memberships.router)
+api_router.include_router(non_human_identities.router)
 api_router.include_router(roles.router)
 api_router.include_router(audit_logs.router)
 api_router.include_router(frameworks.router)
