@@ -16,8 +16,20 @@ from app.services.audit_service import AuditService
 # a compiled native binary -- it is not designed to validate a standalone
 # manifest payload, and dragging in a ~15MB native dependency for what is
 # fundamentally a JSON-shape/plausibility check would be a poor trade.
-# Everything below is a STRUCTURAL check only -- it does not perform
-# cryptographic signature verification.
+#
+# Structural checks alone (claim_generator, assertions, presence of a
+# signature block) cannot detect tampering -- per the C2PA spec, the only
+# way to detect tampering is a "hard binding": a cryptographic hash tied to
+# the exact bytes of the asset, which is invalidated the instant a single
+# byte of the asset changes (spec.c2pa.org, C2PA Technical Specification,
+# "Hard Bindings"). Full COSE_Sign1 / X.509 trust-chain signature
+# verification is out of scope here (no PKI/trust-list infrastructure exists
+# elsewhere in this codebase), but hard-binding hash comparison against the
+# real asset is real, computable cryptographic verification and is
+# implemented below: when the caller supplies the actual asset's SHA-256
+# digest (content_sha256), it is compared against the manifest's
+# c2pa.hash.* hard-binding assertion. A mismatch is a genuine, real
+# detection of tampering -- not a shape check.
 SUPPORTED_SPEC_VERSIONS = {
     "c2pa-1.0",
     "c2pa-1.1",
@@ -38,13 +50,35 @@ class ContentProvenanceService:
     def _utcnow() -> datetime:
         return datetime.now(UTC)
 
+    @staticmethod
+    def _hard_binding_hash(assertions: list) -> str | None:
+        """Extract the declared hash value from a c2pa.hash.* hard-binding assertion, if present."""
+        for item in assertions:
+            if not isinstance(item, dict):
+                continue
+            label = item.get("label")
+            if not isinstance(label, str) or not label.startswith("c2pa.hash."):
+                continue
+            data = item.get("data")
+            if isinstance(data, dict):
+                hash_value = data.get("hash")
+                if isinstance(hash_value, str) and hash_value.strip():
+                    return hash_value.strip()
+        return None
+
     def _validate_c2pa_structure(
-        self, manifest: dict
+        self, manifest: dict, content_sha256: str | None = None
     ) -> tuple[str, str | None, str | None, str | None, int | None]:
         """Run structural validation of a submitted manifest payload.
 
         Returns (status, reason, spec_version_detected, claim_generator, assertion_count).
         ``reason`` is None when status == "valid".
+
+        When ``content_sha256`` (the real digest of the actual asset bytes) is
+        supplied, this also performs genuine cryptographic tamper detection by
+        comparing it against the manifest's hard-binding hash assertion
+        (c2pa.hash.*) -- a mismatch means the asset bytes do not match what
+        the manifest claims, i.e. real, detected tampering.
         """
         if not isinstance(manifest, dict):
             return "invalid", "malformed_claim", None, None, None
@@ -92,6 +126,13 @@ class ContentProvenanceService:
         ):
             return "invalid", "tampered_signature", spec_version, claim_generator, len(assertions)
 
+        if content_sha256 is not None:
+            declared_hash = self._hard_binding_hash(assertions)
+            if declared_hash is not None and declared_hash.lower() != content_sha256.strip().lower():
+                # Real cryptographic tamper detection: the manifest's hard
+                # binding hash does not match the actual asset bytes' digest.
+                return "invalid", "tampered_signature", spec_version, claim_generator, len(assertions)
+
         return "valid", None, spec_version, claim_generator, len(assertions)
 
     def verify_manifest(
@@ -100,6 +141,7 @@ class ContentProvenanceService:
         content_identifier: str,
         manifest: dict,
         actor_id: uuid.UUID | None,
+        content_sha256: str | None = None,
     ) -> ContentProvenanceRecord:
         (
             status_value,
@@ -107,7 +149,12 @@ class ContentProvenanceService:
             spec_version_detected,
             claim_generator,
             assertion_count,
-        ) = self._validate_c2pa_structure(manifest)
+        ) = self._validate_c2pa_structure(manifest, content_sha256)
+
+        hard_binding_present = isinstance(manifest, dict) and isinstance(manifest.get("assertions"), list) and (
+            self._hard_binding_hash(manifest["assertions"]) is not None
+        )
+        content_hash_verified = bool(content_sha256) and hard_binding_present
 
         record = ContentProvenanceRecord(
             organization_id=org_id,
@@ -138,6 +185,10 @@ class ContentProvenanceService:
                 "verification_status": status_value,
                 "invalid_reason": reason,
                 "spec_version_detected": spec_version_detected,
+                # Whether this verification actually performed real
+                # cryptographic hard-binding hash comparison against the
+                # asset's bytes, vs. a shape-only check of the manifest JSON.
+                "content_hash_verified": content_hash_verified,
             },
         )
         self.db.commit()

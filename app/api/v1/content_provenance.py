@@ -26,6 +26,7 @@ def verify_content_manifest(
         payload.content_identifier,
         payload.manifest,
         current_user.id,
+        content_sha256=payload.content_sha256,
     )
     return ContentProvenanceResponse.model_validate(record)
 
