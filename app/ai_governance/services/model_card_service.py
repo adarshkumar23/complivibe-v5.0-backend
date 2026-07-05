@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.ai_governance.services.ai_governance_event_service import AIGovernanceEventService
 from app.models.ai_system import AISystem
+from app.models.membership import Membership
 from app.models.model_card import ModelCard
+from app.models.user import User
 from app.services.audit_service import AuditService
 
 
@@ -57,8 +59,28 @@ class ModelCardService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model card not found")
         return row
 
+    def _validate_contact_owner(self, org_id: uuid.UUID, contact_owner_id: uuid.UUID | None) -> None:
+        if contact_owner_id is None:
+            return
+        owner = self.db.execute(
+            select(User.id)
+            .join(Membership, Membership.user_id == User.id)
+            .where(
+                User.id == contact_owner_id,
+                User.is_active.is_(True),
+                Membership.organization_id == org_id,
+                Membership.status == "active",
+            )
+        ).scalar_one_or_none()
+        if owner is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="contact_owner_id must be an active member of the organization",
+            )
+
     def create_card(self, org_id: uuid.UUID, system_id: uuid.UUID, data, created_by: uuid.UUID) -> ModelCard:
         self._require_system(org_id, system_id)
+        self._validate_contact_owner(org_id, data.contact_owner_id)
         max_version = self.db.execute(
             select(func.max(ModelCard.version)).where(
                 ModelCard.organization_id == org_id,
@@ -157,6 +179,8 @@ class ModelCardService:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Published cards are immutable")
 
         payload = data.model_dump(exclude_unset=True)
+        if "contact_owner_id" in payload:
+            self._validate_contact_owner(org_id, payload["contact_owner_id"])
         for key, value in payload.items():
             setattr(row, key, value)
         row.content_hash = self.compute_content_hash(row)

@@ -243,7 +243,19 @@ def test_third_party_assessment_update_rejects_null_required_fields(client):
 
 def test_a62_model_card_versioning_and_publish(client):
     org = bootstrap_org_user(client, email_prefix="a62-org")
+    org_b = bootstrap_org_user(client, email_prefix="a62-org-b")
     system_id = _create_system(client, org["org_headers"], org["user_id"], name="A62 System")
+
+    foreign_owner = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/model-card",
+        headers=org["org_headers"],
+        json={
+            "intended_purpose": "Assist support triage",
+            "contact_owner_id": org_b["user_id"],
+        },
+    )
+    assert foreign_owner.status_code == 422
+    assert "contact_owner_id" in foreign_owner.json()["detail"]
 
     # Create v1 draft.
     v1 = client.post(
@@ -262,6 +274,14 @@ def test_a62_model_card_versioning_and_publish(client):
     assert v1_body["version"] == 1
     assert v1_body["status"] == "draft"
     assert v1_body["content_hash"] is not None
+
+    foreign_owner_update = client.patch(
+        f"{SYSTEMS_BASE}/{system_id}/model-cards/{v1_body['id']}",
+        headers=org["org_headers"],
+        json={"contact_owner_id": org_b["user_id"]},
+    )
+    assert foreign_owner_update.status_code == 422
+    assert "contact_owner_id" in foreign_owner_update.json()["detail"]
 
     # Publish v1.
     publish_v1 = client.post(
