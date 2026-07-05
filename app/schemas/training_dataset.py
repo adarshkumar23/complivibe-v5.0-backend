@@ -1,10 +1,12 @@
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 LICENSE_TYPE_PATTERN = "^(public_domain|creative_commons|commercial_license|proprietary_internal|unclear|none)$"
 CONSENT_BASIS_PATTERN = "^(explicit_consent|legitimate_interest|contractual|statutory|not_applicable|unclear)$"
+RIGHTS_STATUS_PATTERN = "^(active|expired|revoked)$"
+RIGHTS_STATUS_VALUES = ["active", "expired", "revoked"]
 
 LICENSE_TYPE_VALUES = [
     "public_domain",
@@ -36,6 +38,8 @@ class TrainingDatasetCreate(BaseModel):
     linked_ai_system_id: UUID
     record_count: int | None = Field(default=None, ge=0)
     notes: str | None = None
+    rights_status: str = Field(default="active", pattern=RIGHTS_STATUS_PATTERN)
+    rights_expires_at: date | None = None
 
 
 class TrainingDatasetUpdate(BaseModel):
@@ -46,6 +50,8 @@ class TrainingDatasetUpdate(BaseModel):
     linked_ai_system_id: UUID | None = None
     record_count: int | None = Field(default=None, ge=0)
     notes: str | None = None
+    rights_status: str | None = Field(default=None, pattern=RIGHTS_STATUS_PATTERN)
+    rights_expires_at: date | None = None
 
 
 class TrainingDatasetResponse(BaseModel):
@@ -59,6 +65,8 @@ class TrainingDatasetResponse(BaseModel):
     record_count: int | None = None
     notes: str | None = None
     created_by: UUID | None = None
+    rights_status: str
+    rights_expires_at: date | None = None
     deleted_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
@@ -76,5 +84,7 @@ class TrainingDataRightsGaps(BaseModel):
     documented_count: int
     unclear_rights_count: int
     no_dataset_linked_count: int
+    rights_lapsed_count: int
     no_dataset_linked: list[AISystemRightsGapRef]
     unclear_rights: list[AISystemRightsGapRef]
+    rights_lapsed: list[AISystemRightsGapRef]
