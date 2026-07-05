@@ -110,6 +110,7 @@ from app.models.control_test_definition import ControlTestDefinition
 from app.models.control_test_run import ControlTestRun
 from app.models.compliance_report import ComplianceReport
 from app.models.compliance_report_section import ComplianceReportSection
+from app.models.carbon_emissions_reading import CarbonEmissionsReading
 from app.models.custom_report_template import CustomReportTemplate
 from app.models.compliance_policy import CompliancePolicy
 from app.models.compliance_policy_version import CompliancePolicyVersion
@@ -485,6 +486,7 @@ __all__ = [
     "ControlTestRun",
     "ComplianceReport",
     "ComplianceReportSection",
+    "CarbonEmissionsReading",
     "CustomReportTemplate",
     "CompliancePolicy",
     "CompliancePolicyVersion",
