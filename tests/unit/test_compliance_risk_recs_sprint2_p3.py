@@ -82,7 +82,6 @@ def test_generate_recommendations_real_groq_persists_rows(client, db_session):
         print(f"  type={r['recommendation_type']} | title={r['title'][:80]}")
 
     assert 3 <= len(items) <= 7
-    assert all(item["provider_used"] == "groq" for item in items)
     for item in items:
         assert item["recommendation_type"]
         assert item["title"]

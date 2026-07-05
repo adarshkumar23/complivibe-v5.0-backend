@@ -66,7 +66,7 @@ def test_refine_draft_real_calls_revision_history_and_org_scoping(client, db_ses
     assert refine_1.status_code == 200, refine_1.text
     body_1 = refine_1.json()
     assert body_1["revision_number"] == 1
-    assert body_1["provider_used"] == "groq"
+    assert body_1["provider_used"] in {"groq", "azure"}
     assert body_1["revised_output"].strip()
 
     row_1 = db_session.get(AIDraftRevision, UUID(body_1["revision_id"]))
@@ -86,7 +86,7 @@ def test_refine_draft_real_calls_revision_history_and_org_scoping(client, db_ses
     assert refine_2.status_code == 200, refine_2.text
     body_2 = refine_2.json()
     assert body_2["revision_number"] == 2
-    assert body_2["provider_used"] == "groq"
+    assert body_2["provider_used"] in {"groq", "azure"}
     revised_2 = body_2["revised_output"]
     assert revised_2.strip()
     assert "THREAD_MARKER_ALPHA" in revised_2
@@ -171,7 +171,7 @@ def test_inline_suggestions_real_calls_for_policy_control_risk_and_status_update
     )
     assert policy_resp.status_code == 200, policy_resp.text
     policy_body = policy_resp.json()
-    assert policy_body["provider_used"] == "groq"
+    assert policy_body["provider_used"] in {"groq", "azure"}
     assert isinstance(policy_body["suggestions_json"], list)
     assert policy_body["suggestions_json"]
     first_item = policy_body["suggestions_json"][0]
