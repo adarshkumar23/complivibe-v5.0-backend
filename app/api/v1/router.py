@@ -121,6 +121,7 @@ from app.api.v1 import (
     memberships,
     obligations,
     organizations,
+    regulatory_alerts,
     recertification,
     reports,
     custom_reports,
@@ -252,6 +253,7 @@ api_router.include_router(framework_pack_reviews.queue_router)
 api_router.include_router(framework_review_capacity.router)
 api_router.include_router(obligations.router)
 api_router.include_router(obligations.compliance_router)
+api_router.include_router(regulatory_alerts.router)
 api_router.include_router(controls.router)
 api_router.include_router(control_tests.router)
 api_router.include_router(control_recommendations.router)

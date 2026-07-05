@@ -347,6 +347,7 @@ from app.models.notice_user_acknowledgement import NoticeUserAcknowledgement
 from app.models.consent_record import ConsentRecord
 from app.models.cookie_registry import CookieRegistry
 from app.models.consent_banner_config import ConsentBannerConfig
+from app.models.regulatory_change_alert import RegulatoryChangeAlert
 from app.models.user_notification_preference import UserNotificationPreference
 from app.models.org_ai_config import OrgAIConfig
 from app.models.draft_request import DraftRequest
@@ -638,6 +639,7 @@ __all__ = [
     "ConsentRecord",
     "CookieRegistry",
     "ConsentBannerConfig",
+    "RegulatoryChangeAlert",
     "OrgAIConfig",
     "DraftRequest",
     "WebhookEndpoint",

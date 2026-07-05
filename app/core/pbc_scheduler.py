@@ -26,6 +26,7 @@ from app.data_observability.services.residency_service import run_daily_data_res
 from app.privacy.services.dsar_service import run_daily_dsr_sla_sweep
 from app.privacy.services.consent_service import run_daily_consent_expiry_sweep
 from app.privacy.services.dpa_service import run_daily_dpa_expiry_sweep
+from app.services.regulatory_intelligence_service import run_daily_regulatory_change_poll
 from app.compliance.services.digest_service import run_daily_digest_send_sweep, run_weekly_digest_send_sweep
 from app.satellites.tprm_intelligence.sanctions_screening import run_daily_sanctions_dataset_refresh
 from app.core.scheduler_logger import SchedulerJobLogger
@@ -59,6 +60,7 @@ SCHEDULER_JOB_IDS: list[str] = [
     "daily_digest_send",
     "weekly_digest_send",
     "control_exception_expiry_sweep",
+    "regulatory_change_poll",
     "sanctions_dataset_refresh",
 ]
 
@@ -613,6 +615,29 @@ def _run_sanctions_dataset_refresh_job() -> None:
     )
 
 
+def _run_regulatory_change_poll_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_regulatory_change_poll(db)
+        db.commit()
+        logger.info("Regulatory change poll complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception as exc:
+        db.rollback()
+        _capture_scheduler_exception(exc)
+        logger.exception("Regulatory change poll failed")
+        raise
+
+
+def _run_regulatory_change_poll_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="regulatory_change_poll",
+        job_fn=_run_regulatory_change_poll_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
 def register_pbc_scheduler(app: FastAPI) -> None:
     settings = get_settings()
     if settings.APP_ENV == "test":
@@ -778,6 +803,13 @@ def register_pbc_scheduler(app: FastAPI) -> None:
         _run_control_exception_expiry_job,
         trigger=CronTrigger(hour=2, minute=30),
         id="control_exception_expiry_sweep",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_regulatory_change_poll_job,
+        trigger=CronTrigger(hour=2, minute=45),
+        id="regulatory_change_poll",
         replace_existing=True,
         coalesce=True,
     )
