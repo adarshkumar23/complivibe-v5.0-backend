@@ -1,6 +1,7 @@
 import uuid
 
 from app.core.security import get_password_hash
+from app.models.control import Control
 from app.models.membership import Membership
 from app.models.role import Role
 from app.models.user import User
@@ -128,6 +129,29 @@ def test_control_owner_validation_update_archive_and_audit(client, db_session):
         },
     )
     assert bad_owner.status_code == 400
+
+    inactive_user = _create_active_user_with_role(db_session, org1, "p21-inactive-owner@example.com", "admin")
+    inactive_user.is_active = False
+    inactive_user.status = "inactive"
+    db_session.commit()
+    inactive_owner = client.post(
+        "/api/v1/controls",
+        headers=_headers(owner1, org1),
+        json={
+            "title": "Inactive Owner Control",
+            "control_type": "process",
+            "criticality": "medium",
+            "owner_user_id": str(inactive_user.id),
+        },
+    )
+    assert inactive_owner.status_code == 400
+    assert "owner_user_id" in inactive_owner.json()["detail"]
+    assert (
+        db_session.query(Control)
+        .filter(Control.organization_id == uuid.UUID(org1), Control.owner_user_id == inactive_user.id)
+        .count()
+        == 0
+    )
 
     created = client.post(
         "/api/v1/controls",

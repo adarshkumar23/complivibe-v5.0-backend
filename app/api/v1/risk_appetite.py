@@ -61,6 +61,7 @@ def create_threshold(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scope_id is required when scope_type is business_unit")
 
     service.ensure_active_member(organization.id, payload.escalation_owner_id, field_name="escalation_owner_id")
+    service.ensure_scope_in_org(organization.id, payload.scope_type, payload.scope_id)
     service.ensure_no_active_duplicate(
         organization_id=organization.id,
         scope_type=payload.scope_type,

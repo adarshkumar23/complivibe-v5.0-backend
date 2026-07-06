@@ -5,10 +5,15 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.models.data_asset import DataAsset
+from app.models.dpia import DPIA
 from app.models.framework import Framework
+from app.models.membership import Membership
 from app.models.obligation import Obligation
 from app.models.processing_activity import ProcessingActivity
 from app.models.ropa_framework_link import RopaFrameworkLink
+from app.models.subprocessor import Subprocessor
+from app.models.user import User
 from app.services.audit_service import AuditService
 from app.core.validation import validate_choice
 
@@ -50,6 +55,100 @@ class RopaService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Obligation not found")
         return row
 
+    def _require_active_org_user(self, org_id: uuid.UUID, user_id: uuid.UUID, field_name: str) -> None:
+        row = self.db.execute(
+            select(User)
+            .join(Membership, Membership.user_id == User.id)
+            .where(
+                User.id == user_id,
+                User.is_active.is_(True),
+                User.status == "active",
+                Membership.organization_id == org_id,
+                Membership.status == "active",
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{field_name} must be an active organization user",
+            )
+
+    @staticmethod
+    def _normalize_uuid_list(values: list | None, field_name: str) -> list[str]:
+        normalized: list[str] = []
+        for item in values or []:
+            try:
+                parsed = uuid.UUID(str(item))
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"{field_name} contains an invalid UUID",
+                ) from exc
+            text = str(parsed)
+            if text not in normalized:
+                normalized.append(text)
+        return normalized
+
+    def _validate_linked_dpia(self, org_id: uuid.UUID, dpia_id: uuid.UUID | None) -> None:
+        if dpia_id is None:
+            return
+        row = self.db.execute(
+            select(DPIA.id).where(
+                DPIA.organization_id == org_id,
+                DPIA.id == dpia_id,
+                DPIA.deleted_at.is_(None),
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="linked_dpia_id must reference an organization DPIA",
+            )
+
+    def _normalize_data_asset_ids(self, org_id: uuid.UUID, values: list | None) -> list[str]:
+        normalized = self._normalize_uuid_list(values, "linked_data_asset_ids")
+        if not normalized:
+            return []
+        found = {
+            str(row)
+            for row in self.db.execute(
+                select(DataAsset.id).where(
+                    DataAsset.organization_id == org_id,
+                    DataAsset.id.in_([uuid.UUID(item) for item in normalized]),
+                    DataAsset.deleted_at.is_(None),
+                )
+            ).scalars()
+        }
+        missing = [item for item in normalized if item not in found]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="linked_data_asset_ids must reference organization data assets",
+            )
+        return normalized
+
+    def _normalize_subprocessor_ids(self, org_id: uuid.UUID, values: list | None) -> list[str]:
+        normalized = self._normalize_uuid_list(values, "linked_subprocessor_ids")
+        if not normalized:
+            return []
+        found = {
+            str(row)
+            for row in self.db.execute(
+                select(Subprocessor.id).where(
+                    Subprocessor.organization_id == org_id,
+                    Subprocessor.id.in_([uuid.UUID(item) for item in normalized]),
+                    Subprocessor.deleted_at.is_(None),
+                )
+            ).scalars()
+        }
+        missing = [item for item in normalized if item not in found]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="linked_subprocessor_ids must reference organization subprocessors",
+            )
+        return normalized
+
     @staticmethod
     def _apply_requires_dpia_logic(
         *,
@@ -71,6 +170,10 @@ class RopaService:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status")
         if payload.get("risk_level") is not None and payload["risk_level"] not in ALLOWED_RISK_LEVEL:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid risk_level")
+        self._require_active_org_user(org_id, payload["owner_id"], "owner_id")
+        self._validate_linked_dpia(org_id, payload.get("linked_dpia_id"))
+        payload["linked_data_asset_ids"] = self._normalize_data_asset_ids(org_id, payload.get("linked_data_asset_ids"))
+        payload["linked_subprocessor_ids"] = self._normalize_subprocessor_ids(org_id, payload.get("linked_subprocessor_ids"))
 
         now = self.utcnow()
         requested_requires_dpia = payload.get("requires_dpia")
@@ -165,6 +268,14 @@ class RopaService:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status")
         if "risk_level" in payload and payload["risk_level"] is not None and payload["risk_level"] not in ALLOWED_RISK_LEVEL:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid risk_level")
+        if "owner_id" in payload and payload["owner_id"] is not None:
+            self._require_active_org_user(org_id, payload["owner_id"], "owner_id")
+        if "linked_dpia_id" in payload:
+            self._validate_linked_dpia(org_id, payload.get("linked_dpia_id"))
+        if "linked_data_asset_ids" in payload:
+            payload["linked_data_asset_ids"] = self._normalize_data_asset_ids(org_id, payload.get("linked_data_asset_ids"))
+        if "linked_subprocessor_ids" in payload:
+            payload["linked_subprocessor_ids"] = self._normalize_subprocessor_ids(org_id, payload.get("linked_subprocessor_ids"))
 
         for key, value in payload.items():
             setattr(row, key, value)

@@ -176,6 +176,29 @@ def test_d86_dpia_workflow(client, db_session):
     assert delete_blocked.status_code == 422
 
 
+def test_d86_submit_for_review_rejects_cross_tenant_reviewer(client, db_session):
+    org_a = bootstrap_org_user(client, email_prefix="d86-review-a")
+    org_b = bootstrap_org_user(client, email_prefix="d86-review-b")
+
+    activity = _create_activity(client, org_a["org_headers"], org_a["user_id"], risk_level="high")
+    dpia = _create_dpia(client, org_a["org_headers"], activity["id"], title="Cross tenant reviewer DPIA")
+
+    submit = client.post(
+        f"{DPIA_BASE}/{dpia['id']}/submit-for-review",
+        headers=org_a["org_headers"],
+        json={"reviewer_id": org_b["user_id"]},
+    )
+    assert submit.status_code == 422
+    assert "reviewer_id" in submit.json()["detail"]
+
+    from app.models.dpia import DPIA
+
+    row = db_session.get(DPIA, uuid.UUID(dpia["id"]))
+    assert row is not None
+    assert row.status == "draft"
+    assert row.assigned_reviewer_id is None
+
+
 def test_d91_lawful_basis_registry(client):
     org = bootstrap_org_user(client, email_prefix="d91-org")
     org_b = bootstrap_org_user(client, email_prefix="d91-org-b")

@@ -1,6 +1,7 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
+from app.models.control_test_definition import ControlTestDefinition
 from app.models.control_test_run import ControlTestRun
 from app.models.membership import Membership
 from app.models.role import Role
@@ -114,6 +115,33 @@ def test_control_test_definition_create_update_archive_and_tenant_scope(client, 
         },
     )
     assert bad_owner.status_code == 400
+
+    inactive_owner = _create_active_user_with_role(db_session, org1, "p27-inactive-owner@example.com", "admin")
+    inactive_owner.is_active = False
+    inactive_owner.status = "inactive"
+    db_session.commit()
+    inactive_owner_response = client.post(
+        f"/api/v1/controls/{control_id}/tests",
+        headers=_headers(owner1, org1),
+        json={
+            "name": "Inactive owner",
+            "test_type": "manual_attestation",
+            "check_key": "manual_attestation",
+            "cadence": "weekly",
+            "owner_user_id": str(inactive_owner.id),
+        },
+    )
+    assert inactive_owner_response.status_code == 400
+    assert "owner_user_id" in inactive_owner_response.json()["detail"]
+    assert (
+        db_session.query(ControlTestDefinition)
+        .filter(
+            ControlTestDefinition.organization_id == uuid.UUID(org1),
+            ControlTestDefinition.owner_user_id == inactive_owner.id,
+        )
+        .count()
+        == 0
+    )
 
     created = client.post(
         f"/api/v1/controls/{control_id}/tests",

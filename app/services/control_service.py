@@ -12,6 +12,7 @@ from app.models.evidence_item import EvidenceItem
 from app.models.membership import Membership
 from app.models.obligation import Obligation
 from app.models.organization_framework import OrganizationFramework
+from app.models.user import User
 
 
 class ControlService:
@@ -113,6 +114,12 @@ class ControlService:
             )
         ).scalar_one_or_none()
         if membership is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="owner_user_id must be an active member of the organization",
+            )
+        user = db.execute(select(User).where(User.id == owner_user_id)).scalar_one_or_none()
+        if user is None or not user.is_active or user.status != "active":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="owner_user_id must be an active member of the organization",

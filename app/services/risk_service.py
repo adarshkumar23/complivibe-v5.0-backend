@@ -14,6 +14,7 @@ from app.models.evidence_item import EvidenceItem
 from app.models.membership import Membership
 from app.models.risk import Risk
 from app.models.risk_control_link import RiskControlLink
+from app.models.user import User
 from app.services.audit_service import AuditService
 
 
@@ -83,6 +84,12 @@ class RiskService:
             )
         ).scalar_one_or_none()
         if membership is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="owner_user_id must be an active member of the organization",
+            )
+        user = self.db.execute(select(User).where(User.id == owner_user_id)).scalar_one_or_none()
+        if user is None or not user.is_active or user.status != "active":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="owner_user_id must be an active member of the organization",
