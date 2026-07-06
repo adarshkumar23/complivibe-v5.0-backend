@@ -1,7 +1,7 @@
 """add roi calculator leads table for public onboarding capture
 
-Revision ID: 0247_roi_calculator_leads_p2b
-Revises: 0246_competitor_pricing_p1b
+Revision ID: 0250_roi_calculator_leads_p2b
+Revises: 0249_competitor_pricing_p1b
 Create Date: 2026-07-06 00:00:00.000000
 """
 
@@ -13,8 +13,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0247_roi_calculator_leads_p2b"
-down_revision: str | None = "0246_competitor_pricing_p1b"
+revision: str = "0250_roi_calculator_leads_p2b"
+down_revision: str | None = "0249_competitor_pricing_p1b"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

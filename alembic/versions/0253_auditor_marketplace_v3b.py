@@ -1,7 +1,7 @@
 """add auditor marketplace and engagements
 
-Revision ID: 0250_auditor_marketplace_v3b
-Revises: 0249_certification_programs_v2b
+Revision ID: 0253_auditor_marketplace_v3b
+Revises: 0252_certification_programs_v2b
 Create Date: 2026-07-06 11:05:32.133616
 """
 from __future__ import annotations
@@ -14,8 +14,8 @@ from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
-revision: str = "0250_auditor_marketplace_v3b"
-down_revision: str | None = "0249_certification_programs_v2b"
+revision: str = "0253_auditor_marketplace_v3b"
+down_revision: str | None = "0252_certification_programs_v2b"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

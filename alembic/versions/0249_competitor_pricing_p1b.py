@@ -1,6 +1,6 @@
 """add competitor pricing versioned comparison tables
 
-Revision ID: 0246_competitor_pricing_p1b
+Revision ID: 0249_competitor_pricing_p1b
 Revises: fix_audit_eng_source_sched
 Create Date: 2026-07-06 00:00:00.000000
 """
@@ -13,8 +13,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0246_competitor_pricing_p1b"
-down_revision: str | None = "fix_audit_eng_source_sched"
+revision: str = "0249_competitor_pricing_p1b"
+down_revision: str | None = "0248_evidence_original_m3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

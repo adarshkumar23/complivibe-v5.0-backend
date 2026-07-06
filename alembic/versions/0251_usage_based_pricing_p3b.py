@@ -1,7 +1,7 @@
 """add usage based pricing schema and usage snapshots
 
-Revision ID: 0248_usage_based_pricing_p3b
-Revises: 0247_roi_calculator_leads_p2b
+Revision ID: 0251_usage_based_pricing_p3b
+Revises: 0250_roi_calculator_leads_p2b
 Create Date: 2026-07-06 00:00:00.000000
 """
 
@@ -13,8 +13,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0248_usage_based_pricing_p3b"
-down_revision: str | None = "0247_roi_calculator_leads_p2b"
+revision: str = "0251_usage_based_pricing_p3b"
+down_revision: str | None = "0250_roi_calculator_leads_p2b"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -1,7 +1,7 @@
 """add certification programs and activations
 
-Revision ID: 0249_certification_programs_v2b
-Revises: 0248_usage_based_pricing_p3b
+Revision ID: 0252_certification_programs_v2b
+Revises: 0251_usage_based_pricing_p3b
 Create Date: 2026-07-06 10:38:49.474972
 """
 from __future__ import annotations
@@ -14,8 +14,8 @@ from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
-revision: str = "0249_certification_programs_v2b"
-down_revision: str | None = "0248_usage_based_pricing_p3b"
+revision: str = "0252_certification_programs_v2b"
+down_revision: str | None = "0251_usage_based_pricing_p3b"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
