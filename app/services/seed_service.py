@@ -251,6 +251,10 @@ PERMISSIONS: dict[str, str] = {
     "export_control:read": "Read export control classification and denied-party screening results",
     "export_control:manage": "Create and compute export control classification and denied-party screening",
     "search:read": "Search across risks, controls, vendors, issues, compliance policies, and obligations",
+    "imports:create": "Create competitor migration import jobs",
+    "imports:read": "Read competitor migration import job progress",
+    "imports:preview": "Generate and review import dry-run previews",
+    "imports:commit": "Commit import jobs and persist imported entities",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {

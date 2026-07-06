@@ -181,6 +181,7 @@ from app.api.v1 import (
     attestations,
     carbon_accounting,
     connector_marketplace,
+    import_jobs,
 )
 
 api_router = APIRouter()
@@ -258,6 +259,7 @@ api_router.include_router(auth.router)
 api_router.include_router(auth_sso.router)
 api_router.include_router(auth_scim.router)
 api_router.include_router(platform_rate_limits.router)
+api_router.include_router(import_jobs.router)
 api_router.include_router(platform_siem.router)
 api_router.include_router(platform_report_sharing.router)
 api_router.include_router(platform_billing.router)

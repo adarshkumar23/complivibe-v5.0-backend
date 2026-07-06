@@ -23,6 +23,7 @@ class EvidenceItem(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, 
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     evidence_type: Mapped[str] = mapped_column(String(64), nullable=False, default="other")
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    source_import_tool: Mapped[str | None] = mapped_column(String(32), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_reviewed")
     freshness_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")

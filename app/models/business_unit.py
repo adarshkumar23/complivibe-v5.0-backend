@@ -30,5 +30,6 @@ class BusinessUnit(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, 
         nullable=True,
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    source_import_tool: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
