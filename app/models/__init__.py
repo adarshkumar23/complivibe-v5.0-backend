@@ -110,6 +110,10 @@ from app.models.control_test_definition import ControlTestDefinition
 from app.models.control_test_run import ControlTestRun
 from app.models.compliance_report import ComplianceReport
 from app.models.compliance_report_section import ComplianceReportSection
+from app.models.compliance_baseline_run import ComplianceBaselineRun
+from app.models.compliance_baseline_evidence_sync_run import ComplianceBaselineEvidenceSyncRun
+from app.models.compliance_bot_outbox import ComplianceBotOutbox
+from app.models.compliance_bot_subscription import ComplianceBotSubscription
 from app.models.carbon_emissions_reading import CarbonEmissionsReading
 from app.models.connector_catalog_entry import ConnectorCatalogEntry, ConnectorOrgEnablement
 from app.models.custom_report_template import CustomReportTemplate
@@ -138,6 +142,10 @@ from app.models.ai_governance_diagnostic_snapshot import AIGovernanceDiagnosticS
 from app.models.auditor import Auditor
 from app.models.auditor_engagement import AuditorEngagement
 from app.models.evidence_item import EvidenceItem
+from app.models.evidence_automation_rule import EvidenceAutomationRule
+from app.models.external_sync_connection import ExternalSyncConnection
+from app.models.external_sync_event import ExternalSyncEvent
+from app.models.external_sync_link import ExternalSyncLink
 from app.models.email_delivery_event import EmailDeliveryEvent
 from app.models.email_outbox import EmailOutbox
 from app.models.email_template import EmailTemplate
@@ -225,6 +233,7 @@ from app.models.role import Role
 from app.models.role_permission import RolePermission
 from app.models.score_snapshot import ScoreSnapshot
 from app.models.task import Task
+from app.models.issue_sync_comment import IssueSyncComment
 from app.models.user import User
 from app.models.user_session import UserSession
 from app.models.non_human_identity import NonHumanIdentity
@@ -523,6 +532,8 @@ __all__ = [
     "ControlTestRun",
     "ComplianceReport",
     "ComplianceReportSection",
+    "ComplianceBotSubscription",
+    "ComplianceBotOutbox",
     "CarbonEmissionsReading",
     "ConnectorCatalogEntry",
     "ConnectorOrgEnablement",
@@ -538,6 +549,7 @@ __all__ = [
     "EvidenceControlLink",
     "ControlObligationMapping",
     "EvidenceItem",
+    "EvidenceAutomationRule",
     "Risk",
     "OrgRiskSettings",
     "GovernanceSignal",

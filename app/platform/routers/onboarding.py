@@ -24,6 +24,8 @@ from app.platform.schemas.onboarding import (
     OnboardingChecklistResponse,
     OnboardingStartRequest,
     OnboardingStartResponse,
+    TV1BaselineRunRead,
+    TV1BaselineStartRequest,
     TeamInviteRequest,
     TeamInvitationAcceptResponse,
     TeamInvitationRead,
@@ -31,6 +33,7 @@ from app.platform.schemas.onboarding import (
 )
 from app.schemas.pricing import OnboardingSelectPlanRead
 from app.platform.services.onboarding_service import OnboardingService
+from app.platform.services.tv1_baseline_service import TV1BaselineService
 
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
@@ -171,3 +174,56 @@ def revoke_team_invitation(
     )
     db.commit()
     return TeamInvitationRevokeResponse(id=row.id, status=row.status)
+
+
+@router.post("/baseline/24h/start", response_model=TV1BaselineRunRead, status_code=status.HTTP_201_CREATED)
+def start_24h_baseline(
+    payload: TV1BaselineStartRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    membership: Membership = Depends(require_permission("onboarding_baseline:start")),
+) -> TV1BaselineRunRead:
+    _require_admin_membership(db, membership)
+    row = TV1BaselineService(db).start_24h_baseline(
+        org_id=organization.id,
+        actor_user_id=current_user.id,
+        framework_ids=payload.framework_ids or None,
+        github_payload=payload.github.model_dump(),
+    )
+    db.commit()
+    db.refresh(row)
+    return TV1BaselineRunRead(
+        run_id=row.id,
+        organization_id=row.organization_id,
+        status=row.status,
+        intake_session_id=row.intake_session_id,
+        integration_provider=row.integration_provider,
+        started_at=row.started_at,
+        completed_at=row.completed_at,
+        failed_at=row.failed_at,
+        failure_reason=row.failure_reason,
+        gap_report=row.gap_report_json or {},
+    )
+
+
+@router.get("/baseline/24h/{run_id}", response_model=TV1BaselineRunRead)
+def get_24h_baseline_run(
+    run_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("onboarding_baseline:read")),
+) -> TV1BaselineRunRead:
+    row = TV1BaselineService(db).get_baseline_run(org_id=organization.id, run_id=run_id)
+    return TV1BaselineRunRead(
+        run_id=row.id,
+        organization_id=row.organization_id,
+        status=row.status,
+        intake_session_id=row.intake_session_id,
+        integration_provider=row.integration_provider,
+        started_at=row.started_at,
+        completed_at=row.completed_at,
+        failed_at=row.failed_at,
+        failure_reason=row.failure_reason,
+        gap_report=row.gap_report_json or {},
+    )

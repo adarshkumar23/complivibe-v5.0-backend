@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from app.compliance.services.digest_service import DigestService
 from app.compliance.services.email_template_service import EmailTemplateService
+from app.ai_governance.services.ai_provider_service import AIProviderService
 from app.models.compliance_deadline import ComplianceDeadline
 from app.models.digest_config import DigestConfig
 from app.models.email_outbox import EmailOutbox
@@ -17,7 +18,7 @@ from app.models.user_notification_preference import UserNotificationPreference
 from tests.helpers.auth_org import bootstrap_org_user
 
 
-def test_e99_digest_configs_and_content_and_send(client, db_session):
+def test_e99_digest_configs_and_content_and_send(client, db_session, monkeypatch):
     org = bootstrap_org_user(client, email_prefix="e99-org")
     org_b = bootstrap_org_user(client, email_prefix="e99-org-b")
 
@@ -27,6 +28,11 @@ def test_e99_digest_configs_and_content_and_send(client, db_session):
     now = datetime.now(UTC)
 
     service = DigestService(db_session)
+
+    def _fake_provider_chain(self, *, org_id, messages, failure_context):  # noqa: ANN001
+        return ("Focus first on overdue tasks and critical risk treatment, then clear near-term evidence and deadline items.", "groq", False)
+
+    monkeypatch.setattr(AIProviderService, "_run_provider_chain", _fake_provider_chain)
 
     # Create defaults and ensure unique by org/user/type via get_or_create upsert pattern.
     rows = service.get_or_create_configs(org_id, user_id)
@@ -200,6 +206,9 @@ def test_e99_digest_configs_and_content_and_send(client, db_session):
         .all()
     )
     assert len(queued) >= 1
+    latest = queued[-1]
+    assert "narrative_paragraph" in (latest.template_context or {})
+    assert (latest.template_context or {}).get("narrative_source") in {"ai_groq", "ai_azure", "deterministic_fallback", "deterministic_empty"}
 
     tpl = EmailTemplateService()
     subject_daily, html_daily = tpl.render(

@@ -9,6 +9,7 @@ from app.core.event_bus import EventBus, EventPayload, EventType
 from app.models.control import Control
 from app.models.evidence_control_link import EvidenceControlLink
 from app.models.evidence_item import EvidenceItem
+from app.services.audit_service import AuditService
 
 
 class EvidenceService:
@@ -237,3 +238,111 @@ class EvidenceService:
         if evidence_item.source == "imported":
             return evidence_item.original_created_at or evidence_item.collected_at or evidence_item.created_at
         return evidence_item.collected_at or evidence_item.created_at
+
+    def create_evidence_item(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        actor_user_id: uuid.UUID | None,
+        title: str,
+        description: str | None = None,
+        evidence_type: str = "other",
+        source: str = "manual",
+        file_name: str | None = None,
+        mime_type: str | None = None,
+        size_bytes: int | None = None,
+        checksum_sha256: str | None = None,
+        external_reference_url: str | None = None,
+        valid_from: datetime | None = None,
+        valid_until: datetime | None = None,
+        collected_at: datetime | None = None,
+        metadata_json: dict | None = None,
+        target_control_id: uuid.UUID | None = None,
+        link_confidence: str = "manual_confirmed",
+        link_rationale: str | None = None,
+        request_ip: str | None = None,
+        request_user_agent: str | None = None,
+        audit_metadata: dict | None = None,
+    ) -> tuple[EvidenceItem, EvidenceControlLink | None]:
+        if valid_from and valid_until and valid_until < valid_from:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="valid_until cannot be earlier than valid_from")
+        if size_bytes is not None and size_bytes < 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="size_bytes cannot be negative")
+        if not title.strip():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="title is required")
+
+        evidence = EvidenceItem(
+            organization_id=organization_id,
+            title=title.strip(),
+            description=description,
+            evidence_type=evidence_type,
+            source=source,
+            status="active",
+            review_status="not_reviewed",
+            freshness_status=self.calculate_freshness_status(valid_until),
+            file_name=file_name,
+            mime_type=mime_type,
+            size_bytes=size_bytes,
+            checksum_sha256=checksum_sha256,
+            external_reference_url=external_reference_url,
+            valid_from=valid_from,
+            valid_until=valid_until,
+            collected_at=collected_at,
+            uploaded_by_user_id=actor_user_id,
+            metadata_json=metadata_json,
+        )
+        self.db.add(evidence)
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="evidence.created",
+            entity_type="evidence_item",
+            entity_id=evidence.id,
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+            after_json={
+                "title": evidence.title,
+                "status": evidence.status,
+                "review_status": evidence.review_status,
+                "freshness_status": evidence.freshness_status,
+            },
+            metadata_json=(audit_metadata or {"source": source}),
+            ip_address=request_ip,
+            user_agent=request_user_agent,
+        )
+
+        link: EvidenceControlLink | None = None
+        if target_control_id is not None:
+            self.require_control_in_org(organization_id, target_control_id)
+            now = self.now()
+            link = EvidenceControlLink(
+                organization_id=organization_id,
+                evidence_item_id=evidence.id,
+                control_id=target_control_id,
+                link_status="active",
+                confidence=link_confidence,
+                rationale=link_rationale,
+                linked_by_user_id=actor_user_id,
+                linked_at=now,
+            )
+            self.db.add(link)
+            self.db.flush()
+
+            AuditService(self.db).write_audit_log(
+                action="evidence.control_linked",
+                entity_type="evidence_control_link",
+                entity_id=link.id,
+                organization_id=organization_id,
+                actor_user_id=actor_user_id,
+                after_json={
+                    "evidence_item_id": str(evidence.id),
+                    "control_id": str(target_control_id),
+                    "link_status": link.link_status,
+                    "confidence": link.confidence,
+                },
+                metadata_json={"source": source},
+                ip_address=request_ip,
+                user_agent=request_user_agent,
+            )
+
+        return evidence, link

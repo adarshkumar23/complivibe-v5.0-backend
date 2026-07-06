@@ -28,6 +28,7 @@ from app.privacy.services.consent_service import run_daily_consent_expiry_sweep
 from app.privacy.services.dpa_service import run_daily_dpa_expiry_sweep
 from app.services.regulatory_intelligence_service import run_daily_regulatory_change_poll
 from app.compliance.services.digest_service import run_daily_digest_send_sweep, run_weekly_digest_send_sweep
+from app.services.compliance_bot_service import ComplianceBotService
 from app.satellites.tprm_intelligence.sanctions_screening import (
     run_daily_sanctions_dataset_refresh,
     run_periodic_vendor_sanctions_rescreen_sweep,
@@ -64,6 +65,8 @@ SCHEDULER_JOB_IDS: list[str] = [
     "dpa_expiry_sweep",
     "daily_digest_send",
     "weekly_digest_send",
+    "compliance_bot_digest_dispatch",
+    "compliance_bot_sla_alert_dispatch",
     "control_exception_expiry_sweep",
     "regulatory_change_poll",
     "sanctions_dataset_refresh",
@@ -577,6 +580,52 @@ def _run_weekly_digest_send_job() -> None:
     )
 
 
+def _run_compliance_bot_digest_dispatch_job_internal(*, db) -> dict:
+    try:
+        result = ComplianceBotService(db).run_daily_digest_dispatch()
+        db.commit()
+        logger.info("Compliance bot digest dispatch complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception as exc:
+        db.rollback()
+        _capture_scheduler_exception(exc)
+        logger.exception("Compliance bot digest dispatch failed")
+        raise
+
+
+def _run_compliance_bot_digest_dispatch_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="compliance_bot_digest_dispatch",
+        job_fn=_run_compliance_bot_digest_dispatch_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_compliance_bot_sla_alert_dispatch_job_internal(*, db) -> dict:
+    try:
+        result = ComplianceBotService(db).run_sla_alert_dispatch()
+        db.commit()
+        logger.info("Compliance bot SLA alert dispatch complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception as exc:
+        db.rollback()
+        _capture_scheduler_exception(exc)
+        logger.exception("Compliance bot SLA alert dispatch failed")
+        raise
+
+
+def _run_compliance_bot_sla_alert_dispatch_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="compliance_bot_sla_alert_dispatch",
+        job_fn=_run_compliance_bot_sla_alert_dispatch_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
 def _run_control_exception_expiry_job_internal(*, db) -> dict:
     try:
         result = run_daily_control_exception_expiry_sweep(db)
@@ -866,6 +915,20 @@ def register_pbc_scheduler(app: FastAPI) -> None:
         _run_weekly_digest_send_job,
         trigger=CronTrigger(day_of_week="mon", hour=8, minute=0),
         id="weekly_digest_send",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_compliance_bot_digest_dispatch_job,
+        trigger=IntervalTrigger(minutes=30),
+        id="compliance_bot_digest_dispatch",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_compliance_bot_sla_alert_dispatch_job,
+        trigger=IntervalTrigger(hours=1),
+        id="compliance_bot_sla_alert_dispatch",
         replace_existing=True,
         coalesce=True,
     )
