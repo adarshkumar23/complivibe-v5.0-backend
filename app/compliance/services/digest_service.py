@@ -146,6 +146,193 @@ class DigestService:
             )
             return fallback, "deterministic_fallback", staleness_flags
 
+    @staticmethod
+    def _clamp_score(value: float) -> int:
+        return max(0, min(100, int(round(value))))
+
+    def _weekly_progress_metrics(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> dict[str, int]:
+        tasks_completed = int(
+            self.db.execute(
+                select(func.count(Task.id)).where(
+                    Task.organization_id == org_id,
+                    Task.owner_user_id == user_id,
+                    Task.completed_at.is_not(None),
+                    Task.completed_at >= start_at,
+                    Task.completed_at < end_at,
+                )
+            ).scalar_one()
+            or 0
+        )
+        evidence_reviewed = int(
+            self.db.execute(
+                select(func.count(EvidenceItem.id)).where(
+                    EvidenceItem.organization_id == org_id,
+                    EvidenceItem.reviewed_at.is_not(None),
+                    EvidenceItem.reviewed_at >= start_at,
+                    EvidenceItem.reviewed_at < end_at,
+                )
+            ).scalar_one()
+            or 0
+        )
+        deadlines_completed = int(
+            self.db.execute(
+                select(func.count(ComplianceDeadline.id)).where(
+                    ComplianceDeadline.organization_id == org_id,
+                    ComplianceDeadline.owner_user_id == user_id,
+                    ComplianceDeadline.completed_at.is_not(None),
+                    ComplianceDeadline.completed_at >= start_at,
+                    ComplianceDeadline.completed_at < end_at,
+                )
+            ).scalar_one()
+            or 0
+        )
+        issues_opened = int(
+            self.db.execute(
+                select(func.count(Issue.id)).where(
+                    Issue.organization_id == org_id,
+                    Issue.created_at >= start_at,
+                    Issue.created_at < end_at,
+                    Issue.deleted_at.is_(None),
+                )
+            ).scalar_one()
+            or 0
+        )
+        issues_resolved = int(
+            self.db.execute(
+                select(func.count(Issue.id)).where(
+                    Issue.organization_id == org_id,
+                    Issue.deleted_at.is_(None),
+                    (
+                        (Issue.resolved_at.is_not(None) & (Issue.resolved_at >= start_at) & (Issue.resolved_at < end_at))
+                        | (Issue.closed_at.is_not(None) & (Issue.closed_at >= start_at) & (Issue.closed_at < end_at))
+                    ),
+                )
+            ).scalar_one()
+            or 0
+        )
+        return {
+            "tasks_completed": tasks_completed,
+            "evidence_reviewed": evidence_reviewed,
+            "deadlines_completed": deadlines_completed,
+            "issues_opened": issues_opened,
+            "issues_resolved": issues_resolved,
+        }
+
+    def _weekly_compliance_score(self, metrics: dict[str, int]) -> int:
+        score = (
+            50
+            + (2 * int(metrics.get("tasks_completed", 0)))
+            + (2 * int(metrics.get("issues_resolved", 0)))
+            + (1 * int(metrics.get("evidence_reviewed", 0)))
+            + (1 * int(metrics.get("deadlines_completed", 0)))
+            - (3 * int(metrics.get("issues_opened", 0)))
+        )
+        return self._clamp_score(score)
+
+    def _weekly_wins_and_priorities(
+        self,
+        *,
+        current_metrics: dict[str, int],
+        previous_metrics: dict[str, int],
+    ) -> tuple[list[str], list[str]]:
+        wins: list[tuple[int, str]] = []
+        priorities: list[tuple[int, str]] = []
+
+        def _delta(name: str) -> int:
+            return int(current_metrics.get(name, 0)) - int(previous_metrics.get(name, 0))
+
+        tasks_delta = _delta("tasks_completed")
+        if tasks_delta > 0:
+            wins.append((tasks_delta, f"Completed {tasks_delta} more tasks than last week."))
+        elif tasks_delta < 0:
+            priorities.append((abs(tasks_delta), f"Task completion dropped by {abs(tasks_delta)} compared with last week."))
+
+        reviewed_delta = _delta("evidence_reviewed")
+        if reviewed_delta > 0:
+            wins.append((reviewed_delta, f"Reviewed {reviewed_delta} additional evidence items week-over-week."))
+        elif reviewed_delta < 0:
+            priorities.append((abs(reviewed_delta), f"Evidence reviews fell by {abs(reviewed_delta)} week-over-week."))
+
+        deadlines_delta = _delta("deadlines_completed")
+        if deadlines_delta > 0:
+            wins.append((deadlines_delta, f"Closed {deadlines_delta} more deadlines than last week."))
+        elif deadlines_delta < 0:
+            priorities.append((abs(deadlines_delta), f"Completed {abs(deadlines_delta)} fewer deadlines than last week."))
+
+        resolved_delta = _delta("issues_resolved")
+        if resolved_delta > 0:
+            wins.append((resolved_delta, f"Resolved {resolved_delta} more issues than last week."))
+        elif resolved_delta < 0:
+            priorities.append((abs(resolved_delta), f"Issue resolution decreased by {abs(resolved_delta)} week-over-week."))
+
+        opened_delta = _delta("issues_opened")
+        if opened_delta < 0:
+            wins.append((abs(opened_delta), f"New issues reduced by {abs(opened_delta)} week-over-week."))
+        elif opened_delta > 0:
+            priorities.append((opened_delta, f"New issues increased by {opened_delta} week-over-week."))
+
+        wins.sort(key=lambda item: item[0], reverse=True)
+        priorities.sort(key=lambda item: item[0], reverse=True)
+        top_wins = [item[1] for item in wins[:3]] or ["No measurable improvements over the previous week."]
+        top_priorities = [item[1] for item in priorities[:3]] or ["No material regressions detected this week."]
+        return top_wins, top_priorities
+
+    def _generate_weekly_progress_narrative(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        score_current: int,
+        score_delta: int,
+        top_wins: list[str],
+        top_priorities: list[str],
+    ) -> tuple[str, str, list[str]]:
+        staleness_flags: list[str] = []
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You write one concise weekly compliance progress paragraph for operations leadership. "
+                    "Use plain language and quantify changes where possible. "
+                    "Prioritize biggest win and biggest priority next week."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Organization={org_id}; user={user_id}; weekly_score={score_current}; score_delta={score_delta}. "
+                    f"Top wins={top_wins}. Top priorities={top_priorities}. "
+                    "Return exactly one paragraph, 3-4 sentences."
+                ),
+            },
+        ]
+        try:
+            narrative, provider_name, _ = AIProviderService(self.db)._run_provider_chain(
+                org_id=org_id,
+                messages=messages,
+                failure_context="Weekly progress narrative generation unavailable",
+            )
+            paragraph = " ".join(str(narrative).strip().split())
+            if not paragraph:
+                raise RuntimeError("empty weekly narrative")
+            return paragraph, f"ai_{provider_name}", staleness_flags
+        except Exception:
+            staleness_flags.append("ai_weekly_narrative_fallback")
+            win = top_wins[0] if top_wins else "No measurable improvements this week."
+            priority = top_priorities[0] if top_priorities else "No major blockers were identified."
+            fallback = (
+                f"Weekly compliance score is {score_current} ({score_delta:+d} versus last week). "
+                f"Top win: {win} Top priority for next week: {priority}"
+            )
+            return fallback, "deterministic_fallback", staleness_flags
+
     def get_or_create_configs(self, org_id: uuid.UUID, user_id: uuid.UUID) -> list[DigestConfig]:
         now = self.utcnow()
         defaults = [
@@ -341,6 +528,7 @@ class DigestService:
 
         now = self.utcnow()
         week_ago = now - timedelta(days=7)
+        previous_week_start = now - timedelta(days=14)
         today = now.date()
         month_end = date(today.year, today.month, 28) + timedelta(days=4)
         month_end = month_end - timedelta(days=month_end.day)
@@ -368,11 +556,52 @@ class DigestService:
             or 0
         )
 
+        current_metrics = self._weekly_progress_metrics(
+            org_id=org_id,
+            user_id=user_id,
+            start_at=week_ago,
+            end_at=now,
+        )
+        previous_metrics = self._weekly_progress_metrics(
+            org_id=org_id,
+            user_id=user_id,
+            start_at=previous_week_start,
+            end_at=week_ago,
+        )
+        current_score = self._weekly_compliance_score(current_metrics)
+        previous_score = self._weekly_compliance_score(previous_metrics)
+        score_delta = current_score - previous_score
+        top_wins, top_priorities = self._weekly_wins_and_priorities(
+            current_metrics=current_metrics,
+            previous_metrics=previous_metrics,
+        )
+        weekly_narrative, weekly_narrative_source, weekly_staleness_flags = self._generate_weekly_progress_narrative(
+            org_id=org_id,
+            user_id=user_id,
+            score_current=current_score,
+            score_delta=score_delta,
+            top_wins=top_wins,
+            top_priorities=top_priorities,
+        )
+
         return {
             **daily,
             "digest_type": "weekly",
             "new_issues_this_week": new_issues,
             "obligations_due_this_month": obligations_due,
+            "score_current": current_score,
+            "score_previous": previous_score,
+            "score_delta": score_delta,
+            "top_3_wins": top_wins,
+            "top_3_priorities": top_priorities,
+            "weekly_metrics_current": current_metrics,
+            "weekly_metrics_previous": previous_metrics,
+            "weekly_window_start": week_ago.date().isoformat(),
+            "weekly_window_end": now.date().isoformat(),
+            "narrative_paragraph": weekly_narrative,
+            "narrative_source": weekly_narrative_source,
+            "narrative_generated_at": now.isoformat(),
+            "data_staleness_flags": sorted(set(list(daily.get("data_staleness_flags") or []) + weekly_staleness_flags)),
         }
 
     def send_digest(self, org_id: uuid.UUID, user_id: uuid.UUID, digest_type: str, db: Session | None = None) -> bool:

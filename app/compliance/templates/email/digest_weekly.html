@@ -1,9 +1,22 @@
 {% extends "digest_daily.html" %}
 {% block content %}
 {{ super() }}
-<h3>📊 This Week</h3>
+<h3>This Week</h3>
 <ul>
+  <li>Weekly score: {{ score_current }} ({{ "%+d"|format(score_delta) }} vs prior week)</li>
   <li>New issues this week: {{ new_issues_this_week }}</li>
   <li>Obligations due this month: {{ obligations_due_this_month }}</li>
+</ul>
+<h4>Top 3 Wins</h4>
+<ul>
+  {% for item in top_3_wins %}
+  <li>{{ item }}</li>
+  {% endfor %}
+</ul>
+<h4>Top 3 Priorities</h4>
+<ul>
+  {% for item in top_3_priorities %}
+  <li>{{ item }}</li>
+  {% endfor %}
 </ul>
 {% endblock %}
