@@ -52,6 +52,7 @@ class CompliancePolicy(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMix
         nullable=True,
     )
     ai_drafted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    source_import_tool: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source_ai_draft_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey(

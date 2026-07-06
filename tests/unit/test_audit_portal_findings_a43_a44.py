@@ -6,6 +6,7 @@ import uuid
 from app.core.security import get_password_hash
 from app.models.audit_log import AuditLog
 from app.models.auditor_portal_invitation import AuditorPortalInvitation
+from app.models.evidence_item import EvidenceItem
 from app.models.membership import Membership
 from app.models.obligation import Obligation
 from app.models.role import Role
@@ -333,6 +334,58 @@ def test_a43_portal_controls_and_evidence_scoping_and_org_isolation(client, db_s
     assert evidence.status_code == 200
     evidence_ids = {row["id"] for row in evidence.json()}
     assert evidence_ids == {ev_in["id"]}
+
+
+def test_a43_portal_evidence_uses_original_created_at_for_imported_records(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="a43-evidence-dates")
+    fw_in_scope, _ = _framework_ids(client, org["headers"])
+    engagement = _create_engagement(client, org["org_headers"], fw_in_scope, org["user_id"])
+
+    manual_resp = client.post(
+        "/api/v1/evidence",
+        headers=org["org_headers"],
+        json={
+            "title": "Manual Evidence Date",
+            "evidence_type": "document",
+            "collected_at": "2025-01-15T12:00:00Z",
+        },
+    )
+    assert manual_resp.status_code == 201
+    manual_id = manual_resp.json()["id"]
+
+    imported_resp = client.post(
+        "/api/v1/evidence",
+        headers=org["org_headers"],
+        json={"title": "Imported Evidence Date", "evidence_type": "document"},
+    )
+    assert imported_resp.status_code == 201
+    imported_id = imported_resp.json()["id"]
+
+    imported_row = db_session.query(EvidenceItem).filter(EvidenceItem.id == uuid.UUID(imported_id)).one()
+    imported_row.source = "imported"
+    imported_row.source_import_tool = "drata"
+    imported_row.original_created_at = datetime(2021, 6, 10, 9, 30, tzinfo=UTC)
+    db_session.commit()
+
+    invitation = _create_invitation(
+        client,
+        org["org_headers"],
+        engagement["id"],
+        {
+            "auditor_email": "dates-auditor@example.com",
+            "scoped_framework_ids": [fw_in_scope],
+            "scoped_evidence_ids": [manual_id, imported_id],
+            "expires_in_days": 30,
+        },
+    )
+    portal_headers = {"Authorization": f"Bearer {invitation['plaintext_token']}"}
+
+    evidence = client.get(f"{PORTAL_BASE}/evidence", headers=portal_headers)
+    assert evidence.status_code == 200
+    evidence_map = {row["id"]: row for row in evidence.json()}
+
+    assert evidence_map[manual_id]["submitted_at"] == "2025-01-15T12:00:00"
+    assert evidence_map[imported_id]["submitted_at"] == "2021-06-10T09:30:00"
 
 
 def test_a43_portal_view_writes_resource_specific_audit_trail(client, db_session):

@@ -53,6 +53,7 @@ def _evidence_read(item: EvidenceItem) -> EvidenceRead:
         valid_from=item.valid_from,
         valid_until=item.valid_until,
         collected_at=item.collected_at,
+        original_created_at=item.original_created_at,
         uploaded_by_user_id=item.uploaded_by_user_id,
         reviewed_by_user_id=item.reviewed_by_user_id,
         reviewed_at=item.reviewed_at,

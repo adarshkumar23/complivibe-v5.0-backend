@@ -23,6 +23,7 @@ class EvidenceItem(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, 
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     evidence_type: Mapped[str] = mapped_column(String(64), nullable=False, default="other")
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    source_import_tool: Mapped[str | None] = mapped_column(String(32), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_reviewed")
     freshness_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
@@ -36,6 +37,7 @@ class EvidenceItem(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, 
     valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     collected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    original_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Kept mapped to existing column name for backward migration compatibility.
     uploaded_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         "uploaded_by", Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
