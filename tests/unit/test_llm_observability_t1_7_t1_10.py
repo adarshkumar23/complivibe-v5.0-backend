@@ -240,3 +240,18 @@ def test_permission_gate_and_archived_system_are_rejected(client):
         json={"model": "gpt-4o", "input_tokens": 100, "output_tokens": 100},
     )
     assert resp.status_code == 401
+
+    retire = client.post(
+        f"{SYSTEMS_BASE}/{system_id}/status",
+        headers=org["org_headers"],
+        json={"new_status": "decommissioned"},
+    )
+    assert retire.status_code == 200, retire.text
+
+    retired = client.post(
+        f"{LLM_OBS_BASE}/systems/{system_id}/cost-readings",
+        headers=org["org_headers"],
+        json={"model": "gpt-4o", "input_tokens": 100, "output_tokens": 100},
+    )
+    assert retired.status_code == 422
+    assert "retired system" in retired.json()["detail"]

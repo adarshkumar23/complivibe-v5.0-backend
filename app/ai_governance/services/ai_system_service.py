@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.ai_governance.services.ai_governance_event_service import AIGovernanceEventService
 from app.ai_governance.services.signal_service import SignalService
 from app.models.ai_system import AISystem
+from app.models.membership import Membership
 from app.models.user import User
 from app.services.audit_service import AuditService
 
@@ -32,9 +33,21 @@ class AISystemService:
         return datetime.now(UTC)
 
     def _validate_owner(self, org_id: uuid.UUID, owner_id: uuid.UUID) -> None:
-        owner = self.db.execute(select(User.id).where(User.id == owner_id)).scalar_one_or_none()
+        owner = self.db.execute(
+            select(User.id)
+            .join(Membership, Membership.user_id == User.id)
+            .where(
+                User.id == owner_id,
+                Membership.organization_id == org_id,
+                Membership.status == "active",
+                User.is_active.is_(True),
+            )
+        ).scalar_one_or_none()
         if owner is None:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Owner user not found")
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="owner_id must be an active member of the organization",
+            )
 
     def _validate_system_type(self, system_type: str) -> None:
         if system_type not in self.ALLOWED_SYSTEM_TYPES:

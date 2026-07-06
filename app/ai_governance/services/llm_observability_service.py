@@ -40,7 +40,11 @@ class LLMObservabilityService:
         ).scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="AI system not found")
-        if row.lifecycle_status == "archived":
+        if (
+            row.lifecycle_status in {"archived", "decommissioned"}
+            or row.deployment_status == "decommissioned"
+            or row.archived_at is not None
+        ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="AI system is archived; cannot record new LLM observability events for a retired system",
