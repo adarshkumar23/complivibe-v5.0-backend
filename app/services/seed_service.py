@@ -293,6 +293,8 @@ PERMISSIONS: dict[str, str] = {
     "auditor_marketplace:engage": "Create auditor marketplace engagements linked to audit portal access",
     "onboarding_baseline:start": "Start 24-hour baseline onboarding run with intake generation and evidence auto-collection",
     "onboarding_baseline:read": "Read 24-hour baseline onboarding run outputs and gap analysis",
+    "command_palette:search": "Run command palette search across indexed entities and shortcuts",
+    "command_palette:execute": "Execute command palette backend actions such as quick task creation",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {
@@ -469,6 +471,8 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "search:read",
         "onboarding_baseline:start",
         "onboarding_baseline:read",
+        "command_palette:search",
+        "command_palette:execute",
     },
     "reviewer": {
         "frameworks:read",
@@ -560,6 +564,8 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "export_control:read",
         "search:read",
         "onboarding_baseline:read",
+        "command_palette:search",
+        "command_palette:execute",
     },
     "auditor": {
         "frameworks:read",
@@ -628,6 +634,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "export_control:read",
         "search:read",
         "onboarding_baseline:read",
+        "command_palette:search",
     },
     "readonly": {
         "frameworks:read",
@@ -683,6 +690,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "anti_bribery:read",
         "export_control:read",
         "search:read",
+        "command_palette:search",
     },
 }
 

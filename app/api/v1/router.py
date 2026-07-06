@@ -89,6 +89,7 @@ from app.api.v1 import risk_quantification
 from app.api.v1 import resilience_testing
 from app.api.v1 import whistleblower
 from app.api.v1 import search as search_api
+from app.api.v1 import experience as experience_api
 
 from app.api.v1 import (
     admin_email_config,
@@ -396,3 +397,4 @@ api_router.include_router(risk_quantification.router)
 api_router.include_router(resilience_testing.router)
 api_router.include_router(whistleblower.router)
 api_router.include_router(search_api.router)
+api_router.include_router(experience_api.router)
