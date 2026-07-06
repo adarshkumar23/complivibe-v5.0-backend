@@ -52,6 +52,12 @@ def upgrade() -> None:
         "organizations",
         sa.Column("usage_spend_cap_inr", sa.Numeric(precision=14, scale=2), nullable=True),
     )
+    op.drop_constraint("ck_organizations_subscription_plan", "organizations", type_="check")
+    op.create_check_constraint(
+        "ck_organizations_subscription_plan",
+        "organizations",
+        "subscription_plan IN ('trial','starter','growth','enterprise','usage_flex')",
+    )
 
     op.create_table(
         "usage_billing_snapshots",
@@ -114,6 +120,12 @@ def downgrade() -> None:
     op.drop_index("ix_usage_billing_snapshots_org_period_start", table_name="usage_billing_snapshots")
     op.drop_table("usage_billing_snapshots")
 
+    op.drop_constraint("ck_organizations_subscription_plan", "organizations", type_="check")
+    op.create_check_constraint(
+        "ck_organizations_subscription_plan",
+        "organizations",
+        "subscription_plan IN ('trial','starter','growth','enterprise')",
+    )
     op.drop_column("organizations", "usage_spend_cap_inr")
     op.drop_column("organizations", "usage_spend_cap_enabled")
 
