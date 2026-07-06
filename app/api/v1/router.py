@@ -106,6 +106,7 @@ from app.api.v1 import (
     audit_schedules,
     pbc_items,
     auditor_portal,
+    auditor_marketplace,
     audit_findings,
     evidence_packages,
     policy_exceptions,
@@ -317,6 +318,8 @@ api_router.include_router(audit_engagements.router)
 api_router.include_router(audit_schedules.router)
 api_router.include_router(pbc_items.router)
 api_router.include_router(auditor_portal.router)
+api_router.include_router(auditor_marketplace.public_router)
+api_router.include_router(auditor_marketplace.router)
 api_router.include_router(audit_findings.router)
 api_router.include_router(evidence_packages.router)
 api_router.include_router(policy_exceptions.router)

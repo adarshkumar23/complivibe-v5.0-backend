@@ -268,6 +268,8 @@ PERMISSIONS: dict[str, str] = {
     "pricing:manage": "Refresh competitor pricing comparisons and publish new pricing snapshots",
     "certification_programs:read": "Read certification program catalog and progress views",
     "certification_programs:activate": "Activate certification programs and create linked task/evidence/deadline plans",
+    "auditor_marketplace:read": "Read auditor marketplace engagements and filters",
+    "auditor_marketplace:engage": "Create auditor marketplace engagements linked to audit portal access",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {
@@ -286,6 +288,8 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "tasks:write",
         "certification_programs:read",
         "certification_programs:activate",
+        "auditor_marketplace:read",
+        "auditor_marketplace:engage",
         "dashboard:read",
         "org:read",
         "users:read",

@@ -135,6 +135,8 @@ from app.models.roi_calculator_lead import ROICalculatorLead
 from app.models.business_unit import BusinessUnit
 from app.models.board_scorecard_snapshot import BoardScorecardSnapshot
 from app.models.ai_governance_diagnostic_snapshot import AIGovernanceDiagnosticSnapshot
+from app.models.auditor import Auditor
+from app.models.auditor_engagement import AuditorEngagement
 from app.models.evidence_item import EvidenceItem
 from app.models.email_delivery_event import EmailDeliveryEvent
 from app.models.email_outbox import EmailOutbox
@@ -722,6 +724,8 @@ __all__ = [
     "PolicyTemplate",
     "PolicyTemplateClone",
     "AuditEngagement",
+    "Auditor",
+    "AuditorEngagement",
     "PbcItem",
     "PBCRequest",
     "AuditorPortalInvitation",
