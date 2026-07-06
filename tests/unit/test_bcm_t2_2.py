@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import sqlalchemy as sa
 
 from app.core.security import get_password_hash
-from app.models.bcm import BiaAssessment
+from app.models.bcm import BiaAssessment, BusinessProcess
 from app.models.membership import Membership
 from app.models.role import Role
 from app.models.user import User
@@ -179,6 +179,104 @@ def test_overdue_reviews_flags_deactivated_owner(client, db_session):
     assert len(matching) == 1
     assert matching[0]["is_stale"] is True
     assert any("deactivated" in reason for reason in matching[0]["stale_reasons"])
+
+
+def test_create_process_and_bia_reject_inactive_org_user_references(client, db_session):
+    org_user = bootstrap_org_user(client, email_prefix="bcm-inactive-ref")
+    headers = org_user["org_headers"]
+    organization_id = uuid.UUID(org_user["organization_id"])
+
+    inactive_user = User(
+        email="bcm-inactive-reference@example.com",
+        full_name="Inactive BCM Reference",
+        hashed_password=get_password_hash("Pass1234!@"),
+        status="active",
+        is_active=True,
+        is_superuser=False,
+    )
+    db_session.add(inactive_user)
+    db_session.flush()
+    role = db_session.query(Role).filter(Role.organization_id == organization_id, Role.name == "reviewer").one()
+    db_session.add(
+        Membership(
+            organization_id=organization_id,
+            user_id=inactive_user.id,
+            role_id=role.id,
+            status="inactive",
+        )
+    )
+    db_session.commit()
+
+    rejected_process = _create_process(
+        client,
+        headers,
+        name="Inactive Owner Process",
+        owner_user_id=str(inactive_user.id),
+    )
+    assert rejected_process.status_code == 400, rejected_process.text
+    assert db_session.query(BusinessProcess).filter(BusinessProcess.name == "Inactive Owner Process").count() == 0
+
+    process = _create_process(client, headers)
+    assert process.status_code == 201, process.text
+    rejected_bia = client.post(
+        f"/api/v1/bcm/processes/{process.json()['id']}/bia",
+        headers=headers,
+        json={
+            "impact_analysis_json": {"financial": "medium"},
+            "review_frequency_months": 12,
+            "reviewed_by_user_id": str(inactive_user.id),
+        },
+    )
+    assert rejected_bia.status_code == 400, rejected_bia.text
+    assert db_session.query(BiaAssessment).filter(BiaAssessment.reviewed_by_user_id == inactive_user.id).count() == 0
+
+
+def test_overdue_reviews_flags_inactive_owner_membership_and_status(client, db_session):
+    org_user = bootstrap_org_user(client, email_prefix="bcm-owner-membership")
+    headers = org_user["org_headers"]
+    organization_id = uuid.UUID(org_user["organization_id"])
+
+    owner = User(
+        email="bcm-owner-membership@example.com",
+        full_name="BCM Owner Membership",
+        hashed_password=get_password_hash("Pass1234!@"),
+        status="active",
+        is_active=True,
+        is_superuser=False,
+    )
+    db_session.add(owner)
+    db_session.flush()
+    role = db_session.query(Role).filter(Role.organization_id == organization_id, Role.name == "reviewer").one()
+    membership = Membership(
+        organization_id=organization_id,
+        user_id=owner.id,
+        role_id=role.id,
+        status="active",
+    )
+    db_session.add(membership)
+    db_session.commit()
+
+    resp = _create_process(client, headers, owner_user_id=str(owner.id))
+    assert resp.status_code == 201, resp.text
+    process_id = resp.json()["id"]
+    bia_resp = client.post(
+        f"/api/v1/bcm/processes/{process_id}/bia",
+        headers=headers,
+        json={"impact_analysis_json": {"financial": "low"}, "review_frequency_months": 12},
+    )
+    assert bia_resp.status_code == 201, bia_resp.text
+
+    membership.status = "inactive"
+    owner.status = "disabled"
+    db_session.commit()
+
+    overdue_resp = client.get("/api/v1/bcm/overdue-reviews", headers=headers)
+    assert overdue_resp.status_code == 200, overdue_resp.text
+    matching = [item for item in overdue_resp.json()["items"] if item["process_id"] == process_id]
+    assert len(matching) == 1
+    assert matching[0]["is_stale"] is True
+    assert any("deactivated" in reason for reason in matching[0]["stale_reasons"])
+    assert any("membership is inactive" in reason for reason in matching[0]["stale_reasons"])
 
 
 def test_process_with_no_bia_appears_in_overdue_reviews(client, db_session):

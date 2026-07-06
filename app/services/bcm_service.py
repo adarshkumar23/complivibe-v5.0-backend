@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.bcm import BiaAssessment, BusinessProcess
+from app.models.membership import Membership
 from app.models.user import User
 
 
@@ -25,14 +26,13 @@ class BcmService:
         user = self.db.get(User, user_id)
         if user is None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} does not reference an existing user")
-        # A user only "belongs" to the org via a membership record; check that.
-        from app.models.membership import Membership
-
         membership = self.db.execute(
             select(Membership).where(Membership.user_id == user_id, Membership.organization_id == organization_id)
         ).scalar_one_or_none()
         if membership is None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} does not belong to this organization")
+        if membership.status != "active" or not user.is_active or user.status != "active":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an active organization member")
 
     def create_process(self, organization_id: uuid.UUID, *, data: dict, created_by_user_id: uuid.UUID | None) -> BusinessProcess:
         self._validate_org_user(data.get("owner_user_id"), organization_id, field_name="owner_user_id")
@@ -146,8 +146,17 @@ class BcmService:
                     f"review frequency {bia.review_frequency_months} months)"
                 )
 
-        if owner_user is not None and not owner_user.is_active:
+        if owner_user is not None and (not owner_user.is_active or owner_user.status != "active"):
             reasons.append("Process owner account is deactivated")
+        if process.owner_user_id is not None:
+            owner_membership = self.db.execute(
+                select(Membership).where(
+                    Membership.user_id == process.owner_user_id,
+                    Membership.organization_id == process.organization_id,
+                )
+            ).scalar_one_or_none()
+            if owner_membership is None or owner_membership.status != "active":
+                reasons.append("Process owner organization membership is inactive")
 
         return {"is_stale": len(reasons) > 0, "stale_reasons": reasons}
 

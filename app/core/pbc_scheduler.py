@@ -32,6 +32,7 @@ from app.satellites.tprm_intelligence.sanctions_screening import (
     run_daily_sanctions_dataset_refresh,
     run_periodic_vendor_sanctions_rescreen_sweep,
 )
+from app.satellites.tprm_intelligence.router import run_periodic_vendor_kyb_rescreen_sweep
 from app.satellites.tprm_intelligence.security_rating_monitoring import run_daily_vendor_security_rating_continuous_refresh
 from app.core.scheduler_logger import SchedulerJobLogger
 from app.core.config import get_settings
@@ -67,6 +68,7 @@ SCHEDULER_JOB_IDS: list[str] = [
     "regulatory_change_poll",
     "sanctions_dataset_refresh",
     "vendor_sanctions_rescreen_sweep",
+    "vendor_kyb_rescreen_sweep",
     "vendor_security_rating_continuous_refresh",
 ]
 
@@ -641,6 +643,26 @@ def _run_vendor_sanctions_rescreen_sweep_job() -> None:
     )
 
 
+def _run_vendor_kyb_rescreen_sweep_job_internal(*, db) -> dict:
+    try:
+        result = run_periodic_vendor_kyb_rescreen_sweep(db)
+        logger.info("Vendor KYB rescreen sweep complete", extra=result)
+        return result
+    except Exception as exc:
+        db.rollback()
+        _capture_scheduler_exception(exc)
+        logger.exception("Vendor KYB rescreen sweep failed")
+        raise
+
+
+def _run_vendor_kyb_rescreen_sweep_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="vendor_kyb_rescreen_sweep",
+        job_fn=_run_vendor_kyb_rescreen_sweep_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
 def _run_vendor_security_rating_continuous_refresh_job_internal(*, db) -> dict:
     try:
         result = run_daily_vendor_security_rating_continuous_refresh(db)
@@ -872,6 +894,13 @@ def register_pbc_scheduler(app: FastAPI) -> None:
         _run_vendor_sanctions_rescreen_sweep_job,
         trigger=CronTrigger(hour=3, minute=10),
         id="vendor_sanctions_rescreen_sweep",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_vendor_kyb_rescreen_sweep_job,
+        trigger=CronTrigger(hour=3, minute=12),
+        id="vendor_kyb_rescreen_sweep",
         replace_existing=True,
         coalesce=True,
     )

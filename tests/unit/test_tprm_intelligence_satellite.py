@@ -9,9 +9,12 @@ from app.models.aml_kyc_check import AmlKycCheck
 from app.models.audit_log import AuditLog
 from app.models.sanctions_entity import SanctionsEntity
 from app.models.sanctions_screen_result import SanctionsScreenResult
+from app.models.vendor import Vendor
 from app.models.vendor_external_rating import VendorExternalRating
+from app.models.vendor_supply_chain import VendorSupplyChainAlert
 from app.models.vendor_threat_intelligence import VendorThreatIntelligence
 from app.satellites.tprm_intelligence.kyb_verification import KYBVerificationService
+from app.satellites.tprm_intelligence.router import run_periodic_vendor_kyb_rescreen_sweep
 from app.satellites.tprm_intelligence.sanctions_screening import SanctionsScreeningService, WatchmanSearchResult
 from app.satellites.tprm_intelligence.threat_intelligence import ThreatIntelligenceService
 from app.satellites.tprm_intelligence.vendor_security_rating import VendorSecurityRatingService
@@ -274,6 +277,10 @@ def test_t4_5_vendor_kyb_check_offshore_and_adverse_media_propagates_nth_party_a
     computed = client.post(f"{SATELLITE_BASE}/{fourth_party['id']}/kyb-check/compute", headers=org["org_headers"])
     assert computed.status_code == 201, computed.text
 
+    own_vendor = client.get(f"{VENDORS_BASE}/{fourth_party['id']}", headers=org["org_headers"])
+    assert own_vendor.status_code == 200, own_vendor.text
+    assert own_vendor.json()["risk_tier"] == "critical"
+
     graph = client.get(f"{SATELLITE_BASE}/{first_party['id']}/supply-chain-graph?depth=5", headers=org["org_headers"])
     assert graph.status_code == 200
     alerts = graph.json()["open_alerts"]
@@ -288,6 +295,13 @@ def test_t4_5_vendor_kyb_check_offshore_and_adverse_media_propagates_nth_party_a
     kyb_audit = [r for r in audit_rows if r.metadata_json.get("source") == "vendor.kyb_check.computed"]
     assert len(kyb_audit) >= 1
     assert kyb_audit[0].organization_id == UUID(org["organization_id"])
+
+    tier_audit = db_session.execute(
+        select(AuditLog).where(AuditLog.action == "vendor.risk_tier_escalated", AuditLog.entity_id == UUID(fourth_party["id"]))
+    ).scalar_one_or_none()
+    assert tier_audit is not None
+    assert tier_audit.before_json["risk_tier"] == "not_assessed"
+    assert tier_audit.after_json["risk_tier"] == "critical"
 
 
 def test_t4_5_vendor_kyb_check_clean_result_does_not_propagate_alert(client, db_session, monkeypatch):
@@ -311,6 +325,97 @@ def test_t4_5_vendor_kyb_check_clean_result_does_not_propagate_alert(client, db_
         select(AuditLog).where(AuditLog.action == "vendor_supply_chain.alert_propagated")
     ).scalars().all()
     assert audit_rows == []
+
+
+def test_t4_5_vendor_kyb_clean_recompute_restores_own_tier_and_resolves_nth_party_alert(client, db_session, monkeypatch):
+    org = bootstrap_org_user(client, email_prefix="t4-kyb-clean-recompute")
+    first_party = _create_vendor(client, org, name="First Party Buyer", website="https://first-party.example")
+    fourth_party = _create_vendor(client, org, name="Recovering Shell Co", website="https://recovering-shell.example")
+
+    linked = client.post(
+        f"{SATELLITE_BASE}/{first_party['id']}/supply-chain-links",
+        headers=org["org_headers"],
+        json={"sub_vendor_id": fourth_party["id"], "relationship_type": "payment_dependency"},
+    )
+    assert linked.status_code == 201, linked.text
+
+    risky_result = {
+        "company_name": "Recovering Shell Co",
+        "signals_used": {"adverse_media": {"status": "available", "article_count": 2}},
+        "offshore_links_found": {"source": "icij_offshore_leaks", "found": False, "matches": [], "status": "available"},
+        "ubo_data": {"source": "openownership", "status": "available", "coverage_limitation": "", "statements": []},
+        "adverse_media_found": True,
+    }
+    clean_result = {
+        "company_name": "Recovering Shell Co",
+        "signals_used": {},
+        "offshore_links_found": {"source": "icij_offshore_leaks", "found": False, "matches": [], "status": "available"},
+        "ubo_data": {"source": "openownership", "status": "available", "coverage_limitation": "", "statements": []},
+        "adverse_media_found": False,
+    }
+    results = iter([risky_result, clean_result])
+    monkeypatch.setattr(KYBVerificationService, "compute", lambda self, company_name: next(results))
+
+    risky = client.post(f"{SATELLITE_BASE}/{fourth_party['id']}/kyb-check/compute", headers=org["org_headers"])
+    assert risky.status_code == 201, risky.text
+    after_risky = client.get(f"{VENDORS_BASE}/{fourth_party['id']}", headers=org["org_headers"])
+    assert after_risky.json()["risk_tier"] == "high"
+    db_session.expire_all()
+    first_party_flagged = db_session.get(Vendor, UUID(first_party["id"]))
+    assert first_party_flagged.nth_party_risk_flag is True
+
+    clean = client.post(f"{SATELLITE_BASE}/{fourth_party['id']}/kyb-check/compute", headers=org["org_headers"])
+    assert clean.status_code == 201, clean.text
+    after_clean = client.get(f"{VENDORS_BASE}/{fourth_party['id']}", headers=org["org_headers"])
+    assert after_clean.json()["risk_tier"] == "not_assessed"
+
+    db_session.expire_all()
+    first_party_after = db_session.get(Vendor, UUID(first_party["id"]))
+    assert first_party_after.nth_party_risk_flag is False
+    open_alerts = db_session.execute(
+        select(VendorSupplyChainAlert).where(
+            VendorSupplyChainAlert.parent_vendor_id == UUID(first_party["id"]),
+            VendorSupplyChainAlert.triggering_vendor_id == UUID(fourth_party["id"]),
+            VendorSupplyChainAlert.signal_type == "kyb_aml_risk_flagged",
+            VendorSupplyChainAlert.status == "open",
+        )
+    ).scalars().all()
+    assert open_alerts == []
+    restore_audit = db_session.execute(
+        select(AuditLog).where(
+            AuditLog.action == "vendor.risk_tier_escalated",
+            AuditLog.entity_id == UUID(fourth_party["id"]),
+        )
+    ).scalars().all()
+    assert any(row.after_json.get("reason") == "kyb_aml_risk_recovered" for row in restore_audit)
+
+
+def test_t4_5_periodic_kyb_rescreen_sweep_catches_new_risk(client, db_session, monkeypatch):
+    org = bootstrap_org_user(client, email_prefix="t4-kyb-rescreen")
+    vendor = _create_vendor(client, org, name="Later Adverse Co", website="https://later-adverse.example")
+
+    monkeypatch.setattr(
+        KYBVerificationService,
+        "compute",
+        lambda self, company_name: {
+            "company_name": company_name,
+            "signals_used": {"adverse_media": {"status": "available", "article_count": 3}},
+            "offshore_links_found": {"source": "icij_offshore_leaks", "found": False, "matches": [], "status": "available"},
+            "ubo_data": {"source": "openownership", "status": "available", "coverage_limitation": "", "statements": []},
+            "adverse_media_found": True,
+        },
+    )
+
+    result = run_periodic_vendor_kyb_rescreen_sweep(db_session)
+    assert result["vendors_screened"] >= 1
+    assert result["risk_flags_found"] >= 1
+    assert result["errors"] == 0
+
+    latest = client.get(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check", headers=org["org_headers"])
+    assert latest.status_code == 200, latest.text
+    assert latest.json()["adverse_media_found"] is True
+    after = client.get(f"{VENDORS_BASE}/{vendor['id']}", headers=org["org_headers"])
+    assert after.json()["risk_tier"] == "high"
 
 
 def test_t4_5_vendor_kyb_check_empty_company_name_rejected(client):
