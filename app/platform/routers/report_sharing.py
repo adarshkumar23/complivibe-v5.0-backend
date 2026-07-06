@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
+from app.core.rate_limiter import rate_limiter
 from app.models.membership import Membership
 from app.models.organization import Organization
 from app.models.user import User
@@ -87,10 +88,13 @@ def access_shared_report(
 
 
 @router.post("/shared/{token}/verify", response_model=SharePasswordVerifyResponse)
+@rate_limiter.limiter.limit("10/minute")
 def verify_share_password(
     token: str,
     payload: SharePasswordVerifyRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> SharePasswordVerifyResponse:
     valid = ReportShareService().verify_password(token=token, password=payload.password, db=db)
+    db.commit()
     return SharePasswordVerifyResponse(valid=valid)

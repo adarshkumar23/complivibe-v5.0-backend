@@ -1,20 +1,31 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.audit_log import AuditLog
+from app.models.compliance_deadline import ComplianceDeadline
+from app.models.control import Control
+from app.models.evidence_item import EvidenceItem
+from app.models.framework import Framework
+from app.models.organization_framework import OrganizationFramework
 from app.models.risk import Risk
+from app.models.task import Task
 from app.models.shared_report_link import SharedReportLink
 from app.privacy.services.ropa_service import RopaService
 from app.services.audit_service import AuditService
+
+
+MAX_FAILED_PASSWORD_ATTEMPTS = 5
+PASSWORD_LOCKOUT_MINUTES = 15
 
 
 class ReportShareService:
@@ -99,7 +110,7 @@ class ReportShareService:
                 detail="This report link has reached its maximum view count",
             )
 
-        self._verify_password(link, password)
+        self._verify_password(link, password, db)
 
         link.view_count += 1
         link.last_viewed_at = now
@@ -124,8 +135,11 @@ class ReportShareService:
     def verify_password(self, token: str, db: Session, password: str | None = None) -> bool:
         link = self._get_active_link(token, db)
         try:
-            self._verify_password(link, password)
-        except HTTPException:
+            self._verify_password(link, password, db)
+        except HTTPException as exc:
+            # Propagate rate-limit / lockout responses so the API can return 429.
+            if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+                raise
             return False
         return True
 
@@ -179,18 +193,54 @@ class ReportShareService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report link not found or expired")
         return link
 
-    def _verify_password(self, link: SharedReportLink, password: str | None) -> None:
+    def _verify_password(self, link: SharedReportLink, password: str | None, db: Session) -> None:
         if not link.password_hash:
             return
+
+        now = self.utcnow()
+        if link.locked_until is not None:
+            compare_now = now if link.locked_until.tzinfo is not None else now.replace(tzinfo=None)
+            if link.locked_until > compare_now:
+                retry_after = int((link.locked_until - compare_now).total_seconds())
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Too many failed password attempts for this share link. Please try again later.",
+                    headers={"Retry-After": str(max(1, retry_after))},
+                )
+            # Lockout has expired; reset the counter for a fresh window.
+            link.failed_password_attempt_count = 0
+            link.locked_until = None
+
         if not password:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="This report is password protected",
                 headers={"WWW-Authenticate": "password"},
             )
+
         provided_hash = hashlib.sha256(password.encode()).hexdigest()
-        if provided_hash != link.password_hash:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect password")
+        if hmac.compare_digest(provided_hash, link.password_hash):
+            # Successful authentication resets the failure window.
+            link.failed_password_attempt_count = 0
+            link.locked_until = None
+            return
+
+        link.failed_password_attempt_count += 1
+        if link.failed_password_attempt_count >= MAX_FAILED_PASSWORD_ATTEMPTS:
+            link.locked_until = now + timedelta(minutes=PASSWORD_LOCKOUT_MINUTES)
+            AuditService(db).write_audit_log(
+                action="report.share_password_lockout",
+                entity_type="shared_report_links",
+                entity_id=link.id,
+                organization_id=link.organization_id,
+                actor_user_id=None,
+                after_json={
+                    "failed_password_attempt_count": link.failed_password_attempt_count,
+                    "locked_until": link.locked_until.isoformat(),
+                },
+            )
+        db.flush()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect password")
 
     def _generate_report(self, org_id: uuid.UUID, report_type: str, report_params: dict, db: Session) -> dict:
         if report_type == "risk_register":
@@ -220,6 +270,113 @@ class ReportShareService:
                 "organization_id": str(org_id),
                 "report_params": report_params,
                 "note": "Full compliance summary - rendered by frontend",
+            }
+
+        if report_type == "compliance_one_page_summary":
+            active_framework_rows = (
+                db.execute(
+                    select(Framework.code, Framework.name)
+                    .join(OrganizationFramework, OrganizationFramework.framework_id == Framework.id)
+                    .where(
+                        OrganizationFramework.organization_id == org_id,
+                        OrganizationFramework.status == "active",
+                    )
+                    .order_by(Framework.name.asc())
+                )
+                .all()
+            )
+            active_frameworks = [{"code": str(code), "name": str(name)} for code, name in active_framework_rows]
+
+            total_controls = int(
+                db.execute(select(func.count(Control.id)).where(Control.organization_id == org_id)).scalar_one()
+            )
+            implemented_controls = int(
+                db.execute(
+                    select(func.count(Control.id)).where(
+                        Control.organization_id == org_id,
+                        Control.status.in_(["implemented", "monitoring", "effective"]),
+                    )
+                ).scalar_one()
+            )
+            controls_pct = round((implemented_controls / total_controls) * 100, 1) if total_controls > 0 else 0.0
+
+            evidence_total = int(
+                db.execute(select(func.count(EvidenceItem.id)).where(EvidenceItem.organization_id == org_id)).scalar_one()
+            )
+            evidence_fresh = int(
+                db.execute(
+                    select(func.count(EvidenceItem.id)).where(
+                        EvidenceItem.organization_id == org_id,
+                        EvidenceItem.freshness_status == "fresh",
+                    )
+                ).scalar_one()
+            )
+            evidence_fresh_pct = round((evidence_fresh / evidence_total) * 100, 1) if evidence_total > 0 else 0.0
+
+            open_high_risks = int(
+                db.execute(
+                    select(func.count(Risk.id)).where(
+                        Risk.organization_id == org_id,
+                        Risk.status.not_in(["closed", "accepted"]),
+                        Risk.severity.in_(["high", "critical"]),
+                    )
+                ).scalar_one()
+            )
+
+            overdue_tasks = int(
+                db.execute(
+                    select(func.count(Task.id)).where(
+                        Task.organization_id == org_id,
+                        Task.status.not_in(["completed", "cancelled"]),
+                        Task.due_date.is_not(None),
+                        Task.due_date < self.utcnow(),
+                    )
+                ).scalar_one()
+            )
+            overdue_deadlines = int(
+                db.execute(
+                    select(func.count(ComplianceDeadline.id)).where(
+                        ComplianceDeadline.organization_id == org_id,
+                        ComplianceDeadline.status == "overdue",
+                    )
+                ).scalar_one()
+            )
+
+            priorities: list[str] = []
+            if overdue_tasks > 0:
+                priorities.append(f"{overdue_tasks} overdue task(s) need completion")
+            if overdue_deadlines > 0:
+                priorities.append(f"{overdue_deadlines} overdue compliance deadline(s) need remediation")
+            if open_high_risks > 0:
+                priorities.append(f"{open_high_risks} high/critical open risk(s) need treatment")
+            if controls_pct < 80:
+                priorities.append("Control implementation coverage is below 80%")
+            if evidence_fresh_pct < 85:
+                priorities.append("Evidence freshness is below 85%")
+            if not priorities:
+                priorities.append("No critical blockers detected in current compliance snapshot")
+            priorities = priorities[:3]
+
+            return {
+                "report_kind": "one_page_quick_read",
+                "brand_name": report_params.get("brand_name") or "CompliVibe",
+                "generated_at": self.utcnow().isoformat(),
+                "active_frameworks": active_frameworks,
+                "overview": {
+                    "framework_count": len(active_frameworks),
+                    "controls_implemented_pct": controls_pct,
+                    "evidence_fresh_pct": evidence_fresh_pct,
+                    "open_high_risks": open_high_risks,
+                    "overdue_items_total": overdue_tasks + overdue_deadlines,
+                },
+                "sections_included": report_params.get("include_sections") or [],
+                "top_priorities": priorities,
+                "metrics": {
+                    "controls": {"total": total_controls, "implemented": implemented_controls},
+                    "evidence": {"total": evidence_total, "fresh": evidence_fresh},
+                    "tasks": {"overdue": overdue_tasks},
+                    "deadlines": {"overdue": overdue_deadlines},
+                },
             }
 
         if report_type == "framework_gap":
