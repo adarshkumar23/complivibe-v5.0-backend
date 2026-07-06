@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -78,6 +80,37 @@ class IssueSyncService:
         self.db.add(row)
         self.db.flush()
         return row
+
+    @staticmethod
+    def _verify_shared_secret(connection: ExternalSyncConnection, provided_secret: str | None) -> None:
+        """Verify a shared-secret webhook token (used for Jira, which does not sign payloads).
+
+        The connection's ``webhook_secret`` is the authenticity check for inbound webhooks -
+        without it, any caller with the connection_id (or, worse, any authenticated org member
+        with the ingest permission) could forge inbound Jira events. If an operator configured a
+        secret, callers must present the matching value via the ``X-Webhook-Secret`` header or a
+        ``secret`` query parameter.
+        """
+        secret = connection.webhook_secret
+        if not secret:
+            return
+        if not provided_secret or not hmac.compare_digest(provided_secret.encode(), secret.encode()):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing webhook secret")
+
+    @staticmethod
+    def _verify_hmac_signature(connection: ExternalSyncConnection, *, raw_body: bytes, signature: str | None) -> None:
+        """Verify Linear's HMAC-SHA256 webhook signature (``Linear-Signature`` header) over the raw body."""
+        secret = connection.webhook_secret
+        if not secret:
+            return
+        if not signature:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing webhook signature")
+        expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+        provided = signature.strip().lower()
+        if provided.startswith("sha256="):
+            provided = provided[len("sha256="):]
+        if not hmac.compare_digest(expected, provided):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid webhook signature")
 
     @staticmethod
     def _direction_allows(direction_mode: str, wanted: str) -> bool:
@@ -587,8 +620,16 @@ class IssueSyncService:
         )
         return event
 
-    def ingest_jira_webhook(self, *, org_id: uuid.UUID, connection_id: uuid.UUID, payload: dict[str, Any]) -> ExternalSyncEvent:
+    def ingest_jira_webhook(
+        self,
+        *,
+        org_id: uuid.UUID,
+        connection_id: uuid.UUID,
+        payload: dict[str, Any],
+        provided_secret: str | None = None,
+    ) -> ExternalSyncEvent:
         connection = self._require_connection(org_id, connection_id)
+        self._verify_shared_secret(connection, provided_secret)
         if connection.provider != "jira":
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Connection provider is not jira")
         if not self._direction_allows(connection.direction_mode, "inbound"):
@@ -615,8 +656,17 @@ class IssueSyncService:
             external_event_id=str(event_id) if event_id is not None else None,
         )
 
-    def ingest_linear_webhook(self, *, org_id: uuid.UUID, connection_id: uuid.UUID, payload: dict[str, Any]) -> ExternalSyncEvent:
+    def ingest_linear_webhook(
+        self,
+        *,
+        org_id: uuid.UUID,
+        connection_id: uuid.UUID,
+        payload: dict[str, Any],
+        raw_body: bytes = b"",
+        signature: str | None = None,
+    ) -> ExternalSyncEvent:
         connection = self._require_connection(org_id, connection_id)
+        self._verify_hmac_signature(connection, raw_body=raw_body, signature=signature)
         if connection.provider != "linear":
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Connection provider is not linear")
         if not self._direction_allows(connection.direction_mode, "inbound"):

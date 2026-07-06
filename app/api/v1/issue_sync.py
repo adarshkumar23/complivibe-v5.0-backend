@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, status
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
@@ -171,28 +172,57 @@ def run_outbound_sync(
     return _event_read(row)
 
 
+async def _parse_webhook_body(request: Request) -> tuple[bytes, dict[str, Any]]:
+    raw_body = await request.body()
+    if not raw_body:
+        return raw_body, {}
+    try:
+        parsed = json.loads(raw_body)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Invalid JSON body: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Webhook body must be a JSON object")
+    return raw_body, parsed
+
+
 @router.post("/webhooks/jira/{connection_id}", response_model=IssueSyncWebhookResponse)
-def ingest_jira_webhook(
+async def ingest_jira_webhook(
     connection_id: uuid.UUID,
-    payload: dict[str, Any] = Body(default_factory=dict),
+    request: Request,
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("issue_sync_webhook:jira")),
+    x_webhook_secret: str | None = Header(default=None, alias="X-Webhook-Secret"),
+    secret: str | None = Query(default=None),
 ) -> IssueSyncWebhookResponse:
-    row = IssueSyncService(db).ingest_jira_webhook(org_id=organization.id, connection_id=connection_id, payload=payload)
+    _raw_body, payload = await _parse_webhook_body(request)
+    row = IssueSyncService(db).ingest_jira_webhook(
+        org_id=organization.id,
+        connection_id=connection_id,
+        payload=payload,
+        provided_secret=x_webhook_secret or secret,
+    )
     db.commit()
     return IssueSyncWebhookResponse(processed=True, event_id=row.id, status=row.status, detail="jira webhook processed")
 
 
 @router.post("/webhooks/linear/{connection_id}", response_model=IssueSyncWebhookResponse)
-def ingest_linear_webhook(
+async def ingest_linear_webhook(
     connection_id: uuid.UUID,
-    payload: dict[str, Any] = Body(default_factory=dict),
+    request: Request,
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("issue_sync_webhook:linear")),
+    linear_signature: str | None = Header(default=None, alias="Linear-Signature"),
 ) -> IssueSyncWebhookResponse:
-    row = IssueSyncService(db).ingest_linear_webhook(org_id=organization.id, connection_id=connection_id, payload=payload)
+    raw_body, payload = await _parse_webhook_body(request)
+    row = IssueSyncService(db).ingest_linear_webhook(
+        org_id=organization.id,
+        connection_id=connection_id,
+        payload=payload,
+        raw_body=raw_body,
+        signature=linear_signature,
+    )
     db.commit()
     return IssueSyncWebhookResponse(processed=True, event_id=row.id, status=row.status, detail="linear webhook processed")
 
