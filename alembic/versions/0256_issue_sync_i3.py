@@ -1,7 +1,7 @@
 """add jira linear bidirectional issue sync structures
 
-Revision ID: 0248_issue_sync_i3
-Revises: 0247_compliance_bot_i2
+Revision ID: 0256_issue_sync_i3
+Revises: 0255_compliance_bot_i2
 Create Date: 2026-07-06
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
-revision: str = "0248_issue_sync_i3"
-down_revision: str | None = "0247_compliance_bot_i2"
+revision: str = "0256_issue_sync_i3"
+down_revision: str | None = "0255_compliance_bot_i2"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

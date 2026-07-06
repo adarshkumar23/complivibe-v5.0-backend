@@ -1,7 +1,7 @@
 """add evidence automation rules for inbound connector
 
-Revision ID: 0246_evidence_automation_i1
-Revises: 0245_saml_replay
+Revision ID: 0254_evidence_automation_i1
+Revises: 0253_auditor_marketplace_v3b
 Create Date: 2026-07-06
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
-revision: str = "0246_evidence_automation_i1"
-down_revision: str | None = "0245_saml_replay"
+revision: str = "0254_evidence_automation_i1"
+down_revision: str | None = "0253_auditor_marketplace_v3b"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

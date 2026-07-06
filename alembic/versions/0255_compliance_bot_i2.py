@@ -1,7 +1,7 @@
 """add compliance bot subscriptions and outbox
 
-Revision ID: 0247_compliance_bot_i2
-Revises: 0246_evidence_automation_i1
+Revision ID: 0255_compliance_bot_i2
+Revises: 0254_evidence_automation_i1
 Create Date: 2026-07-06
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
-revision: str = "0247_compliance_bot_i2"
-down_revision: str | None = "0246_evidence_automation_i1"
+revision: str = "0255_compliance_bot_i2"
+down_revision: str | None = "0254_evidence_automation_i1"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

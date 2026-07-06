@@ -1,7 +1,7 @@
 """add tv1 baseline run and evidence sync tables
 
-Revision ID: 0249_tv1_baseline_run
-Revises: 0248_issue_sync_i3
+Revision ID: 0257_tv1_baseline_run
+Revises: 0256_issue_sync_i3
 Create Date: 2026-07-06
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
-revision: str = "0249_tv1_baseline_run"
-down_revision: str | None = "0248_issue_sync_i3"
+revision: str = "0257_tv1_baseline_run"
+down_revision: str | None = "0256_issue_sync_i3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
