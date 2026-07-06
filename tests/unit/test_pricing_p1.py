@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.models.audit_log import AuditLog
 from app.models.competitor_pricing_entry import CompetitorPricingEntry
 from app.models.competitor_pricing_version import CompetitorPricingVersion
+from app.models.user import User
 from tests.helpers.auth_org import bootstrap_org_user
 
 
@@ -30,12 +31,49 @@ def test_public_pricing_endpoint_returns_latest_snapshot(client, db_session):
     assert version is not None
 
 
-def test_pricing_refresh_requires_permission_and_writes_versioned_records(client, db_session):
+def test_pricing_refresh_requires_platform_admin_and_writes_versioned_records(client, db_session):
     org = bootstrap_org_user(client, email_prefix="pricing-refresh")
     org_id = UUID(org["organization_id"])
 
+    # A regular org owner (with pricing:manage and all org permissions) must NOT
+    # be able to overwrite the global pricing snapshot.
     before_versions = db_session.execute(select(CompetitorPricingVersion)).scalars().all()
     before_count = len(before_versions)
+
+    denied = client.post(
+        "/api/v1/pricing/refresh",
+        headers=org["org_headers"],
+        json={
+            "source_note": "Unauthorized market refresh",
+            "entries": [
+                {
+                    "competitor_key": "drata",
+                    "competitor_name": "Drata",
+                    "pricing_model": "tiered_quote",
+                    "public_pricing_available": False,
+                    "pricing_summary": "Tiered packaging with quote-led commercial process.",
+                    "source_url": "https://drata.com/plans",
+                    "source_excerpt": "Plans and pricing page",
+                    "currency": None,
+                    "starting_price_amount": None,
+                    "starting_price_unit": None,
+                    "last_verified_at": "2026-07-06T00:00:00Z",
+                    "metadata_json": {"capture": "manual"},
+                }
+            ],
+        },
+    )
+    assert denied.status_code == 403, denied.text
+    assert "Platform administrator" in denied.json()["detail"]
+
+    versions_after_denial = db_session.execute(select(CompetitorPricingVersion)).scalars().all()
+    assert len(versions_after_denial) == before_count
+
+    # Promote the same user to platform staff via the existing is_superuser flag.
+    user = db_session.get(User, UUID(org["user_id"]))
+    assert user is not None
+    user.is_superuser = True
+    db_session.commit()
 
     response = client.post(
         "/api/v1/pricing/refresh",
@@ -82,6 +120,8 @@ def test_pricing_refresh_requires_permission_and_writes_versioned_records(client
         )
     ).scalars().all()
     assert len(audit_rows) >= 2
+    snapshot_audit = [row for row in audit_rows if row.action == "pricing.snapshot_created"][0]
+    assert snapshot_audit.metadata_json.get("actor_is_superuser") is True
 
 
 def test_onboarding_select_plan_and_trust_center_public_include_competitor_pricing(client, db_session):

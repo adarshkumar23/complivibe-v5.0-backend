@@ -146,6 +146,7 @@ class CompetitorPricingService:
         actor_organization_id: uuid.UUID | None,
         source_note: str | None,
         published_at: datetime | None = None,
+        actor_is_superuser: bool | None = None,
     ) -> CompetitorPricingVersion:
         if not entries:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="At least one pricing entry is required")
@@ -167,7 +168,10 @@ class CompetitorPricingService:
                 organization_id=actor_organization_id,
                 actor_user_id=actor_user_id,
                 after_json={"published_at": version.published_at.isoformat(), "entry_count": len(entries)},
-                metadata_json={"source_note": source_note or ""},
+                metadata_json={
+                    "source_note": source_note or "",
+                    "actor_is_superuser": bool(actor_is_superuser),
+                },
             )
 
         for payload in entries:
