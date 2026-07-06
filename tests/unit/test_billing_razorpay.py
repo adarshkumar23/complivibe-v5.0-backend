@@ -76,13 +76,16 @@ def test_billing_schema_and_plan_seed_and_features(client, db_session):
     plans_resp = client.get("/api/v1/billing/plans")
     assert plans_resp.status_code == 200
     plans = plans_resp.json()
-    assert len(plans) == 3
+    assert len(plans) == 4
 
     by_code = {item["plan_code"]: item for item in plans}
     assert by_code["starter"]["features"]["max_users"] == 5
     assert by_code["starter"]["features"]["sso_enabled"] is False
+    assert by_code["starter"]["plan_type"] == "fixed"
     assert by_code["growth"]["features"]["sso_enabled"] is True
     assert by_code["enterprise"]["features"]["max_users"] is None
+    assert by_code["usage_flex"]["plan_type"] == "usage_based"
+    assert by_code["usage_flex"]["usage_unit_price_inr"] == 12.0
 
 
 def test_trial_status_and_expiry_gate(client, db_session):

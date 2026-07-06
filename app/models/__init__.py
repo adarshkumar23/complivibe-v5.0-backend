@@ -181,6 +181,7 @@ from app.models.organization_internal_signing_key import OrganizationInternalSig
 from app.models.organization import Organization
 from app.models.organization_ai_configuration import OrganizationAIConfiguration
 from app.models.subscription_plan import SubscriptionPlan
+from app.models.usage_billing_snapshot import UsageBillingSnapshot
 from app.models.openscap_rule_mapping import OpenSCAPRuleMapping
 from app.models.rate_limit_config import RateLimitConfig
 from app.models.siem_export_config import SiemExportConfig
@@ -662,6 +663,7 @@ __all__ = [
     "CompetitorPricingVersion",
     "CompetitorPricingEntry",
     "ROICalculatorLead",
+    "UsageBillingSnapshot",
     "MLOpsIntegration",
     "DataAsset",
     "DataLineageNode",

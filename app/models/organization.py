@@ -25,6 +25,8 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     subscription_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     razorpay_customer_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     razorpay_subscription_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    usage_spend_cap_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    usage_spend_cap_inr: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     sanctions_match_threshold: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False, default=Decimal("0.8500"))
     onboarding_completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

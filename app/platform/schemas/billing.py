@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 
 class BillingSubscribeRequest(BaseModel):
-    plan_code: Literal["starter", "growth", "enterprise"]
+    plan_code: Literal["starter", "growth", "enterprise", "usage_flex"]
     billing_cycle: Literal["monthly", "annual"] = "monthly"
 
 
@@ -48,8 +48,10 @@ class BillingPlanResponse(BaseModel):
     id: uuid.UUID
     plan_code: str
     display_name: str
+    plan_type: str
     price_inr_monthly: int
     price_inr_annual: int
+    usage_unit_price_inr: float | None = None
     max_users: int | None
     max_frameworks: int | None
     max_ai_systems: int | None
@@ -61,3 +63,32 @@ class BillingPlanResponse(BaseModel):
 
 class RazorpayWebhookResponse(BaseModel):
     status: str = Field(default="processed")
+
+
+class UsageSpendCapUpdateRequest(BaseModel):
+    usage_spend_cap_enabled: bool
+    usage_spend_cap_inr: float | None = Field(default=None, ge=0)
+
+
+class UsageBillingDashboardRead(BaseModel):
+    period_start: str
+    period_end: str
+    active_frameworks_count: int
+    active_users_count: int
+    api_calls_count: int
+    billable_units: float
+    unit_price_inr: float
+    current_estimated_cost_inr: float
+    projected_month_end_cost_inr: float
+    usage_spend_cap_enabled: bool
+    usage_spend_cap_inr: float | None = None
+    is_spend_cap_breached: bool
+    synced_to_processor: bool
+    processor_reference: str | None = None
+
+
+class UsageBillingSyncResponse(BaseModel):
+    status: str
+    snapshot_id: uuid.UUID
+    billable_units: float
+    processor_reference: str | None = None

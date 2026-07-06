@@ -19,9 +19,13 @@ from app.platform.schemas.billing import (
     BillingSubscribeRequest,
     BillingSubscribeResponse,
     RazorpayWebhookResponse,
+    UsageBillingDashboardRead,
+    UsageBillingSyncResponse,
+    UsageSpendCapUpdateRequest,
 )
 from app.platform.services.billing_service import BillingService
 from app.platform.services.razorpay_service import RazorpayService
+from app.platform.services.usage_billing_service import UsageBillingService
 from app.platform.services.webhook_handler_service import WebhookHandlerService
 
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -73,8 +77,10 @@ def list_plans(db: Session = Depends(get_db)) -> list[BillingPlanResponse]:
             id=item.id,
             plan_code=item.plan_code,
             display_name=item.display_name,
+            plan_type=item.plan_type,
             price_inr_monthly=item.price_inr_monthly,
             price_inr_annual=item.price_inr_annual,
+            usage_unit_price_inr=float(item.usage_unit_price_inr) if item.usage_unit_price_inr is not None else None,
             max_users=item.max_users,
             max_frameworks=item.max_frameworks,
             max_ai_systems=item.max_ai_systems,
@@ -114,6 +120,51 @@ def invoices(
     _require_admin_membership(db, membership)
     result = BillingService(db).get_invoices(organization.id)
     return [BillingInvoiceResponse(**item) for item in result]
+
+
+@router.get("/usage/dashboard", response_model=UsageBillingDashboardRead)
+def usage_dashboard(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    membership: Membership = Depends(require_permission("billing_usage_dashboard:read")),
+) -> UsageBillingDashboardRead:
+    _require_admin_membership(db, membership)
+    payload = UsageBillingService(db).usage_dashboard(organization.id, current_user.id)
+    db.commit()
+    return UsageBillingDashboardRead(**payload)
+
+
+@router.post("/usage/spend-cap")
+def update_usage_spend_cap(
+    payload: UsageSpendCapUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    membership: Membership = Depends(require_permission("billing_usage_spend_cap:write")),
+) -> dict:
+    _require_admin_membership(db, membership)
+    result = UsageBillingService(db).update_spend_cap(
+        organization.id,
+        current_user.id,
+        usage_spend_cap_enabled=payload.usage_spend_cap_enabled,
+        usage_spend_cap_inr=payload.usage_spend_cap_inr,
+    )
+    db.commit()
+    return result
+
+
+@router.post("/usage/sync", response_model=UsageBillingSyncResponse)
+def sync_usage_to_processor(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    membership: Membership = Depends(require_permission("billing_usage_sync:execute")),
+) -> UsageBillingSyncResponse:
+    _require_admin_membership(db, membership)
+    result = UsageBillingService(db).sync_usage_to_processor(organization.id, current_user.id)
+    db.commit()
+    return UsageBillingSyncResponse(**result)
 
 
 @webhook_router.post("/razorpay", response_model=RazorpayWebhookResponse)
