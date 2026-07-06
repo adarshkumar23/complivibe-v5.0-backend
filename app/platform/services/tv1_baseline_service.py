@@ -126,7 +126,7 @@ class TV1BaselineService:
                 Obligation.framework_id.in_(framework_ids),
                 Obligation.status == "active",
             )
-            .order_by(Obligation.criticality.desc(), Obligation.reference_code.asc())
+            .order_by(Obligation.reference_code.asc())
             .limit(200)
         ).scalars().all()
         questions: list[dict] = []
@@ -430,7 +430,7 @@ class TV1BaselineService:
         needs_review = sum(1 for row in intake_items if row.status in {"needs_review", "rejected"})
 
         uncovered = [row for row in obligations if row.id not in evidence_obligation_ids]
-        uncovered = sorted(uncovered, key=lambda row: (row.criticality or "", row.reference_code or ""), reverse=True)
+        uncovered = sorted(uncovered, key=lambda row: (row.reference_code or ""))
 
         coverage_pct = 0.0 if total_obligations == 0 else round((len(evidence_obligation_ids) / total_obligations) * 100, 2)
         report = {
@@ -448,7 +448,6 @@ class TV1BaselineService:
                     "obligation_id": str(row.id),
                     "reference_code": row.reference_code,
                     "title": row.title,
-                    "criticality": row.criticality,
                     "framework_id": str(row.framework_id),
                 }
                 for row in uncovered[:15]
