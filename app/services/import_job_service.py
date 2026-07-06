@@ -121,7 +121,7 @@ class ImportJobService:
             self.refresh_preview(job_id)
             return
         scheduler = getattr(app.state, "pbc_scheduler", None)
-        if scheduler is not None:
+        if scheduler is not None and getattr(scheduler, "running", False):
             try:
                 from apscheduler.triggers.date import DateTrigger
 
