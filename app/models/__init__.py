@@ -110,6 +110,8 @@ from app.models.control_test_definition import ControlTestDefinition
 from app.models.control_test_run import ControlTestRun
 from app.models.compliance_report import ComplianceReport
 from app.models.compliance_report_section import ComplianceReportSection
+from app.models.compliance_bot_outbox import ComplianceBotOutbox
+from app.models.compliance_bot_subscription import ComplianceBotSubscription
 from app.models.carbon_emissions_reading import CarbonEmissionsReading
 from app.models.connector_catalog_entry import ConnectorCatalogEntry, ConnectorOrgEnablement
 from app.models.custom_report_template import CustomReportTemplate
@@ -524,6 +526,8 @@ __all__ = [
     "ControlTestRun",
     "ComplianceReport",
     "ComplianceReportSection",
+    "ComplianceBotSubscription",
+    "ComplianceBotOutbox",
     "CarbonEmissionsReading",
     "ConnectorCatalogEntry",
     "ConnectorOrgEnablement",
