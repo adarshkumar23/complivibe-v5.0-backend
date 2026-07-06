@@ -54,3 +54,19 @@ class ComplianceTimelineEvent(BaseModel):
 class ComplianceTimelineResponse(BaseModel):
     total_events: int
     events: list[ComplianceTimelineEvent]
+
+
+class ComplianceInboxItem(BaseModel):
+    item_key: str
+    item_type: str
+    title: str
+    detail: str | None = None
+    priority_score: int
+    due_at: datetime | None = None
+    navigate_path: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ComplianceInboxResponse(BaseModel):
+    total_items: int
+    items: list[ComplianceInboxItem]

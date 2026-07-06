@@ -11,6 +11,7 @@ from app.models.membership import Membership
 from app.models.organization import Organization
 from app.models.user import User
 from app.schemas.experience import (
+    ComplianceInboxResponse,
     ComplianceTimelineResponse,
     CommandPaletteExecuteRequest,
     CommandPaletteExecuteResponse,
@@ -72,5 +73,20 @@ def compliance_timeline(
         entity_id=entity_id,
         start_at=start_at,
         end_at=end_at,
+        limit=limit,
+    )
+
+
+@router.get("/inbox", response_model=ComplianceInboxResponse)
+def compliance_inbox(
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("compliance_inbox:read")),
+) -> ComplianceInboxResponse:
+    return CommandPaletteService(db).compliance_inbox(
+        organization_id=organization.id,
+        user_id=current_user.id,
         limit=limit,
     )
