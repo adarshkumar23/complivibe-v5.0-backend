@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -37,3 +38,19 @@ class CommandPaletteExecuteResponse(BaseModel):
     navigate_path: str | None = None
     task_id: uuid.UUID | None = None
     executed_at: datetime
+
+
+class ComplianceTimelineEvent(BaseModel):
+    event_key: str
+    event_type: str
+    occurred_at: datetime
+    entity_type: str
+    entity_id: uuid.UUID
+    title: str
+    status: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ComplianceTimelineResponse(BaseModel):
+    total_events: int
+    events: list[ComplianceTimelineEvent]

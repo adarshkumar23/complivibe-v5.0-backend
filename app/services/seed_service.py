@@ -295,6 +295,7 @@ PERMISSIONS: dict[str, str] = {
     "onboarding_baseline:read": "Read 24-hour baseline onboarding run outputs and gap analysis",
     "command_palette:search": "Run command palette search across indexed entities and shortcuts",
     "command_palette:execute": "Execute command palette backend actions such as quick task creation",
+    "compliance_timeline:read": "Read chronological compliance timeline events across key operational modules",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {
@@ -473,6 +474,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "onboarding_baseline:read",
         "command_palette:search",
         "command_palette:execute",
+        "compliance_timeline:read",
     },
     "reviewer": {
         "frameworks:read",
@@ -566,6 +568,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "onboarding_baseline:read",
         "command_palette:search",
         "command_palette:execute",
+        "compliance_timeline:read",
     },
     "auditor": {
         "frameworks:read",
@@ -635,6 +638,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "search:read",
         "onboarding_baseline:read",
         "command_palette:search",
+        "compliance_timeline:read",
     },
     "readonly": {
         "frameworks:read",
@@ -691,6 +695,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "export_control:read",
         "search:read",
         "command_palette:search",
+        "compliance_timeline:read",
     },
 }
 

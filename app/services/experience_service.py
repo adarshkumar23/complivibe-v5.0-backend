@@ -5,16 +5,23 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
+from app.models.compliance_deadline import ComplianceDeadline
+from app.models.compliance_deadline_event import ComplianceDeadlineEvent
 from app.models.compliance_policy import CompliancePolicy
 from app.models.control import Control
+from app.models.control_test_run import ControlTestRun
+from app.models.evidence_item import EvidenceItem
 from app.models.issue import Issue
 from app.models.obligation import Obligation
 from app.models.risk import Risk
 from app.models.task import Task
 from app.models.vendor import Vendor
 from app.schemas.experience import (
+    ComplianceTimelineEvent,
+    ComplianceTimelineResponse,
     CommandPaletteExecuteRequest,
     CommandPaletteExecuteResponse,
     CommandPaletteItem,
@@ -42,6 +49,8 @@ ENTITY_MODEL_BY_TYPE: dict[str, type] = {
     "compliance_policy": CompliancePolicy,
     "obligation": Obligation,
 }
+
+TIMELINE_SCOPE_ENTITY_TYPES = {"evidence", "control", "risk", "issue", "deadline"}
 
 
 class CommandPaletteService:
@@ -208,3 +217,207 @@ class CommandPaletteService:
             )
 
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported action_key")
+
+    def compliance_timeline(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        entity_type: str | None,
+        entity_id: uuid.UUID | None,
+        start_at: datetime | None,
+        end_at: datetime | None,
+        limit: int,
+    ) -> ComplianceTimelineResponse:
+        normalized_entity_type = (entity_type or "").strip().lower() or None
+        if normalized_entity_type and normalized_entity_type not in TIMELINE_SCOPE_ENTITY_TYPES:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported entity_type")
+        if normalized_entity_type and entity_id is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="entity_id is required for entity-scoped timeline")
+        if entity_id is not None and normalized_entity_type is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="entity_type is required when entity_id is provided")
+        if start_at and end_at and start_at > end_at:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="start_at must be less than or equal to end_at")
+
+        events: list[ComplianceTimelineEvent] = []
+
+        if normalized_entity_type in {None, "evidence"}:
+            evidence_stmt = select(EvidenceItem).where(EvidenceItem.organization_id == organization_id)
+            if normalized_entity_type == "evidence" and entity_id:
+                evidence_stmt = evidence_stmt.where(EvidenceItem.id == entity_id)
+            if start_at:
+                evidence_stmt = evidence_stmt.where(EvidenceItem.created_at >= start_at)
+            if end_at:
+                evidence_stmt = evidence_stmt.where(EvidenceItem.created_at <= end_at)
+            evidence_rows = self.db.execute(evidence_stmt.order_by(EvidenceItem.created_at.desc()).limit(limit)).scalars().all()
+            for row in evidence_rows:
+                occurred_at = row.collected_at or row.created_at
+                if start_at and occurred_at < start_at:
+                    continue
+                if end_at and occurred_at > end_at:
+                    continue
+                events.append(
+                    ComplianceTimelineEvent(
+                        event_key=f"evidence_collected:{row.id}",
+                        event_type="evidence_collected",
+                        occurred_at=occurred_at,
+                        entity_type="evidence",
+                        entity_id=row.id,
+                        title=row.title,
+                        status=row.review_status,
+                        metadata={"evidence_type": row.evidence_type, "source": row.source},
+                    )
+                )
+
+        if normalized_entity_type in {None, "control"}:
+            test_stmt = select(ControlTestRun).where(ControlTestRun.organization_id == organization_id)
+            if normalized_entity_type == "control" and entity_id:
+                test_stmt = test_stmt.where(ControlTestRun.control_id == entity_id)
+            if start_at:
+                test_stmt = test_stmt.where(ControlTestRun.created_at >= start_at)
+            if end_at:
+                test_stmt = test_stmt.where(ControlTestRun.created_at <= end_at)
+            test_rows = self.db.execute(test_stmt.order_by(ControlTestRun.created_at.desc()).limit(limit)).scalars().all()
+            for row in test_rows:
+                events.append(
+                    ComplianceTimelineEvent(
+                        event_key=f"control_tested:{row.id}",
+                        event_type="control_tested",
+                        occurred_at=row.created_at,
+                        entity_type="control",
+                        entity_id=row.control_id,
+                        title=f"Control test {row.check_key}",
+                        status=row.result,
+                        metadata={"test_run_id": str(row.id), "execution_source": row.execution_source},
+                    )
+                )
+
+        if normalized_entity_type in {None, "risk"}:
+            risk_stmt = select(Risk).where(Risk.organization_id == organization_id)
+            if normalized_entity_type == "risk" and entity_id:
+                risk_stmt = risk_stmt.where(Risk.id == entity_id)
+            if start_at:
+                risk_stmt = risk_stmt.where(Risk.created_at >= start_at)
+            if end_at:
+                risk_stmt = risk_stmt.where(Risk.created_at <= end_at)
+            risk_rows = self.db.execute(risk_stmt.order_by(Risk.created_at.desc()).limit(limit)).scalars().all()
+            for row in risk_rows:
+                events.append(
+                    ComplianceTimelineEvent(
+                        event_key=f"risk_raised:{row.id}",
+                        event_type="risk_raised",
+                        occurred_at=row.created_at,
+                        entity_type="risk",
+                        entity_id=row.id,
+                        title=row.title,
+                        status=row.status,
+                        metadata={"severity": row.severity, "category": row.category},
+                    )
+                )
+
+        if normalized_entity_type in {None, "issue"}:
+            issue_stmt = select(Issue).where(and_(Issue.organization_id == organization_id, Issue.resolved_at.is_not(None)))
+            if normalized_entity_type == "issue" and entity_id:
+                issue_stmt = issue_stmt.where(Issue.id == entity_id)
+            if start_at:
+                issue_stmt = issue_stmt.where(Issue.resolved_at >= start_at)
+            if end_at:
+                issue_stmt = issue_stmt.where(Issue.resolved_at <= end_at)
+            issue_rows = self.db.execute(issue_stmt.order_by(Issue.resolved_at.desc()).limit(limit)).scalars().all()
+            for row in issue_rows:
+                resolved_at = row.resolved_at
+                if resolved_at is None:
+                    continue
+                events.append(
+                    ComplianceTimelineEvent(
+                        event_key=f"issue_resolved:{row.id}",
+                        event_type="issue_resolved",
+                        occurred_at=resolved_at,
+                        entity_type="issue",
+                        entity_id=row.id,
+                        title=row.title,
+                        status=row.status,
+                        metadata={"severity": row.severity, "issue_type": row.issue_type},
+                    )
+                )
+
+        met_stmt = select(ComplianceDeadline).where(
+            and_(
+                ComplianceDeadline.organization_id == organization_id,
+                ComplianceDeadline.status == "completed",
+                ComplianceDeadline.completed_at.is_not(None),
+            )
+        )
+        if normalized_entity_type == "deadline" and entity_id:
+            met_stmt = met_stmt.where(ComplianceDeadline.id == entity_id)
+        if normalized_entity_type and normalized_entity_type != "deadline" and entity_id:
+            met_stmt = met_stmt.where(
+                and_(
+                    ComplianceDeadline.linked_entity_type == normalized_entity_type,
+                    ComplianceDeadline.linked_entity_id == entity_id,
+                )
+            )
+        if start_at:
+            met_stmt = met_stmt.where(ComplianceDeadline.completed_at >= start_at)
+        if end_at:
+            met_stmt = met_stmt.where(ComplianceDeadline.completed_at <= end_at)
+        met_rows = self.db.execute(met_stmt.order_by(ComplianceDeadline.completed_at.desc()).limit(limit)).scalars().all()
+        for row in met_rows:
+            if row.completed_at is None:
+                continue
+            completed_on_time = row.completed_at.date() <= row.due_date
+            event_type = "deadline_met" if completed_on_time else "deadline_missed"
+            events.append(
+                ComplianceTimelineEvent(
+                    event_key=f"{event_type}:{row.id}:{row.completed_at.isoformat()}",
+                    event_type=event_type,
+                    occurred_at=row.completed_at,
+                    entity_type="deadline",
+                    entity_id=row.id,
+                    title=row.title,
+                    status=row.status,
+                    metadata={"due_date": row.due_date.isoformat(), "completed_on_time": completed_on_time},
+                )
+            )
+
+        missed_stmt = (
+            select(ComplianceDeadlineEvent, ComplianceDeadline)
+            .join(ComplianceDeadline, ComplianceDeadline.id == ComplianceDeadlineEvent.deadline_id)
+            .where(
+                and_(
+                    ComplianceDeadlineEvent.organization_id == organization_id,
+                    ComplianceDeadlineEvent.event_type == "overdue_detected",
+                    ComplianceDeadlineEvent.dry_run.is_(False),
+                )
+            )
+        )
+        if normalized_entity_type == "deadline" and entity_id:
+            missed_stmt = missed_stmt.where(ComplianceDeadline.id == entity_id)
+        if normalized_entity_type and normalized_entity_type != "deadline" and entity_id:
+            missed_stmt = missed_stmt.where(
+                and_(
+                    ComplianceDeadline.linked_entity_type == normalized_entity_type,
+                    ComplianceDeadline.linked_entity_id == entity_id,
+                )
+            )
+        if start_at:
+            missed_stmt = missed_stmt.where(ComplianceDeadlineEvent.created_at >= start_at)
+        if end_at:
+            missed_stmt = missed_stmt.where(ComplianceDeadlineEvent.created_at <= end_at)
+        missed_rows = self.db.execute(missed_stmt.order_by(ComplianceDeadlineEvent.created_at.desc()).limit(limit)).all()
+        for event_row, deadline in missed_rows:
+            events.append(
+                ComplianceTimelineEvent(
+                    event_key=f"deadline_missed:{event_row.id}",
+                    event_type="deadline_missed",
+                    occurred_at=event_row.created_at,
+                    entity_type="deadline",
+                    entity_id=deadline.id,
+                    title=deadline.title,
+                    status=deadline.status,
+                    metadata={"due_date": deadline.due_date.isoformat(), "event_type": event_row.event_type},
+                )
+            )
+
+        events.sort(key=lambda item: item.occurred_at, reverse=True)
+        trimmed = events[:limit]
+        return ComplianceTimelineResponse(total_events=len(trimmed), events=trimmed)

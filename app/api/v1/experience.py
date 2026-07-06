@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import uuid
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -8,6 +11,7 @@ from app.models.membership import Membership
 from app.models.organization import Organization
 from app.models.user import User
 from app.schemas.experience import (
+    ComplianceTimelineResponse,
     CommandPaletteExecuteRequest,
     CommandPaletteExecuteResponse,
     CommandPaletteQueryResponse,
@@ -49,3 +53,24 @@ def command_palette_execute(
     )
     db.commit()
     return result
+
+
+@router.get("/compliance-timeline", response_model=ComplianceTimelineResponse)
+def compliance_timeline(
+    entity_type: str | None = Query(default=None),
+    entity_id: uuid.UUID | None = Query(default=None),
+    start_at: datetime | None = Query(default=None),
+    end_at: datetime | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("compliance_timeline:read")),
+) -> ComplianceTimelineResponse:
+    return CommandPaletteService(db).compliance_timeline(
+        organization_id=organization.id,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        start_at=start_at,
+        end_at=end_at,
+        limit=limit,
+    )
