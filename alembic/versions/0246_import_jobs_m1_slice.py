@@ -1,7 +1,7 @@
 """add import_jobs and source_import_tool columns for m1 slice
 
 Revision ID: 0246_import_jobs_m1
-Revises: 0245_saml_replay
+Revises: fix_audit_eng_source_sched
 Create Date: 2026-07-06 00:00:00.000000
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0246_import_jobs_m1"
-down_revision: str | None = "0245_saml_replay"
+down_revision: str | None = "fix_audit_eng_source_sched"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
