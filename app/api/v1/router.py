@@ -96,6 +96,7 @@ from app.api.v1 import (
     ai_governance,
     ai_systems,
     compliance_contracts,
+    certification_programs,
     compliance_dashboard,
     compliance_policies,
     compliance_deadlines,
@@ -353,6 +354,7 @@ api_router.include_router(escalation_policies.router)
 api_router.include_router(issues.router)
 api_router.include_router(issue_settings.router)
 api_router.include_router(sla_policies.router)
+api_router.include_router(certification_programs.router)
 api_router.include_router(breach_notifications.router)
 api_router.include_router(dora.router)
 api_router.include_router(issues.remediation_router)

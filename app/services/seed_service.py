@@ -266,6 +266,8 @@ PERMISSIONS: dict[str, str] = {
     "imports:parity_read": "Read import parity dashboard and switch-readiness metrics",
     "imports:gap_report": "Read imported-data coverage gap report by import job",
     "pricing:manage": "Refresh competitor pricing comparisons and publish new pricing snapshots",
+    "certification_programs:read": "Read certification program catalog and progress views",
+    "certification_programs:activate": "Activate certification programs and create linked task/evidence/deadline plans",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {
@@ -282,6 +284,8 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "risks:write",
         "tasks:read",
         "tasks:write",
+        "certification_programs:read",
+        "certification_programs:activate",
         "dashboard:read",
         "org:read",
         "users:read",
