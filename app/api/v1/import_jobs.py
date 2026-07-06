@@ -13,11 +13,13 @@ from app.models.user import User
 from app.schemas.import_job import (
     ImportCommitRead,
     ImportDryRunPreviewRead,
+    ImportGapReportRead,
     ImportJobCreateRequest,
     ImportJobRead,
     ImportParityDashboardRead,
     ImportProgressRead,
 )
+from app.services.import_gap_report_service import ImportGapReportService
 from app.services.import_job_service import ImportJobService
 from app.services.import_parity_service import ImportParityService
 
@@ -130,3 +132,17 @@ def get_import_parity_dashboard(
     )
     db.commit()
     return ImportParityDashboardRead(**payload)
+
+
+@router.get("/{job_id}/gap-report", response_model=ImportGapReportRead)
+def get_import_gap_report(
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("imports:gap_report")),
+) -> ImportGapReportRead:
+    payload = ImportGapReportService(db).generate(
+        organization_id=organization.id,
+        job_id=job_id,
+    )
+    return ImportGapReportRead(**payload)

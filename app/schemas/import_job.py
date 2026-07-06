@@ -81,3 +81,23 @@ class ImportParityDashboardRead(BaseModel):
     overall: dict[str, Any]
     modules: list[ImportParityModuleRead]
     by_source: list[ImportParityBySourceRead]
+
+
+class ImportGapRowRead(BaseModel):
+    id: uuid.UUID
+    name: str
+    reason: str
+
+
+class ImportGapReportRead(BaseModel):
+    job_id: uuid.UUID
+    generated_at: datetime
+    import_source: str = Field(pattern=SOURCE_PATTERN)
+    stale: bool
+    stale_reason: str | None = None
+    active_frameworks: list[dict[str, Any]]
+    obligations_without_coverage: list[ImportGapRowRead]
+    controls_without_coverage: list[ImportGapRowRead]
+    ai_systems_without_coverage: list[ImportGapRowRead]
+    vendors_without_coverage: list[ImportGapRowRead]
+    summary: dict[str, int]
