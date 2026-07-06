@@ -96,6 +96,7 @@ from app.api.v1 import (
     ai_governance,
     ai_systems,
     compliance_contracts,
+    certification_programs,
     compliance_dashboard,
     compliance_policies,
     compliance_deadlines,
@@ -105,6 +106,7 @@ from app.api.v1 import (
     audit_schedules,
     pbc_items,
     auditor_portal,
+    auditor_marketplace,
     audit_findings,
     evidence_packages,
     policy_exceptions,
@@ -182,6 +184,8 @@ from app.api.v1 import (
     carbon_accounting,
     connector_marketplace,
     import_jobs,
+    pricing,
+    roi_calculator,
 )
 
 api_router = APIRouter()
@@ -314,6 +318,8 @@ api_router.include_router(audit_engagements.router)
 api_router.include_router(audit_schedules.router)
 api_router.include_router(pbc_items.router)
 api_router.include_router(auditor_portal.router)
+api_router.include_router(auditor_marketplace.public_router)
+api_router.include_router(auditor_marketplace.router)
 api_router.include_router(audit_findings.router)
 api_router.include_router(evidence_packages.router)
 api_router.include_router(policy_exceptions.router)
@@ -351,6 +357,7 @@ api_router.include_router(escalation_policies.router)
 api_router.include_router(issues.router)
 api_router.include_router(issue_settings.router)
 api_router.include_router(sla_policies.router)
+api_router.include_router(certification_programs.router)
 api_router.include_router(breach_notifications.router)
 api_router.include_router(dora.router)
 api_router.include_router(issues.remediation_router)
@@ -365,6 +372,8 @@ api_router.include_router(webhooks.router)
 api_router.include_router(offboarding.router)
 api_router.include_router(carbon_accounting.router)
 api_router.include_router(connector_marketplace.router)
+api_router.include_router(pricing.router)
+api_router.include_router(roi_calculator.router)
 api_router.include_router(legal_matters.router)
 api_router.include_router(ip_assets.router)
 api_router.include_router(content_provenance.router)

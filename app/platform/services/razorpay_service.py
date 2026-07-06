@@ -93,3 +93,27 @@ class RazorpayService:
             }
         )
         return plan["id"]
+
+    def update_subscription_quantity(self, razorpay_subscription_id: str, quantity: int) -> dict:
+        safe_quantity = max(1, int(quantity))
+        return self.client.subscription.edit(
+            razorpay_subscription_id,
+            {
+                "quantity": safe_quantity,
+                "schedule_change_at": "now",
+            },
+        )
+
+    def create_subscription_addon(self, razorpay_subscription_id: str, amount_paise: int, description: str) -> dict:
+        safe_amount = max(0, int(amount_paise))
+        return self.client.subscription.createAddon(
+            razorpay_subscription_id,
+            {
+                "item": {
+                    "name": "CompliVibe Usage Adjustment",
+                    "amount": safe_amount,
+                    "currency": "INR",
+                    "description": description,
+                }
+            },
+        )

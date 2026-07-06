@@ -127,9 +127,16 @@ from app.models.control_obligation_mapping import ControlObligationMapping
 from app.models.cross_framework_obligation_mapping import CrossFrameworkObligationMapping
 from app.models.compliance_risk_recommendation import ComplianceRiskRecommendation
 from app.models.billing_event import BillingEvent
+from app.models.competitor_pricing_entry import CompetitorPricingEntry
+from app.models.competitor_pricing_version import CompetitorPricingVersion
+from app.models.certification_program import CertificationProgram
+from app.models.certification_program_activation import CertificationProgramActivation
+from app.models.roi_calculator_lead import ROICalculatorLead
 from app.models.business_unit import BusinessUnit
 from app.models.board_scorecard_snapshot import BoardScorecardSnapshot
 from app.models.ai_governance_diagnostic_snapshot import AIGovernanceDiagnosticSnapshot
+from app.models.auditor import Auditor
+from app.models.auditor_engagement import AuditorEngagement
 from app.models.evidence_item import EvidenceItem
 from app.models.email_delivery_event import EmailDeliveryEvent
 from app.models.email_outbox import EmailOutbox
@@ -178,6 +185,7 @@ from app.models.organization_internal_signing_key import OrganizationInternalSig
 from app.models.organization import Organization
 from app.models.organization_ai_configuration import OrganizationAIConfiguration
 from app.models.subscription_plan import SubscriptionPlan
+from app.models.usage_billing_snapshot import UsageBillingSnapshot
 from app.models.openscap_rule_mapping import OpenSCAPRuleMapping
 from app.models.rate_limit_config import RateLimitConfig
 from app.models.siem_export_config import SiemExportConfig
@@ -656,6 +664,12 @@ __all__ = [
     "AIRiskSignal",
     "AIRiskRecommendation",
     "ComplianceRiskRecommendation",
+    "CompetitorPricingVersion",
+    "CompetitorPricingEntry",
+    "CertificationProgram",
+    "CertificationProgramActivation",
+    "ROICalculatorLead",
+    "UsageBillingSnapshot",
     "MLOpsIntegration",
     "DataAsset",
     "DataLineageNode",
@@ -710,6 +724,8 @@ __all__ = [
     "PolicyTemplate",
     "PolicyTemplateClone",
     "AuditEngagement",
+    "Auditor",
+    "AuditorEngagement",
     "PbcItem",
     "PBCRequest",
     "AuditorPortalInvitation",

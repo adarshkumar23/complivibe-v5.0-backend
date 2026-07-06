@@ -29,6 +29,7 @@ from app.platform.schemas.onboarding import (
     TeamInvitationRead,
     TeamInvitationRevokeResponse,
 )
+from app.schemas.pricing import OnboardingSelectPlanRead
 from app.platform.services.onboarding_service import OnboardingService
 
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
@@ -60,6 +61,13 @@ def check_slug(slug: str, db: Session = Depends(get_db)) -> dict:
     normalized = OnboardingService._slugify(slug)
     existing = db.execute(select(Organization).where(Organization.slug == normalized)).scalar_one_or_none()
     return {"available": existing is None}
+
+
+@router.get("/select-plan", response_model=OnboardingSelectPlanRead)
+def select_plan_options(db: Session = Depends(get_db)) -> OnboardingSelectPlanRead:
+    payload = OnboardingService().select_plan_options(db=db)
+    db.commit()
+    return OnboardingSelectPlanRead(**payload)
 
 
 @router.post("/accept-invite", response_model=TeamInvitationAcceptResponse)

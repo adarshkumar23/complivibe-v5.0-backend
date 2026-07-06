@@ -23,6 +23,7 @@ from app.models.role import Role
 from app.models.team_invitation import TeamInvitation
 from app.models.user import User
 from app.platform.services.billing_service import BillingService
+from app.platform.services.competitor_pricing_service import CompetitorPricingService
 from app.services.audit_service import AuditService
 from app.services.seed_service import SeedService
 
@@ -46,6 +47,23 @@ class OnboardingService:
         if value.tzinfo is None:
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
+
+    def select_plan_options(self, db: Session) -> dict:
+        plans = BillingService(db).list_plans()
+        pricing_snapshot = CompetitorPricingService(db).latest_snapshot_payload()
+        return {
+            "available_plans": [
+                {
+                    "plan_code": item.plan_code,
+                    "display_name": item.display_name,
+                    "price_inr_monthly": item.price_inr_monthly,
+                    "price_inr_annual": item.price_inr_annual,
+                    "features": item.features or {},
+                }
+                for item in plans
+            ],
+            "competitor_pricing": pricing_snapshot,
+        }
 
     def start_onboarding(
         self,

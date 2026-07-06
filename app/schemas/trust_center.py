@@ -132,6 +132,8 @@ class TrustCenterPublicRead(BaseModel):
     certifications: list[TrustCenterCertificationPublicRead]
     framework_coverage: list[TrustCenterFrameworkCoverageRead]
     policies: list[TrustCenterPolicyPublicRead]
+    competitor_pricing: list[dict] = Field(default_factory=list)
+    competitor_pricing_last_updated: datetime | None = None
     uptime: TrustCenterPublicUptimeRead | None = None
 
 
