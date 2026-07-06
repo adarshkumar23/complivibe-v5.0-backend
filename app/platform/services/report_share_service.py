@@ -6,12 +6,18 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.audit_log import AuditLog
+from app.models.compliance_deadline import ComplianceDeadline
+from app.models.control import Control
+from app.models.evidence_item import EvidenceItem
+from app.models.framework import Framework
+from app.models.organization_framework import OrganizationFramework
 from app.models.risk import Risk
+from app.models.task import Task
 from app.models.shared_report_link import SharedReportLink
 from app.privacy.services.ropa_service import RopaService
 from app.services.audit_service import AuditService
@@ -220,6 +226,113 @@ class ReportShareService:
                 "organization_id": str(org_id),
                 "report_params": report_params,
                 "note": "Full compliance summary - rendered by frontend",
+            }
+
+        if report_type == "compliance_one_page_summary":
+            active_framework_rows = (
+                db.execute(
+                    select(Framework.code, Framework.name)
+                    .join(OrganizationFramework, OrganizationFramework.framework_id == Framework.id)
+                    .where(
+                        OrganizationFramework.organization_id == org_id,
+                        OrganizationFramework.status == "active",
+                    )
+                    .order_by(Framework.name.asc())
+                )
+                .all()
+            )
+            active_frameworks = [{"code": str(code), "name": str(name)} for code, name in active_framework_rows]
+
+            total_controls = int(
+                db.execute(select(func.count(Control.id)).where(Control.organization_id == org_id)).scalar_one()
+            )
+            implemented_controls = int(
+                db.execute(
+                    select(func.count(Control.id)).where(
+                        Control.organization_id == org_id,
+                        Control.status.in_(["implemented", "monitoring", "effective"]),
+                    )
+                ).scalar_one()
+            )
+            controls_pct = round((implemented_controls / total_controls) * 100, 1) if total_controls > 0 else 0.0
+
+            evidence_total = int(
+                db.execute(select(func.count(EvidenceItem.id)).where(EvidenceItem.organization_id == org_id)).scalar_one()
+            )
+            evidence_fresh = int(
+                db.execute(
+                    select(func.count(EvidenceItem.id)).where(
+                        EvidenceItem.organization_id == org_id,
+                        EvidenceItem.freshness_status == "fresh",
+                    )
+                ).scalar_one()
+            )
+            evidence_fresh_pct = round((evidence_fresh / evidence_total) * 100, 1) if evidence_total > 0 else 0.0
+
+            open_high_risks = int(
+                db.execute(
+                    select(func.count(Risk.id)).where(
+                        Risk.organization_id == org_id,
+                        Risk.status.not_in(["closed", "accepted"]),
+                        Risk.severity.in_(["high", "critical"]),
+                    )
+                ).scalar_one()
+            )
+
+            overdue_tasks = int(
+                db.execute(
+                    select(func.count(Task.id)).where(
+                        Task.organization_id == org_id,
+                        Task.status.not_in(["completed", "cancelled"]),
+                        Task.due_date.is_not(None),
+                        Task.due_date < self.utcnow(),
+                    )
+                ).scalar_one()
+            )
+            overdue_deadlines = int(
+                db.execute(
+                    select(func.count(ComplianceDeadline.id)).where(
+                        ComplianceDeadline.organization_id == org_id,
+                        ComplianceDeadline.status == "overdue",
+                    )
+                ).scalar_one()
+            )
+
+            priorities: list[str] = []
+            if overdue_tasks > 0:
+                priorities.append(f"{overdue_tasks} overdue task(s) need completion")
+            if overdue_deadlines > 0:
+                priorities.append(f"{overdue_deadlines} overdue compliance deadline(s) need remediation")
+            if open_high_risks > 0:
+                priorities.append(f"{open_high_risks} high/critical open risk(s) need treatment")
+            if controls_pct < 80:
+                priorities.append("Control implementation coverage is below 80%")
+            if evidence_fresh_pct < 85:
+                priorities.append("Evidence freshness is below 85%")
+            if not priorities:
+                priorities.append("No critical blockers detected in current compliance snapshot")
+            priorities = priorities[:3]
+
+            return {
+                "report_kind": "one_page_quick_read",
+                "brand_name": report_params.get("brand_name") or "CompliVibe",
+                "generated_at": self.utcnow().isoformat(),
+                "active_frameworks": active_frameworks,
+                "overview": {
+                    "framework_count": len(active_frameworks),
+                    "controls_implemented_pct": controls_pct,
+                    "evidence_fresh_pct": evidence_fresh_pct,
+                    "open_high_risks": open_high_risks,
+                    "overdue_items_total": overdue_tasks + overdue_deadlines,
+                },
+                "sections_included": report_params.get("include_sections") or [],
+                "top_priorities": priorities,
+                "metrics": {
+                    "controls": {"total": total_controls, "implemented": implemented_controls},
+                    "evidence": {"total": evidence_total, "fresh": evidence_fresh},
+                    "tasks": {"overdue": overdue_tasks},
+                    "deadlines": {"overdue": overdue_deadlines},
+                },
             }
 
         if report_type == "framework_gap":

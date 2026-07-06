@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
+from fastapi import Request
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
@@ -12,6 +13,8 @@ from app.models.organization import Organization
 from app.models.user import User
 from app.schemas.experience import (
     ComplianceInboxResponse,
+    ComplianceSummaryGenerateRequest,
+    ComplianceSummaryGenerateResponse,
     ComplianceTimelineResponse,
     CommandPaletteExecuteRequest,
     CommandPaletteExecuteResponse,
@@ -90,3 +93,22 @@ def compliance_inbox(
         user_id=current_user.id,
         limit=limit,
     )
+
+
+@router.post("/compliance-summary/generate", response_model=ComplianceSummaryGenerateResponse)
+def generate_compliance_summary(
+    payload: ComplianceSummaryGenerateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("compliance_summary:generate")),
+) -> ComplianceSummaryGenerateResponse:
+    result = CommandPaletteService(db).generate_compliance_summary(
+        organization_id=organization.id,
+        actor_user_id=current_user.id,
+        payload=payload,
+        base_url=str(request.base_url),
+    )
+    db.commit()
+    return result

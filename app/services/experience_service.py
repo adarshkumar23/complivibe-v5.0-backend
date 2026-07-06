@@ -27,6 +27,8 @@ from app.models.vendor import Vendor
 from app.schemas.experience import (
     ComplianceInboxItem,
     ComplianceInboxResponse,
+    ComplianceSummaryGenerateRequest,
+    ComplianceSummaryGenerateResponse,
     ComplianceTimelineEvent,
     ComplianceTimelineResponse,
     CommandPaletteExecuteRequest,
@@ -34,6 +36,7 @@ from app.schemas.experience import (
     CommandPaletteItem,
     CommandPaletteQueryResponse,
 )
+from app.platform.services.report_share_service import ReportShareService
 from app.services.audit_service import AuditService
 from app.services.search_indexing_service import SearchIndexingService, SearchUnavailableError
 
@@ -589,3 +592,39 @@ class CommandPaletteService:
         items.sort(key=lambda item: (item.priority_score, item.due_at or datetime.min.replace(tzinfo=UTC)), reverse=True)
         trimmed = items[:limit]
         return ComplianceInboxResponse(total_items=len(trimmed), items=trimmed)
+
+    def generate_compliance_summary(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        actor_user_id: uuid.UUID,
+        payload: ComplianceSummaryGenerateRequest,
+        base_url: str,
+    ) -> ComplianceSummaryGenerateResponse:
+        include_sections = [section.strip().lower() for section in payload.include_sections if str(section).strip()]
+        if not include_sections:
+            include_sections = ["overview", "controls", "evidence", "risks", "deadlines"]
+
+        share_row = ReportShareService().create_share_link(
+            org_id=organization_id,
+            created_by=actor_user_id,
+            report_type="compliance_one_page_summary",
+            report_params={
+                "brand_name": payload.brand_name,
+                "include_sections": include_sections,
+            },
+            expires_hours=payload.expires_hours,
+            password=payload.password,
+            max_views=payload.max_views,
+            recipient_email=payload.recipient_email,
+            watermark_text=payload.watermark_text,
+            db=self.db,
+            base_url=base_url,
+        )
+        return ComplianceSummaryGenerateResponse(
+            share_id=uuid.UUID(str(share_row["share_id"])),
+            token=str(share_row["token"]),
+            public_url=str(share_row["share_url"]),
+            expires_at=datetime.fromisoformat(str(share_row["expires_at"])),
+            password_protected=bool(share_row["password_protected"]),
+        )

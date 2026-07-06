@@ -70,3 +70,21 @@ class ComplianceInboxItem(BaseModel):
 class ComplianceInboxResponse(BaseModel):
     total_items: int
     items: list[ComplianceInboxItem]
+
+
+class ComplianceSummaryGenerateRequest(BaseModel):
+    expires_hours: int = Field(default=72, ge=1, le=24 * 90)
+    max_views: int | None = Field(default=None, ge=1, le=100000)
+    password: str | None = Field(default=None, max_length=255)
+    recipient_email: str | None = Field(default=None, max_length=255)
+    watermark_text: str | None = Field(default=None, max_length=255)
+    brand_name: str | None = Field(default=None, max_length=120)
+    include_sections: list[str] = Field(default_factory=lambda: ["overview", "controls", "evidence", "risks", "deadlines"])
+
+
+class ComplianceSummaryGenerateResponse(BaseModel):
+    share_id: uuid.UUID
+    token: str
+    public_url: str
+    expires_at: datetime
+    password_protected: bool
