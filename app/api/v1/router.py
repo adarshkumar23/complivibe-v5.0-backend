@@ -188,6 +188,7 @@ from app.api.v1 import (
     roi_calculator,
     evidence_automation,
     compliance_bot,
+    issue_sync,
 )
 
 api_router = APIRouter()
@@ -301,6 +302,7 @@ api_router.include_router(framework_content.router)
 api_router.include_router(evidence.router)
 api_router.include_router(evidence_automation.router)
 api_router.include_router(compliance_bot.router)
+api_router.include_router(issue_sync.router)
 api_router.include_router(risks.router)
 api_router.include_router(recertification.router)
 api_router.include_router(reports.router)
