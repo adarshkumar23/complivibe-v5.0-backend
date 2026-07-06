@@ -186,6 +186,7 @@ from app.api.v1 import (
     import_jobs,
     pricing,
     roi_calculator,
+    evidence_automation,
 )
 
 api_router = APIRouter()
@@ -297,6 +298,7 @@ api_router.include_router(control_tests.router)
 api_router.include_router(control_recommendations.router)
 api_router.include_router(framework_content.router)
 api_router.include_router(evidence.router)
+api_router.include_router(evidence_automation.router)
 api_router.include_router(risks.router)
 api_router.include_router(recertification.router)
 api_router.include_router(reports.router)

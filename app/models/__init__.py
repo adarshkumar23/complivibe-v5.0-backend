@@ -138,6 +138,7 @@ from app.models.ai_governance_diagnostic_snapshot import AIGovernanceDiagnosticS
 from app.models.auditor import Auditor
 from app.models.auditor_engagement import AuditorEngagement
 from app.models.evidence_item import EvidenceItem
+from app.models.evidence_automation_rule import EvidenceAutomationRule
 from app.models.email_delivery_event import EmailDeliveryEvent
 from app.models.email_outbox import EmailOutbox
 from app.models.email_template import EmailTemplate
@@ -538,6 +539,7 @@ __all__ = [
     "EvidenceControlLink",
     "ControlObligationMapping",
     "EvidenceItem",
+    "EvidenceAutomationRule",
     "Risk",
     "OrgRiskSettings",
     "GovernanceSignal",
