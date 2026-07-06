@@ -255,6 +255,7 @@ PERMISSIONS: dict[str, str] = {
     "imports:read": "Read competitor migration import job progress",
     "imports:preview": "Generate and review import dry-run previews",
     "imports:commit": "Commit import jobs and persist imported entities",
+    "imports:parity_read": "Read import parity dashboard and switch-readiness metrics",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {

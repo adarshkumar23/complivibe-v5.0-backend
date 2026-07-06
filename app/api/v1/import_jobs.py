@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
@@ -15,9 +15,11 @@ from app.schemas.import_job import (
     ImportDryRunPreviewRead,
     ImportJobCreateRequest,
     ImportJobRead,
+    ImportParityDashboardRead,
     ImportProgressRead,
 )
 from app.services.import_job_service import ImportJobService
+from app.services.import_parity_service import ImportParityService
 
 router = APIRouter(prefix="/import", tags=["import-jobs"])
 
@@ -111,3 +113,20 @@ def commit_import_job(
     payload = ImportJobService(db).commit(organization.id, job_id, current_user.id)
     db.commit()
     return ImportCommitRead(**payload)
+
+
+@router.get("/parity-dashboard", response_model=ImportParityDashboardRead)
+def get_import_parity_dashboard(
+    threshold_pct: float = Query(default=95.0, ge=0.0, le=100.0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("imports:parity_read")),
+) -> ImportParityDashboardRead:
+    payload = ImportParityService(db).dashboard(
+        organization_id=organization.id,
+        threshold_pct=threshold_pct,
+        actor_user_id=current_user.id,
+    )
+    db.commit()
+    return ImportParityDashboardRead(**payload)

@@ -120,6 +120,7 @@ from app.models.compliance_policy_control_link import CompliancePolicyControlLin
 from app.models.export_job import ExportJob
 from app.models.export_job_event import ExportJobEvent
 from app.models.import_job import ImportJob
+from app.models.import_parity_tracking import ImportParityTracking
 from app.models.export_attestation import ExportAttestation
 from app.models.evidence_control_link import EvidenceControlLink
 from app.models.control_obligation_mapping import ControlObligationMapping

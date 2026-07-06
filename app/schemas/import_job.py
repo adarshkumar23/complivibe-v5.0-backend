@@ -56,3 +56,28 @@ class ImportCommitRead(BaseModel):
     updated: dict[str, int]
     skipped: dict[str, int]
     row_errors: list[dict[str, Any]]
+
+
+class ImportParityModuleRead(BaseModel):
+    entity_type: str = Field(pattern="^(control|evidence|policy|business_unit)$")
+    expected_count: int
+    imported_count: int
+    verified_count: int
+    parity_pct: float
+
+
+class ImportParityBySourceRead(BaseModel):
+    tool_source: str = Field(pattern=SOURCE_PATTERN)
+    modules: list[ImportParityModuleRead]
+    expected_count: int
+    imported_count: int
+    verified_count: int
+    parity_pct: float
+
+
+class ImportParityDashboardRead(BaseModel):
+    threshold_pct: float
+    ready_to_switch: bool
+    overall: dict[str, Any]
+    modules: list[ImportParityModuleRead]
+    by_source: list[ImportParityBySourceRead]
