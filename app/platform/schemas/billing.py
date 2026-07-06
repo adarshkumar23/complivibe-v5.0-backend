@@ -83,6 +83,7 @@ class UsageBillingDashboardRead(BaseModel):
     usage_spend_cap_enabled: bool
     usage_spend_cap_inr: float | None = None
     is_spend_cap_breached: bool
+    spend_cap_alert: str | None = None
     synced_to_processor: bool
     processor_reference: str | None = None
 
@@ -91,4 +92,5 @@ class UsageBillingSyncResponse(BaseModel):
     status: str
     snapshot_id: uuid.UUID
     billable_units: float
+    spend_cap_alert: str | None = None
     processor_reference: str | None = None

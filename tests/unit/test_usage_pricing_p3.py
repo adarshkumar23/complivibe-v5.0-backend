@@ -112,11 +112,22 @@ def test_usage_sync_blocks_when_spend_cap_breached(client, db_session):
     assert blocked.status_code == 200
     body = blocked.json()
     assert body["status"] == "blocked_spend_cap"
+    assert body["spend_cap_alert"] is not None
+    assert "soft warning" in body["spend_cap_alert"].lower()
+
+    # The cap is a soft warning, not a hard stop: the customer can still view dashboard.
+    dash = client.get("/api/v1/billing/usage/dashboard", headers=org["org_headers"])
+    assert dash.status_code == 200, dash.text
+    dash_body = dash.json()
+    assert dash_body["is_spend_cap_breached"] is True
+    assert dash_body["spend_cap_alert"] is not None
+    assert "soft warning" in dash_body["spend_cap_alert"].lower()
 
     row = db_session.execute(
         select(UsageBillingSnapshot)
         .where(UsageBillingSnapshot.organization_id == UUID(org["organization_id"]))
         .order_by(UsageBillingSnapshot.created_at.desc())
+        .limit(1)
     ).scalar_one()
     assert row.is_spend_cap_breached is True
     assert row.synced_to_processor is False

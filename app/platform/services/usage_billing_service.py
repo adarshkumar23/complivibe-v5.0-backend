@@ -115,6 +115,10 @@ class UsageBillingService:
         projected_month_end_cost = self._round((current_estimated_cost / Decimal(elapsed_days)) * Decimal(total_days))
 
         spend_cap = Decimal(str(organization.usage_spend_cap_inr)) if organization.usage_spend_cap_inr is not None else None
+        # The usage spend cap is intentionally a SOFT cap. It is a warning/notification
+        # guardrail, not a kill switch. Customers continue to have full product access
+        # mid-work; the only automatic side effect is that usage is NOT synced to the
+        # payment processor while the cap is breached.
         breached = bool(organization.usage_spend_cap_enabled and spend_cap is not None and projected_month_end_cost > spend_cap)
 
         snapshot = UsageBillingSnapshot(
@@ -147,7 +151,18 @@ class UsageBillingService:
         return snapshot
 
     @staticmethod
-    def _snapshot_payload(snapshot: UsageBillingSnapshot, organization: Organization) -> dict:
+    def _spend_cap_alert(snapshot: UsageBillingSnapshot) -> str | None:
+        if not snapshot.is_spend_cap_breached:
+            return None
+        return (
+            f"Spend cap breached: projected month-end cost "
+            f"INR {float(snapshot.projected_month_end_cost_inr):,.2f} exceeds the configured cap "
+            f"INR {float(snapshot.spend_cap_inr):,.2f}. This is a soft warning only — "
+            "your team can continue using CompliVibe. Usage sync to the payment "
+            "processor is paused until the cap is raised or usage drops."
+        )
+
+    def _snapshot_payload(self, snapshot: UsageBillingSnapshot, organization: Organization) -> dict:
         return {
             "period_start": snapshot.period_start.isoformat(),
             "period_end": snapshot.period_end.isoformat(),
@@ -161,6 +176,7 @@ class UsageBillingService:
             "usage_spend_cap_enabled": organization.usage_spend_cap_enabled,
             "usage_spend_cap_inr": float(organization.usage_spend_cap_inr) if organization.usage_spend_cap_inr is not None else None,
             "is_spend_cap_breached": snapshot.is_spend_cap_breached,
+            "spend_cap_alert": self._spend_cap_alert(snapshot),
             "synced_to_processor": snapshot.synced_to_processor,
             "processor_reference": snapshot.processor_reference,
         }
@@ -247,6 +263,7 @@ class UsageBillingService:
                 "status": "blocked_spend_cap",
                 "snapshot_id": snapshot.id,
                 "billable_units": float(snapshot.billable_units),
+                "spend_cap_alert": self._spend_cap_alert(snapshot),
                 "processor_reference": None,
             }
 
