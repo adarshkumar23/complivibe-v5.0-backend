@@ -5,6 +5,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
+from app.ai_governance.services.ai_provider_service import AIProviderService
 from app.compliance.services.email_template_service import EmailTemplateService
 from app.models.compliance_deadline import ComplianceDeadline
 from app.models.digest_config import DigestConfig
@@ -38,6 +39,112 @@ class DigestService:
             return f"{hh:02d}:{mm:02d}"
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid send_time_utc format") from exc
+
+    @staticmethod
+    def _priority_rank(priority: str) -> int:
+        mapping = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        return mapping.get(str(priority).lower(), 4)
+
+    def _ranked_event_items(
+        self,
+        *,
+        overdue_tasks: list[dict],
+        open_risks: list[dict],
+        upcoming_deadlines: list[dict],
+        expiring_evidence: list[dict],
+    ) -> list[dict]:
+        rows: list[dict] = []
+        for task in overdue_tasks:
+            rows.append(
+                {
+                    "event_type": "task_overdue",
+                    "priority_rank": self._priority_rank("high"),
+                    "title": str(task.get("title") or "Overdue task"),
+                    "detail": f"{task.get('days_overdue', 0)} day(s) overdue",
+                }
+            )
+        for risk in open_risks:
+            rows.append(
+                {
+                    "event_type": "risk_open",
+                    "priority_rank": self._priority_rank(str(risk.get("severity") or "high")),
+                    "title": str(risk.get("title") or "Open risk"),
+                    "detail": f"severity={risk.get('severity', 'high')}",
+                }
+            )
+        for deadline in upcoming_deadlines:
+            rows.append(
+                {
+                    "event_type": "deadline_upcoming",
+                    "priority_rank": self._priority_rank("medium"),
+                    "title": str(deadline.get("title") or "Upcoming deadline"),
+                    "detail": f"due in {deadline.get('days_remaining', 0)} day(s)",
+                }
+            )
+        for evidence in expiring_evidence:
+            rows.append(
+                {
+                    "event_type": "evidence_expiring",
+                    "priority_rank": self._priority_rank("medium"),
+                    "title": str(evidence.get("title") or "Expiring evidence"),
+                    "detail": f"{evidence.get('days_remaining', 0)} day(s) remaining",
+                }
+            )
+        rows.sort(key=lambda item: (int(item.get("priority_rank", 9)), str(item.get("title") or "")))
+        return rows[:10]
+
+    def _generate_digest_narrative(
+        self,
+        *,
+        org_id: uuid.UUID,
+        user_id: uuid.UUID,
+        ranked_events: list[dict],
+    ) -> tuple[str, str, list[str]]:
+        if not ranked_events:
+            return (
+                "No urgent changes were detected in your compliance workload today; keep current controls and evidence collection cadence steady.",
+                "deterministic_empty",
+                [],
+            )
+
+        event_lines = [f"- {item['event_type']}: {item['title']} ({item['detail']})" for item in ranked_events[:6]]
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You write one concise compliance operations digest paragraph. "
+                    "Prioritize urgent items first, mention likely impact, and end with a concrete next-step focus. "
+                    "Do not use bullet points."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Organization={org_id}; user={user_id}. "
+                    "Create exactly one paragraph (2-4 sentences) from these prioritized events:\n"
+                    + "\n".join(event_lines)
+                ),
+            },
+        ]
+        staleness_flags: list[str] = []
+        try:
+            narrative, provider_name, _ = AIProviderService(self.db)._run_provider_chain(
+                org_id=org_id,
+                messages=messages,
+                failure_context="Digest narrative generation unavailable",
+            )
+            paragraph = " ".join(str(narrative).strip().split())
+            if not paragraph:
+                raise RuntimeError("empty narrative")
+            return paragraph, f"ai_{provider_name}", staleness_flags
+        except Exception:
+            staleness_flags.append("ai_narrative_fallback")
+            first = ranked_events[0]
+            fallback = (
+                f"Top priority is {first['title']} ({first['detail']}); focus first on remediating this before other items. "
+                f"There are {len(ranked_events)} prioritized signals across tasks, risks, evidence, and deadlines to review today."
+            )
+            return fallback, "deterministic_fallback", staleness_flags
 
     def get_or_create_configs(self, org_id: uuid.UUID, user_id: uuid.UUID) -> list[DigestConfig]:
         now = self.utcnow()
@@ -207,9 +314,30 @@ class DigestService:
             ],
         }
 
+    def _with_digest_narrative(self, *, org_id: uuid.UUID, user_id: uuid.UUID, payload: dict) -> dict:
+        ranked_events = self._ranked_event_items(
+            overdue_tasks=list(payload.get("overdue_tasks") or []),
+            open_risks=list(payload.get("open_risks") or []),
+            upcoming_deadlines=list(payload.get("upcoming_deadlines") or []),
+            expiring_evidence=list(payload.get("expiring_evidence") or []),
+        )
+        narrative, narrative_source, staleness_flags = self._generate_digest_narrative(
+            org_id=org_id,
+            user_id=user_id,
+            ranked_events=ranked_events,
+        )
+        return {
+            **payload,
+            "prioritized_events": ranked_events,
+            "narrative_paragraph": narrative,
+            "narrative_source": narrative_source,
+            "narrative_generated_at": self.utcnow().isoformat(),
+            "data_staleness_flags": staleness_flags,
+        }
+
     def build_weekly_digest(self, org_id: uuid.UUID, user_id: uuid.UUID, db: Session | None = None) -> dict:
         _db = db or self.db
-        daily = self.build_daily_digest(org_id, user_id, _db)
+        daily = self._with_digest_narrative(org_id=org_id, user_id=user_id, payload=self.build_daily_digest(org_id, user_id, _db))
 
         now = self.utcnow()
         week_ago = now - timedelta(days=7)
@@ -269,7 +397,14 @@ class DigestService:
             return False
         org = _db.get(Organization, org_id)
 
-        content = self.build_daily_digest(org_id, user_id, _db) if digest_type == "daily" else self.build_weekly_digest(org_id, user_id, _db)
+        if digest_type == "daily":
+            content = self._with_digest_narrative(
+                org_id=org_id,
+                user_id=user_id,
+                payload=self.build_daily_digest(org_id, user_id, _db),
+            )
+        else:
+            content = self.build_weekly_digest(org_id, user_id, _db)
 
         template_svc = EmailTemplateService()
         subject, html = template_svc.render(
@@ -297,7 +432,7 @@ class DigestService:
                 recipient_email=user.email,
                 recipient_user_id=user.id,
                 subject=subject,
-                body_text=f"Your {digest_type} CompliVibe digest is ready.",
+                body_text=str(content.get("narrative_paragraph") or f"Your {digest_type} CompliVibe digest is ready."),
                 body_html=html,
                 status="pending",
                 priority="normal",

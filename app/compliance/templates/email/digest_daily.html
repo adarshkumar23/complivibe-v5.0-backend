@@ -1,6 +1,9 @@
 {% extends "base_email.html" %}
 {% block content %}
 <p>Hello {{ user_name }}, here is your daily compliance digest.</p>
+{% if narrative_paragraph %}
+<p><strong>Priority Narrative:</strong> {{ narrative_paragraph }}</p>
+{% endif %}
 
 {% if overdue_tasks %}
 <h3>⚠️ Overdue Tasks ({{ overdue_tasks|length }})</h3>
