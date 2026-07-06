@@ -27,6 +27,7 @@ from app.repositories.control_repository import ControlRepository
 from app.repositories.risk_repository import RiskRepository
 from app.services.compliance_dashboard_service import ComplianceDashboardService
 from app.services.compliance_policy_service import CompliancePolicyService
+from app.services.evidence_service import EvidenceService
 from app.services.vendor_service import VendorService
 
 
@@ -607,6 +608,7 @@ class ExportContentBuilder:
                 evidence_lines = [
                     (
                         f"- {item.title} | source={item.source} | "
+                        f"evidence_at={EvidenceService.effective_submitted_at(item).isoformat()} | "
                         f"verified_at={(item.reviewed_at.isoformat() if item.reviewed_at else item.updated_at.isoformat())}"
                     )
                     for item in evidence_rows

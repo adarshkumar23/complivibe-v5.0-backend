@@ -408,6 +408,7 @@ class ImportJobService:
                 "policy_type": str(raw.get("policy_type") or "imported").strip(),
                 "evidence_type": str(raw.get("evidence_type") or "other").strip(),
                 "collected_at": raw.get("collected_at"),
+                "original_created_at": raw.get("original_created_at") or raw.get("created_at"),
             }
         )
 
@@ -526,6 +527,8 @@ class ImportJobService:
     def _upsert_evidence(self, job: ImportJob, row: dict[str, Any], actor_user_id: uuid.UUID | None) -> tuple[EvidenceItem | None, str]:
         existing = self._find_existing(job.organization_id, row)
         collected_at = self._parse_optional_datetime(row.get("collected_at"))
+        original_created_at = self._parse_optional_datetime(row.get("original_created_at"))
+        import_fallback_created_at = original_created_at or collected_at or self._utcnow()
         if existing is None:
             item = EvidenceService(self.db).create_imported_evidence(
                 organization_id=job.organization_id,
@@ -534,6 +537,7 @@ class ImportJobService:
                 evidence_type=row["evidence_type"],
                 source_import_tool=job.source_tool,
                 collected_at=collected_at,
+                original_created_at=import_fallback_created_at,
                 actor_user_id=actor_user_id,
             )
             return item, "created"
@@ -541,6 +545,11 @@ class ImportJobService:
             return existing, "skipped"
         existing.description = row["description"]
         existing.collected_at = collected_at
+        existing.original_created_at = (
+            min(existing.original_created_at, import_fallback_created_at)
+            if existing.original_created_at
+            else import_fallback_created_at
+        )
         existing.source_import_tool = job.source_tool
         existing.source = "imported"
         self.db.flush()

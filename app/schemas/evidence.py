@@ -43,6 +43,7 @@ class EvidenceRead(UUIDTimestampSchema):
     valid_from: datetime | None = None
     valid_until: datetime | None = None
     collected_at: datetime | None = None
+    original_created_at: datetime | None = None
     uploaded_by_user_id: UUID | None = None
     reviewed_by_user_id: UUID | None = None
     reviewed_at: datetime | None = None

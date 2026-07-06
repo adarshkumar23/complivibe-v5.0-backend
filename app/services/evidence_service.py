@@ -210,6 +210,7 @@ class EvidenceService:
         evidence_type: str,
         source_import_tool: str,
         collected_at: datetime | None,
+        original_created_at: datetime | None,
         actor_user_id: uuid.UUID | None,
     ) -> EvidenceItem:
         row = EvidenceItem(
@@ -223,9 +224,16 @@ class EvidenceService:
             review_status="not_reviewed",
             freshness_status="unknown",
             collected_at=collected_at,
+            original_created_at=original_created_at,
             uploaded_by_user_id=actor_user_id,
             metadata_json={"source_import_tool": source_import_tool},
         )
         self.db.add(row)
         self.db.flush()
         return row
+
+    @staticmethod
+    def effective_submitted_at(evidence_item: EvidenceItem) -> datetime:
+        if evidence_item.source == "imported":
+            return evidence_item.original_created_at or evidence_item.collected_at or evidence_item.created_at
+        return evidence_item.collected_at or evidence_item.created_at

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -104,6 +105,7 @@ def test_import_job_commit_evidence_uses_existing_evidence_table_and_audit(clien
                     "description": "Imported artifact",
                     "evidence_type": "document",
                     "collected_at": "2026-01-01T10:00:00Z",
+                    "original_created_at": "2024-05-20T08:30:00Z",
                 }
             ],
         },
@@ -131,6 +133,7 @@ def test_import_job_commit_evidence_uses_existing_evidence_table_and_audit(clien
     ).scalar_one()
     assert evidence_row.source == "imported"
     assert evidence_row.source_import_tool == "generic"
+    assert evidence_row.original_created_at == datetime(2024, 5, 20, 8, 30)
 
     audit_row = db_session.execute(
         select(AuditLog).where(
@@ -182,6 +185,36 @@ def test_import_job_preview_handles_non_object_source_rows_with_row_error(client
     job = db_session.execute(select(ImportJob).where(ImportJob.id == UUID(job_id))).scalar_one()
     assert job.status == "failed"
     assert "Drata evidence row must be an object" in (job.error_summary or "")
+
+
+def test_import_job_commit_evidence_original_created_at_falls_back_to_collected_at(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="import-job-evidence-fallback")
+    create = client.post(
+        f"{BASE}/generic",
+        headers=org["org_headers"],
+        json={
+            "dry_run": False,
+            "conflict_strategy": "skip",
+            "records": [
+                {
+                    "entity_type": "evidence",
+                    "title": "Fallback Evidence",
+                    "evidence_type": "document",
+                    "collected_at": "2025-02-14T09:00:00Z",
+                }
+            ],
+        },
+    )
+    assert create.status_code == 201
+    assert client.post(f"{BASE}/{create.json()['id']}/commit", headers=org["org_headers"]).status_code == 200
+
+    evidence_row = db_session.execute(
+        select(EvidenceItem).where(
+            EvidenceItem.organization_id == UUID(org["organization_id"]),
+            EvidenceItem.title == "Fallback Evidence",
+        )
+    ).scalar_one()
+    assert evidence_row.original_created_at == datetime(2025, 2, 14, 9, 0)
 
 
 def test_import_parity_dashboard_zero_expected_defaults_to_ready(client, db_session):

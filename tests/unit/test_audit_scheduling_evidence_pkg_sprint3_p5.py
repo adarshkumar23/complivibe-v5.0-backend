@@ -188,12 +188,22 @@ def test_s3_p5_evidence_package_builder_and_export_endpoint(client, db_session):
     db_session.flush()
 
     verified_evidence_id = _create_evidence(client, org["org_headers"], "Verified Evidence")
+    imported_verified_evidence_id = _create_evidence(client, org["org_headers"], "Imported Verified Evidence")
     pending_evidence_id = _create_evidence(client, org["org_headers"], "Pending Evidence")
 
     verified_row = db_session.query(EvidenceItem).filter(EvidenceItem.id == verified_evidence_id).one()
     verified_row.review_status = "verified"
     verified_row.status = "active"
     verified_row.reviewed_at = datetime.now(UTC)
+    verified_row.collected_at = datetime(2026, 5, 1, 11, 0, tzinfo=UTC)
+
+    imported_verified_row = db_session.query(EvidenceItem).filter(EvidenceItem.id == imported_verified_evidence_id).one()
+    imported_verified_row.review_status = "verified"
+    imported_verified_row.status = "active"
+    imported_verified_row.reviewed_at = datetime.now(UTC)
+    imported_verified_row.source = "imported"
+    imported_verified_row.source_import_tool = "drata"
+    imported_verified_row.original_created_at = datetime(2021, 1, 4, 15, 45, tzinfo=UTC)
 
     pending_row = db_session.query(EvidenceItem).filter(EvidenceItem.id == pending_evidence_id).one()
     pending_row.review_status = "needs_review"
@@ -221,6 +231,17 @@ def test_s3_p5_evidence_package_builder_and_export_endpoint(client, db_session):
             linked_at=datetime.now(UTC),
         )
     )
+    db_session.add(
+        EvidenceControlLink(
+            organization_id=org_id,
+            evidence_item_id=imported_verified_evidence_id,
+            control_id=control.id,
+            link_status="active",
+            confidence="manual_confirmed",
+            linked_by_user_id=user_id,
+            linked_at=datetime.now(UTC),
+        )
+    )
     db_session.commit()
 
     # (g) builder returns populated sections and correct summary counts.
@@ -240,12 +261,15 @@ def test_s3_p5_evidence_package_builder_and_export_endpoint(client, db_session):
     assert summary["Obligations With Verified Evidence"] == "1"
     assert summary["Total Controls"] == "1"
     assert summary["Controls With Verified Evidence"] == "1"
-    assert summary["Total Evidence Items"] == "1"
+    assert summary["Total Evidence Items"] == "2"
 
     # (h) only verified evidence is included.
     flattened = "\\n".join(item for section in content.sections for item in section.items)
     assert "Verified Evidence" in flattened
+    assert "Imported Verified Evidence" in flattened
     assert "Pending Evidence" not in flattened
+    assert "Verified Evidence | source=manual | evidence_at=2026-05-01T11:00:00" in flattened
+    assert "Imported Verified Evidence | source=imported | evidence_at=2021-01-04T15:45:00" in flattened
 
     # (i) PDF export non-empty and (j) DOCX export non-empty.
     pdf_resp = client.get(

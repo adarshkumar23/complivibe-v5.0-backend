@@ -23,6 +23,7 @@ from app.schemas.auditor_portal import (
     AuditorPortalReportRead,
     AuditorPortalRevokeResponse,
 )
+from app.services.evidence_service import EvidenceService
 
 router = APIRouter(prefix="/audit-portal", tags=["auditor-portal"])
 
@@ -215,7 +216,7 @@ def portal_evidence(
             title=row.title,
             description=row.description,
             status=row.status,
-            submitted_at=row.collected_at or row.created_at,
+            submitted_at=EvidenceService.effective_submitted_at(row),
             file_name=row.file_name,
             mime_type=row.mime_type,
             size_bytes=row.size_bytes,
