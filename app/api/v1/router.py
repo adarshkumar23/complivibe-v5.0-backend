@@ -182,6 +182,7 @@ from app.api.v1 import (
     carbon_accounting,
     connector_marketplace,
     import_jobs,
+    pricing,
 )
 
 api_router = APIRouter()
@@ -365,6 +366,7 @@ api_router.include_router(webhooks.router)
 api_router.include_router(offboarding.router)
 api_router.include_router(carbon_accounting.router)
 api_router.include_router(connector_marketplace.router)
+api_router.include_router(pricing.router)
 api_router.include_router(legal_matters.router)
 api_router.include_router(ip_assets.router)
 api_router.include_router(content_provenance.router)

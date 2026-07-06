@@ -127,6 +127,8 @@ from app.models.control_obligation_mapping import ControlObligationMapping
 from app.models.cross_framework_obligation_mapping import CrossFrameworkObligationMapping
 from app.models.compliance_risk_recommendation import ComplianceRiskRecommendation
 from app.models.billing_event import BillingEvent
+from app.models.competitor_pricing_entry import CompetitorPricingEntry
+from app.models.competitor_pricing_version import CompetitorPricingVersion
 from app.models.business_unit import BusinessUnit
 from app.models.board_scorecard_snapshot import BoardScorecardSnapshot
 from app.models.ai_governance_diagnostic_snapshot import AIGovernanceDiagnosticSnapshot
@@ -656,6 +658,8 @@ __all__ = [
     "AIRiskSignal",
     "AIRiskRecommendation",
     "ComplianceRiskRecommendation",
+    "CompetitorPricingVersion",
+    "CompetitorPricingEntry",
     "MLOpsIntegration",
     "DataAsset",
     "DataLineageNode",

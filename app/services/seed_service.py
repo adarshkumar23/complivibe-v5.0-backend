@@ -257,6 +257,7 @@ PERMISSIONS: dict[str, str] = {
     "imports:commit": "Commit import jobs and persist imported entities",
     "imports:parity_read": "Read import parity dashboard and switch-readiness metrics",
     "imports:gap_report": "Read imported-data coverage gap report by import job",
+    "pricing:manage": "Refresh competitor pricing comparisons and publish new pricing snapshots",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {

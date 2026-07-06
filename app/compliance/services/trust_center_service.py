@@ -22,6 +22,7 @@ from app.models.trust_center_access_request import TrustCenterAccessRequest
 from app.models.trust_center_configuration import TrustCenterConfiguration
 from app.models.trust_center_published_policy import TrustCenterPublishedPolicy
 from app.models.user import User
+from app.platform.services.competitor_pricing_service import CompetitorPricingService
 from app.services.audit_service import AuditService
 
 SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,98}[a-z0-9]$")
@@ -155,6 +156,18 @@ class TrustCenterService:
                 "updated_at": config.uptime_updated_at,
             }
 
+        pricing_snapshot = CompetitorPricingService(self.db).latest_snapshot_payload()
+        competitor_pricing = [
+            {
+                "competitor_name": row["competitor_name"],
+                "pricing_model": row["pricing_model"],
+                "pricing_summary": row["pricing_summary"],
+                "source_url": row["source_url"],
+                "last_verified_at": row["last_verified_at"],
+            }
+            for row in pricing_snapshot["entries"]
+        ]
+
         return {
             "organization_slug": slug,
             "display_name": config.display_name or org.name,
@@ -165,6 +178,8 @@ class TrustCenterService:
             "certifications": certifications,
             "framework_coverage": framework_coverage,
             "policies": policies,
+            "competitor_pricing": competitor_pricing,
+            "competitor_pricing_last_updated": pricing_snapshot["last_updated"],
             "uptime": uptime,
         }
 
