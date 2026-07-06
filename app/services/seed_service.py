@@ -93,6 +93,11 @@ from app.services.framework_seed_data_stream_a6 import (
     UNESCO_QUESTIONS,
     UNESCO_SECTIONS,
 )
+from app.services.framework_seed_data_stream_b_v1 import (
+    INDIA_PACK_OBLIGATIONS,
+    INDIA_PACK_QUESTIONS,
+    INDIA_PACK_SECTIONS,
+)
 
 PERMISSIONS: dict[str, str] = {
     "org:read": "Read organization details",
@@ -1142,6 +1147,123 @@ FRAMEWORK_SEEDS: list[dict] = [
         "status": "active",
         "coverage_level": "metadata_only",
         "source_url": None,
+        "effective_date": None,
+    },
+    {
+        "code": "RBI_IT_GOV",
+        "name": "RBI IT Governance and Assurance",
+        "description": "RBI master direction baseline for IT governance, risk, controls, and assurance practices.",
+        "category": "Financial Regulation",
+        "jurisdiction": "IN",
+        "authority": "Reserve Bank of India",
+        "version": "2023",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": "https://www.rbi.org.in/scripts/BS_ViewMasDirections.aspx?id=12562",
+        "effective_date": None,
+    },
+    {
+        "code": "RBI_CLOUD_OUTSOURCING",
+        "name": "RBI IT Outsourcing and Cloud Controls",
+        "description": "RBI outsourcing of IT services direction used as cloud and third-party IT control baseline.",
+        "category": "Financial Regulation",
+        "jurisdiction": "IN",
+        "authority": "Reserve Bank of India",
+        "version": "2023",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": "https://www.rbi.org.in/Scripts/BS_ViewMasDirections.aspx?id=12486",
+        "effective_date": None,
+    },
+    {
+        "code": "SEBI_CSCRF",
+        "name": "SEBI CSCRF",
+        "description": "SEBI Cybersecurity and Cyber Resilience Framework obligations for regulated entities.",
+        "category": "Financial Regulation",
+        "jurisdiction": "IN",
+        "authority": "Securities and Exchange Board of India",
+        "version": "2024",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": "https://www.sebi.gov.in/legal/circulars/aug-2024/cybersecurity-and-cyber-resilience-framework-cscrf-for-sebi-regulated-entities-res-_85964.html",
+        "effective_date": None,
+    },
+    {
+        "code": "SEBI_CLOUD",
+        "name": "SEBI Cloud Adoption Framework",
+        "description": "SEBI framework for adoption of cloud services by SEBI-regulated entities.",
+        "category": "Financial Regulation",
+        "jurisdiction": "IN",
+        "authority": "Securities and Exchange Board of India",
+        "version": "2023",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": "https://www.sebi.gov.in/legal/circulars/mar-2023/framework-for-adoption-of-cloud-services-by-sebi-regulated-entities-res-_68740.html",
+        "effective_date": None,
+    },
+    {
+        "code": "IRDAI_CYBER_2023",
+        "name": "IRDAI Information and Cyber Security Guidelines",
+        "description": "IRDAI cybersecurity governance and incident obligations for insurers and intermediaries.",
+        "category": "Financial Regulation",
+        "jurisdiction": "IN",
+        "authority": "Insurance Regulatory and Development Authority of India",
+        "version": "2023",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": "https://irdai.gov.in/documents/37343/366029/IRDAI%2BCS%2BGuidelines%2B2023.pdf/81730785-1f51-977b-5a92-d9cfd7eb2cd6?download=true&t=1682401978542&version=1.0",
+        "effective_date": None,
+    },
+    {
+        "code": "CERT_IN_2022",
+        "name": "CERT-In Cyber Incident Directions",
+        "description": "CERT-In directions under section 70B, including six-hour reporting and logging requirements.",
+        "category": "Cybersecurity",
+        "jurisdiction": "IN",
+        "authority": "Indian Computer Emergency Response Team",
+        "version": "2022",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": "https://www.cert-in.org.in/PDF/CERT-In_Directions_70B_28.04.2022.pdf",
+        "effective_date": None,
+    },
+    {
+        "code": "INDIA_IT_ACT",
+        "name": "India IT Act",
+        "description": "Information Technology Act 2000 and amendment obligations for reasonable security and cyber incident governance.",
+        "category": "Privacy",
+        "jurisdiction": "IN",
+        "authority": "Government of India",
+        "version": "2000/2008",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": "https://www.indiacode.nic.in/handle/123456789/1999",
+        "effective_date": None,
+    },
+    {
+        "code": "MCA_COMPLIANCE_CAL",
+        "name": "MCA Compliance Calendar",
+        "description": "Companies Act annual compliance timeline for AGM, annual return, and financial statement filing windows.",
+        "category": "Corporate Compliance",
+        "jurisdiction": "IN",
+        "authority": "Ministry of Corporate Affairs",
+        "version": "2013",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": "https://www.indiacode.nic.in/bitstream/123456789/2114/5/A2013-18.pdf",
+        "effective_date": None,
+    },
+    {
+        "code": "DPIIT_STARTUP",
+        "name": "DPIIT Startup India Recognition",
+        "description": "DPIIT startup recognition eligibility and continuity requirements under current gazette definition.",
+        "category": "Corporate Compliance",
+        "jurisdiction": "IN",
+        "authority": "Department for Promotion of Industry and Internal Trade",
+        "version": "2026",
+        "status": "active",
+        "coverage_level": "starter",
+        "source_url": "https://www.dpiit.gov.in/static/uploads/2026/02/119e52e2a36f652215a32c3ccc5f9c66.pdf",
         "effective_date": None,
     },
     {
@@ -3430,6 +3552,7 @@ class SeedService:
         SeedService.ensure_singapore_ai_framework(db)
         SeedService.ensure_g7_hiroshima_framework(db)
         SeedService.ensure_mitre_atlas_framework(db)
+        SeedService.ensure_india_first_pack_frameworks(db)
         frameworks = SeedService.ensure_framework_catalog(db)
         existing_keys = {
             (o.framework_id, o.reference_code): o
@@ -3466,6 +3589,78 @@ class SeedService:
         SeedService.ensure_g7_oecd_cross_mappings(db)
         SeedService.ensure_atlas_nist_airmf_cross_mappings(db)
         return created_or_updated
+
+    @staticmethod
+    def ensure_india_first_pack_frameworks(db: Session) -> None:
+        framework_codes = [
+            "RBI_IT_GOV",
+            "RBI_CLOUD_OUTSOURCING",
+            "SEBI_CSCRF",
+            "SEBI_CLOUD",
+            "IRDAI_CYBER_2023",
+            "CERT_IN_2022",
+            "INDIA_IT_ACT",
+            "MCA_COMPLIANCE_CAL",
+            "DPIIT_STARTUP",
+        ]
+        frameworks = SeedService.ensure_framework_catalog(db)
+
+        for framework_code in framework_codes:
+            framework = frameworks[framework_code]
+            section_map = SeedService._ensure_framework_sections(
+                db,
+                framework=framework,
+                section_seeds=INDIA_PACK_SECTIONS[framework_code],
+            )
+            existing = {
+                row.reference_code: row
+                for row in db.execute(select(Obligation).where(Obligation.framework_id == framework.id)).scalars().all()
+            }
+            active_refs: set[str] = set()
+            for ref_code, title, description, section_code, evidence_hints in INDIA_PACK_OBLIGATIONS[framework_code]:
+                active_refs.add(ref_code)
+                plain = f"Implement and evidence {title.lower()}."
+                if evidence_hints:
+                    plain = f"{plain} Evidence hints: {', '.join(evidence_hints)}"
+                values = {
+                    "framework_section_id": section_map[section_code].id,
+                    "title": title,
+                    "description": description,
+                    "plain_language_summary": plain,
+                    "obligation_type": "regulatory",
+                    "jurisdiction": "IN",
+                    "version": framework.version,
+                    "ig_level": None,
+                    "control_family": None,
+                    "baseline": None,
+                    "status": "active",
+                }
+                row = existing.get(ref_code)
+                if row is None:
+                    row = Obligation(
+                        framework_id=framework.id,
+                        reference_code=ref_code,
+                        source_url=framework.source_url,
+                        effective_date=None,
+                        parent_obligation_id=None,
+                        **values,
+                    )
+                    db.add(row)
+                    db.flush()
+                else:
+                    for field, value in values.items():
+                        setattr(row, field, value)
+                    row.source_url = framework.source_url
+
+            for ref_code, row in existing.items():
+                if ref_code not in active_refs:
+                    row.status = "inactive"
+
+            questions = INDIA_PACK_QUESTIONS.get(framework_code, [])
+            if questions:
+                SeedService._ensure_framework_questions(db, framework=framework, question_rows=questions)
+
+        db.flush()
 
     @staticmethod
     def ensure_applicability_rules(db: Session) -> list[ObligationApplicabilityRule]:
