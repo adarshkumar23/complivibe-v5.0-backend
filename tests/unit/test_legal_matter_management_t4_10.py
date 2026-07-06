@@ -276,6 +276,36 @@ def test_link_risk_from_different_org_returns_404(client, db_session):
     assert response.status_code == 404
 
 
+def test_owner_user_must_be_active_member_of_same_org(client, db_session):
+    org1 = _bootstrap(client, db_session, "lm-owner-a")
+    org2 = _bootstrap(client, db_session, "lm-owner-b")
+
+    create_response = client.post(
+        BASE,
+        headers=org1["org_headers"],
+        json={"title": "Cross owner matter", "owner_user_id": org2["user_id"]},
+    )
+    assert create_response.status_code == 422
+    assert db_session.query(LegalMatter).filter(LegalMatter.title == "Cross owner matter").one_or_none() is None
+
+    created = client.post(
+        BASE,
+        headers=org1["org_headers"],
+        json={"title": "Owned matter", "owner_user_id": org1["user_id"]},
+    )
+    assert created.status_code == 201
+
+    patch_response = client.patch(
+        f"{BASE}/{created.json()['id']}",
+        headers=org1["org_headers"],
+        json={"owner_user_id": org2["user_id"]},
+    )
+    assert patch_response.status_code == 422
+    row = db_session.get(LegalMatter, uuid.UUID(created.json()["id"]))
+    assert row is not None
+    assert str(row.owner_user_id) == org1["user_id"]
+
+
 def test_audit_log_rows_exist_for_create_link_close(client, db_session):
     org = _bootstrap(client, db_session, "lm-audit")
     risk = _create_risk(db_session, org["organization_id"])

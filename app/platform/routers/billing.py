@@ -57,7 +57,7 @@ def subscribe(
 def billing_status(
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
-    _: User = Depends(get_current_active_user),
+    _: Membership = Depends(require_permission("org:read")),
 ) -> BillingStatusResponse:
     result = BillingService(db).get_billing_status(organization.id)
     return BillingStatusResponse(**result)

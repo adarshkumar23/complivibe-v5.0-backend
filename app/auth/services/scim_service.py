@@ -5,7 +5,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.compliance.services.offboarding_service import OffboardingService
@@ -31,7 +31,7 @@ class SCIMService:
         normalized_count = max(1, min(int(count), 200))
 
         query = (
-            select(User)
+            select(User, Membership)
             .join(Membership, Membership.user_id == User.id)
             .where(Membership.organization_id == org_id)
             .order_by(User.created_at.asc())
@@ -42,21 +42,21 @@ class SCIMService:
                 email = parts[1].strip().lower()
                 query = query.where(User.email == email)
 
-        users = list(db.execute(query).scalars().all())
-        total = len(users)
-        paged = users[normalized_start - 1 : normalized_start - 1 + normalized_count]
+        rows = list(db.execute(query).all())
+        total = len(rows)
+        paged = rows[normalized_start - 1 : normalized_start - 1 + normalized_count]
 
         return {
             "schemas": ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
             "totalResults": total,
             "startIndex": normalized_start,
             "itemsPerPage": len(paged),
-            "Resources": [self._to_scim_user(user) for user in paged],
+            "Resources": [self._to_scim_user(user, active=self._scim_active(user, membership)) for user, membership in paged],
         }
 
     def get_user(self, org_id: uuid.UUID, user_id: uuid.UUID, db: Session) -> dict:
-        user = self._get_org_user(org_id, user_id, db)
-        return self._to_scim_user(user)
+        user, membership = self._get_org_user_with_membership(org_id, user_id, db)
+        return self._to_scim_user(user, active=self._scim_active(user, membership))
 
     def provision_user(self, org_id: uuid.UUID, scim_payload: dict, db: Session) -> dict:
         email = str(scim_payload.get("userName") or "").strip().lower()
@@ -78,13 +78,12 @@ class SCIMService:
                 )
             ).scalar_one_or_none()
             if membership is None:
-                self._create_membership(existing.id, org_id, role_name="member", db=db)
-            existing.is_active = is_active
-            existing.status = "active" if is_active else "inactive"
+                membership = self._create_membership(existing.id, org_id, role_name="member", db=db)
+            self._set_membership_active(existing, membership, is_active, db)
             if full_name:
                 existing.full_name = full_name
             db.flush()
-            return self._to_scim_user(existing)
+            return self._to_scim_user(existing, active=self._scim_active(existing, membership))
 
         user = User(
             email=email,
@@ -107,10 +106,11 @@ class SCIMService:
             metadata_json={"source": "scim", "external_id": scim_payload.get("externalId")},
         )
         db.flush()
-        return self._to_scim_user(user)
+        membership = self._get_org_membership(org_id, user.id, db)
+        return self._to_scim_user(user, active=self._scim_active(user, membership))
 
     def update_user(self, org_id: uuid.UUID, user_id: uuid.UUID, scim_payload: dict, db: Session) -> dict:
-        user = self._get_org_user(org_id, user_id, db)
+        user, membership = self._get_org_user_with_membership(org_id, user_id, db)
         name = scim_payload.get("name") or {}
         given = str(name.get("givenName") or "").strip()
         family = str(name.get("familyName") or "").strip()
@@ -119,9 +119,7 @@ class SCIMService:
         if full_name:
             user.full_name = full_name
         if "active" in scim_payload:
-            is_active = bool(scim_payload["active"])
-            user.is_active = is_active
-            user.status = "active" if is_active else "inactive"
+            self._set_membership_active(user, membership, bool(scim_payload["active"]), db)
 
         AuditService(db).write_audit_log(
             action="user.updated_via_scim",
@@ -131,10 +129,10 @@ class SCIMService:
             entity_id=user.id,
         )
         db.flush()
-        return self._to_scim_user(user)
+        return self._to_scim_user(user, active=self._scim_active(user, membership))
 
     def patch_user(self, org_id: uuid.UUID, user_id: uuid.UUID, operations: list[dict], db: Session) -> dict:
-        user = self._get_org_user(org_id, user_id, db)
+        user, membership = self._get_org_user_with_membership(org_id, user_id, db)
 
         for operation in operations:
             op_type = str(operation.get("op") or "").lower()
@@ -143,9 +141,7 @@ class SCIMService:
             if op_type != "replace":
                 continue
             if path == "active":
-                is_active = bool(value)
-                user.is_active = is_active
-                user.status = "active" if is_active else "inactive"
+                self._set_membership_active(user, membership, bool(value), db)
             elif path == "name.givenName":
                 family = self._split_name(user.full_name)[1]
                 user.full_name = f"{value or ''} {family}".strip()
@@ -162,12 +158,11 @@ class SCIMService:
             metadata_json={"operations": operations},
         )
         db.flush()
-        return self._to_scim_user(user)
+        return self._to_scim_user(user, active=self._scim_active(user, membership))
 
     def deprovision_user(self, org_id: uuid.UUID, user_id: uuid.UUID, db: Session) -> None:
-        user = self._get_org_user(org_id, user_id, db)
-        user.is_active = False
-        user.status = "inactive"
+        user, membership = self._get_org_user_with_membership(org_id, user_id, db)
+        self._set_membership_active(user, membership, False, db)
 
         try:
             successor_id = self._find_successor(org_id, user_id, db)
@@ -192,7 +187,7 @@ class SCIMService:
         db.flush()
 
     @staticmethod
-    def _to_scim_user(user: User) -> dict:
+    def _to_scim_user(user: User, *, active: bool | None = None) -> dict:
         given, family = SCIMService._split_name(user.full_name)
         return {
             "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
@@ -204,7 +199,7 @@ class SCIMService:
                 "formatted": user.full_name or user.email,
             },
             "emails": [{"value": user.email, "primary": True}],
-            "active": user.is_active,
+            "active": user.is_active if active is None else active,
             "meta": {
                 "resourceType": "User",
                 "created": user.created_at.isoformat(),
@@ -223,17 +218,52 @@ class SCIMService:
 
     @staticmethod
     def _get_org_user(org_id: uuid.UUID, user_id: uuid.UUID, db: Session) -> User:
-        user = db.execute(
-            select(User)
+        user, _ = SCIMService._get_org_user_with_membership(org_id, user_id, db)
+        return user
+
+    @staticmethod
+    def _get_org_user_with_membership(org_id: uuid.UUID, user_id: uuid.UUID, db: Session) -> tuple[User, Membership]:
+        row = db.execute(
+            select(User, Membership)
             .join(Membership, Membership.user_id == User.id)
             .where(
                 User.id == user_id,
                 Membership.organization_id == org_id,
             )
-        ).scalar_one_or_none()
-        if user is None:
+        ).one_or_none()
+        if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found in this organization")
-        return user
+        return row
+
+    @staticmethod
+    def _get_org_membership(org_id: uuid.UUID, user_id: uuid.UUID, db: Session) -> Membership:
+        membership = db.execute(
+            select(Membership).where(Membership.organization_id == org_id, Membership.user_id == user_id)
+        ).scalar_one()
+        return membership
+
+    @staticmethod
+    def _scim_active(user: User, membership: Membership) -> bool:
+        return user.is_active and user.status == "active" and membership.status == "active"
+
+    @staticmethod
+    def _set_membership_active(user: User, membership: Membership, is_active: bool, db: Session) -> None:
+        membership.status = "active" if is_active else "inactive"
+        if is_active:
+            user.is_active = True
+            user.status = "active"
+            return
+
+        other_active_memberships = db.execute(
+            select(func.count(Membership.id)).where(
+                Membership.user_id == user.id,
+                Membership.organization_id != membership.organization_id,
+                Membership.status == "active",
+            )
+        ).scalar_one()
+        if other_active_memberships == 0:
+            user.is_active = False
+            user.status = "inactive"
 
     @staticmethod
     def _create_membership(user_id: uuid.UUID, org_id: uuid.UUID, role_name: str, db: Session) -> Membership:

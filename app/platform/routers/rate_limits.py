@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_active_user, get_current_organization, get_db
+from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
 from app.models.organization import Organization
 from app.models.rate_limit_config import RateLimitConfig
 from app.models.user import User
@@ -120,7 +120,7 @@ def reset_org_override(
 @router.get("/rate-limits/my-limits")
 def get_my_limits(
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_active_user),
+    _: object = Depends(require_permission("org:read")),
     organization: Organization = Depends(get_current_organization),
 ) -> dict:
     service = RateLimitService()

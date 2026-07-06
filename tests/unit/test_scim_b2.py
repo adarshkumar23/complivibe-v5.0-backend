@@ -231,3 +231,47 @@ def test_scim_auth_enforcement_and_org_isolation(client, db_session):
         )
     ).scalars().all()
     assert len(audit_scim_tokens) >= 1
+
+
+def test_scim_deprovision_does_not_disable_shared_user_in_other_org(client, db_session):
+    org_a = bootstrap_org_user(client, email_prefix="scim-shared-a")
+    org_b = bootstrap_org_user(client, email_prefix="scim-shared-b")
+    _enable_scim_feature(db_session, org_a["organization_id"])
+    _enable_scim_feature(db_session, org_b["organization_id"])
+
+    headers_a = _scim_headers(_create_scim_token(client, org_a["org_headers"], "A token")["raw_token"])
+    headers_b = _scim_headers(_create_scim_token(client, org_b["org_headers"], "B token")["raw_token"])
+    payload = _sample_scim_user("shared-scim@example.com")
+
+    created_a = client.post("/api/v1/scim/v2/Users", headers=headers_a, json=payload)
+    assert created_a.status_code == 201
+    user_id = created_a.json()["id"]
+    created_b = client.post("/api/v1/scim/v2/Users", headers=headers_b, json=payload)
+    assert created_b.status_code == 201
+    assert created_b.json()["id"] == user_id
+
+    deleted_a = client.delete(f"/api/v1/scim/v2/Users/{user_id}", headers=headers_a)
+    assert deleted_a.status_code == 204
+
+    user_row = db_session.get(User, UUID(user_id))
+    assert user_row is not None
+    assert user_row.is_active is True
+    assert user_row.status == "active"
+    membership_a = db_session.execute(
+        select(Membership).where(
+            Membership.organization_id == UUID(org_a["organization_id"]),
+            Membership.user_id == UUID(user_id),
+        )
+    ).scalar_one()
+    membership_b = db_session.execute(
+        select(Membership).where(
+            Membership.organization_id == UUID(org_b["organization_id"]),
+            Membership.user_id == UUID(user_id),
+        )
+    ).scalar_one()
+    assert membership_a.status == "inactive"
+    assert membership_b.status == "active"
+
+    fetched_b = client.get(f"/api/v1/scim/v2/Users/{user_id}", headers=headers_b)
+    assert fetched_b.status_code == 200
+    assert fetched_b.json()["active"] is True

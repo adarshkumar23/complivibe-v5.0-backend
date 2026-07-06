@@ -8,7 +8,9 @@ from sqlalchemy.orm import Session
 from app.compliance.services.issue_service import IssueService
 from app.models.issue import Issue
 from app.models.legal_matter import LegalMatter
+from app.models.membership import Membership
 from app.models.risk import Risk
+from app.models.user import User
 from app.schemas.legal_matter import LegalMatterCreate, LegalMatterUpdate
 from app.services.audit_service import AuditService
 
@@ -24,7 +26,27 @@ class LegalMatterService:
     def utcnow() -> datetime:
         return datetime.now(UTC)
 
+    def _require_active_org_user(self, org_id: uuid.UUID, user_id: uuid.UUID, field_name: str) -> None:
+        row = self.db.execute(
+            select(User.id)
+            .join(Membership, Membership.user_id == User.id)
+            .where(
+                User.id == user_id,
+                User.is_active.is_(True),
+                User.status == "active",
+                Membership.organization_id == org_id,
+                Membership.status == "active",
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{field_name} must be an active organization user",
+            )
+
     def create_matter(self, org_id: uuid.UUID, data: LegalMatterCreate, created_by: uuid.UUID) -> LegalMatter:
+        if data.owner_user_id is not None:
+            self._require_active_org_user(org_id, data.owner_user_id, "owner_user_id")
         row = LegalMatter(
             organization_id=org_id,
             title=data.title,
@@ -97,6 +119,8 @@ class LegalMatterService:
         # must go through change_status() / close_matter() so the open-linked-issue
         # guard and closed_at/closed_by bookkeeping can never be bypassed by a plain PATCH.
         updates = data.model_dump(exclude_unset=True)
+        if updates.get("owner_user_id") is not None:
+            self._require_active_org_user(org_id, updates["owner_user_id"], "owner_user_id")
 
         before = {"title": row.title, "status": row.status, "matter_type": row.matter_type}
         for key, value in updates.items():

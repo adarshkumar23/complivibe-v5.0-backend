@@ -182,6 +182,7 @@ from app.models.siem_export_config import SiemExportConfig
 from app.models.siem_export_run import SiemExportRun
 from app.models.scim_token import ScimToken
 from app.models.security_scan_job import SecurityScanJob
+from app.models.saml_assertion_replay import SAMLAssertionReplay
 from app.models.sso_config import SSOConfig
 from app.models.oidc_config import OIDCConfig
 from app.models.oidc_auth_state import OIDCAuthState
@@ -553,6 +554,7 @@ __all__ = [
     "AmlKycCheck",
     "SanctionsEntity",
     "SanctionsScreenResult",
+    "SAMLAssertionReplay",
     "BriberyRiskAssessment",
     "ExportControlCheck",
     "Vendor",

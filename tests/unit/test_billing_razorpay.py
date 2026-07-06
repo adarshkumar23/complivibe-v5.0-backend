@@ -101,6 +101,15 @@ def test_trial_status_and_expiry_gate(client, db_session):
     assert expired.json()["detail"]["error"] == "trial_expired"
 
 
+def test_billing_status_requires_membership_in_requested_org(client, db_session):
+    org_a = bootstrap_org_user(client, email_prefix="billing-member-a")
+    org_b = bootstrap_org_user(client, email_prefix="billing-member-b")
+    mixed_headers = {**org_a["headers"], "X-Organization-ID": org_b["organization_id"]}
+
+    response = client.get("/api/v1/billing/status", headers=mixed_headers)
+    assert response.status_code == 403
+
+
 def test_subscribe_and_invoices_mocked(client, db_session):
     org = bootstrap_org_user(client, email_prefix="billing-sub")
 
