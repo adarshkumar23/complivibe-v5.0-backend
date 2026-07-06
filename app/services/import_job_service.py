@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import uuid
+import zipfile
+from base64 import b64decode
+from binascii import Error as BinasciiError
 from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
@@ -25,6 +29,10 @@ from app.services.evidence_service import EvidenceService
 SOURCE_TOOLS = {"vanta", "drata", "sprinto", "scrut", "generic"}
 CONFLICT_STRATEGIES = {"skip", "update"}
 ENTITY_TYPES = {"control", "evidence", "policy", "business_unit"}
+_CONTROL_HINTS = {"control", "controls", "monitor", "monitors", "requirement", "requirements", "test", "tests"}
+_EVIDENCE_HINTS = {"evidence", "artifact", "artifacts", "integration", "integrations", "event", "events"}
+_POLICY_HINTS = {"policy", "policies", "document", "documents"}
+_BUSINESS_UNIT_HINTS = {"entity", "entities", "business_unit", "business_units", "department", "departments"}
 
 
 def run_import_job_validation(job_id: str) -> None:
@@ -164,17 +172,23 @@ class ImportJobService:
         job = self.require_job(organization_id, job_id)
         parsed, row_errors = self._parse_records(job.source_tool, job.raw_payload_json)
         preview = self._build_preview(job.organization_id, parsed, row_errors, job.conflict_strategy)
+        job.status = "processing"
+        job.progress_total = len(parsed)
+        job.progress_current = 0
+        job.updated_at = self._utcnow()
+        self.db.flush()
 
         created = defaultdict(int)
         updated = defaultdict(int)
         skipped = defaultdict(int)
         audit = AuditService(self.db)
 
-        for row in parsed:
+        for idx, row in enumerate(parsed, start=1):
             entity = row["entity_type"]
             action = preview["row_actions"].get(str(row["row_number"]), "skip")
             if action == "skip":
                 skipped[entity] += 1
+                job.progress_current = idx
                 continue
             if entity == "business_unit":
                 entity_row, action_taken = self._upsert_business_unit(job, row, actor_user_id)
@@ -194,6 +208,7 @@ class ImportJobService:
                 updated[entity] += 1
             else:
                 skipped[entity] += 1
+                job.progress_current = idx
                 continue
 
             audit.write_audit_log(
@@ -212,9 +227,9 @@ class ImportJobService:
                     "row_number": row["row_number"],
                 },
             )
+            job.progress_current = idx
 
         job.status = "completed" if not row_errors else "failed"
-        job.progress_total = len(parsed)
         job.progress_current = len(parsed)
         job.error_summary = self._error_summary(row_errors)
         job.result_json = {
@@ -288,84 +303,76 @@ class ImportJobService:
             return parsed_rows, [{"row": 0, "error": "Payload must be object or list"}]
 
         if "csv_content" in raw_payload and raw_payload.get("csv_content"):
-            return self._parse_csv_rows(str(raw_payload["csv_content"]))
+            return self._parse_csv_rows(
+                csv_content=str(raw_payload["csv_content"]),
+                source_tool=source_tool,
+                column_map=raw_payload.get("column_map"),
+            )
+
+        if source_tool == "drata":
+            zip_payload = raw_payload.get("zip_base64") or raw_payload.get("zip_content_base64")
+            if zip_payload:
+                return self._parse_drata_zip(str(zip_payload))
 
         if "records" in raw_payload and isinstance(raw_payload["records"], list):
             for idx, raw in enumerate(raw_payload["records"], start=1):
+                if source_tool in SOURCE_TOOLS:
+                    section_name = str(raw.get("section") or raw.get("module") or "").strip()
+                    self._normalize_source_row(source_tool, section_name, raw, idx, parsed_rows, row_errors)
+                    continue
                 self._normalize_row(raw, idx, parsed_rows, row_errors)
             return parsed_rows, row_errors
 
         if source_tool == "vanta":
-            row = 1
-            for record in raw_payload.get("monitors", []):
-                if not isinstance(record, dict):
-                    row_errors.append({"row": row, "error": "Vanta monitors row must be an object"})
-                    row += 1
-                    continue
-                self._normalize_row({"entity_type": "control", **record}, row, parsed_rows, row_errors)
-                row += 1
-            for record in raw_payload.get("integrations", []):
-                if not isinstance(record, dict):
-                    row_errors.append({"row": row, "error": "Vanta integrations row must be an object"})
-                    row += 1
-                    continue
-                self._normalize_row({"entity_type": "evidence", **record}, row, parsed_rows, row_errors)
-                row += 1
-            for record in raw_payload.get("policies", []):
-                if not isinstance(record, dict):
-                    row_errors.append({"row": row, "error": "Vanta policies row must be an object"})
-                    row += 1
-                    continue
-                self._normalize_row({"entity_type": "policy", **record}, row, parsed_rows, row_errors)
-                row += 1
+            row = self._collect_section_rows("vanta", "monitors", raw_payload.get("monitors"), row_errors, parsed_rows, 1)
+            row = self._collect_section_rows("vanta", "integrations", raw_payload.get("integrations"), row_errors, parsed_rows, row)
+            self._collect_section_rows("vanta", "policies", raw_payload.get("policies"), row_errors, parsed_rows, row)
             return parsed_rows, row_errors
 
         if source_tool == "drata":
-            row = 1
-            for record in raw_payload.get("controls", []):
-                if not isinstance(record, dict):
-                    row_errors.append({"row": row, "error": "Drata controls row must be an object"})
-                    row += 1
-                    continue
-                self._normalize_row({"entity_type": "control", **record}, row, parsed_rows, row_errors)
-                row += 1
-            for record in raw_payload.get("evidence", []):
-                if not isinstance(record, dict):
-                    row_errors.append({"row": row, "error": "Drata evidence row must be an object"})
-                    row += 1
-                    continue
-                self._normalize_row({"entity_type": "evidence", **record}, row, parsed_rows, row_errors)
-                row += 1
-            for record in raw_payload.get("policies", []):
-                if not isinstance(record, dict):
-                    row_errors.append({"row": row, "error": "Drata policies row must be an object"})
-                    row += 1
-                    continue
-                self._normalize_row({"entity_type": "policy", **record}, row, parsed_rows, row_errors)
-                row += 1
+            row = self._collect_section_rows("drata", "controls", raw_payload.get("controls"), row_errors, parsed_rows, 1)
+            row = self._collect_section_rows("drata", "evidence", raw_payload.get("evidence"), row_errors, parsed_rows, row)
+            self._collect_section_rows("drata", "policies", raw_payload.get("policies"), row_errors, parsed_rows, row)
             return parsed_rows, row_errors
 
         if source_tool in {"sprinto", "scrut"}:
-            row = 1
-            for record in raw_payload.get("entities", []):
-                if not isinstance(record, dict):
-                    row_errors.append({"row": row, "error": f"{source_tool} entities row must be an object"})
-                    row += 1
-                    continue
-                self._normalize_row({"entity_type": "business_unit", **record}, row, parsed_rows, row_errors)
-                row += 1
-            for record in raw_payload.get("controls", []):
-                if not isinstance(record, dict):
-                    row_errors.append({"row": row, "error": f"{source_tool} controls row must be an object"})
-                    row += 1
-                    continue
-                self._normalize_row({"entity_type": "control", **record}, row, parsed_rows, row_errors)
-                row += 1
+            row = self._collect_section_rows(source_tool, "entities", raw_payload.get("entities"), row_errors, parsed_rows, 1)
+            self._collect_section_rows(source_tool, "controls", raw_payload.get("controls"), row_errors, parsed_rows, row)
             return parsed_rows, row_errors
 
         return parsed_rows, [{"row": 0, "error": "No parsable records found"}]
 
-    def _parse_csv_rows(self, csv_content: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    def _collect_section_rows(
+        self,
+        source_tool: str,
+        section_name: str,
+        rows: Any,
+        row_errors: list[dict[str, Any]],
+        parsed_rows: list[dict[str, Any]],
+        start_row: int,
+    ) -> int:
+        row = start_row
+        if rows is None:
+            return row
+        if not isinstance(rows, list):
+            row_errors.append({"row": row, "error": f"{source_tool.capitalize()} {section_name} payload must be a list"})
+            return row + 1
+        for record in rows:
+            if not isinstance(record, dict):
+                row_errors.append({"row": row, "error": f"{source_tool.capitalize()} {section_name} row must be an object"})
+                row += 1
+                continue
+            self._normalize_source_row(source_tool, section_name, record, row, parsed_rows, row_errors)
+            row += 1
+        return row
+
+    def _parse_csv_rows(
+        self,
+        *,
+        csv_content: str,
+        source_tool: str,
+        column_map: dict[str, str] | None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         parsed_rows: list[dict[str, Any]] = []
         row_errors: list[dict[str, Any]] = []
         try:
@@ -373,10 +380,271 @@ class ImportJobService:
             if not reader.fieldnames:
                 return parsed_rows, [{"row": 0, "error": "CSV is missing header row"}]
             for idx, raw in enumerate(reader, start=2):
-                self._normalize_row(raw, idx, parsed_rows, row_errors)
+                mapped = self._map_csv_row(raw, source_tool=source_tool, column_map=column_map, row_number=idx, row_errors=row_errors)
+                if mapped is None:
+                    continue
+                self._normalize_row(mapped, idx, parsed_rows, row_errors)
             return parsed_rows, row_errors
         except csv.Error as exc:
             return parsed_rows, [{"row": 0, "error": f"CSV parse failure: {exc}"}]
+
+    def _parse_drata_zip(self, zip_payload_b64: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        parsed_rows: list[dict[str, Any]] = []
+        row_errors: list[dict[str, Any]] = []
+        try:
+            zip_bytes = b64decode(zip_payload_b64, validate=True)
+        except (BinasciiError, ValueError):
+            return parsed_rows, [{"row": 0, "error": "Drata ZIP payload is not valid base64"}]
+
+        try:
+            with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as archive:
+                row = 1
+                for file_name in archive.namelist():
+                    if file_name.endswith("/"):
+                        continue
+                    section = self._infer_section_from_filename(file_name)
+                    if section is None:
+                        continue
+                    with archive.open(file_name, "r") as handle:
+                        content = handle.read().decode("utf-8", errors="replace")
+                    if file_name.lower().endswith(".json"):
+                        try:
+                            loaded = json.loads(content)
+                        except json.JSONDecodeError as exc:
+                            row_errors.append({"row": row, "error": f"{file_name}: invalid JSON ({exc.msg})"})
+                            row += 1
+                            continue
+                        records = loaded if isinstance(loaded, list) else loaded.get("items") if isinstance(loaded, dict) else None
+                        if not isinstance(records, list):
+                            row_errors.append({"row": row, "error": f"{file_name}: expected JSON array or object with items[]"})
+                            row += 1
+                            continue
+                        for entry in records:
+                            if not isinstance(entry, dict):
+                                row_errors.append({"row": row, "error": f"{file_name}: JSON row must be an object"})
+                                row += 1
+                                continue
+                            self._normalize_source_row("drata", section, entry, row, parsed_rows, row_errors, file_name=file_name)
+                            row += 1
+                        continue
+
+                    try:
+                        reader = csv.DictReader(io.StringIO(content))
+                    except csv.Error as exc:
+                        row_errors.append({"row": row, "error": f"{file_name}: CSV parse failure ({exc})"})
+                        row += 1
+                        continue
+                    if not reader.fieldnames:
+                        row_errors.append({"row": row, "error": f"{file_name}: CSV header row missing"})
+                        row += 1
+                        continue
+                    for raw in reader:
+                        self._normalize_source_row("drata", section, raw, row, parsed_rows, row_errors, file_name=file_name)
+                        row += 1
+        except zipfile.BadZipFile:
+            return parsed_rows, [{"row": 0, "error": "Drata ZIP payload is corrupted or invalid"}]
+        return parsed_rows, row_errors
+
+    def _infer_section_from_filename(self, file_name: str) -> str | None:
+        lowered = file_name.lower()
+        if any(token in lowered for token in ("control", "requirement")):
+            return "controls"
+        if any(token in lowered for token in ("evidence", "event", "artifact")):
+            return "evidence"
+        if any(token in lowered for token in ("policy", "policies", "document")):
+            return "policies"
+        if any(token in lowered for token in ("entity", "business_unit", "department")):
+            return "entities"
+        return None
+
+    def _normalize_source_row(
+        self,
+        source_tool: str,
+        section_name: str,
+        raw: dict[str, Any],
+        row_number: int,
+        parsed_rows: list[dict[str, Any]],
+        row_errors: list[dict[str, Any]],
+        file_name: str | None = None,
+    ) -> None:
+        mapped = self._map_source_row(source_tool, section_name, raw)
+        if mapped is None:
+            row_errors.append(
+                {
+                    "row": row_number,
+                    "error": (
+                        f"{file_name}: could not map {source_tool} {section_name} row to supported entity"
+                        if file_name
+                        else f"Could not map {source_tool} {section_name} row to supported entity"
+                    ),
+                }
+            )
+            return
+        self._normalize_row(mapped, row_number, parsed_rows, row_errors)
+
+    def _map_source_row(self, source_tool: str, section_name: str, raw: dict[str, Any]) -> dict[str, Any] | None:
+        section = section_name.strip().lower()
+        title = self._pick(raw, "title", "name", "display_name", "control_name", "policy_name", "monitor_name", "integration_name")
+        description = self._pick(raw, "description", "details", "summary", "notes")
+        code = self._pick(raw, "code", "control_code", "control_id", "id", "reference")
+        policy_type = self._pick(raw, "policy_type", "type", "category") or "imported"
+        evidence_type = self._pick(raw, "evidence_type", "artifact_type", "kind")
+        collected_at = self._pick(raw, "collected_at", "captured_at", "updated_at", "observed_at")
+        original_created_at = self._pick(raw, "original_created_at", "created_at", "uploaded_at")
+
+        if source_tool == "vanta":
+            if section in {"monitors"}:
+                return {
+                    "entity_type": "control",
+                    "title": title,
+                    "description": description,
+                    "code": code,
+                }
+            if section in {"integrations"}:
+                run_status = self._pick(raw, "status", "result", "test_result")
+                run_description = " ; ".join(part for part in [description, run_status] if part)
+                return {
+                    "entity_type": "evidence",
+                    "title": title or "Imported integration test result",
+                    "description": run_description or None,
+                    "evidence_type": evidence_type or "technical_control_test_result",
+                    "collected_at": collected_at,
+                    "original_created_at": original_created_at,
+                }
+            if section in {"policies"}:
+                return {
+                    "entity_type": "policy",
+                    "title": title,
+                    "description": description,
+                    "policy_type": policy_type,
+                }
+            return None
+
+        if source_tool == "drata":
+            if section in {"controls"}:
+                return {
+                    "entity_type": "control",
+                    "title": title,
+                    "description": description,
+                    "code": code,
+                }
+            if section in {"evidence"}:
+                return {
+                    "entity_type": "evidence",
+                    "title": title,
+                    "description": description,
+                    "evidence_type": evidence_type or "document",
+                    "collected_at": collected_at,
+                    "original_created_at": original_created_at,
+                }
+            if section in {"policies"}:
+                return {
+                    "entity_type": "policy",
+                    "title": title,
+                    "description": description,
+                    "policy_type": policy_type,
+                }
+            return None
+
+        if source_tool in {"sprinto", "scrut"}:
+            if section in {"entities"}:
+                return {
+                    "entity_type": "business_unit",
+                    "title": title,
+                    "description": description,
+                    "code": code,
+                }
+            if section in {"controls"}:
+                return {
+                    "entity_type": "control",
+                    "title": title,
+                    "description": description,
+                    "code": code,
+                }
+            return None
+
+        return raw
+
+    def _map_csv_row(
+        self,
+        raw: dict[str, Any],
+        *,
+        source_tool: str,
+        column_map: dict[str, str] | None,
+        row_number: int,
+        row_errors: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        cmap = column_map or {}
+        if not isinstance(raw, dict):
+            row_errors.append({"row": row_number, "error": "CSV row must be an object"})
+            return None
+
+        def from_columns(*aliases: str) -> Any:
+            configured = [cmap.get(alias) for alias in aliases if cmap.get(alias)]
+            candidates = [*configured, *aliases]
+            for key in candidates:
+                if key in raw and raw[key] not in (None, ""):
+                    return raw[key]
+                if key is None:
+                    continue
+                lowered = key.lower()
+                for present, value in raw.items():
+                    if str(present).strip().lower() == lowered and value not in (None, ""):
+                        return value
+            return None
+
+        mapped: dict[str, Any] = {
+            "entity_type": str(from_columns("entity_type", "module", "object_type", "section", "type") or "").strip().lower(),
+            "title": from_columns("title", "name", "control_name", "policy_name", "artifact_name", "entity_name"),
+            "description": from_columns("description", "details", "summary", "notes"),
+            "code": from_columns("code", "control_code", "reference", "id"),
+            "policy_type": from_columns("policy_type", "policy_category", "category") or "imported",
+            "evidence_type": from_columns("evidence_type", "artifact_type", "kind") or "other",
+            "collected_at": from_columns("collected_at", "captured_at", "observed_at", "updated_at"),
+            "original_created_at": from_columns("original_created_at", "created_at", "uploaded_at"),
+        }
+
+        if source_tool in {"sprinto", "scrut"}:
+            hint = mapped["entity_type"]
+            if hint in _BUSINESS_UNIT_HINTS:
+                mapped["entity_type"] = "business_unit"
+            elif hint in _CONTROL_HINTS:
+                mapped["entity_type"] = "control"
+            elif not hint:
+                mapped["entity_type"] = "control" if mapped["code"] else "business_unit"
+
+        if source_tool == "vanta":
+            hint = mapped["entity_type"]
+            if hint in _CONTROL_HINTS:
+                mapped["entity_type"] = "control"
+            elif hint in _EVIDENCE_HINTS:
+                mapped["entity_type"] = "evidence"
+                if mapped["evidence_type"] == "other":
+                    mapped["evidence_type"] = "technical_control_test_result"
+            elif hint in _POLICY_HINTS:
+                mapped["entity_type"] = "policy"
+
+        if source_tool == "drata":
+            hint = mapped["entity_type"]
+            if hint in _CONTROL_HINTS:
+                mapped["entity_type"] = "control"
+            elif hint in _EVIDENCE_HINTS:
+                mapped["entity_type"] = "evidence"
+            elif hint in _POLICY_HINTS:
+                mapped["entity_type"] = "policy"
+
+        return mapped
+
+    @staticmethod
+    def _pick(raw: dict[str, Any], *keys: str) -> Any | None:
+        for key in keys:
+            if key in raw and raw[key] not in (None, ""):
+                return raw[key]
+            lowered = key.lower()
+            for present, value in raw.items():
+                if str(present).strip().lower() == lowered and value not in (None, ""):
+                    return value
+        return None
 
     def _normalize_row(
         self,

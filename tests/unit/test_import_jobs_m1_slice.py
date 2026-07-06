@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import io
+import zipfile
 from datetime import datetime
 from uuid import UUID
 
@@ -11,9 +14,18 @@ from app.models.control import Control
 from app.models.evidence_item import EvidenceItem
 from app.models.import_job import ImportJob
 from app.models.import_parity_tracking import ImportParityTracking
+from app.models.business_unit import BusinessUnit
 from tests.helpers.auth_org import bootstrap_org_user
 
 BASE = "/api/v1/import"
+
+
+def _build_zip_base64(files: dict[str, str]) -> str:
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    return base64.b64encode(payload.getvalue()).decode()
 
 
 def test_import_job_create_preview_and_row_level_parse_errors(client, db_session):
@@ -338,3 +350,155 @@ def test_import_parity_dashboard_threshold_override(client, db_session):
     assert lowered_threshold.status_code == 200
     assert lowered_threshold.json()["threshold_pct"] == 0.0
     assert lowered_threshold.json()["ready_to_switch"] is True
+
+
+def test_import_job_source_mappers_cover_all_five_sources(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="import-all-sources")
+    org_id = UUID(org["organization_id"])
+
+    vanta_create = client.post(
+        f"{BASE}/vanta",
+        headers=org["org_headers"],
+        json={
+            "dry_run": False,
+            "conflict_strategy": "skip",
+            "source_payload": {
+                "monitors": [{"name": "Vanta Monitor Control", "code": "VM-1", "description": "from monitor"}],
+                "integrations": [{"name": "Vanta AWS Integration", "status": "pass"}],
+                "policies": [{"name": "Vanta Policy", "policy_type": "security"}],
+            },
+        },
+    )
+    assert vanta_create.status_code == 201
+    assert client.post(f"{BASE}/{vanta_create.json()['id']}/commit", headers=org["org_headers"]).status_code == 200
+
+    drata_zip = _build_zip_base64(
+        {
+            "controls.csv": "name,control_code,description\nDrata Control,DR-1,from drata csv\n",
+            "evidence.csv": "name,evidence_type,collected_at,created_at\nDrata Evidence,document,2026-03-10T12:00:00Z,2025-03-10T12:00:00Z\n",
+            "policies.csv": "policy_name,policy_type,description\nDrata Policy,security,from drata policy export\n",
+        }
+    )
+    drata_create = client.post(
+        f"{BASE}/drata",
+        headers=org["org_headers"],
+        json={
+            "dry_run": False,
+            "conflict_strategy": "skip",
+            "source_payload": {"zip_base64": drata_zip},
+        },
+    )
+    assert drata_create.status_code == 201
+    assert client.post(f"{BASE}/{drata_create.json()['id']}/commit", headers=org["org_headers"]).status_code == 200
+
+    sprinto_create = client.post(
+        f"{BASE}/sprinto",
+        headers=org["org_headers"],
+        json={
+            "dry_run": False,
+            "conflict_strategy": "skip",
+            "csv_content": (
+                "module,name,code,description\n"
+                "entities,Sprinto Entity,SPR-ENG,Engineering org unit\n"
+                "controls,Sprinto Access Control,SPR-C-1,Control from Sprinto export\n"
+            ),
+        },
+    )
+    assert sprinto_create.status_code == 201
+    assert client.post(f"{BASE}/{sprinto_create.json()['id']}/commit", headers=org["org_headers"]).status_code == 200
+
+    scrut_create = client.post(
+        f"{BASE}/scrut",
+        headers=org["org_headers"],
+        json={
+            "dry_run": False,
+            "conflict_strategy": "skip",
+            "source_payload": {
+                "entities": [{"name": "Scrut Entity", "code": "SCR-OPS"}],
+                "controls": [{"name": "Scrut Control", "code": "SCR-C-1"}],
+            },
+        },
+    )
+    assert scrut_create.status_code == 201
+    assert client.post(f"{BASE}/{scrut_create.json()['id']}/commit", headers=org["org_headers"]).status_code == 200
+
+    generic_create = client.post(
+        f"{BASE}/generic",
+        headers=org["org_headers"],
+        json={
+            "dry_run": False,
+            "conflict_strategy": "skip",
+            "records": [{"entity_type": "policy", "title": "Generic Policy", "policy_type": "security"}],
+        },
+    )
+    assert generic_create.status_code == 201
+    assert client.post(f"{BASE}/{generic_create.json()['id']}/commit", headers=org["org_headers"]).status_code == 200
+
+    controls = db_session.execute(select(Control).where(Control.organization_id == org_id)).scalars().all()
+    policies = db_session.execute(select(CompliancePolicy).where(CompliancePolicy.organization_id == org_id)).scalars().all()
+    evidence = db_session.execute(select(EvidenceItem).where(EvidenceItem.organization_id == org_id)).scalars().all()
+    units = db_session.execute(select(BusinessUnit).where(BusinessUnit.organization_id == org_id)).scalars().all()
+
+    assert {row.source_import_tool for row in controls} >= {"vanta", "drata", "sprinto", "scrut"}
+    assert {row.source_import_tool for row in policies} >= {"vanta", "drata", "generic"}
+    assert {row.source_import_tool for row in evidence} >= {"vanta", "drata"}
+    assert {row.source_import_tool for row in units} >= {"sprinto", "scrut"}
+    assert any(row.evidence_type == "technical_control_test_result" for row in evidence)
+
+
+def test_import_job_drata_zip_corrupt_reports_clear_error(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="import-drata-zip-corrupt")
+    create = client.post(
+        f"{BASE}/drata",
+        headers=org["org_headers"],
+        json={
+            "dry_run": True,
+            "conflict_strategy": "skip",
+            "source_payload": {"zip_base64": "not-valid-base64"},
+        },
+    )
+    assert create.status_code == 201
+    job_id = create.json()["id"]
+    progress = client.get(f"{BASE}/{job_id}/progress", headers=org["org_headers"])
+    assert progress.status_code == 200
+    assert progress.json()["job"]["status"] == "failed"
+    assert "valid base64" in (progress.json()["job"]["error_summary"] or "")
+
+
+def test_import_job_generic_csv_custom_column_map(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="import-generic-column-map")
+    create = client.post(
+        f"{BASE}/generic",
+        headers=org["org_headers"],
+        json={
+            "dry_run": False,
+            "conflict_strategy": "skip",
+            "csv_content": (
+                "kind,headline,details,ref_code,evidence_kind,observed_on\n"
+                "evidence,CSV Named Evidence,mapped columns,E-77,screenshot,2026-02-01T00:00:00Z\n"
+            ),
+            "source_payload": {
+                "column_map": {
+                    "entity_type": "kind",
+                    "title": "headline",
+                    "description": "details",
+                    "code": "ref_code",
+                    "evidence_type": "evidence_kind",
+                    "collected_at": "observed_on",
+                }
+            },
+        },
+    )
+    assert create.status_code == 201
+    job_id = create.json()["id"]
+    commit = client.post(f"{BASE}/{job_id}/commit", headers=org["org_headers"])
+    assert commit.status_code == 200
+    assert commit.json()["created"]["evidence"] == 1
+
+    evidence_row = db_session.execute(
+        select(EvidenceItem).where(
+            EvidenceItem.organization_id == UUID(org["organization_id"]),
+            EvidenceItem.title == "CSV Named Evidence",
+        )
+    ).scalar_one()
+    assert evidence_row.evidence_type == "screenshot"
