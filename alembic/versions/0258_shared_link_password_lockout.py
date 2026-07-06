@@ -1,7 +1,7 @@
 """add share link password lockout columns
 
-Revision ID: 0246_shared_link_lockout
-Revises: 0245_saml_replay
+Revision ID: 0258_shared_link_password_lockout
+Revises: 0257_tv1_baseline_run
 Create Date: 2026-07-06 00:00:00.000000
 """
 
@@ -12,8 +12,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0246_shared_link_lockout"
-down_revision: str | None = "0245_saml_replay"
+revision: str = "0258_shared_link_password_lockout"
+down_revision: str | None = "0257_tv1_baseline_run"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
