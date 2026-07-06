@@ -92,3 +92,29 @@ class TeamInvitationAcceptResponse(BaseModel):
     org_id: uuid.UUID
     access_token: str
     token_type: str = "bearer"
+
+
+class TV1GitHubIntegrationRequest(BaseModel):
+    owner: str = Field(min_length=1, max_length=255)
+    token: str = Field(min_length=1, max_length=500)
+    api_base_url: str | None = None
+    repo_limit: int = Field(default=20, ge=1, le=100)
+    target_control_id: uuid.UUID | None = None
+
+
+class TV1BaselineStartRequest(BaseModel):
+    framework_ids: list[uuid.UUID] = Field(default_factory=list)
+    github: TV1GitHubIntegrationRequest
+
+
+class TV1BaselineRunRead(BaseModel):
+    run_id: uuid.UUID
+    organization_id: uuid.UUID
+    status: str
+    intake_session_id: uuid.UUID | None = None
+    integration_provider: str | None = None
+    started_at: datetime
+    completed_at: datetime | None = None
+    failed_at: datetime | None = None
+    failure_reason: str | None = None
+    gap_report: dict = Field(default_factory=dict)

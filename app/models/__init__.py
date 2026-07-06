@@ -110,6 +110,8 @@ from app.models.control_test_definition import ControlTestDefinition
 from app.models.control_test_run import ControlTestRun
 from app.models.compliance_report import ComplianceReport
 from app.models.compliance_report_section import ComplianceReportSection
+from app.models.compliance_baseline_run import ComplianceBaselineRun
+from app.models.compliance_baseline_evidence_sync_run import ComplianceBaselineEvidenceSyncRun
 from app.models.compliance_bot_outbox import ComplianceBotOutbox
 from app.models.compliance_bot_subscription import ComplianceBotSubscription
 from app.models.carbon_emissions_reading import CarbonEmissionsReading
