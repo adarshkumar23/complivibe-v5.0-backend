@@ -64,7 +64,7 @@ def sso_callback(
     saml_response: Annotated[str, Form(alias="SAMLResponse")],
     db: Session = Depends(get_db),
 ) -> SSOCallbackResponse:
-    payload = SSOService().process_callback(org_slug=org_slug, saml_response=saml_response, db=db)
+    payload = SSOService().process_callback(org_slug=org_slug, saml_response=saml_response, request=request, db=db)
     db.commit()
     return SSOCallbackResponse(**payload)
 

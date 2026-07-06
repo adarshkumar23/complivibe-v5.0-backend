@@ -3,7 +3,7 @@
 Worktree: `/home/ubuntu/complivibe-v4.0/complivibe-sweep-d`  
 Branch: `final-sweep-d`  
 Base refreshed to main: `66f779d Document local dev vault setup`  
-Alembic head/current: `0244_fair_bayesian (head)`  
+Alembic head/current: `0245_saml_replay (head)`
 Real env copied from backend: `.env` includes `VAULT_ADDR=http://127.0.0.1:8210` and `VAULT_TOKEN=dev-root-token`.
 
 ## Verification Summary
@@ -15,10 +15,10 @@ Final test evidence:
 - Focused security regression set: passed.
 - Broad D-slice suite: passed.
 - Failed observability dependency rerun after installing declared runtime packages: passed.
-- Final full suite: `python -m pytest tests/ -q --disable-warnings` passed.
-- Only skip: existing PostgreSQL migration smoke test skipped because `POSTGRES_TEST_DATABASE_URL` is not set.
+- Final full suite after SAML hardening and replay migration: `python -m pytest tests/ -q --disable-warnings` passed.
+- Skips: existing PostgreSQL migration smoke test skipped because `POSTGRES_TEST_DATABASE_URL` is not set; GDELT reachability smoke skipped because the sandbox request timed out.
 
-No migrations were added. No hard deletes were used. `AuditService.write_audit_log` call sites were preserved.
+One migration was added for SAML assertion replay protection. No hard deletes were used. `AuditService.write_audit_log` call sites were preserved.
 
 ## Fixes Made
 
@@ -38,9 +38,9 @@ No migrations were added. No hard deletes were used. `AuditService.write_audit_l
    - Before: admin-configured discovery/JWKS URLs were SSRF candidates.
    - After: `assert_public_http_url` guards discovery and callback-time JWKS fetches; regressions cover loopback URLs.
 
-5. SAML SSO no longer accepts unsigned forged assertions through the regex fallback.
-   - Before: any posted XML/string containing an email could authenticate if SSO was active.
-   - After: unsigned fallback returns no email and callback rejects it. Remaining caveat: this is not full cryptographic SAML validation; see residual risks.
+5. SAML SSO now uses strict `python3-saml` response validation plus DB-backed assertion replay protection.
+   - Before: any posted XML/string containing an email could authenticate if SSO was active, and the first sweep only added a reject-if-unsigned guard.
+   - After: the callback validates the SAML response with `OneLogin_Saml2_Auth.process_response()` using per-org settings, requires an assertion signature, verifies it against that org's configured IdP certificate, validates issuer, audience, ACS/Destination/Recipient, and Conditions/SubjectConfirmation timestamps, extracts identity only from toolkit-validated NameID/attributes, and stores consumed assertion IDs in `saml_assertion_replays`.
 
 6. DORA ICT register now validates cross-tenant references and completes the requested chain.
    - Before: `owner_id` was checked only against global users and `vendor_id` was not validated; DORA gaps created a Risk only.
@@ -84,7 +84,7 @@ No migrations were added. No hard deletes were used. `AuditService.write_audit_l
 | Users & Memberships | SOLID | Membership creation/list/update permissions pass; cross-org membership assumptions rejected via RBAC dependencies. |
 | Roles & Custom Roles | SOLID | Custom role CRUD/assignment tests pass; dedicated permission checks preserved. |
 | Authentication | SOLID | Register/login/me/RBAC/audit tests pass; inactive users blocked. |
-| SSO (SAML) | WEAK after partial fix | Unsigned forged assertion acceptance is fixed and regression-tested. Full signed assertion validation against configured certificate/issuer/audience/timestamps remains a required hardening item. |
+| SSO (SAML) | SOLID after fix | Real signed SAML HTTP callback tests pass for valid assertion and reject unsigned, wrong certificate, wrong issuer, wrong audience, wrong destination, expired, not-yet-valid, and replayed assertions. Failures write `sso.login_failed` audit rows with `validation_check`; success writes `sso.login`. |
 | SSO (OIDC) | SOLID | Discovery/config/login/callback validation tests pass; invalid state/nonce/claims/signature rejected; internal discovery/JWKS URL regressions pass. |
 | SCIM Provisioning | SOLID after fix | Token lifecycle and org isolation pass; shared-user deprovision now leaves other org membership active and global user active, with DB assertions. |
 | Sessions | SOLID | Session/IP allowlist tests pass. |
@@ -117,22 +117,51 @@ No migrations were added. No hard deletes were used. `AuditService.write_audit_l
 
 ## Residual Risks / Not Fixed
 
-- SAML SSO remains WEAK until full `python3-saml` validation is wired for issuer, audience, ACS/destination, timestamps, and configured certificate signature verification. This sweep blocked the live forged unsigned assertion bug, but did not implement the complete SAML validation stack.
 - Connector catalog writes remain a product/security decision: catalog entries are global, but ordinary org connector write permission can mutate schema/status affecting other org enablements. The safe direction is a platform-admin-only permission model plus regression tests.
 - AI usage single-system latest-check reads may return stale historical checks after an AI system is archived. Bulk/gap paths exclude archived systems and no cross-tenant leak was found.
+
+## SAML Security Evidence
+
+Before/after by validation requirement:
+
+| Requirement | Before | After |
+| --- | --- | --- |
+| Signature verification against org IdP certificate | Regex fallback accepted unsigned XML/string payloads; no cryptographic verification. | `python3-saml` strict validation requires signed assertions and verifies signatures with the current org's `sso_configs.certificate`. Wrong-tenant certificate test returns 401. |
+| Issuer validation | Not validated. | Toolkit IdP `entityId` is set from the org config and wrong issuer test returns 401. |
+| Audience restriction | Not validated. | Toolkit SP `entityId` is the callback host's metadata URL and wrong audience test returns 401. |
+| Destination / ACS / Recipient | Not validated. | Toolkit request data is built from the actual FastAPI request and wrong Destination/Recipient test returns 401. |
+| Timestamp validation | Not validated. | Toolkit Conditions and SubjectConfirmation timestamp checks reject expired and not-yet-valid assertions in HTTP tests. |
+| Replay protection | Not present. | Validated assertion IDs are stored in `saml_assertion_replays`; replaying the same signed assertion returns 401 and writes an audit failure. |
+
+Adversarial HTTP tests added in `tests/unit/test_sso_b1.py`:
+
+| Test | Result |
+| --- | --- |
+| Unsigned assertion, original bug | Rejected with 401; audit `validation_check=signature`. |
+| Signed assertion with different organization's certificate | Rejected with 401; audit `validation_check=signature`. |
+| Correctly signed assertion with wrong issuer | Rejected with 401; audit `validation_check=issuer`. |
+| Correctly signed assertion with wrong audience | Rejected with 401; audit `validation_check=audience`. |
+| Correctly signed assertion with wrong destination | Rejected with 401; audit `validation_check=destination`. |
+| Correctly signed assertion expired in the past | Rejected with 401; audit `validation_check=timestamp`. |
+| Correctly signed assertion not yet valid beyond toolkit clock skew | Rejected with 401; audit `validation_check=timestamp`. |
+| Correctly signed valid assertion replayed a second time | First request succeeds; second request rejected with 401; audit `validation_check=replay`. |
+| Correctly signed valid assertion first use | Succeeds with 200, JIT user/membership created, `sso.login` audit row written. |
 
 ## Changed Files
 
 - `app/services/legal_matter_service.py`
 - `app/auth/services/scim_service.py`
 - `app/auth/services/sso_service.py`
+- `app/auth/routers/sso.py`
 - `app/auth/services/oidc_config_service.py`
 - `app/auth/services/oidc_service.py`
 - `app/platform/routers/billing.py`
 - `app/platform/routers/rate_limits.py`
 - `app/compliance/services/dora_service.py`
+- `app/models/saml_assertion_replay.py`
+- `alembic/versions/0245_saml_assertion_replay.py`
 - Regression tests in `tests/unit/test_*`
 
 ## Final Status
 
-Ready for review. Do not merge without reviewer acknowledgement of the residual SAML and connector catalog risks.
+Ready for review. SAML is now rated SOLID based on strict python3-saml validation, replay storage, audited failures, adversarial HTTP tests, and a green full suite. Do not merge without reviewer acknowledgement of the remaining connector catalog risk.
