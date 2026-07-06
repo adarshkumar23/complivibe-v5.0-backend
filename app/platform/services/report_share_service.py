@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -21,6 +22,10 @@ from app.models.task import Task
 from app.models.shared_report_link import SharedReportLink
 from app.privacy.services.ropa_service import RopaService
 from app.services.audit_service import AuditService
+
+
+MAX_FAILED_PASSWORD_ATTEMPTS = 5
+PASSWORD_LOCKOUT_MINUTES = 15
 
 
 class ReportShareService:
@@ -105,7 +110,7 @@ class ReportShareService:
                 detail="This report link has reached its maximum view count",
             )
 
-        self._verify_password(link, password)
+        self._verify_password(link, password, db)
 
         link.view_count += 1
         link.last_viewed_at = now
@@ -130,8 +135,11 @@ class ReportShareService:
     def verify_password(self, token: str, db: Session, password: str | None = None) -> bool:
         link = self._get_active_link(token, db)
         try:
-            self._verify_password(link, password)
-        except HTTPException:
+            self._verify_password(link, password, db)
+        except HTTPException as exc:
+            # Propagate rate-limit / lockout responses so the API can return 429.
+            if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+                raise
             return False
         return True
 
@@ -185,18 +193,54 @@ class ReportShareService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report link not found or expired")
         return link
 
-    def _verify_password(self, link: SharedReportLink, password: str | None) -> None:
+    def _verify_password(self, link: SharedReportLink, password: str | None, db: Session) -> None:
         if not link.password_hash:
             return
+
+        now = self.utcnow()
+        if link.locked_until is not None:
+            compare_now = now if link.locked_until.tzinfo is not None else now.replace(tzinfo=None)
+            if link.locked_until > compare_now:
+                retry_after = int((link.locked_until - compare_now).total_seconds())
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Too many failed password attempts for this share link. Please try again later.",
+                    headers={"Retry-After": str(max(1, retry_after))},
+                )
+            # Lockout has expired; reset the counter for a fresh window.
+            link.failed_password_attempt_count = 0
+            link.locked_until = None
+
         if not password:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="This report is password protected",
                 headers={"WWW-Authenticate": "password"},
             )
+
         provided_hash = hashlib.sha256(password.encode()).hexdigest()
-        if provided_hash != link.password_hash:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect password")
+        if hmac.compare_digest(provided_hash, link.password_hash):
+            # Successful authentication resets the failure window.
+            link.failed_password_attempt_count = 0
+            link.locked_until = None
+            return
+
+        link.failed_password_attempt_count += 1
+        if link.failed_password_attempt_count >= MAX_FAILED_PASSWORD_ATTEMPTS:
+            link.locked_until = now + timedelta(minutes=PASSWORD_LOCKOUT_MINUTES)
+            AuditService(db).write_audit_log(
+                action="report.share_password_lockout",
+                entity_type="shared_report_links",
+                entity_id=link.id,
+                organization_id=link.organization_id,
+                actor_user_id=None,
+                after_json={
+                    "failed_password_attempt_count": link.failed_password_attempt_count,
+                    "locked_until": link.locked_until.isoformat(),
+                },
+            )
+        db.flush()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect password")
 
     def _generate_report(self, org_id: uuid.UUID, report_type: str, report_params: dict, db: Session) -> dict:
         if report_type == "risk_register":

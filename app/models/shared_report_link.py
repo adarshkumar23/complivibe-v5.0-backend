@@ -26,6 +26,8 @@ class SharedReportLink(UUIDPrimaryKeyMixin, Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     max_views: Mapped[int | None] = mapped_column(Integer, nullable=True)
     view_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_password_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_viewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     recipient_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     watermark_text: Mapped[str | None] = mapped_column(Text, nullable=True)
