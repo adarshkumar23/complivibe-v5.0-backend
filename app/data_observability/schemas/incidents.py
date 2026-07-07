@@ -38,6 +38,10 @@ class DataIncidentRead(BaseModel):
     resolved_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    age_hours: int = 0
+    recurrence_count: int = 1
+    escalated_to_issue: bool = False
+    context_flags: list[str] = []
 
 
 class ResolveIncidentRequest(BaseModel):
@@ -52,6 +56,11 @@ class DataIncidentSummaryRead(BaseModel):
     new_count: int
     auto_escalated_count: int
     assets_with_active_incidents: int
+    open_count: int = 0
+    critical_open_count: int = 0
+    stale_new_count: int = 0
+    mean_time_to_resolve_hours: float = 0.0
+    context_flags: list[str] = []
 
 
 class EscalateIncidentRead(BaseModel):

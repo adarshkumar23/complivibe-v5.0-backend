@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from app.models.data_asset import DataAsset
+from app.models.data_incident import DataIncident
 from app.models.issue import Issue
 from tests.helpers.auth_org import bootstrap_org_user
 
@@ -105,6 +106,28 @@ def test_c79_data_incident_detection(client, db_session):
     )
     assert medium_dup.status_code == 201
     assert medium_dup.json()["id"] == medium_body["id"]
+    assert medium_dup.json()["recurrence_count"] >= 2
+    assert "repeated_incident" in medium_dup.json()["context_flags"]
+
+    # A duplicate inside the dedup window with higher severity should upgrade the same incident.
+    medium_critical_dup = client.post(
+        INCIDENTS_BASE,
+        headers=org["org_headers"],
+        json={
+            "data_asset_id": asset_id,
+            "detector_type": "quality_breach",
+            "title": "Metric drift escalated",
+            "description": "Escalated impact within dedup window",
+            "severity": "critical",
+            "rule_type": "freshness",
+            "detected_by": "api",
+        },
+    )
+    assert medium_critical_dup.status_code == 201
+    assert medium_critical_dup.json()["id"] == medium_body["id"]
+    assert medium_critical_dup.json()["severity"] == "critical"
+    assert medium_critical_dup.json()["linked_issue_id"] is not None
+    assert medium_critical_dup.json()["escalated_to_issue"] is True
 
     investigate = client.post(f"{INCIDENTS_BASE}/{medium_body['id']}/investigate", headers=org["org_headers"])
     assert investigate.status_code == 200
@@ -135,6 +158,12 @@ def test_c79_data_incident_detection(client, db_session):
     )
     assert medium_2.status_code == 201
     medium_2_id = medium_2.json()["id"]
+    assert "untriaged" in medium_2.json()["context_flags"]
+    stale_row = db_session.get(DataIncident, uuid.UUID(medium_2_id))
+    assert stale_row is not None
+    stale_row.detected_at = datetime.now(UTC) - timedelta(hours=30)
+    stale_row.updated_at = stale_row.detected_at
+    db_session.commit()
 
     escalated = client.post(f"{INCIDENTS_BASE}/{medium_2_id}/escalate-to-issue", headers=org["org_headers"])
     assert escalated.status_code == 200
@@ -146,7 +175,14 @@ def test_c79_data_incident_detection(client, db_session):
     assert summary.status_code == 200
     summary_body = summary.json()
     assert summary_body["by_severity"].get("critical", 0) >= 1
-    assert summary_body["by_severity"].get("medium", 0) >= 2
+    assert summary_body["by_severity"].get("medium", 0) >= 1
+    assert "open_count" in summary_body
+    assert "critical_open_count" in summary_body
+    assert "mean_time_to_resolve_hours" in summary_body
+    assert "context_flags" in summary_body
+    assert summary_body["open_count"] >= 1
+    assert summary_body["stale_new_count"] >= 1
+    assert "stale_new_incidents_present" in summary_body["context_flags"]
 
     # Wire test: access anomaly breach creates incident.
     ingest_key = "c79-ingest-key-12345"
@@ -183,6 +219,8 @@ def test_c79_data_incident_detection(client, db_session):
     )
     assert incidents.status_code == 200
     assert len(incidents.json()) >= 1
+    assert "age_hours" in incidents.json()[0]
+    assert "context_flags" in incidents.json()[0]
 
     # Org isolation.
     org_b = bootstrap_org_user(client, email_prefix="c79-org-b")

@@ -36,6 +36,73 @@ class DataIncidentService:
     def utcnow() -> datetime:
         return datetime.now(UTC)
 
+    @staticmethod
+    def _as_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    @staticmethod
+    def _severity_rank(value: str) -> int:
+        return {"low": 1, "medium": 2, "high": 3, "critical": 4}.get(value, 0)
+
+    def incident_context(self, row: DataIncident, *, now: datetime | None = None) -> dict:
+        evaluated_now = now or self.utcnow()
+        detected_at = self._as_utc(row.detected_at) or evaluated_now
+        age_hours = max(0, int((evaluated_now - detected_at).total_seconds() // 3600))
+        evidence = dict(row.evidence_json or {})
+        recurrence_count = int(evidence.get("recurrence_count", 1))
+        context_flags: list[str] = []
+        if row.detected_by in {"scheduler", "rule_engine", "api"}:
+            context_flags.append("auto_detected")
+        if recurrence_count > 1:
+            context_flags.append("repeated_incident")
+        if row.status == "new":
+            context_flags.append("untriaged")
+            if age_hours >= 24:
+                context_flags.append("stale_new_incident")
+        if row.severity in {"critical", "high"} and row.status in {"new", "investigating", "contained"}:
+            context_flags.append("high_impact_open_incident")
+        if row.linked_issue_id is not None:
+            issue = self.db.get(Issue, row.linked_issue_id)
+            if issue is None or issue.deleted_at is not None:
+                context_flags.append("linked_issue_missing_or_closed")
+        return {
+            "age_hours": age_hours,
+            "recurrence_count": recurrence_count,
+            "escalated_to_issue": row.linked_issue_id is not None,
+            "context_flags": context_flags,
+        }
+
+    def incident_response_payload(self, row: DataIncident) -> dict:
+        context = self.incident_context(row)
+        return {
+            "id": row.id,
+            "organization_id": row.organization_id,
+            "data_asset_id": row.data_asset_id,
+            "detector_type": row.detector_type,
+            "detector_ref_id": row.detector_ref_id,
+            "title": row.title,
+            "description": row.description,
+            "severity": row.severity,
+            "status": row.status,
+            "rule_type": row.rule_type,
+            "evidence_json": row.evidence_json,
+            "linked_issue_id": row.linked_issue_id,
+            "detected_by": row.detected_by,
+            "detected_at": row.detected_at,
+            "resolved_by": row.resolved_by,
+            "resolved_at": row.resolved_at,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "age_hours": context["age_hours"],
+            "recurrence_count": context["recurrence_count"],
+            "escalated_to_issue": context["escalated_to_issue"],
+            "context_flags": context["context_flags"],
+        }
+
     def _require_asset(self, org_id: uuid.UUID, asset_id: uuid.UUID) -> DataAsset:
         row = self.db.execute(
             select(DataAsset).where(
@@ -146,6 +213,55 @@ class DataIncidentService:
 
         existing = self._check_dedup(org_id, data_asset_id, detector_type, rule_type)
         if existing is not None:
+            now = self.utcnow()
+            evidence_json = dict(existing.evidence_json or {})
+            recurrence_count = int(evidence_json.get("recurrence_count", 1)) + 1
+            evidence_json["recurrence_count"] = recurrence_count
+            evidence_json["last_seen_at"] = now.isoformat()
+            if evidence_json.get("first_seen_at") is None:
+                evidence_json["first_seen_at"] = (self._as_utc(existing.detected_at) or now).isoformat()
+
+            severity_upgraded = self._severity_rank(severity) > self._severity_rank(existing.severity)
+            previous_severity = existing.severity
+            if severity_upgraded:
+                existing.severity = severity
+                evidence_json["previous_severity"] = previous_severity
+                evidence_json["severity_upgraded_at"] = now.isoformat()
+            if evidence:
+                evidence_json["latest_evidence"] = evidence
+
+            existing.evidence_json = evidence_json
+            existing.updated_at = now
+            self.db.flush()
+
+            if existing.severity == "critical" and existing.linked_issue_id is None:
+                issue = self._create_issue_for_incident(existing, asset, actor_user_id)
+                existing.linked_issue_id = issue.id
+                existing.updated_at = self.utcnow()
+                self.db.flush()
+                AuditService(self.db).write_audit_log(
+                    action="data_incident.auto_escalated",
+                    entity_type="issue",
+                    entity_id=issue.id,
+                    organization_id=org_id,
+                    actor_user_id=actor_user_id,
+                    after_json={"incident_id": str(existing.id), "source_type": "data_incident"},
+                    metadata_json={"source": "dedup_escalation"},
+                )
+
+            AuditService(self.db).write_audit_log(
+                action="data_incident.deduplicated",
+                entity_type="data_incident",
+                entity_id=existing.id,
+                organization_id=org_id,
+                actor_user_id=actor_user_id,
+                after_json={
+                    "recurrence_count": recurrence_count,
+                    "severity": existing.severity,
+                    "severity_upgraded": severity_upgraded,
+                },
+                metadata_json={"source": detected_by, "rule_type": rule_type},
+            )
             return existing
 
         now = self.utcnow()
@@ -331,6 +447,7 @@ class DataIncidentService:
         return issue
 
     def get_incident_summary(self, org_id: uuid.UUID) -> dict:
+        now = self.utcnow()
         total = int(self.db.execute(select(func.count(DataIncident.id)).where(DataIncident.organization_id == org_id)).scalar_one() or 0)
 
         by_severity_rows = self.db.execute(
@@ -376,6 +493,64 @@ class DataIncidentService:
             ).scalar_one()
             or 0
         )
+        open_count = int(
+            self.db.execute(
+                select(func.count(DataIncident.id)).where(
+                    DataIncident.organization_id == org_id,
+                    DataIncident.status.in_(["new", "investigating", "contained"]),
+                )
+            ).scalar_one()
+            or 0
+        )
+        critical_open_count = int(
+            self.db.execute(
+                select(func.count(DataIncident.id)).where(
+                    DataIncident.organization_id == org_id,
+                    DataIncident.severity == "critical",
+                    DataIncident.status.in_(["new", "investigating", "contained"]),
+                )
+            ).scalar_one()
+            or 0
+        )
+        stale_new_threshold = now - timedelta(hours=24)
+        stale_new_count = int(
+            self.db.execute(
+                select(func.count(DataIncident.id)).where(
+                    DataIncident.organization_id == org_id,
+                    DataIncident.status == "new",
+                    DataIncident.detected_at < stale_new_threshold,
+                )
+            ).scalar_one()
+            or 0
+        )
+
+        resolved_rows = self.db.execute(
+            select(DataIncident.detected_at, DataIncident.resolved_at).where(
+                DataIncident.organization_id == org_id,
+                DataIncident.status == "resolved",
+                DataIncident.resolved_at.is_not(None),
+            )
+        ).all()
+        resolution_hours: list[float] = []
+        for detected_at, resolved_at in resolved_rows:
+            d = self._as_utc(detected_at)
+            r = self._as_utc(resolved_at)
+            if d is None or r is None:
+                continue
+            delta_hours = (r - d).total_seconds() / 3600
+            if delta_hours >= 0:
+                resolution_hours.append(delta_hours)
+        mean_time_to_resolve_hours = round(sum(resolution_hours) / len(resolution_hours), 2) if resolution_hours else 0.0
+
+        context_flags: list[str] = []
+        if critical_open_count > 0:
+            context_flags.append("critical_open_incidents_present")
+        if stale_new_count > 0:
+            context_flags.append("stale_new_incidents_present")
+        if total > 0 and (auto_escalated_count / total) >= 0.5:
+            context_flags.append("high_auto_escalation_share")
+        if mean_time_to_resolve_hours > 72:
+            context_flags.append("high_mean_time_to_resolve")
 
         return {
             "total": total,
@@ -385,4 +560,9 @@ class DataIncidentService:
             "new_count": new_count,
             "auto_escalated_count": auto_escalated_count,
             "assets_with_active_incidents": assets_with_active_incidents,
+            "open_count": open_count,
+            "critical_open_count": critical_open_count,
+            "stale_new_count": stale_new_count,
+            "mean_time_to_resolve_hours": mean_time_to_resolve_hours,
+            "context_flags": context_flags,
         }

@@ -19,6 +19,10 @@ from app.models.user import User
 router = APIRouter(prefix="/data-observability/incidents", tags=["data-observability-incidents"])
 
 
+def _incident_read(service: DataIncidentService, row) -> DataIncidentRead:
+    return DataIncidentRead.model_validate(service.incident_response_payload(row))
+
+
 @router.post("", response_model=DataIncidentRead, status_code=status.HTTP_201_CREATED)
 def create_manual_incident(
     payload: DataIncidentCreate,
@@ -27,7 +31,8 @@ def create_manual_incident(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:write")),
 ) -> DataIncidentRead:
-    row = DataIncidentService(db).create_incident(
+    service = DataIncidentService(db)
+    row = service.create_incident(
         organization.id,
         payload.data_asset_id,
         detector_type=payload.detector_type,
@@ -43,7 +48,7 @@ def create_manual_incident(
     assert row is not None
     db.commit()
     db.refresh(row)
-    return DataIncidentRead.model_validate(row)
+    return _incident_read(service, row)
 
 
 @router.get("", response_model=list[DataIncidentRead])
@@ -58,7 +63,8 @@ def list_incidents(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:read")),
 ) -> list[DataIncidentRead]:
-    rows = DataIncidentService(db).list_incidents(
+    service = DataIncidentService(db)
+    rows = service.list_incidents(
         organization.id,
         data_asset_id=data_asset_id,
         severity=severity,
@@ -67,7 +73,7 @@ def list_incidents(
         skip=skip,
         limit=limit,
     )
-    return [DataIncidentRead.model_validate(row) for row in rows]
+    return [_incident_read(service, row) for row in rows]
 
 
 @router.get("/summary", response_model=DataIncidentSummaryRead)
@@ -87,8 +93,9 @@ def get_incident(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:read")),
 ) -> DataIncidentRead:
-    row = DataIncidentService(db).get_incident(organization.id, incident_id)
-    return DataIncidentRead.model_validate(row)
+    service = DataIncidentService(db)
+    row = service.get_incident(organization.id, incident_id)
+    return _incident_read(service, row)
 
 
 @router.post("/{incident_id}/investigate", response_model=DataIncidentRead)
@@ -99,10 +106,11 @@ def investigate_incident(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:write")),
 ) -> DataIncidentRead:
-    row = DataIncidentService(db).investigate_incident(organization.id, incident_id, current_user.id)
+    service = DataIncidentService(db)
+    row = service.investigate_incident(organization.id, incident_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return DataIncidentRead.model_validate(row)
+    return _incident_read(service, row)
 
 
 @router.post("/{incident_id}/contain", response_model=DataIncidentRead)
@@ -113,10 +121,11 @@ def contain_incident(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:write")),
 ) -> DataIncidentRead:
-    row = DataIncidentService(db).contain_incident(organization.id, incident_id, current_user.id)
+    service = DataIncidentService(db)
+    row = service.contain_incident(organization.id, incident_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return DataIncidentRead.model_validate(row)
+    return _incident_read(service, row)
 
 
 @router.post("/{incident_id}/resolve", response_model=DataIncidentRead)
@@ -128,10 +137,11 @@ def resolve_incident(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:write")),
 ) -> DataIncidentRead:
-    row = DataIncidentService(db).resolve_incident(organization.id, incident_id, current_user.id, notes=payload.notes)
+    service = DataIncidentService(db)
+    row = service.resolve_incident(organization.id, incident_id, current_user.id, notes=payload.notes)
     db.commit()
     db.refresh(row)
-    return DataIncidentRead.model_validate(row)
+    return _incident_read(service, row)
 
 
 @router.post("/{incident_id}/dismiss", response_model=DataIncidentRead)
@@ -142,10 +152,11 @@ def dismiss_incident(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:write")),
 ) -> DataIncidentRead:
-    row = DataIncidentService(db).dismiss_incident(organization.id, incident_id, current_user.id)
+    service = DataIncidentService(db)
+    row = service.dismiss_incident(organization.id, incident_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return DataIncidentRead.model_validate(row)
+    return _incident_read(service, row)
 
 
 @router.post("/{incident_id}/escalate-to-issue", response_model=EscalateIncidentRead)
