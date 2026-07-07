@@ -45,7 +45,7 @@ from app.services.task_service import TaskService
 router = APIRouter(prefix="/risks", tags=["risks"])
 
 
-def _risk_read(risk: Risk) -> RiskRead:
+def _risk_read(risk: Risk, *, owner_membership_active: bool | None = None) -> RiskRead:
     return RiskRead(
         id=risk.id,
         organization_id=risk.organization_id,
@@ -81,7 +81,30 @@ def _risk_read(risk: Risk) -> RiskRead:
         created_by_user_id=risk.created_by_user_id,
         created_at=risk.created_at,
         updated_at=risk.updated_at,
+        owner_membership_active=owner_membership_active,
     )
+
+
+def _active_owner_ids(db: Session, organization_id: uuid.UUID, owner_ids: set[uuid.UUID]) -> set[uuid.UUID]:
+    """Batch-resolve which of the given user ids currently hold an active membership in the
+    org, in a single query -- used so listing N risks doesn't cost N membership lookups."""
+    if not owner_ids:
+        return set()
+    rows = db.execute(
+        select(Membership.user_id).where(
+            Membership.organization_id == organization_id,
+            Membership.user_id.in_(owner_ids),
+            Membership.status == "active",
+        )
+    ).scalars().all()
+    return set(rows)
+
+
+def _risk_read_with_owner_status(db: Session, organization_id: uuid.UUID, risk: Risk) -> RiskRead:
+    owner_membership_active = None
+    if risk.owner_user_id is not None:
+        owner_membership_active = risk.owner_user_id in _active_owner_ids(db, organization_id, {risk.owner_user_id})
+    return _risk_read(risk, owner_membership_active=owner_membership_active)
 
 
 def _risk_control_link_read(link: RiskControlLink) -> RiskControlLinkRead:
@@ -242,7 +265,15 @@ def list_risks(
         limit=limit,
         offset=offset,
     )
-    return [_risk_read(r) for r in rows]
+    owner_ids = {r.owner_user_id for r in rows if r.owner_user_id is not None}
+    active_owner_ids = _active_owner_ids(db, organization.id, owner_ids)
+    return [
+        _risk_read(
+            r,
+            owner_membership_active=(r.owner_user_id in active_owner_ids) if r.owner_user_id is not None else None,
+        )
+        for r in rows
+    ]
 
 
 @router.get("/{risk_id}/score-breakdown", response_model=dict)
@@ -315,7 +346,7 @@ def create_risk(
 
     db.commit()
     db.refresh(risk)
-    return _risk_read(risk)
+    return _risk_read_with_owner_status(db, organization.id, risk)
 
 
 @router.get("/{risk_id}", response_model=RiskDetail)
@@ -363,7 +394,11 @@ def get_risk_detail(
         if (e := evidence_map.get(link.evidence_item_id)) is not None
     ]
 
-    return RiskDetail(**_risk_read(risk).model_dump(), linked_controls=linked_controls, linked_evidence=linked_evidence)
+    return RiskDetail(
+        **_risk_read_with_owner_status(db, organization.id, risk).model_dump(),
+        linked_controls=linked_controls,
+        linked_evidence=linked_evidence,
+    )
 
 
 @router.patch("/{risk_id}", response_model=RiskRead)
@@ -534,7 +569,7 @@ def update_risk(
 
     db.commit()
     db.refresh(risk)
-    return _risk_read(risk)
+    return _risk_read_with_owner_status(db, organization.id, risk)
 
 
 @router.patch("/{risk_id}/archive", response_model=RiskRead)
@@ -566,7 +601,7 @@ def archive_risk(
 
     db.commit()
     db.refresh(risk)
-    return _risk_read(risk)
+    return _risk_read_with_owner_status(db, organization.id, risk)
 
 
 @router.post("/{risk_id}/controls", response_model=RiskControlLinkRead)
@@ -814,7 +849,7 @@ def accept_risk(
 
     db.commit()
     db.refresh(risk)
-    return _risk_read(risk)
+    return _risk_read_with_owner_status(db, organization.id, risk)
 
 
 @router.post("/{risk_id}/treatment-task", response_model=TaskRead, status_code=status.HTTP_201_CREATED)

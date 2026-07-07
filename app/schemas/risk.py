@@ -135,6 +135,7 @@ class RiskRead(UUIDTimestampSchema):
     review_due_at: datetime | None = None
     metadata_json: dict | None = None
     created_by_user_id: UUID | None = None
+    owner_membership_active: bool | None = None
 
 
 class RiskDetail(RiskRead):

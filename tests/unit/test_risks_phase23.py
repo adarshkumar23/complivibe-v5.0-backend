@@ -302,6 +302,64 @@ def test_risk_update_owner_validation_archive_accept_and_audit(client, db_sessio
     assert "risk.archived" in actions
 
 
+def test_risk_owner_membership_active_flag_reflects_deactivation(client, db_session):
+    owner1 = _register(client, "p23-flag-owner@example.com", "Pass1234!@", "P23 Flag Org")
+    org1 = _org_id(client, owner1)
+
+    delegate = _create_active_user_with_role(db_session, org1, "p23-flag-delegate@example.com", "admin")
+
+    created = client.post(
+        "/api/v1/risks",
+        headers=_headers(owner1, org1),
+        json={
+            "title": "Delegated risk",
+            "category": "operational",
+            "likelihood": 2,
+            "impact": 3,
+            "owner_user_id": str(delegate.id),
+        },
+    )
+    assert created.status_code == 201
+    risk_id = created.json()["id"]
+    assert created.json()["owner_membership_active"] is True
+
+    detail = client.get(f"/api/v1/risks/{risk_id}", headers=_headers(owner1, org1))
+    assert detail.status_code == 200
+    assert detail.json()["owner_membership_active"] is True
+
+    listed = client.get("/api/v1/risks", headers=_headers(owner1, org1))
+    assert listed.status_code == 200
+    by_id = {row["id"]: row for row in listed.json()}
+    assert by_id[risk_id]["owner_membership_active"] is True
+
+    # A risk with no owner at all has no membership status to report.
+    unowned = client.post(
+        "/api/v1/risks",
+        headers=_headers(owner1, org1),
+        json={"title": "Unowned risk", "category": "operational", "likelihood": 1, "impact": 1},
+    )
+    assert unowned.status_code == 201
+    assert unowned.json()["owner_membership_active"] is None
+
+    # Deactivate the delegate's membership (e.g. they've left the org) without touching the risk.
+    memberships = client.get("/api/v1/memberships", headers=_headers(owner1, org1)).json()
+    delegate_membership_id = next(m["id"] for m in memberships if m["user_id"] == str(delegate.id))
+    deactivate_resp = client.patch(
+        f"/api/v1/memberships/{delegate_membership_id}/deactivate",
+        headers=_headers(owner1, org1),
+    )
+    assert deactivate_resp.status_code == 200
+
+    stale_detail = client.get(f"/api/v1/risks/{risk_id}", headers=_headers(owner1, org1))
+    assert stale_detail.status_code == 200
+    assert stale_detail.json()["owner_user_id"] == str(delegate.id)
+    assert stale_detail.json()["owner_membership_active"] is False
+
+    stale_listed = client.get("/api/v1/risks", headers=_headers(owner1, org1))
+    by_id_after = {row["id"]: row for row in stale_listed.json()}
+    assert by_id_after[risk_id]["owner_membership_active"] is False
+
+
 def test_risk_control_and_evidence_linking_detail_and_cross_tenant_rules(client):
     owner1 = _register(client, "p23-owner5@example.com", "Pass1234!@", "P23 Org5")
     owner2 = _register(client, "p23-owner6@example.com", "Pass1234!@", "P23 Org6")
