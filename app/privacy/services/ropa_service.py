@@ -37,6 +37,97 @@ class RopaService:
     def utcnow() -> datetime:
         return datetime.now(UTC)
 
+    @staticmethod
+    def _as_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    def _validate_transfer_consistency(
+        self,
+        *,
+        international_transfers: bool,
+        transfer_destinations: list | None,
+        transfer_safeguards: str | None,
+    ) -> tuple[list, str | None]:
+        normalized_destinations = transfer_destinations or []
+        normalized_safeguards = transfer_safeguards
+        if not international_transfers:
+            # Keep persisted shape consistent when transfers are disabled.
+            normalized_destinations = []
+            normalized_safeguards = None
+        return normalized_destinations, normalized_safeguards
+
+    @staticmethod
+    def _validate_legal_basis_dependencies(*, legal_basis: str, legitimate_interest_justification: str | None) -> None:
+        if legal_basis == "legitimate_interests" and not (legitimate_interest_justification or "").strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="legitimate_interest_justification is required for legal_basis=legitimate_interests",
+            )
+
+    def activity_context(self, row: ProcessingActivity, *, now: datetime | None = None) -> dict:
+        evaluated_now = now or self.utcnow()
+        updated_at = self._as_utc(row.updated_at) or evaluated_now
+        age_days = max(0, int((evaluated_now - updated_at).total_seconds() // 86400))
+        linkage_count = len(row.linked_data_asset_ids or []) + len(row.linked_subprocessor_ids or [])
+        if row.linked_dpia_id is not None:
+            linkage_count += 1
+
+        context_flags: list[str] = []
+        if row.requires_dpia and row.linked_dpia_id is None:
+            context_flags.append("requires_dpia_missing_linked_dpia")
+        if row.international_transfers and not (row.transfer_destinations or []):
+            context_flags.append("transfer_destinations_missing")
+        if row.legal_basis == "legitimate_interests" and not (row.legitimate_interest_justification or "").strip():
+            context_flags.append("legitimate_interest_justification_missing")
+        if age_days >= 180 and row.status in {"active", "under_review"}:
+            context_flags.append("activity_stale_for_review")
+        if not (row.retention_period or "").strip():
+            context_flags.append("retention_period_missing")
+
+        return {"age_days": age_days, "linkage_count": linkage_count, "context_flags": context_flags}
+
+    def activity_response_payload(self, row: ProcessingActivity) -> dict:
+        context = self.activity_context(row)
+        return {
+            "id": row.id,
+            "organization_id": row.organization_id,
+            "name": row.name,
+            "description": row.description,
+            "purpose": row.purpose,
+            "legal_basis": row.legal_basis,
+            "legitimate_interest_justification": row.legitimate_interest_justification,
+            "data_categories": row.data_categories,
+            "special_categories": row.special_categories,
+            "data_subject_types": row.data_subject_types,
+            "retention_period": row.retention_period,
+            "retention_basis": row.retention_basis,
+            "recipients": row.recipients,
+            "international_transfers": row.international_transfers,
+            "transfer_destinations": row.transfer_destinations,
+            "transfer_safeguards": row.transfer_safeguards,
+            "controller_name": row.controller_name,
+            "controller_contact": row.controller_contact,
+            "dpo_contact": row.dpo_contact,
+            "status": row.status,
+            "risk_level": row.risk_level,
+            "requires_dpia": row.requires_dpia,
+            "linked_dpia_id": row.linked_dpia_id,
+            "linked_data_asset_ids": row.linked_data_asset_ids,
+            "linked_subprocessor_ids": row.linked_subprocessor_ids,
+            "owner_id": row.owner_id,
+            "created_by": row.created_by,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "deleted_at": row.deleted_at,
+            "age_days": context["age_days"],
+            "linkage_count": context["linkage_count"],
+            "context_flags": context["context_flags"],
+        }
+
     def _require_activity(self, org_id: uuid.UUID, activity_id: uuid.UUID) -> ProcessingActivity:
         row = self.db.execute(
             select(ProcessingActivity).where(
@@ -171,6 +262,15 @@ class RopaService:
         if payload.get("risk_level") is not None and payload["risk_level"] not in ALLOWED_RISK_LEVEL:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid risk_level")
         self._require_active_org_user(org_id, payload["owner_id"], "owner_id")
+        self._validate_legal_basis_dependencies(
+            legal_basis=payload["legal_basis"],
+            legitimate_interest_justification=payload.get("legitimate_interest_justification"),
+        )
+        payload["transfer_destinations"], payload["transfer_safeguards"] = self._validate_transfer_consistency(
+            international_transfers=bool(payload.get("international_transfers", False)),
+            transfer_destinations=payload.get("transfer_destinations"),
+            transfer_safeguards=payload.get("transfer_safeguards"),
+        )
         self._validate_linked_dpia(org_id, payload.get("linked_dpia_id"))
         payload["linked_data_asset_ids"] = self._normalize_data_asset_ids(org_id, payload.get("linked_data_asset_ids"))
         payload["linked_subprocessor_ids"] = self._normalize_subprocessor_ids(org_id, payload.get("linked_subprocessor_ids"))
@@ -270,6 +370,26 @@ class RopaService:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid risk_level")
         if "owner_id" in payload and payload["owner_id"] is not None:
             self._require_active_org_user(org_id, payload["owner_id"], "owner_id")
+        next_legal_basis = payload.get("legal_basis", row.legal_basis)
+        next_legitimate_justification = payload.get("legitimate_interest_justification", row.legitimate_interest_justification)
+        self._validate_legal_basis_dependencies(
+            legal_basis=next_legal_basis,
+            legitimate_interest_justification=next_legitimate_justification,
+        )
+        next_international_transfers = (
+            payload["international_transfers"] if "international_transfers" in payload else row.international_transfers
+        )
+        next_transfer_destinations = payload.get("transfer_destinations", row.transfer_destinations)
+        next_transfer_safeguards = payload.get("transfer_safeguards", row.transfer_safeguards)
+        normalized_destinations, normalized_safeguards = self._validate_transfer_consistency(
+            international_transfers=bool(next_international_transfers),
+            transfer_destinations=next_transfer_destinations,
+            transfer_safeguards=next_transfer_safeguards,
+        )
+        if "international_transfers" in payload or "transfer_destinations" in payload:
+            payload["transfer_destinations"] = normalized_destinations
+        if "international_transfers" in payload or "transfer_safeguards" in payload:
+            payload["transfer_safeguards"] = normalized_safeguards
         if "linked_dpia_id" in payload:
             self._validate_linked_dpia(org_id, payload.get("linked_dpia_id"))
         if "linked_data_asset_ids" in payload:
@@ -436,6 +556,31 @@ class RopaService:
             ).scalar_one()
             or 0
         )
+        activity_rows = self.db.execute(select(ProcessingActivity).where(*base_filters)).scalars().all()
+        stale_activity_count = sum(
+            1
+            for row in activity_rows
+            if "activity_stale_for_review" in self.activity_context(row)["context_flags"]
+        )
+        high_risk_without_dpia_count = int(
+            self.db.execute(
+                select(func.count(ProcessingActivity.id)).where(
+                    *base_filters,
+                    ProcessingActivity.risk_level.in_(["high", "critical"]),
+                    ProcessingActivity.linked_dpia_id.is_(None),
+                )
+            ).scalar_one()
+            or 0
+        )
+        context_flags: list[str] = []
+        if missing_dpia_count > 0:
+            context_flags.append("requires_dpia_missing_links_present")
+        if stale_activity_count > 0:
+            context_flags.append("stale_activities_present")
+        if with_international_transfers > 0:
+            context_flags.append("international_transfers_present")
+        if high_risk_without_dpia_count > 0:
+            context_flags.append("high_risk_without_dpia_present")
 
         return {
             "total_activities": total_activities,
@@ -445,6 +590,9 @@ class RopaService:
             "with_international_transfers": with_international_transfers,
             "with_special_categories": with_special_categories,
             "missing_dpia_count": missing_dpia_count,
+            "stale_activity_count": stale_activity_count,
+            "high_risk_without_dpia_count": high_risk_without_dpia_count,
+            "context_flags": context_flags,
         }
 
     def generate_article30_report(self, org_id: uuid.UUID) -> dict:
@@ -480,6 +628,11 @@ class RopaService:
         dpo_contact = next((row.dpo_contact for row in rows if row.dpo_contact), None)
 
         status_value = "complete" if activities else "empty"
+        context_flags: list[str] = []
+        if activities and not dpo_contact:
+            context_flags.append("dpo_contact_missing")
+        if any(item["international_transfers"] and not item["transfer_destinations"] for item in activities):
+            context_flags.append("transfer_destinations_missing")
         return {
             "report_type": "gdpr_article30_ropa",
             "status": status_value,
@@ -488,6 +641,7 @@ class RopaService:
             "activities": activities,
             "total_activities": len(activities),
             "message": "No processing activities have been created yet." if not activities else None,
+            "context_flags": context_flags,
         }
 
     def soft_delete_activity(self, org_id: uuid.UUID, activity_id: uuid.UUID, user_id: uuid.UUID) -> ProcessingActivity:

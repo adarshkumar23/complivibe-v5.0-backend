@@ -22,6 +22,10 @@ from app.services.audit_service import AuditService
 router = APIRouter(prefix="/privacy/ropa", tags=["privacy-ropa"])
 
 
+def _activity_read(service: RopaService, row) -> ProcessingActivityRead:
+    return ProcessingActivityRead.model_validate(service.activity_response_payload(row))
+
+
 @router.post("/activities", response_model=ProcessingActivityRead, status_code=status.HTTP_201_CREATED)
 def create_activity(
     payload: ProcessingActivityCreate,
@@ -30,10 +34,11 @@ def create_activity(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("privacy:write")),
 ) -> ProcessingActivityRead:
-    row = RopaService(db).create_activity(organization.id, payload, current_user.id)
+    service = RopaService(db)
+    row = service.create_activity(organization.id, payload, current_user.id)
     db.commit()
     db.refresh(row)
-    return ProcessingActivityRead.model_validate(row)
+    return _activity_read(service, row)
 
 
 @router.get("/activities", response_model=list[ProcessingActivityRead])
@@ -47,7 +52,8 @@ def list_activities(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("privacy:read")),
 ) -> list[ProcessingActivityRead]:
-    rows = RopaService(db).list_activities(
+    service = RopaService(db)
+    rows = service.list_activities(
         organization.id,
         status_filter=status_filter,
         legal_basis=legal_basis,
@@ -55,7 +61,7 @@ def list_activities(
         skip=skip,
         limit=limit,
     )
-    return [ProcessingActivityRead.model_validate(row) for row in rows]
+    return [_activity_read(service, row) for row in rows]
 
 
 @router.get("/activities/summary", response_model=RopaSummaryRead)
@@ -74,7 +80,8 @@ def get_activity(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("privacy:read")),
 ) -> ProcessingActivityRead:
-    return ProcessingActivityRead.model_validate(RopaService(db).get_activity(organization.id, activity_id))
+    service = RopaService(db)
+    return _activity_read(service, service.get_activity(organization.id, activity_id))
 
 
 @router.patch("/activities/{activity_id}", response_model=ProcessingActivityRead)
@@ -86,10 +93,11 @@ def update_activity(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("privacy:write")),
 ) -> ProcessingActivityRead:
-    row = RopaService(db).update_activity(organization.id, activity_id, payload, current_user.id)
+    service = RopaService(db)
+    row = service.update_activity(organization.id, activity_id, payload, current_user.id)
     db.commit()
     db.refresh(row)
-    return ProcessingActivityRead.model_validate(row)
+    return _activity_read(service, row)
 
 
 @router.delete("/activities/{activity_id}", response_model=ProcessingActivityRead)
@@ -100,10 +108,11 @@ def delete_activity(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("privacy:write")),
 ) -> ProcessingActivityRead:
-    row = RopaService(db).soft_delete_activity(organization.id, activity_id, current_user.id)
+    service = RopaService(db)
+    row = service.soft_delete_activity(organization.id, activity_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return ProcessingActivityRead.model_validate(row)
+    return _activity_read(service, row)
 
 
 @router.post("/activities/{activity_id}/obligation-links", response_model=RopaFrameworkLinkRead, status_code=status.HTTP_201_CREATED)

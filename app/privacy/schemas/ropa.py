@@ -91,6 +91,9 @@ class ProcessingActivityRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
+    age_days: int = 0
+    linkage_count: int = 0
+    context_flags: list[str] = []
 
 
 class RopaFrameworkLinkCreate(BaseModel):
@@ -117,6 +120,9 @@ class RopaSummaryRead(BaseModel):
     with_international_transfers: int
     with_special_categories: int
     missing_dpia_count: int
+    stale_activity_count: int = 0
+    high_risk_without_dpia_count: int = 0
+    context_flags: list[str] = []
 
 
 class Article30ActivityRead(BaseModel):
@@ -142,3 +148,4 @@ class Article30ReportRead(BaseModel):
     activities: list[Article30ActivityRead]
     total_activities: int
     message: str | None = None
+    context_flags: list[str] = []

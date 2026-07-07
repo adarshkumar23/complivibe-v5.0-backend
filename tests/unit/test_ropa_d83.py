@@ -112,6 +112,7 @@ def test_d83_ropa_activity_obligation_and_report(client, db_session):
     created = _create_activity(client, org["org_headers"], org["user_id"]) 
     assert created["name"] == "Customer Support Processing"
     assert created["requires_dpia"] is False
+    assert "retention_period_missing" not in created["context_flags"]
 
     with_special = _create_activity(
         client,
@@ -121,6 +122,7 @@ def test_d83_ropa_activity_obligation_and_report(client, db_session):
         special_categories=["health"],
     )
     assert with_special["requires_dpia"] is True
+    assert "requires_dpia_missing_linked_dpia" in with_special["context_flags"]
 
     with_high_risk = _create_activity(
         client,
@@ -155,6 +157,8 @@ def test_d83_ropa_activity_obligation_and_report(client, db_session):
     summary = client.get(f"{BASE}/activities/summary", headers=org["org_headers"])
     assert summary.status_code == 200
     assert summary.json()["requires_dpia_count"] == 2
+    assert "context_flags" in summary.json()
+    assert summary.json()["missing_dpia_count"] >= 2
 
     report = client.get(f"{BASE}/article30-report", headers=org["org_headers"])
     assert report.status_code == 200
@@ -163,6 +167,7 @@ def test_d83_ropa_activity_obligation_and_report(client, db_session):
     assert report_body["report_type"] == "gdpr_article30_ropa"
     assert report_body["total_activities"] >= 3
     assert isinstance(report_body["activities"], list)
+    assert "context_flags" in report_body
 
     gdpr_payload = GDPRArticle30Builder.build(uuid.UUID(org["organization_id"]), db_session)
     assert gdpr_payload["status"] == "complete"
@@ -302,3 +307,62 @@ def test_d83_rejects_cross_tenant_owner_and_linked_references(client, db_session
         .count()
     )
     assert org_a_poisoned_rows == 0
+
+
+def test_d83_transfer_and_legal_basis_consistency_guards(client):
+    org = bootstrap_org_user(client, email_prefix="d83-consistency")
+
+    missing_legitimate_interest_justification = client.post(
+        f"{BASE}/activities",
+        headers=org["org_headers"],
+        json=_activity_payload(
+            org["user_id"],
+            name="Legitimate interests without justification",
+            legal_basis="legitimate_interests",
+            legitimate_interest_justification=None,
+        ),
+    )
+    assert missing_legitimate_interest_justification.status_code == 422
+    assert "legitimate_interest_justification" in missing_legitimate_interest_justification.json()["detail"]
+
+    transfer_without_destination = client.post(
+        f"{BASE}/activities",
+        headers=org["org_headers"],
+        json=_activity_payload(
+            org["user_id"],
+            name="Transfers missing destinations",
+            international_transfers=True,
+            transfer_destinations=[],
+        ),
+    )
+    assert transfer_without_destination.status_code == 201
+    assert "transfer_destinations_missing" in transfer_without_destination.json()["context_flags"]
+
+    valid_transfer = client.post(
+        f"{BASE}/activities",
+        headers=org["org_headers"],
+        json=_activity_payload(
+            org["user_id"],
+            name="Transfers with destinations",
+            legal_basis="legitimate_interests",
+            legitimate_interest_justification="Operational necessity",
+            international_transfers=True,
+            transfer_destinations=["US"],
+            transfer_safeguards="scc",
+        ),
+    )
+    assert valid_transfer.status_code == 201
+    body = valid_transfer.json()
+    assert body["international_transfers"] is True
+    assert body["transfer_destinations"] == ["US"]
+
+    removed_transfers = client.patch(
+        f"{BASE}/activities/{body['id']}",
+        headers=org["org_headers"],
+        json={"international_transfers": False},
+    )
+    assert removed_transfers.status_code == 200
+    patched = removed_transfers.json()
+    assert patched["international_transfers"] is False
+    assert patched["transfer_destinations"] == []
+    assert patched["transfer_safeguards"] is None
