@@ -4,11 +4,26 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.ai_governance.schemas.ai_classification import AIRiskClassificationRead
 from app.ai_governance.services.ai_classifier import AIRiskClassifier, MANDATORY_CONTROLS
 from app.ai_governance.services.ai_governance_event_service import AIGovernanceEventService
 from app.models.ai_risk_classification import AIRiskClassification
 from app.models.ai_system import AISystem
 from app.services.audit_service import AuditService
+
+# Human-readable phrasing for each guided-classification question key, used to
+# explain *why* a tier was assigned instead of surfacing a bare "yes"/"no".
+QUESTION_EXPLANATIONS = {
+    "critical_infrastructure": "it deploys in critical infrastructure (energy, water, transport, finance)",
+    "employment_decisions": "it affects employment, worker management, or hiring decisions",
+    "biometric_data": "it processes biometric data for identification",
+    "essential_services": "it affects access to essential services (healthcare, education, benefits)",
+    "law_enforcement": "it is used by or for law enforcement, migration, or border control",
+    "manipulation": "it could manipulate human behavior, exploit vulnerabilities, or use subliminal techniques",
+    "social_scoring": "it performs social scoring or general-purpose citizen evaluation",
+    "realtime_biometric_public": "it performs real-time remote biometric identification in public spaces",
+    "transparency_obligation": "it interacts with humans and could be mistaken for a human",
+}
 
 
 class AIRiskClassificationService:
@@ -113,3 +128,46 @@ class AIRiskClassificationService:
     def get_mandatory_controls(self, org_id: uuid.UUID, system_id: uuid.UUID) -> list[str]:
         row = self.get_classification(org_id, system_id)
         return list(MANDATORY_CONTROLS.get(row.risk_tier, []))
+
+    def build_classification_explanation(self, row: AIRiskClassification) -> str | None:
+        basis = row.classification_basis or {}
+        method = basis.get("method")
+
+        if method == "manual":
+            notes = basis.get("notes")
+            if notes:
+                return f"Manually classified as {row.risk_tier} based on: {notes}"
+            return f"Manually classified as {row.risk_tier} with no basis notes provided."
+
+        if method == "guided":
+            decision_path = basis.get("decision_path") or []
+            # The tier-determining step is the last "yes" answer in the walked
+            # path (a "no" all the way through lands on minimal/limited).
+            triggering_steps = [step for step in decision_path if step.get("answer") == "yes"]
+            if triggering_steps:
+                last = triggering_steps[-1]
+                reason = QUESTION_EXPLANATIONS.get(last.get("key"), last.get("key"))
+                return f"Classified {row.risk_tier}-risk because {reason}."
+            return f"Classified {row.risk_tier}-risk: none of the guided questionnaire's triggering criteria were answered 'yes'."
+
+        return None
+
+    def to_read(self, org_id: uuid.UUID, row: AIRiskClassification) -> AIRiskClassificationRead:
+        system = self.db.execute(
+            select(AISystem).where(
+                AISystem.organization_id == org_id,
+                AISystem.id == row.ai_system_id,
+            )
+        ).scalar_one_or_none()
+
+        reassessment_required = bool(
+            system is not None
+            and system.updated_at is not None
+            and row.classified_at is not None
+            and system.updated_at > row.classified_at
+        )
+
+        data = AIRiskClassificationRead.model_validate(row).model_dump()
+        data["classification_explanation"] = self.build_classification_explanation(row)
+        data["reassessment_required"] = reassessment_required
+        return AIRiskClassificationRead(**data)

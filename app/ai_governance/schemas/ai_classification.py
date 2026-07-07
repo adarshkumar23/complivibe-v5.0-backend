@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class GuidedClassificationStartRead(BaseModel):
@@ -31,6 +31,17 @@ class AIRiskClassificationRead(BaseModel):
     classified_at: datetime
     review_required_at: datetime | None
     updated_at: datetime
+    classification_explanation: str | None = Field(
+        default=None,
+        description="Human-readable explanation of why this risk tier was assigned.",
+    )
+    reassessment_required: bool = Field(
+        default=False,
+        description=(
+            "True when the AI system's registered attributes were changed after this "
+            "classification was recorded, meaning the tier may no longer be accurate."
+        ),
+    )
 
 
 class MandatoryControlsRead(BaseModel):

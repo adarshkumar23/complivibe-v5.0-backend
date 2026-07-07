@@ -232,7 +232,8 @@ def submit_guided_classification(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("ai_governance:write")),
 ) -> AIRiskClassificationRead:
-    row = AIRiskClassificationService(db).submit_guided_answers(
+    service = AIRiskClassificationService(db)
+    row = service.submit_guided_answers(
         organization.id,
         system_id,
         payload.answers,
@@ -240,7 +241,7 @@ def submit_guided_classification(
     )
     db.commit()
     db.refresh(row)
-    return AIRiskClassificationRead.model_validate(row)
+    return service.to_read(organization.id, row)
 
 
 @router.post("/{system_id}/classify/manual", response_model=AIRiskClassificationRead)
@@ -252,7 +253,8 @@ def manual_classify(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("ai_governance:write")),
 ) -> AIRiskClassificationRead:
-    row = AIRiskClassificationService(db).manual_classify(
+    service = AIRiskClassificationService(db)
+    row = service.manual_classify(
         organization.id,
         system_id,
         payload.risk_tier,
@@ -261,7 +263,7 @@ def manual_classify(
     )
     db.commit()
     db.refresh(row)
-    return AIRiskClassificationRead.model_validate(row)
+    return service.to_read(organization.id, row)
 
 
 @router.get("/{system_id}/classification", response_model=AIRiskClassificationRead)
@@ -271,8 +273,9 @@ def get_classification(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("ai_governance:read")),
 ) -> AIRiskClassificationRead:
-    row = AIRiskClassificationService(db).get_classification(organization.id, system_id)
-    return AIRiskClassificationRead.model_validate(row)
+    service = AIRiskClassificationService(db)
+    row = service.get_classification(organization.id, system_id)
+    return service.to_read(organization.id, row)
 
 
 @router.get("/{system_id}/mandatory-controls", response_model=MandatoryControlsRead)
