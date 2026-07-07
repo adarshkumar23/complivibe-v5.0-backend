@@ -42,6 +42,7 @@ class ControlTestDefinitionRead(BaseModel):
     metadata_json: dict | None = None
     created_at: datetime
     updated_at: datetime
+    is_overdue: bool = False
 
 
 class ControlTestRunCreateRequest(BaseModel):

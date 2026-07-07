@@ -180,9 +180,13 @@ class ControlMonitoringRuleService:
         elif rule.rule_type == "evidence_gap":
             threshold = int(rule.condition_json["days_without_evidence"])
             cutoff = now - timedelta(days=threshold)
-            for definition in definitions:
-                last_collected_at = self.db.execute(
-                    select(func.max(EvidenceItem.collected_at))
+            control_ids = [d.control_id for d in definitions]
+            # One grouped query for every scoped definition's control instead of one query per
+            # definition -- an org can have thousands of active monitoring definitions in scope.
+            last_collected_by_control: dict[uuid.UUID, datetime | None] = {}
+            if control_ids:
+                rows = self.db.execute(
+                    select(EvidenceControlLink.control_id, func.max(EvidenceItem.collected_at))
                     .select_from(EvidenceControlLink)
                     .join(
                         EvidenceItem,
@@ -193,55 +197,70 @@ class ControlMonitoringRuleService:
                     )
                     .where(
                         EvidenceControlLink.organization_id == organization_id,
-                        EvidenceControlLink.control_id == definition.control_id,
+                        EvidenceControlLink.control_id.in_(control_ids),
                         EvidenceControlLink.link_status == "active",
                     )
-                ).scalar_one_or_none()
-                last_collected_at = self.as_utc(last_collected_at)
+                    .group_by(EvidenceControlLink.control_id)
+                ).all()
+                last_collected_by_control = {control_id: collected_at for control_id, collected_at in rows}
+
+            for definition in definitions:
+                last_collected_at = self.as_utc(last_collected_by_control.get(definition.control_id))
                 if last_collected_at is None or last_collected_at <= cutoff:
                     matches.append({"definition": definition, "reason": "evidence_gap"})
 
         elif rule.rule_type == "task_overdue":
             threshold = int(rule.condition_json["days_overdue_threshold"])
             cutoff = now - timedelta(days=threshold)
+            definition_ids = [d.id for d in definitions]
+            overdue_by_definition: dict[uuid.UUID, int] = {}
+            if definition_ids:
+                rows = self.db.execute(
+                    select(Task.linked_entity_id, func.count(Task.id))
+                    .where(
+                        Task.organization_id == organization_id,
+                        Task.linked_entity_type == "control_monitoring_definition",
+                        Task.linked_entity_id.in_(definition_ids),
+                        Task.status.in_(["open", "in_progress", "blocked"]),
+                        Task.due_date.is_not(None),
+                        Task.due_date <= cutoff,
+                    )
+                    .group_by(Task.linked_entity_id)
+                ).all()
+                overdue_by_definition = {definition_id: int(count) for definition_id, count in rows}
+
             for definition in definitions:
-                overdue_tasks = int(
-                    self.db.execute(
-                        select(func.count(Task.id)).where(
-                            Task.organization_id == organization_id,
-                            Task.linked_entity_type == "control_monitoring_definition",
-                            Task.linked_entity_id == definition.id,
-                            Task.status.in_(["open", "in_progress", "blocked"]),
-                            Task.due_date.is_not(None),
-                            Task.due_date <= cutoff,
-                        )
-                    ).scalar_one()
-                )
+                overdue_tasks = overdue_by_definition.get(definition.id, 0)
                 if overdue_tasks > 0:
                     matches.append({"definition": definition, "reason": "task_overdue", "overdue_tasks": overdue_tasks})
 
         elif rule.rule_type == "risk_threshold_breach":
             levels = set(rule.condition_json["risk_levels"])
+            control_ids = [d.control_id for d in definitions]
+            breach_by_control: dict[uuid.UUID, int] = {}
+            if control_ids:
+                rows = self.db.execute(
+                    select(RiskControlLink.control_id, func.count(Risk.id))
+                    .select_from(RiskControlLink)
+                    .join(
+                        Risk,
+                        and_(
+                            Risk.id == RiskControlLink.risk_id,
+                            Risk.organization_id == organization_id,
+                        ),
+                    )
+                    .where(
+                        RiskControlLink.organization_id == organization_id,
+                        RiskControlLink.control_id.in_(control_ids),
+                        RiskControlLink.status == "active",
+                        Risk.severity.in_(levels),
+                    )
+                    .group_by(RiskControlLink.control_id)
+                ).all()
+                breach_by_control = {control_id: int(count) for control_id, count in rows}
+
             for definition in definitions:
-                breach_count = int(
-                    self.db.execute(
-                        select(func.count(Risk.id))
-                        .select_from(RiskControlLink)
-                        .join(
-                            Risk,
-                            and_(
-                                Risk.id == RiskControlLink.risk_id,
-                                Risk.organization_id == organization_id,
-                            ),
-                        )
-                        .where(
-                            RiskControlLink.organization_id == organization_id,
-                            RiskControlLink.control_id == definition.control_id,
-                            RiskControlLink.status == "active",
-                            Risk.severity.in_(levels),
-                        )
-                    ).scalar_one()
-                )
+                breach_count = breach_by_control.get(definition.control_id, 0)
                 if breach_count > 0:
                     matches.append({"definition": definition, "reason": "risk_threshold_breach", "breach_count": breach_count})
 

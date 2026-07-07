@@ -31,6 +31,8 @@ class EntityRiskScoreRead(BaseModel):
     computed_by_user_id: UUID | None = None
     computed_at: datetime
     created_at: datetime
+    stale: bool = False
+    stale_reasons: list[str] = Field(default_factory=list)
 
 
 class EntityRiskScoreByBand(BaseModel):

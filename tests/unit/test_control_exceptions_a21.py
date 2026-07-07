@@ -497,3 +497,54 @@ def test_a21_audit_events_cover_lifecycle_transitions(client, db_session):
 
     approvals = db_session.execute(select(ControlExceptionApproval)).scalars().all()
     assert approvals
+
+
+def test_a21_review_overdue_flag_on_read_and_summary(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="a21-review")
+    owner = _create_active_user_with_role(db_session, org["organization_id"], "a21-review-owner@example.com")
+    approver = _create_active_user_with_role(db_session, org["organization_id"], "a21-review-approver@example.com")
+    control = _create_control(client, org["org_headers"], title="A21 Review Control")
+
+    created = _create_exception(client, org["org_headers"], control_id=control["id"], owner_user_id=str(owner.id))
+    assert created["review_overdue"] is False
+
+    approver_token = login_user(client, approver.email)
+    approver_headers = org_headers(approver_token, org["organization_id"])
+    approved = client.post(f"{BASE}/{created['id']}/approve", headers=approver_headers, json={"decision_notes": "ok"})
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "active"
+    # No review_date set at all -> never "overdue".
+    assert approved.json()["review_overdue"] is False
+
+    row = db_session.execute(select(ControlException).where(ControlException.id == uuid.UUID(created["id"]))).scalar_one()
+    row.review_date = date.today() - timedelta(days=3)
+    db_session.commit()
+
+    detail = client.get(f"{BASE}/{created['id']}", headers=org["org_headers"])
+    assert detail.status_code == 200
+    assert detail.json()["review_overdue"] is True
+
+    listed = client.get(BASE, headers=org["org_headers"])
+    assert listed.status_code == 200
+    by_id = {item["id"]: item for item in listed.json()}
+    assert by_id[created["id"]]["review_overdue"] is True
+
+    summary = client.get(f"{BASE}/summary", headers=org["org_headers"])
+    assert summary.status_code == 200
+    assert summary.json()["review_overdue"] == 1
+
+    # A rejected (non-active) exception with a past review_date is not "overdue for review" --
+    # there's nothing live left to review.
+    other_control = _create_control(client, org["org_headers"], title="A21 Review Control 2")
+    pending = _create_exception(client, org["org_headers"], control_id=other_control["id"], owner_user_id=str(owner.id))
+    rejected = client.post(
+        f"{BASE}/{pending['id']}/reject",
+        headers=org["org_headers"],
+        json={"rejection_reason": "not needed"},
+    )
+    assert rejected.status_code == 200
+    row2 = db_session.execute(select(ControlException).where(ControlException.id == uuid.UUID(pending["id"]))).scalar_one()
+    row2.review_date = date.today() - timedelta(days=3)
+    db_session.commit()
+    rejected_detail = client.get(f"{BASE}/{pending['id']}", headers=org["org_headers"])
+    assert rejected_detail.json()["review_overdue"] is False

@@ -29,6 +29,9 @@ router = APIRouter(tags=["control-tests"])
 
 
 def _to_definition_read(row: ControlTestDefinition) -> ControlTestDefinitionRead:
+    now = ControlTestService.now()
+    next_due_at = ControlTestService._to_utc(row.next_due_at)
+    is_overdue = row.status == "active" and next_due_at is not None and next_due_at < now
     return ControlTestDefinitionRead(
         id=row.id,
         organization_id=row.organization_id,
@@ -46,6 +49,7 @@ def _to_definition_read(row: ControlTestDefinition) -> ControlTestDefinitionRead
         metadata_json=row.metadata_json,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        is_overdue=is_overdue,
     )
 
 

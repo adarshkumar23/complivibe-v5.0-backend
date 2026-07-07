@@ -17,6 +17,12 @@ from app.services.audit_service import AuditService
 
 
 class KRICalculator:
+    # An indicator's current_value/status is only ever computed on-demand (create leaves it
+    # "not_calculated", and it's only refreshed via the explicit /recalculate endpoint -- there
+    # is no background scheduler recomputing these). Anything older than this is presented to
+    # callers as stale rather than silently shown as current.
+    STALE_AFTER = timedelta(hours=24)
+
     @staticmethod
     def utcnow() -> datetime:
         return datetime.now(UTC)
@@ -196,6 +202,43 @@ class KRICalculator:
         else:
             status_value = "green"
         return current_value, status_value
+
+    @staticmethod
+    def is_stale(indicator: RiskIndicator) -> bool:
+        if indicator.status == "not_calculated" or indicator.last_calculated_at is None:
+            return True
+        last_calculated_at = indicator.last_calculated_at
+        if last_calculated_at.tzinfo is None:
+            last_calculated_at = last_calculated_at.replace(tzinfo=UTC)
+        return (KRICalculator.utcnow() - last_calculated_at) > KRICalculator.STALE_AFTER
+
+    @staticmethod
+    def breach_detail(indicator: RiskIndicator) -> dict | None:
+        """Explain *why* an indicator is amber/red: which threshold was crossed and by how much.
+
+        Returns None when there's nothing to explain (green, or no value calculated yet).
+        """
+        if indicator.status not in {"amber", "red"} or indicator.current_value is None:
+            return None
+
+        current_value = float(indicator.current_value)
+        warning_threshold = float(indicator.warning_threshold)
+        critical_threshold = float(indicator.critical_threshold)
+        threshold_breached = critical_threshold if indicator.status == "red" else warning_threshold
+        threshold_label = "critical_threshold" if indicator.status == "red" else "warning_threshold"
+        margin = KRICalculator._to_float(current_value - threshold_breached)
+
+        return {
+            "metric_type": indicator.metric_type,
+            "current_value": current_value,
+            "threshold_label": threshold_label,
+            "threshold_value": threshold_breached,
+            "margin_over_threshold": margin,
+            "explanation": (
+                f"{indicator.metric_type} is {current_value} which exceeds {threshold_label} "
+                f"({threshold_breached}) by {margin}."
+            ),
+        }
 
     @staticmethod
     def recalculate_and_persist(

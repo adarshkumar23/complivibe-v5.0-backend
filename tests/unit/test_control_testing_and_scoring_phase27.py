@@ -319,6 +319,106 @@ def test_control_test_run_manual_and_internal_checks_with_dry_run(client, db_ses
     assert "control_test.run_created" in [item["action"] for item in logs]
 
 
+def test_control_test_definition_is_overdue_flag(client, db_session):
+    owner = _register(client, "p27-overdue@example.com", "Pass1234!@", "P27 Overdue Org")
+    org = _org_id(client, owner)
+    control_id = _create_control(client, owner, org, "Overdue Control")
+
+    overdue_def = client.post(
+        f"/api/v1/controls/{control_id}/tests",
+        headers=_headers(owner, org),
+        json={
+            "name": "Overdue test",
+            "test_type": "manual_attestation",
+            "check_key": "manual_attestation",
+            "cadence": "weekly",
+            "next_due_at": (datetime.now(UTC) - timedelta(days=1)).isoformat(),
+        },
+    )
+    assert overdue_def.status_code == 201
+    assert overdue_def.json()["is_overdue"] is True
+
+    not_due_def = client.post(
+        f"/api/v1/controls/{control_id}/tests",
+        headers=_headers(owner, org),
+        json={
+            "name": "Not due test",
+            "test_type": "manual_attestation",
+            "check_key": "manual_attestation",
+            "cadence": "weekly",
+            "next_due_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+        },
+    )
+    assert not_due_def.status_code == 201
+    assert not_due_def.json()["is_overdue"] is False
+
+    no_cadence_def = client.post(
+        f"/api/v1/controls/{control_id}/tests",
+        headers=_headers(owner, org),
+        json={
+            "name": "No cadence test",
+            "test_type": "manual_attestation",
+            "check_key": "manual_attestation",
+        },
+    )
+    assert no_cadence_def.status_code == 201
+    assert no_cadence_def.json()["is_overdue"] is False
+
+    listed = client.get(f"/api/v1/controls/{control_id}/tests", headers=_headers(owner, org))
+    assert listed.status_code == 200
+    by_id = {row["id"]: row for row in listed.json()}
+    assert by_id[overdue_def.json()["id"]]["is_overdue"] is True
+    assert by_id[not_due_def.json()["id"]]["is_overdue"] is False
+
+    # Archiving an overdue definition removes it from the "needs attention" set.
+    archived = client.post(f"/api/v1/control-tests/{overdue_def.json()['id']}/archive", headers=_headers(owner, org))
+    assert archived.status_code == 200
+    assert archived.json()["is_overdue"] is False
+
+
+def test_control_test_summary_reflects_only_latest_run_per_definition_at_scale(client, db_session):
+    """Regression test for the summary endpoint's latest-per-definition computation: with many
+    historical runs recorded for the same test definition, latest_passed/latest_failed must
+    reflect only the most recent run per definition, not double-count history."""
+    owner = _register(client, "p27-scale@example.com", "Pass1234!@", "P27 Scale Org")
+    org = _org_id(client, owner)
+    control_id = _create_control(client, owner, org, "Scale Control")
+
+    manual_def = client.post(
+        f"/api/v1/controls/{control_id}/tests",
+        headers=_headers(owner, org),
+        json={
+            "name": "Repeatedly run test",
+            "test_type": "manual_attestation",
+            "check_key": "manual_attestation",
+            "cadence": "weekly",
+        },
+    )
+    assert manual_def.status_code == 201
+    test_id = manual_def.json()["id"]
+
+    # Run it many times, alternating result, so only the final ("passed") run is current.
+    for i in range(12):
+        result = "failed" if i % 2 == 0 else "passed"
+        resp = client.post(
+            f"/api/v1/control-tests/{test_id}/run",
+            headers=_headers(owner, org),
+            json={"manual_result": result, "result_reason": f"run {i}"},
+        )
+        assert resp.status_code == 200
+
+    run_count = db_session.query(ControlTestRun).filter(ControlTestRun.organization_id == uuid.UUID(org)).count()
+    assert run_count == 12
+
+    summary = client.get("/api/v1/control-tests/summary", headers=_headers(owner, org))
+    assert summary.status_code == 200
+    body = summary.json()
+    # Last of the 12 runs (i=11, odd) was "passed" -- exactly one definition, so exactly one
+    # counted as latest_passed and zero as latest_failed, regardless of the 11 earlier runs.
+    assert body["latest_passed"] == 1
+    assert body["latest_failed"] == 0
+
+
 def test_score_snapshot_materialize_latest_list_and_methodology(client, db_session):
     owner = _register(client, "p27-owner4@example.com", "Pass1234!@", "P27 Org4")
     org = _org_id(client, owner)

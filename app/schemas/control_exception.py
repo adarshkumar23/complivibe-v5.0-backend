@@ -70,6 +70,7 @@ class ControlExceptionRead(UUIDTimestampSchema):
     auto_expired_at: datetime | None = None
     tags_json: dict | list | None = None
     notes: str | None = None
+    review_overdue: bool = False
 
 
 class ControlExceptionDetail(ControlExceptionRead):
@@ -83,6 +84,7 @@ class ControlExceptionSummary(BaseModel):
     expiring_soon: int
     expired_unreviewed: int
     controls_with_active_exception: int
+    review_overdue: int
 
 
 class ControlExceptionApproveRequest(BaseModel):

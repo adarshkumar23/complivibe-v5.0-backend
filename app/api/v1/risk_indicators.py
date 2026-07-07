@@ -55,6 +55,8 @@ def _indicator_read(row: RiskIndicator) -> RiskIndicatorRead:
         archive_reason=row.archive_reason,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        stale=KRICalculator.is_stale(row),
+        breach_detail=KRICalculator.breach_detail(row),
     )
 
 
