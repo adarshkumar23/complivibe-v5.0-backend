@@ -173,14 +173,22 @@ class EscalationService:
         self.db.flush()
         return row
 
-    def _issue_candidates_for_policy(self, policy: EscalationPolicy) -> list[Issue]:
+    @staticmethod
+    def _hours_since(reference: datetime, now: datetime) -> float:
+        if reference.tzinfo is None:
+            reference = reference.replace(tzinfo=UTC)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+        return round((now - reference).total_seconds() / 3600.0, 2)
+
+    def _issue_candidates_for_policy(self, policy: EscalationPolicy) -> list[tuple[Issue, dict]]:
         now = self.utcnow()
         if policy.condition_type == "time_in_state":
             hours = int((policy.condition_value or {}).get("hours", 0))
             if hours <= 0:
                 return []
             cutoff = now - timedelta(hours=hours)
-            return self.db.execute(
+            rows = self.db.execute(
                 select(Issue).where(
                     Issue.organization_id == policy.organization_id,
                     Issue.deleted_at.is_(None),
@@ -188,10 +196,22 @@ class EscalationService:
                     Issue.updated_at < cutoff,
                 )
             ).scalars().all()
+            return [
+                (
+                    row,
+                    {
+                        "condition_type": "time_in_state",
+                        "threshold_hours": hours,
+                        "status_at_fire": row.status,
+                        "actual_hours_in_state": self._hours_since(row.updated_at, now),
+                    },
+                )
+                for row in rows
+            ]
 
         if policy.condition_type == "sla_breach":
             rows = self.db.execute(
-                select(Issue)
+                select(Issue, IssueSLATracking)
                 .join(IssueSLATracking, IssueSLATracking.issue_id == Issue.id)
                 .where(
                     Issue.organization_id == policy.organization_id,
@@ -200,15 +220,25 @@ class EscalationService:
                     Issue.status.notin_(["resolved", "closed"]),
                     or_(IssueSLATracking.response_breached.is_(True), IssueSLATracking.resolution_breached.is_(True)),
                 )
-            ).scalars().all()
-            return rows
+            ).all()
+            return [
+                (
+                    issue,
+                    {
+                        "condition_type": "sla_breach",
+                        "response_breached": bool(tracking.response_breached),
+                        "resolution_breached": bool(tracking.resolution_breached),
+                    },
+                )
+                for issue, tracking in rows
+            ]
 
         if policy.condition_type == "severity_threshold":
             severity = (policy.condition_value or {}).get("severity")
             if severity not in {"critical", "high", "medium", "low"}:
                 return []
             cutoff = now - timedelta(hours=1)
-            return self.db.execute(
+            rows = self.db.execute(
                 select(Issue).where(
                     Issue.organization_id == policy.organization_id,
                     Issue.deleted_at.is_(None),
@@ -217,12 +247,24 @@ class EscalationService:
                     Issue.created_at < cutoff,
                 )
             ).scalars().all()
+            return [
+                (
+                    row,
+                    {
+                        "condition_type": "severity_threshold",
+                        "threshold_severity": severity,
+                        "actual_severity": row.severity,
+                        "actual_hours_open": self._hours_since(row.created_at, now),
+                    },
+                )
+                for row in rows
+            ]
 
         return []
 
-    def _resolve_candidates(self, policy: EscalationPolicy) -> list[tuple[str, uuid.UUID]]:
+    def _resolve_candidates(self, policy: EscalationPolicy) -> list[tuple[str, uuid.UUID, dict]]:
         if policy.entity_type == "issue":
-            return [("issue", row.id) for row in self._issue_candidates_for_policy(policy)]
+            return [("issue", row.id, reason) for row, reason in self._issue_candidates_for_policy(policy)]
         return []
 
     def _is_idempotent_skip(self, policy_id: uuid.UUID, entity_id: uuid.UUID, now: datetime) -> bool:
@@ -273,16 +315,28 @@ class EscalationService:
         if org_id is not None:
             stmt = stmt.where(EscalationPolicy.organization_id == org_id)
 
-        policies = self.db.execute(stmt.order_by(EscalationPolicy.created_at.asc())).scalars().all()
+        policy_ids = [row.id for row in self.db.execute(stmt.order_by(EscalationPolicy.created_at.asc())).scalars().all()]
 
         policies_evaluated = 0
         escalations_fired = 0
         skipped_idempotent = 0
 
-        for policy in policies:
+        for policy_id in policy_ids:
+            # Lock this policy row for the duration of its evaluation so two
+            # concurrent evaluate_policies calls (e.g. the scheduler and a
+            # manual /evaluate hit racing) can't both pass the idempotency
+            # check for the same policy+entity before either commits its
+            # EscalationEvent -- the second caller blocks here until the
+            # first's transaction commits, then re-checks and correctly skips.
+            policy = self.db.execute(
+                select(EscalationPolicy).where(EscalationPolicy.id == policy_id).with_for_update()
+            ).scalar_one_or_none()
+            if policy is None or not policy.is_active or policy.deleted_at is not None:
+                continue
+
             policies_evaluated += 1
             candidates = self._resolve_candidates(policy)
-            for entity_type, entity_id in candidates:
+            for entity_type, entity_id, reason in candidates:
                 if self._is_idempotent_skip(policy.id, entity_id, now):
                     skipped_idempotent += 1
                     continue
@@ -308,6 +362,7 @@ class EscalationService:
                     escalated_to=policy.escalate_to_user_id,
                     notification_sent=sent,
                     notification_queued_at=queued_at,
+                    reason=reason,
                 )
                 self.db.add(event)
                 self.db.flush()
@@ -323,6 +378,7 @@ class EscalationService:
                         "entity_type": entity_type,
                         "entity_id": str(entity_id),
                         "escalated_to": str(policy.escalate_to_user_id),
+                        "reason": reason,
                     },
                     metadata_json={"source": "scheduler" if org_id is None else "manual"},
                 )
@@ -340,13 +396,16 @@ class EscalationService:
         *,
         entity_type: str | None = None,
         entity_id: uuid.UUID | None = None,
+        skip: int = 0,
+        limit: int = 50,
     ) -> list[EscalationEvent]:
         stmt = select(EscalationEvent).where(EscalationEvent.organization_id == org_id)
         if entity_type is not None:
             stmt = stmt.where(EscalationEvent.entity_type == entity_type)
         if entity_id is not None:
             stmt = stmt.where(EscalationEvent.entity_id == entity_id)
-        return self.db.execute(stmt.order_by(EscalationEvent.escalated_at.desc())).scalars().all()
+        stmt = stmt.order_by(EscalationEvent.escalated_at.desc()).offset(skip).limit(limit)
+        return self.db.execute(stmt).scalars().all()
 
 
 def run_daily_escalation_policy_evaluation(db: Session) -> dict[str, int]:

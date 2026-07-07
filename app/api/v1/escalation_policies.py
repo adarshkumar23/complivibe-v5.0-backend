@@ -50,6 +50,7 @@ def _event_read(row: EscalationEvent) -> EscalationEventRead:
         escalated_to=row.escalated_to,
         notification_sent=row.notification_sent,
         notification_queued_at=row.notification_queued_at,
+        reason=dict(row.reason) if row.reason else None,
     )
 
 
@@ -87,6 +88,8 @@ def list_policies(
 def list_escalation_events(
     entity_type: str | None = Query(default=None),
     entity_id: uuid.UUID | None = Query(default=None),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("escalations:read")),
@@ -95,6 +98,8 @@ def list_escalation_events(
         organization.id,
         entity_type=entity_type,
         entity_id=entity_id,
+        skip=skip,
+        limit=limit,
     )
     return [_event_read(row) for row in rows]
 

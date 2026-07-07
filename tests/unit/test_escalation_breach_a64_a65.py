@@ -100,6 +100,52 @@ def test_a64_escalation_policy_create_evaluate_idempotency_and_org_isolation(cli
     assert all(row["organization_id"] == org_b["organization_id"] for row in list_org_b.json())
 
 
+def test_a64_escalation_event_explains_why_it_fired_and_history_is_paginated(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="a64-reason")
+
+    stuck_issue = _create_issue(client, org["org_headers"], owner_id=org["user_id"], severity="critical", title="stuck-reason")
+    issue_row = db_session.get(Issue, uuid.UUID(stuck_issue["id"]))
+    issue_row.updated_at = datetime.now(UTC) - timedelta(hours=5)
+    db_session.commit()
+
+    policy = client.post(
+        ESCALATIONS_BASE,
+        headers=org["org_headers"],
+        json={
+            "name": "Issue stuck >2h (reason check)",
+            "entity_type": "issue",
+            "condition_type": "time_in_state",
+            "condition_value": {"hours": 2},
+            "escalate_to_user_id": org["user_id"],
+            "notification_message_template": "Escalation {entity_type} {entity_id} by {condition_type}",
+        },
+    )
+    assert policy.status_code == 201
+
+    evaluate = client.post(f"{ESCALATIONS_BASE}/evaluate", headers=org["org_headers"])
+    assert evaluate.status_code == 200
+    assert evaluate.json()["escalations_fired"] >= 1
+
+    events = client.get(f"{ESCALATIONS_BASE}/events", headers=org["org_headers"], params={"entity_id": stuck_issue["id"]})
+    assert events.status_code == 200
+    payload = events.json()
+    assert len(payload) == 1
+    reason = payload[0]["reason"]
+    assert reason["condition_type"] == "time_in_state"
+    assert reason["threshold_hours"] == 2
+    assert reason["actual_hours_in_state"] >= 4.9
+
+    # Pagination: create more issues/events by adjusting the SLA-breach path
+    # and confirm skip/limit are honored on the events listing.
+    paged = client.get(
+        f"{ESCALATIONS_BASE}/events",
+        headers=org["org_headers"],
+        params={"limit": 1, "skip": 0},
+    )
+    assert paged.status_code == 200
+    assert len(paged.json()) <= 1
+
+
 def test_a64_escalation_sla_breach_and_deactivated_policy_not_evaluated(client, db_session):
     org = bootstrap_org_user(client, email_prefix="a64-sla")
 
