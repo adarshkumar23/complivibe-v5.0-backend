@@ -96,7 +96,10 @@ def test_phase76_low_risk_high_confidence_auto_executes_and_reverses_with_notifi
     org = bootstrap_org_user(client, email_prefix="p76-auto")
     headers = org["org_headers"]
     ai, assessment, _ = _seed(client, headers, name="P76-Auto")
-    _set_autopilot_settings(client, headers, enabled=True, threshold=0.95)
+    # Server-side confidence is always AUTOPILOT_DEFAULT_CONFIDENCE_SCORE (0.5),
+    # never the client-supplied value (see security fix below), so the org must
+    # explicitly opt into a threshold at/below that default for auto-exec to fire.
+    _set_autopilot_settings(client, headers, enabled=True, threshold=0.5)
     policy_id = _policy_allow_auto(client, headers)
 
     before_assessment = db_session.get(AISystemRiskAssessment, uuid.UUID(assessment["id"]))
@@ -127,6 +130,9 @@ def test_phase76_low_risk_high_confidence_auto_executes_and_reverses_with_notifi
     assert execution is not None
     assert execution["execution_status"] == "executed"
     assert execution["risk_tier"] == "low"
+    # Client claimed confidence_score=0.99; server must ignore it and persist its
+    # own server-derived default instead of trusting client self-attestation.
+    assert execution["confidence_score"] == 0.5
 
     after_assessment = db_session.get(AISystemRiskAssessment, uuid.UUID(assessment["id"]))
     assert after_assessment.risk_factors_json != before_factors
@@ -236,7 +242,7 @@ def test_phase76_circuit_breaker_trips_and_disables_auto_execute(client, db_sess
     org = bootstrap_org_user(client, email_prefix="p76-breaker")
     headers = org["org_headers"]
     ai, assessment, _ = _seed(client, headers, name="P76-Breaker")
-    _set_autopilot_settings(client, headers, enabled=True, threshold=0.95)
+    _set_autopilot_settings(client, headers, enabled=True, threshold=0.5)
     policy_id = _policy_allow_auto(client, headers)
 
     execution_ids: list[str] = []

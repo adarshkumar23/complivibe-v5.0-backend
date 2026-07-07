@@ -207,7 +207,8 @@ AUTOPILOT_DEFAULT_CONFIDENCE_SCORE = 0.5
 AUTOPILOT_DEFAULT_AUTO_EXECUTE_THRESHOLD = 0.95
 AUTOPILOT_DEFAULT_REVERSAL_WINDOW_HOURS = 24
 AUTOPILOT_CIRCUIT_BREAKER_REVERSAL_RATE_THRESHOLD = 0.2
-AUTOPILOT_CIRCUIT_BREAKER_MIN_SAMPLE_SIZE = 5
+AUTOPILOT_CIRCUIT_BREAKER_MIN_SAMPLE_SIZE = 3
+AUTOPILOT_CIRCUIT_BREAKER_ABSOLUTE_REVERSAL_MIN_SAMPLE_SIZE = 2
 AUTOPILOT_CIRCUIT_BREAKER_WINDOW_HOURS = 24
 AUTOPILOT_CIRCUIT_BREAKER_SPIKE_WINDOW_HOURS = 1
 AUTOPILOT_CIRCUIT_BREAKER_SPIKE_MULTIPLIER = 3.0
@@ -3428,18 +3429,6 @@ class AISystemRiskAssessmentService:
             return "medium"
         return "high"
 
-    @staticmethod
-    def normalize_confidence_score(value: Any) -> float:
-        if value is None:
-            return AUTOPILOT_DEFAULT_CONFIDENCE_SCORE
-        try:
-            numeric = float(value)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="confidence_score must be a number between 0 and 1") from None
-        if numeric < 0 or numeric > 1:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="confidence_score must be between 0 and 1")
-        return round(numeric, 6)
-
     def _candidate_actions_from_prioritized_signals(
         self,
         *,
@@ -5841,17 +5830,19 @@ class AISystemRiskAssessmentService:
         normalized["action_type"] = action_type.strip()
         normalized["priority_band"] = priority_band
         normalized["source_reason_codes"] = sorted(set(normalized_reason_codes))
-        risk_tier = candidate_action_json.get("risk_tier")
-        if risk_tier is None:
-            risk_tier = self.classify_candidate_action_risk_tier(
-                action_key=normalized["action_key"],
-                action_type=normalized["action_type"],
-            )
-        risk_tier = str(risk_tier).strip().lower()
-        if risk_tier not in AUTOPILOT_ACTION_RISK_TIERS:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="candidate_action_json.risk_tier is invalid")
-        normalized["risk_tier"] = risk_tier
-        normalized["confidence_score"] = self.normalize_confidence_score(candidate_action_json.get("confidence_score"))
+        # SECURITY: risk_tier must never be trusted from client input. It is always
+        # derived server-side from action_key/action_type so a caller cannot
+        # self-declare a destructive action (e.g. delete_evidence) as low-risk to
+        # bypass the human-approval gate. Any client-supplied risk_tier is ignored.
+        normalized["risk_tier"] = self.classify_candidate_action_risk_tier(
+            action_key=normalized["action_key"],
+            action_type=normalized["action_type"],
+        )
+        # SECURITY: confidence_score is likewise never accepted from client input on
+        # this path -- it is the value the internal candidate-generation pipeline
+        # uses (AUTOPILOT_DEFAULT_CONFIDENCE_SCORE), never a caller-attested number,
+        # since a self-declared 1.0 could otherwise force auto-execution.
+        normalized["confidence_score"] = AUTOPILOT_DEFAULT_CONFIDENCE_SCORE
         return normalized
 
     def evaluate_candidate_action_against_policy(
@@ -6503,6 +6494,15 @@ class AISystemRiskAssessmentService:
             if settings.autopilot_auto_execute_reversal_window_hours
             else AUTOPILOT_DEFAULT_REVERSAL_WINDOW_HOURS
         )
+        # SECURITY: an auto-execution must never happen silently. If the org has no
+        # active owner/admin to notify, block the auto-execution entirely (rather
+        # than executing with notification_count == 0) so a human is guaranteed to
+        # see it before it can happen unnoticed.
+        if not self._autopilot_admin_members(organization_id=organization_id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Autopilot auto-execution blocked: organization has no active owner/admin to notify",
+            )
         action_key = str(action.get("action_key") or "").strip()
         action_type = str(action.get("action_type") or "").strip()
         if action_key == "flag_stale_evidence":
@@ -6641,6 +6641,12 @@ class AISystemRiskAssessmentService:
         trip_reasons: list[str] = []
         if total_window >= AUTOPILOT_CIRCUIT_BREAKER_MIN_SAMPLE_SIZE and reversal_rate > AUTOPILOT_CIRCUIT_BREAKER_REVERSAL_RATE_THRESHOLD:
             trip_reasons.append("reversal_rate_threshold_breached")
+        # SECURITY: a low absolute execution count must not be usable to stay under
+        # AUTOPILOT_CIRCUIT_BREAKER_MIN_SAMPLE_SIZE while every single execution in
+        # a smaller window is reversed. Trip unconditionally on a 100% reversal rate
+        # once a minimal sample exists, regardless of total volume.
+        if total_window >= AUTOPILOT_CIRCUIT_BREAKER_ABSOLUTE_REVERSAL_MIN_SAMPLE_SIZE and reversal_rate >= 1.0:
+            trip_reasons.append("full_reversal_rate_detected")
         if current_window_count >= spike_threshold and current_window_count >= AUTOPILOT_CIRCUIT_BREAKER_SPIKE_MIN_EXECUTIONS:
             trip_reasons.append("execution_volume_spike_detected")
         if not trip_reasons:
