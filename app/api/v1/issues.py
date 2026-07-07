@@ -22,6 +22,7 @@ from app.schemas.issue import (
     IssueAssignRequest,
     IssueCreate,
     IssueDashboard,
+    IssueInsight,
     IssueRead,
     IssueTransitionRead,
     IssueTransitionRequest,
@@ -43,7 +44,7 @@ router = APIRouter(prefix="/compliance/issues", tags=["issues"])
 remediation_router = APIRouter(prefix="/compliance/remediation-suggestions", tags=["issues"])
 
 
-def _read(row: Issue) -> IssueRead:
+def _read(row: Issue, *, insight: dict | None = None) -> IssueRead:
     return IssueRead(
         id=row.id,
         organization_id=row.organization_id,
@@ -63,7 +64,16 @@ def _read(row: Issue) -> IssueRead:
         created_at=row.created_at,
         updated_at=row.updated_at,
         deleted_at=row.deleted_at,
+        insight=IssueInsight(**insight) if insight is not None else None,
     )
+
+
+def _read_with_insight(db: Session, organization_id, row: Issue) -> IssueRead:
+    # Single-item endpoints only (get/transition) -- computing this per-row in
+    # list_issues would be an N+1 query against SLA tracking + RCA per issue.
+    service = IssueService(db)
+    insight = service.get_issue_insight(organization_id, row)
+    return _read(row, insight=insight)
 
 
 def _transition_read(row: IssueTransition) -> IssueTransitionRead:
@@ -79,7 +89,12 @@ def _transition_read(row: IssueTransition) -> IssueTransitionRead:
     )
 
 
-def _rca_read(row: RootCauseAnalysis) -> RCARead:
+def _rca_read(row: RootCauseAnalysis, *, current_issue_severity: str | None = None) -> RCARead:
+    severity_changed = bool(
+        row.severity_at_creation is not None
+        and current_issue_severity is not None
+        and row.severity_at_creation != current_issue_severity
+    )
     return RCARead(
         id=row.id,
         organization_id=row.organization_id,
@@ -95,6 +110,8 @@ def _rca_read(row: RootCauseAnalysis) -> RCARead:
         reviewed_at=row.reviewed_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        severity_at_creation=row.severity_at_creation,
+        severity_changed_since_rca=severity_changed,
     )
 
 
@@ -166,7 +183,14 @@ def _remediation_read(row) -> RemediationSuggestionRead:
     )
 
 
-def _classification_read(row) -> IncidentClassificationRead:
+def _classification_read(row, *, current_issue=None) -> IncidentClassificationRead:
+    stale = bool(
+        current_issue is not None
+        and (
+            (row.classified_issue_type is not None and row.classified_issue_type != current_issue.issue_type)
+            or (row.classified_severity is not None and row.classified_severity != current_issue.severity)
+        )
+    )
     return IncidentClassificationRead(
         id=row.id,
         organization_id=row.organization_id,
@@ -179,6 +203,7 @@ def _classification_read(row) -> IncidentClassificationRead:
         classification_by=row.classification_by,
         classified_at=row.classified_at,
         last_updated_at=row.last_updated_at,
+        stale=stale,
     )
 
 
@@ -373,7 +398,8 @@ def auto_classify_issue(
     row = ClassificationService(db).auto_classify(organization.id, issue_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return _classification_read(row)
+    issue = IssueService(db).get_issue(organization.id, issue_id)
+    return _classification_read(row, current_issue=issue)
 
 
 @router.patch("/{issue_id}/classification", response_model=IncidentClassificationRead)
@@ -388,7 +414,8 @@ def override_issue_classification(
     row = ClassificationService(db).override_classification(organization.id, issue_id, payload, current_user.id)
     db.commit()
     db.refresh(row)
-    return _classification_read(row)
+    issue = IssueService(db).get_issue(organization.id, issue_id)
+    return _classification_read(row, current_issue=issue)
 
 
 @router.get("/{issue_id}/classification", response_model=IncidentClassificationRead | None)
@@ -401,7 +428,8 @@ def get_issue_classification(
     row = ClassificationService(db).get_classification(organization.id, issue_id)
     if row is None:
         return None
-    return _classification_read(row)
+    issue = IssueService(db).get_issue(organization.id, issue_id)
+    return _classification_read(row, current_issue=issue)
 
 
 @router.get("/{issue_id}", response_model=IssueRead)
@@ -412,7 +440,7 @@ def get_issue(
     _: Membership = Depends(require_permission("issues:read")),
 ) -> IssueRead:
     row = IssueService(db).get_issue(organization.id, issue_id)
-    return _read(row)
+    return _read_with_insight(db, organization.id, row)
 
 
 @router.patch("/{issue_id}", response_model=IssueRead)
@@ -464,7 +492,7 @@ def transition_issue(
     )
     db.commit()
     db.refresh(row)
-    return _read(row)
+    return _read_with_insight(db, organization.id, row)
 
 
 @router.post("/{issue_id}/rca", response_model=RCARead, status_code=status.HTTP_201_CREATED)
@@ -479,7 +507,8 @@ def create_issue_rca(
     row = RCAService(db).create_rca(organization.id, issue_id, payload, current_user.id)
     db.commit()
     db.refresh(row)
-    return _rca_read(row)
+    issue = IssueService(db).get_issue(organization.id, issue_id)
+    return _rca_read(row, current_issue_severity=issue.severity)
 
 
 @router.post("/{issue_id}/breach-notification", response_model=BreachNotificationRead, status_code=status.HTTP_201_CREATED)
@@ -505,7 +534,8 @@ def get_issue_rca(
     _: Membership = Depends(require_permission("issues:read")),
 ) -> RCARead:
     row = RCAService(db).get_rca(organization.id, issue_id)
-    return _rca_read(row)
+    issue = IssueService(db).get_issue(organization.id, issue_id)
+    return _rca_read(row, current_issue_severity=issue.severity)
 
 
 @router.patch("/{issue_id}/rca", response_model=RCARead)
@@ -520,7 +550,8 @@ def update_issue_rca(
     row = RCAService(db).update_rca(organization.id, issue_id, payload, actor_user_id=current_user.id)
     db.commit()
     db.refresh(row)
-    return _rca_read(row)
+    issue = IssueService(db).get_issue(organization.id, issue_id)
+    return _rca_read(row, current_issue_severity=issue.severity)
 
 
 @router.post("/{issue_id}/rca/review", response_model=RCARead)
@@ -534,7 +565,8 @@ def review_issue_rca(
     row = RCAService(db).review_rca(organization.id, issue_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return _rca_read(row)
+    issue = IssueService(db).get_issue(organization.id, issue_id)
+    return _rca_read(row, current_issue_severity=issue.severity)
 
 
 @router.get("/{issue_id}/transitions", response_model=list[IssueTransitionRead])
