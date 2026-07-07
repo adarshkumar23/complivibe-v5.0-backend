@@ -213,6 +213,7 @@ from app.models.governance_signal import GovernanceSignal
 from app.models.governance_autopilot_policy import GovernanceAutopilotPolicy
 from app.models.governance_autopilot_approval_policy import GovernanceAutopilotApprovalPolicy
 from app.models.governance_autopilot_execution_intent import GovernanceAutopilotExecutionIntent
+from app.models.governance_autopilot_execution import GovernanceAutopilotExecution
 from app.models.governance_autopilot_execution_approval import GovernanceAutopilotExecutionApproval
 from app.models.governance_autopilot_execution_approval_vote import GovernanceAutopilotExecutionApprovalVote
 from app.models.governance_autopilot_runner_simulation import GovernanceAutopilotRunnerSimulation
@@ -556,6 +557,7 @@ __all__ = [
     "GovernanceAutopilotPolicy",
     "GovernanceAutopilotApprovalPolicy",
     "GovernanceAutopilotExecutionIntent",
+    "GovernanceAutopilotExecution",
     "GovernanceAutopilotExecutionApproval",
     "GovernanceAutopilotExecutionApprovalVote",
     "GovernanceAutopilotRunnerSimulation",

@@ -135,6 +135,8 @@ GOVERNANCE_AUTOPILOT_APPROVAL_STATUS_PATTERN = "^(requested|approved|rejected|ca
 GOVERNANCE_AUTOPILOT_APPROVAL_POLICY_STATUS_PATTERN = "^(active|inactive|archived)$"
 GOVERNANCE_AUTOPILOT_VOTE_STATUS_PATTERN = "^(approved|rejected)$"
 GOVERNANCE_AUTOPILOT_READINESS_STATE_PATTERN = "^(not_ready|approval_required|ready_for_runner|blocked|cancelled|rejected)$"
+GOVERNANCE_AUTOPILOT_ACTION_RISK_TIER_PATTERN = "^(low|medium|high)$"
+GOVERNANCE_AUTOPILOT_EXECUTION_STATUS_PATTERN = "^(executed|reversed)$"
 GOVERNANCE_AUTOPILOT_RUNNER_SIMULATION_STATUS_PATTERN = (
     "^(ready_for_runner|not_ready|blocked|approval_required|policy_denied|capability_denied|archived)$"
 )
@@ -687,6 +689,8 @@ class GovernanceCandidateActionRead(BaseModel):
     rationale_json: dict
     human_approval_required: bool
     automation_allowed: bool
+    risk_tier: str = Field(default="medium", pattern=GOVERNANCE_AUTOPILOT_ACTION_RISK_TIER_PATTERN)
+    confidence_score: float = Field(default=0.5, ge=0.0, le=1.0)
     target_route_hint: str | None = None
     caveat: str
 
@@ -799,6 +803,8 @@ class GovernanceRecommendationSnapshotActionRead(BaseModel):
     rationale_json: dict
     human_approval_required: bool
     automation_allowed: bool
+    risk_tier: str = Field(default="medium", pattern=GOVERNANCE_AUTOPILOT_ACTION_RISK_TIER_PATTERN)
+    confidence_score: float = Field(default=0.5, ge=0.0, le=1.0)
     target_route_hint: str | None = None
     disposition: dict | None = None
     caveat: str
@@ -1121,6 +1127,8 @@ class GovernanceAutopilotEvaluateCandidateActionResponse(BaseModel):
     allowed_by_policy: bool
     required_mode: str = Field(pattern=GOVERNANCE_AUTOPILOT_POLICY_MODE_PATTERN)
     requires_human_approval: bool
+    risk_tier: str = Field(pattern=GOVERNANCE_AUTOPILOT_ACTION_RISK_TIER_PATTERN)
+    confidence_score: float = Field(ge=0.0, le=1.0)
     blocked_reasons: list[str]
     policy_decision: str
     policy_explanation_json: dict
@@ -1260,6 +1268,31 @@ class GovernanceAutopilotExecutionApprovalRejectRequest(BaseModel):
 
 class GovernanceAutopilotExecutionApprovalCancelRequest(BaseModel):
     decision_reason: str | None = None
+
+
+class GovernanceAutopilotExecutionReverseRequest(BaseModel):
+    reason: str | None = None
+
+
+class GovernanceAutopilotExecutionRead(UUIDTimestampSchema):
+    execution_id: UUID
+    organization_id: UUID
+    execution_intent_id: UUID
+    action_key: str
+    action_type: str
+    risk_tier: str = Field(pattern=GOVERNANCE_AUTOPILOT_ACTION_RISK_TIER_PATTERN)
+    confidence_score: float = Field(ge=0.0, le=1.0)
+    target_entity_type: str | None = None
+    target_entity_id: UUID | None = None
+    execution_status: str = Field(pattern=GOVERNANCE_AUTOPILOT_EXECUTION_STATUS_PATTERN)
+    before_snapshot_json: dict | list
+    after_snapshot_json: dict | list
+    reversal_deadline_at: datetime
+    reversed_at: datetime | None = None
+    reversed_by_user_id: UUID | None = None
+    reversal_reason: str | None = None
+    reversal_snapshot_json: dict | list | None = None
+    metadata_json: dict | list | None = None
 
 
 class GovernanceAutopilotExecutionApprovalRead(UUIDTimestampSchema):
