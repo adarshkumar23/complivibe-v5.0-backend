@@ -146,7 +146,10 @@ class ShadowAIService:
         if detection.status == "registered":
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Detection has already been registered as an AI system",
+                detail=(
+                    "Detection is already registered as AI system "
+                    f"{detection.registered_system_id}"
+                ),
             )
 
         payload_dict = system_data.model_dump()

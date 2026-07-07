@@ -160,6 +160,7 @@ class MLOPSSyncService:
                 purpose="ML model synced from MLOps integration",
                 affected_population=None,
                 geographic_scope=None,
+                model_version=model.get("version"),
             )
             ai_system_service.create_system(org_id=org_id, data=payload, created_by=triggered_by)
             created_systems += 1
