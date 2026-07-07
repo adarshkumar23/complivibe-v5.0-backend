@@ -81,6 +81,8 @@ def create_campaign(
         declined_count=summary["declined_count"],
         pending_count=summary["pending_count"],
         completion_pct=summary["completion_pct"],
+        policy_changed_since_campaign_start=summary["policy_changed_since_campaign_start"],
+        current_policy_version=summary["current_policy_version"],
     )
 
 
@@ -119,6 +121,8 @@ def get_campaign(
         declined_count=summary["declined_count"],
         pending_count=summary["pending_count"],
         completion_pct=summary["completion_pct"],
+        policy_changed_since_campaign_start=summary["policy_changed_since_campaign_start"],
+        current_policy_version=summary["current_policy_version"],
     )
 
 

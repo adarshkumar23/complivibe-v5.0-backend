@@ -95,6 +95,9 @@ class CompliancePolicyVersionRead(BaseModel):
     review_notes: str | None = None
     content_sha256: str
     created_at: datetime
+    is_live: bool = False
+    referenced_by_active_campaign: bool = False
+    stale_active_campaign_reference: bool = False
 
 
 class CompliancePolicyApprovalRequestCreate(BaseModel):

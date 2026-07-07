@@ -45,6 +45,9 @@ def _read_exception(
 ) -> PolicyExceptionResponse:
     policy_row = policy or service.require_policy_in_org(row.organization_id, row.policy_id)
     approval_row = approval if approval is not None else service.get_approval(row.organization_id, row.id)
+    # An exception snapshots the policy version at request time; if the policy has since been
+    # re-versioned (or archived), the exception may no longer reflect the live policy text.
+    policy_version_is_stale = bool(row.policy_version) and row.policy_version != policy_row.version
     return PolicyExceptionResponse(
         id=row.id,
         organization_id=row.organization_id,
@@ -63,7 +66,13 @@ def _read_exception(
         created_at=row.created_at,
         updated_at=row.updated_at,
         approval=_read_approval(approval_row) if approval_row else None,
-        policy=PolicyRef(id=policy_row.id, name=policy_row.title),
+        policy=PolicyRef(
+            id=policy_row.id,
+            name=policy_row.title,
+            status=policy_row.status,
+            current_version=policy_row.version,
+        ),
+        policy_version_is_stale=policy_version_is_stale,
     )
 
 

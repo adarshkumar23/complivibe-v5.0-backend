@@ -55,6 +55,8 @@ class PolicyExceptionApprovalResponse(BaseModel):
 class PolicyRef(BaseModel):
     id: UUID
     name: str
+    status: str | None = None
+    current_version: str | None = None
 
 
 class PolicyExceptionResponse(BaseModel):
@@ -76,6 +78,7 @@ class PolicyExceptionResponse(BaseModel):
     updated_at: datetime
     approval: PolicyExceptionApprovalResponse | None = None
     policy: PolicyRef
+    policy_version_is_stale: bool = False
 
 
 class PolicyExceptionSummaryResponse(BaseModel):

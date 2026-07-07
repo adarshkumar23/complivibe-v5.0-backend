@@ -409,3 +409,51 @@ def test_a31_campaign_completion_endpoint_returns_user_breakdown(client, db_sess
     status_map = {row["email"]: row["status"] for row in completion.json()}
     assert status_map[u1.email] == "attested"
     assert status_map[u2.email] == "pending"
+
+
+def test_a31_completion_reports_days_overdue_and_campaign_flags_policy_drift(client, db_session):
+    """Intelligence + context-consciousness: a pending attestation past its due date must report
+    exactly how many days overdue it is, and a campaign whose underlying policy has since been
+    re-versioned must say so explicitly rather than silently looking on-track."""
+    org = bootstrap_org_user(client, email_prefix="a31-overdue")
+    u1 = _create_active_user_with_role(db_session, org["organization_id"], "a31-overdue1@example.com")
+    policy = _create_policy(client, org["org_headers"], owner_user_id=org["user_id"], title="Overdue Policy", version="1.0")
+    past_due = date.today() - timedelta(days=5)
+    campaign = _create_campaign(
+        client,
+        org["org_headers"],
+        policy_id=policy["id"],
+        user_ids=[str(u1.id)],
+        name="Overdue Campaign",
+        due_date_value=past_due,
+    )
+    campaign_id = campaign["campaign"]["id"]
+
+    completion = client.get(f"{CAMPAIGNS_BASE}/{campaign_id}/completion", headers=org["org_headers"])
+    assert completion.status_code == 200
+    row = next(r for r in completion.json() if r["email"] == u1.email)
+    assert row["status"] == "pending"
+    assert row["days_overdue"] == 5
+
+    # The employee_attestation_service surface (PATCH) must reflect the same live-policy check.
+    unchanged = client.patch(f"{CAMPAIGNS_BASE}/{campaign_id}", headers=org["org_headers"], json={"description": "still open"})
+    assert unchanged.status_code == 200
+    assert unchanged.json()["policy_changed_since_campaign_start"] is False
+    assert unchanged.json()["current_policy_version"] == "1.0"
+
+    bump = client.patch(f"/api/v1/compliance/policies/{policy['id']}", headers=org["org_headers"], json={"version": "2.0"})
+    assert bump.status_code == 200
+
+    drifted = client.patch(f"{CAMPAIGNS_BASE}/{campaign_id}", headers=org["org_headers"], json={"description": "policy moved on"})
+    assert drifted.status_code == 200
+    assert drifted.json()["policy_changed_since_campaign_start"] is True
+    assert drifted.json()["current_policy_version"] == "2.0"
+
+    # A fully-attested (non-overdue) record must not report days_overdue.
+    u1_headers = org_headers(login_user(client, u1.email), org["organization_id"])
+    submit = client.post(f"{CAMPAIGNS_BASE}/{campaign_id}/attest", headers=u1_headers, json={})
+    assert submit.status_code == 200
+    completion_after = client.get(f"{CAMPAIGNS_BASE}/{campaign_id}/completion", headers=org["org_headers"])
+    row_after = next(r for r in completion_after.json() if r["email"] == u1.email)
+    assert row_after["status"] == "attested"
+    assert row_after["days_overdue"] is None

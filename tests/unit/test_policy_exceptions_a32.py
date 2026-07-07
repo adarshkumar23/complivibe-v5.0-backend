@@ -376,3 +376,75 @@ def test_verify_sod_applies_symmetrically_to_reject_not_just_approve(client):
 
     row_after = self_reject if self_reject.status_code == 200 else None
     assert row_after is None, "exception must remain pending after a blocked self-reject attempt"
+
+
+def _archive_policy(client, headers: dict[str, str], policy_id: str) -> None:
+    r1 = client.patch(f"/api/v1/compliance/policies/{policy_id}", headers=headers, json={"status": "under_review"})
+    assert r1.status_code == 200
+    r2 = client.patch(f"/api/v1/compliance/policies/{policy_id}", headers=headers, json={"status": "approved"})
+    assert r2.status_code == 200
+    r3 = client.patch(f"/api/v1/compliance/policies/{policy_id}", headers=headers, json={"status": "deprecated"})
+    assert r3.status_code == 200
+    r4 = client.post(f"/api/v1/compliance/policies/{policy_id}/archive", headers=headers, json={"reason": "retired"})
+    assert r4.status_code == 200
+
+
+def test_a32_cannot_request_exception_against_archived_policy(client):
+    """Edge case: an exception request against a policy that has since been archived must be
+    rejected outright, rather than silently created against a policy no one is enforcing anymore."""
+    org = bootstrap_org_user(client, email_prefix="a32-archived-policy")
+    policy = _create_policy(client, org["org_headers"], owner_user_id=org["user_id"], title="Soon Archived")
+    _archive_policy(client, org["org_headers"], policy["id"])
+
+    response = client.post(
+        BASE,
+        headers=org["org_headers"],
+        json={
+            "policy_id": policy["id"],
+            "reason": "trying to except an archived policy",
+            "compensating_measure_description": "n/a",
+        },
+    )
+    assert response.status_code == 400
+    assert "archived" in response.json()["detail"].lower()
+
+
+def test_a32_exception_flags_stale_policy_version_and_archived_status(client):
+    """Context-consciousness: once a policy is re-versioned or archived after an exception was
+    granted, the exception record must surface that drift instead of silently implying the
+    exception still applies to the current, live policy text."""
+    org = bootstrap_org_user(client, email_prefix="a32-stale-flag")
+    policy = _create_policy(client, org["org_headers"], owner_user_id=org["user_id"], title="Drifting Policy", version="1.0")
+    created = _create_exception(client, org["org_headers"], policy_id=policy["id"])
+
+    detail = client.get(f"{BASE}/{created['id']}", headers=org["org_headers"])
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["policy_is_archived"] is False
+    assert body["policy_current_version"] == "1.0"
+
+    # Bump the live policy version out from under the exception.
+    bump = client.patch(
+        f"/api/v1/compliance/policies/{policy['id']}",
+        headers=org["org_headers"],
+        json={"version": "2.0"},
+    )
+    assert bump.status_code == 200
+
+    detail_after = client.get(f"{BASE}/{created['id']}", headers=org["org_headers"])
+    assert detail_after.status_code == 200
+    body_after = detail_after.json()
+    assert body_after["policy_current_version"] == "2.0"
+
+    # The v1 richer read surface (PATCH response) snapshots policy_version at request time and
+    # must now report the exception as stale against the live (bumped) policy version.
+    patched = client.patch(
+        f"/api/v1/compliance/policy-exceptions/{created['id']}",
+        headers=org["org_headers"],
+        json={"requestor_scope": "re-checked"},
+    )
+    assert patched.status_code == 200
+    patched_body = patched.json()
+    assert patched_body["policy_version_is_stale"] is True
+    assert patched_body["policy"]["current_version"] == "2.0"
+    assert patched_body["policy"]["status"] == "draft"

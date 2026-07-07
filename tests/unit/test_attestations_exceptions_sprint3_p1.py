@@ -124,6 +124,32 @@ def test_s3_p1_attestation_campaign_and_attest_decline_flow(client, db_session):
     assert att_row.status == "attested"
 
 
+def test_s3_p1_campaign_flags_policy_changed_since_start(client, db_session):
+    """Context-consciousness: once the underlying policy is re-versioned after a campaign
+    launches, the campaign summary must say so explicitly rather than silently letting
+    in-flight (or even completed) attestations imply compliance against stale policy text."""
+    org = bootstrap_org_user(client, email_prefix="s3p1-driftflag")
+    policy = _create_policy(client, org["org_headers"], org["user_id"], "Drift Flag Policy")
+    created = _create_campaign(client, org["org_headers"], policy["id"], "Drift Flag Campaign", "Attest to v1 text")
+    campaign_id = created["campaign"]["id"]
+
+    assert created["policy_changed_since_campaign_start"] is False
+    assert created["current_policy_version"] == "1.0"
+
+    bump = client.patch(
+        f"/api/v1/compliance/policies/{policy['id']}",
+        headers=org["org_headers"],
+        json={"version": "1.1"},
+    )
+    assert bump.status_code == 200
+
+    summary = client.get(f"{ATTEST_BASE}/{campaign_id}", headers=org["org_headers"])
+    assert summary.status_code == 200
+    body = summary.json()
+    assert body["policy_changed_since_campaign_start"] is True
+    assert body["current_policy_version"] == "1.1"
+
+
 def test_s3_p1_policy_exception_lifecycle_and_sweep(client, db_session):
     org = bootstrap_org_user(client, email_prefix="s3p1-exc")
     approver = _create_active_user_with_role(db_session, org["organization_id"], "s3p1-approver@example.com", role_name="owner")

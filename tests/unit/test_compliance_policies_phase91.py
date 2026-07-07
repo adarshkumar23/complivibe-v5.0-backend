@@ -226,6 +226,89 @@ def test_phase91_supersession_behavior_and_policy_approved_state(client, db_sess
     assert policy_detail.json()["approved_at"] is not None
 
 
+def test_phase91_version_list_flags_live_version_and_stale_active_campaign(client, db_session):
+    """Intelligence: the version list must flag which version is currently live/effective, and
+    must flag when an active attestation campaign is still referencing a version that has since
+    been superseded -- so nobody mistakes a stale campaign for proof of current compliance."""
+    org = bootstrap_org_user(client, email_prefix="p91-liveflag")
+    requester_headers = org["org_headers"]
+
+    owner_user = _create_user_with_role(
+        db_session,
+        org_id=org["organization_id"],
+        email="p91-liveflag-owner@example.com",
+        role_name="owner",
+    )
+    approver_user = _create_user_with_role(
+        db_session,
+        org_id=org["organization_id"],
+        email="p91-liveflag-approver@example.com",
+        role_name="admin",
+    )
+    approver_token = login_user(client, approver_user.email)
+    approver_headers = org_headers(approver_token, org["organization_id"])
+
+    policy = _create_policy(client, requester_headers, owner_user_id=str(owner_user.id), title="Live Flag Policy")
+
+    v1 = _create_version(client, requester_headers, policy["id"], version_number="1.0", content={"rev": 1})
+    _submit_version(client, requester_headers, policy["id"], v1["id"])
+    req1 = _create_approval_request(client, requester_headers, policy["id"], v1["id"], approver_user_id=str(approver_user.id))
+    approve1 = client.post(
+        f"{BASE}/{policy['id']}/approval-requests/{req1['id']}/approve",
+        headers=approver_headers,
+        json={"notes": "approved v1"},
+    )
+    assert approve1.status_code == 200
+
+    # Before any second version exists, v1 is the live version and no campaign references it yet.
+    versions_before = client.get(f"{BASE}/{policy['id']}/versions", headers=requester_headers)
+    assert versions_before.status_code == 200
+    v1_before = next(v for v in versions_before.json() if v["id"] == v1["id"])
+    assert v1_before["is_live"] is True
+    assert v1_before["referenced_by_active_campaign"] is False
+    assert v1_before["stale_active_campaign_reference"] is False
+
+    # Launch an attestation campaign explicitly pinned to v1.
+    campaign = client.post(
+        "/api/v1/compliance/attestation-campaigns",
+        headers=requester_headers,
+        json={
+            "policy_id": policy["id"],
+            "title": "Live Flag Campaign",
+            "due_date": "2030-01-01",
+            "policy_version_id": v1["id"],
+        },
+    )
+    assert campaign.status_code == 201
+
+    # Now supersede v1 with an approved v2.
+    v2 = _create_version(client, requester_headers, policy["id"], version_number="2.0", content={"rev": 2})
+    _submit_version(client, requester_headers, policy["id"], v2["id"])
+    req2 = _create_approval_request(client, requester_headers, policy["id"], v2["id"], approver_user_id=str(approver_user.id))
+    approve2 = client.post(
+        f"{BASE}/{policy['id']}/approval-requests/{req2['id']}/approve",
+        headers=approver_headers,
+        json={"notes": "approved v2"},
+    )
+    assert approve2.status_code == 200
+
+    versions_after = client.get(f"{BASE}/{policy['id']}/versions", headers=requester_headers)
+    assert versions_after.status_code == 200
+    by_id = {v["id"]: v for v in versions_after.json()}
+
+    assert by_id[v1["id"]]["is_live"] is False
+    assert by_id[v1["id"]]["referenced_by_active_campaign"] is True
+    assert by_id[v1["id"]]["stale_active_campaign_reference"] is True
+
+    assert by_id[v2["id"]]["is_live"] is True
+    assert by_id[v2["id"]]["referenced_by_active_campaign"] is False
+    assert by_id[v2["id"]]["stale_active_campaign_reference"] is False
+
+    single = client.get(f"{BASE}/{policy['id']}/versions/{v1['id']}", headers=requester_headers)
+    assert single.status_code == 200
+    assert single.json()["stale_active_campaign_reference"] is True
+
+
 def test_phase91_tenant_scoping_for_versions_and_approval_requests(client, db_session):
     org1 = bootstrap_org_user(client, email_prefix="p91-tenant-a")
     org2 = bootstrap_org_user(client, email_prefix="p91-tenant-b")

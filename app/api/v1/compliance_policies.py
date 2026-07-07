@@ -65,7 +65,8 @@ def _policy_read(row: CompliancePolicy, *, violation_count: int = 0) -> Complian
     )
 
 
-def _version_read(row: CompliancePolicyVersion) -> CompliancePolicyVersionRead:
+def _version_read(row: CompliancePolicyVersion, *, context: dict | None = None) -> CompliancePolicyVersionRead:
+    context = context or {}
     return CompliancePolicyVersionRead(
         id=row.id,
         organization_id=row.organization_id,
@@ -81,6 +82,9 @@ def _version_read(row: CompliancePolicyVersion) -> CompliancePolicyVersionRead:
         review_notes=row.review_notes,
         content_sha256=row.content_sha256,
         created_at=row.created_at,
+        is_live=context.get("is_live", False),
+        referenced_by_active_campaign=context.get("referenced_by_active_campaign", False),
+        stale_active_campaign_reference=context.get("stale_active_campaign_reference", False),
     )
 
 
@@ -431,7 +435,7 @@ def list_policy_versions(
     _: Membership = Depends(require_permission("compliance_policies:read")),
 ) -> list[CompliancePolicyVersionRead]:
     service = CompliancePolicyService(db)
-    _ = service.require_policy_in_org(organization.id, policy_id)
+    policy = service.require_policy_in_org(organization.id, policy_id)
     rows = db.execute(
         select(CompliancePolicyVersion)
         .where(
@@ -440,7 +444,8 @@ def list_policy_versions(
         )
         .order_by(CompliancePolicyVersion.created_at.desc())
     ).scalars().all()
-    return [_version_read(row) for row in rows]
+    context = service.version_context(organization.id, policy, rows)
+    return [_version_read(row, context=context.get(row.id)) for row in rows]
 
 
 @router.get("/{policy_id}/versions/{version_id}", response_model=CompliancePolicyVersionRead)
@@ -451,8 +456,11 @@ def get_policy_version(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("compliance_policies:read")),
 ) -> CompliancePolicyVersionRead:
-    row = CompliancePolicyService(db).require_version_in_org(organization.id, policy_id, version_id)
-    return _version_read(row)
+    service = CompliancePolicyService(db)
+    policy = service.require_policy_in_org(organization.id, policy_id)
+    row = service.require_version_in_org(organization.id, policy_id, version_id)
+    context = service.version_context(organization.id, policy, [row])
+    return _version_read(row, context=context.get(row.id))
 
 
 @router.post("/{policy_id}/versions/{version_id}/submit-for-approval", response_model=CompliancePolicyVersionRead)
