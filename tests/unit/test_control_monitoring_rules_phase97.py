@@ -1,5 +1,8 @@
+import contextlib
 import uuid
 from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import event, select
 
 from app.core.security import get_password_hash
 from app.models.control_monitoring_definition import ControlMonitoringDefinition
@@ -94,6 +97,23 @@ def _set_definition_due_past(db_session, definition_id: str, days: int = 3) -> N
     row = db_session.query(ControlMonitoringDefinition).filter(ControlMonitoringDefinition.id == uuid.UUID(definition_id)).one()
     row.next_check_due_at = datetime.now(UTC) - timedelta(days=days)
     db_session.commit()
+
+
+@contextlib.contextmanager
+def _count_select_queries(engine):
+    """Count SELECT statements executed against engine within the context."""
+    statements = []
+
+    def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        # SQLite may emit non-SELECT statements mixed in; only count SELECTs.
+        if statement.strip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", before_cursor_execute)
+    try:
+        yield statements
+    finally:
+        event.remove(engine, "before_cursor_execute", before_cursor_execute)
 
 
 def test_phase97_rule_crud_and_condition_validation_per_type(client, db_session):
@@ -564,3 +584,172 @@ def test_phase97_execution_history_summary_and_audit_events(client, db_session):
     assert "control_monitoring_rule.updated" in actions
     assert "control_monitoring_rule.archived" in actions
     assert "control_monitoring_rule.evaluated" in actions
+
+
+def test_phase97_evidence_gap_rule_batches_queries_for_many_definitions(client, db_session):
+    """Adversarial N+1 check: evidence_gap matching must use a single grouped query for all
+    scoped definitions, not one query per definition."""
+    from app.models.control_monitoring_rule import ControlMonitoringRule
+    from app.services.control_monitoring_rule_service import ControlMonitoringRuleService
+
+    org = bootstrap_org_user(client, email_prefix="p97-n1-ev")
+    owner = _create_active_user_with_role(db_session, org["organization_id"], "p97-n1-ev-owner@example.com", "admin")
+
+    definitions: list[dict] = []
+    for i in range(5):
+        control = _create_control(client, org["org_headers"], title=f"P97 Evidence Control {i}")
+        definition = _create_definition(
+            client, org["org_headers"], control_id=control["id"], owner_user_id=str(owner.id), name=f"Evidence Def {i}"
+        )
+        definitions.append(definition)
+
+    rule = _create_rule(
+        client,
+        org["org_headers"],
+        name="Evidence Gap Batch Rule",
+        rule_type="evidence_gap",
+        condition_json={"days_without_evidence": 14},
+        action_type="create_alert",
+        scope_definition_ids=[d["id"] for d in definitions],
+    )
+
+    row = db_session.execute(select(ControlMonitoringRule).where(ControlMonitoringRule.id == uuid.UUID(rule["id"]))).scalar_one()
+    service = ControlMonitoringRuleService(db_session)
+
+    with _count_select_queries(db_session.get_bind()) as selects:
+        matches = service._definition_matches(uuid.UUID(org["organization_id"]), row)
+
+    assert len(matches) == 5
+    matched_ids = {str(m["definition"].id) for m in matches}
+    assert matched_ids == {d["id"] for d in definitions}
+    # With the N+1 fix we expect one query for definitions and one grouped evidence query.
+    # Allow a small cushion for any incidental selects.
+    select_count = len(selects)
+    assert select_count <= 3, f"expected batched evidence_gap queries, got {select_count} SELECTs"
+
+
+def test_phase97_task_overdue_rule_batches_queries_for_many_definitions(client, db_session):
+    """Adversarial N+1 check: task_overdue matching must use a single grouped query for all
+    scoped definitions, not one query per definition."""
+    from app.models.control_monitoring_rule import ControlMonitoringRule
+    from app.services.control_monitoring_rule_service import ControlMonitoringRuleService
+
+    org = bootstrap_org_user(client, email_prefix="p97-n1-task")
+    owner = _create_active_user_with_role(db_session, org["organization_id"], "p97-n1-task-owner@example.com", "admin")
+    org_id = uuid.UUID(org["organization_id"])
+    now = datetime.now(UTC)
+
+    definitions: list[dict] = []
+    for i in range(5):
+        control = _create_control(client, org["org_headers"], title=f"P97 Task Control {i}")
+        definition = _create_definition(
+            client, org["org_headers"], control_id=control["id"], owner_user_id=str(owner.id), name=f"Task Def {i}"
+        )
+        definitions.append(definition)
+        # Every definition gets an overdue task so they all match.
+        db_session.add(
+            Task(
+                organization_id=org_id,
+                title=f"Overdue task {i}",
+                status="open",
+                priority="normal",
+                task_type="general",
+                owner_user_id=owner.id,
+                created_by_user_id=owner.id,
+                due_date=now - timedelta(days=5),
+                linked_entity_type="control_monitoring_definition",
+                linked_entity_id=uuid.UUID(definition["id"]),
+                source="test",
+                reminder_status="none",
+            )
+        )
+    db_session.commit()
+
+    rule = _create_rule(
+        client,
+        org["org_headers"],
+        name="Task Overdue Batch Rule",
+        rule_type="task_overdue",
+        condition_json={"days_overdue_threshold": 1},
+        action_type="create_alert",
+        scope_definition_ids=[d["id"] for d in definitions],
+    )
+
+    row = db_session.execute(select(ControlMonitoringRule).where(ControlMonitoringRule.id == uuid.UUID(rule["id"]))).scalar_one()
+    service = ControlMonitoringRuleService(db_session)
+
+    with _count_select_queries(db_session.get_bind()) as selects:
+        matches = service._definition_matches(uuid.UUID(org["organization_id"]), row)
+
+    assert len(matches) == 5
+    select_count = len(selects)
+    assert select_count <= 3, f"expected batched task_overdue queries, got {select_count} SELECTs"
+
+
+def test_phase97_risk_threshold_breach_rule_batches_queries_for_many_definitions(client, db_session):
+    """Adversarial N+1 check: risk_threshold_breach matching must use a single grouped query
+    for all scoped definitions, not one query per definition."""
+    from app.models.control_monitoring_rule import ControlMonitoringRule
+    from app.models.risk import Risk
+    from app.models.risk_control_link import RiskControlLink
+    from app.services.control_monitoring_rule_service import ControlMonitoringRuleService
+
+    org = bootstrap_org_user(client, email_prefix="p97-n1-risk")
+    owner = _create_active_user_with_role(db_session, org["organization_id"], "p97-n1-risk-owner@example.com", "admin")
+    org_id = uuid.UUID(org["organization_id"])
+
+    definitions: list[dict] = []
+    risks: list[Risk] = []
+    for i in range(5):
+        control = _create_control(client, org["org_headers"], title=f"P97 Risk Control {i}")
+        definition = _create_definition(
+            client, org["org_headers"], control_id=control["id"], owner_user_id=str(owner.id), name=f"Risk Def {i}"
+        )
+        definitions.append(definition)
+        risk = Risk(
+            organization_id=org_id,
+            title=f"High severity risk {i}",
+            category="security",
+            severity="high",
+            likelihood=4,
+            impact=5,
+            inherent_score=20,
+            treatment_strategy="mitigate",
+            status="identified",
+            owner_user_id=owner.id,
+        )
+        db_session.add(risk)
+        risks.append(risk)
+    db_session.flush()
+
+    for definition, risk in zip(definitions, risks):
+        db_session.add(
+            RiskControlLink(
+                organization_id=org_id,
+                risk_id=risk.id,
+                control_id=uuid.UUID(definition["control_id"]),
+                link_type="mitigates",
+                status="active",
+            )
+        )
+    db_session.commit()
+
+    rule = _create_rule(
+        client,
+        org["org_headers"],
+        name="Risk Breach Batch Rule",
+        rule_type="risk_threshold_breach",
+        condition_json={"risk_levels": ["critical", "high"]},
+        action_type="create_alert",
+        scope_definition_ids=[d["id"] for d in definitions],
+    )
+
+    row = db_session.execute(select(ControlMonitoringRule).where(ControlMonitoringRule.id == uuid.UUID(rule["id"]))).scalar_one()
+    service = ControlMonitoringRuleService(db_session)
+
+    with _count_select_queries(db_session.get_bind()) as selects:
+        matches = service._definition_matches(uuid.UUID(org["organization_id"]), row)
+
+    assert len(matches) == 5
+    select_count = len(selects)
+    assert select_count <= 3, f"expected batched risk_threshold_breach queries, got {select_count} SELECTs"

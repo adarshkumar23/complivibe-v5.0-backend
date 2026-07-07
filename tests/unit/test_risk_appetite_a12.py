@@ -936,3 +936,112 @@ def test_a12_tenant_isolation_all_endpoints(client, db_session):
         json={"reason": "cross"},
     )
     assert deactivate_cross.status_code == 404
+
+
+def test_a12_breach_auto_resolves_via_risk_update_at_exact_threshold(client, db_session):
+    """Adversarial reproduction: create a real API-level breach, then correct the risk score
+    through the public risk update endpoint so it lands exactly on the threshold. The prior
+    open alert must transition to resolved, and the /breaches list must empty."""
+    org = bootstrap_org_user(client, email_prefix="a12-api-boundary")
+    escalation_owner = _create_active_user_with_role(db_session, org["organization_id"], "a12-api-boundary-owner@example.com", "admin")
+
+    threshold = _create_threshold(
+        client,
+        org["org_headers"],
+        scope_type="org",
+        risk_category="operational",
+        max_acceptable_score=10,
+        escalation_owner_id=str(escalation_owner.id),
+    )
+    assert threshold.status_code == 201
+
+    risk = _create_risk(
+        client,
+        org["org_headers"],
+        title="Boundary Risk",
+        category="operational",
+        likelihood=5,
+        impact=5,
+        owner_user_id=str(escalation_owner.id),
+    )
+    assert risk.status_code == 201
+    risk_id = risk.json()["id"]
+    assert risk.json()["inherent_score"] == 25
+
+    breaches = client.get(f"{BASE}/breaches", headers=org["org_headers"])
+    assert breaches.status_code == 200
+    assert len(breaches.json()) == 1
+    first_alert_id = breaches.json()[0]["alert_id"]
+
+    # Drop the risk score to exactly the threshold (25 -> 10). The breach must resolve.
+    update = client.patch(
+        f"/api/v1/risks/{risk_id}",
+        headers=org["org_headers"],
+        json={"likelihood": 2, "impact": 5},
+    )
+    assert update.status_code == 200
+    assert update.json()["inherent_score"] == 10
+
+    breaches_after = client.get(f"{BASE}/breaches", headers=org["org_headers"])
+    assert breaches_after.status_code == 200
+    assert breaches_after.json() == []
+
+    logs = client.get("/api/v1/audit-logs", headers=org["org_headers"]).json()
+    auto_resolved = [row for row in logs if row["action"] == "risk_appetite.breach_auto_resolved"]
+    assert len(auto_resolved) == 1
+    assert auto_resolved[0]["entity_id"] == str(first_alert_id)
+
+
+def test_a12_breach_resolves_at_threshold_boundary_one_unit_resolution(client, db_session):
+    """Adversarial edge: a score that breaches by exactly 1 unit (threshold 10, score 11)
+    must auto-resolve when the score drops back to the threshold value (10), and a fresh
+    re-breach must create a new alert rather than reopening the resolved one."""
+    org = bootstrap_org_user(client, email_prefix="a12-one-unit")
+    escalation_owner = _create_active_user_with_role(db_session, org["organization_id"], "a12-one-unit-owner@example.com", "admin")
+    org_id = uuid.UUID(org["organization_id"])
+
+    risk = Risk(
+        organization_id=org_id,
+        title="One Unit Risk",
+        category="compliance",
+        severity="medium",
+        likelihood=3,
+        impact=3,
+        inherent_score=9,
+        treatment_strategy="mitigate",
+        status="identified",
+        owner_user_id=escalation_owner.id,
+    )
+    threshold = RiskAppetiteThreshold(
+        organization_id=org_id,
+        scope_type="org",
+        scope_id=None,
+        risk_category="compliance",
+        max_acceptable_score=10,
+        escalation_owner_id=escalation_owner.id,
+        is_active=True,
+        created_by_user_id=escalation_owner.id,
+    )
+    db_session.add_all([risk, threshold])
+    db_session.commit()
+
+    service = RiskAppetiteService(db_session)
+    alert = service.check_appetite_breach(org_id=org_id, risk_id=risk.id, new_score=11, risk_category="compliance")
+    db_session.commit()
+    assert alert is not None
+    assert alert.status == "open"
+
+    # Exactly one unit below breach -> resolves.
+    resolved = service.check_appetite_breach(org_id=org_id, risk_id=risk.id, new_score=10, risk_category="compliance")
+    db_session.commit()
+    assert resolved is None
+    db_session.refresh(alert)
+    assert alert.status == "resolved"
+    assert "no longer applies" in (alert.resolution_notes or "")
+
+    # Re-breach creates a new alert; the resolved alert stays resolved.
+    rebreach = service.check_appetite_breach(org_id=org_id, risk_id=risk.id, new_score=11, risk_category="compliance")
+    db_session.commit()
+    assert rebreach is not None
+    assert rebreach.id != alert.id
+    assert rebreach.status == "open"
