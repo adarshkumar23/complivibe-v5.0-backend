@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import UTC, datetime
 
 from app.ai_governance.services.ai_provider_service import AIProviderService
 from app.models.compliance_baseline_run import ComplianceBaselineRun
@@ -88,6 +89,12 @@ def test_tv1_baseline_start_generates_30_questions_collects_github_evidence(clie
     assert body["gap_report"]["intake_question_source"] in {"ai_groq", "ai_azure", "deterministic_fallback"}
     assert len(body["gap_report"]["integration_roadmap"]) == 2
     assert body["gap_report"]["github_collection_summary"]["evidence_items_created"] >= 1
+    assert isinstance(body["gap_report"]["context_flags"], list)
+    assert isinstance(body["context_flags"], list)
+    assert "framework_coverage_summary" in body["gap_report"]
+    assert "data_freshness" in body["gap_report"]
+    assert "coverage_band" in body["gap_report"]
+    assert "weakest_frameworks" in body["gap_report"]
 
     run_id = uuid.UUID(body["run_id"])
     run_row = db_session.query(ComplianceBaselineRun).filter(ComplianceBaselineRun.id == run_id).one()
@@ -122,3 +129,96 @@ def test_tv1_baseline_start_rejects_missing_github_token(client):
         json={"framework_ids": [], "github": {"owner": "example-org", "token": ""}},
     )
     assert response.status_code in {422, 400}
+
+
+def test_tv1_baseline_start_rejects_invalid_target_control_uuid(client, db_session):
+    ctx = bootstrap_org_user(client, email_prefix="tv1-p2c-invalid-target")
+    org_id = uuid.UUID(ctx["organization_id"])
+    user_id = uuid.UUID(ctx["user_id"])
+
+    framework = Framework(
+        code="SOC2_TV1_TARGET",
+        name="SOC2 TV1 Target",
+        version="2024",
+        category="security",
+        jurisdiction="US",
+        authority="AICPA",
+        description="TV1 framework target uuid",
+        status="active",
+    )
+    db_session.add(framework)
+    db_session.flush()
+    db_session.add(
+        OrganizationFramework(
+            organization_id=org_id,
+            framework_id=framework.id,
+            status="active",
+            activated_by_user_id=user_id,
+        )
+    )
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/onboarding/baseline/24h/start",
+        headers=_headers(ctx["access_token"], ctx["organization_id"]),
+        json={
+            "framework_ids": [str(framework.id)],
+            "github": {"owner": "example-org", "token": "ghp_example", "target_control_id": "not-a-uuid"},
+        },
+    )
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    if isinstance(detail, list):
+        assert any(item.get("loc") == ["body", "github", "target_control_id"] for item in detail)
+    else:
+        assert "target_control_id" in str(detail)
+
+
+def test_tv1_baseline_start_rejects_when_another_run_is_in_progress(client, db_session):
+    ctx = bootstrap_org_user(client, email_prefix="tv1-p2c-running")
+    org_id = uuid.UUID(ctx["organization_id"])
+    user_id = uuid.UUID(ctx["user_id"])
+
+    framework = Framework(
+        code="SOC2_TV1_RUNNING",
+        name="SOC2 TV1 Running",
+        version="2024",
+        category="security",
+        jurisdiction="US",
+        authority="AICPA",
+        description="TV1 framework running",
+        status="active",
+    )
+    db_session.add(framework)
+    db_session.flush()
+    db_session.add(
+        OrganizationFramework(
+            organization_id=org_id,
+            framework_id=framework.id,
+            status="active",
+            activated_by_user_id=user_id,
+        )
+    )
+    db_session.add(
+        ComplianceBaselineRun(
+            organization_id=org_id,
+            status="running",
+            selected_framework_ids_json=[str(framework.id)],
+            integration_provider="github",
+            gap_report_json={},
+            started_at=datetime.now(UTC),
+            created_by=user_id,
+        )
+    )
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/onboarding/baseline/24h/start",
+        headers=_headers(ctx["access_token"], ctx["organization_id"]),
+        json={
+            "framework_ids": [str(framework.id)],
+            "github": {"owner": "example-org", "token": "ghp_example"},
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert "already in progress" in response.json()["detail"]

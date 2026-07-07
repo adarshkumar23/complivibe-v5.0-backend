@@ -118,3 +118,4 @@ class TV1BaselineRunRead(BaseModel):
     failed_at: datetime | None = None
     failure_reason: str | None = None
     gap_report: dict = Field(default_factory=dict)
+    context_flags: list[str] = Field(default_factory=list)

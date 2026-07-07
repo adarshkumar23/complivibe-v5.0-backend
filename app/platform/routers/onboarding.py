@@ -204,6 +204,7 @@ def start_24h_baseline(
         failed_at=row.failed_at,
         failure_reason=row.failure_reason,
         gap_report=row.gap_report_json or {},
+        context_flags=list((row.gap_report_json or {}).get("context_flags") or []),
     )
 
 
@@ -226,4 +227,5 @@ def get_24h_baseline_run(
         failed_at=row.failed_at,
         failure_reason=row.failure_reason,
         gap_report=row.gap_report_json or {},
+        context_flags=list((row.gap_report_json or {}).get("context_flags") or []),
     )

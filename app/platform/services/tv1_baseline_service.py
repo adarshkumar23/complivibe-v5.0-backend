@@ -55,6 +55,14 @@ class TV1BaselineService:
     def utcnow() -> datetime:
         return datetime.now(UTC)
 
+    @staticmethod
+    def _as_aware_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
     def _require_user_in_org(self, org_id: uuid.UUID, user_id: uuid.UUID) -> User:
         membership = self.db.execute(
             select(Membership).where(
@@ -88,6 +96,21 @@ class TV1BaselineService:
         if not rows:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="No active frameworks selected")
         return rows
+
+    def _require_no_running_baseline(self, org_id: uuid.UUID) -> None:
+        running_count = int(
+            self.db.execute(
+                select(func.count(ComplianceBaselineRun.id)).where(
+                    ComplianceBaselineRun.organization_id == org_id,
+                    ComplianceBaselineRun.status == "running",
+                )
+            ).scalar_one()
+        )
+        if running_count > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A baseline run is already in progress for this organization",
+            )
 
     def _parse_questions_payload(self, text: str) -> list[dict]:
         cleaned = str(text).strip()
@@ -378,6 +401,7 @@ class TV1BaselineService:
         self,
         *,
         org_id: uuid.UUID,
+        baseline_run_id: uuid.UUID,
         framework_ids: list[uuid.UUID],
         intake_session_id: uuid.UUID,
     ) -> dict:
@@ -432,17 +456,103 @@ class TV1BaselineService:
         uncovered = [row for row in obligations if row.id not in evidence_obligation_ids]
         uncovered = sorted(uncovered, key=lambda row: (row.reference_code or ""))
 
+        framework_rows = self.db.execute(
+            select(Framework).where(Framework.id.in_(framework_ids))
+        ).scalars().all()
+        framework_by_id = {row.id: row for row in framework_rows}
+        obligations_by_framework: dict[uuid.UUID, list[Obligation]] = {}
+        for row in obligations:
+            obligations_by_framework.setdefault(row.framework_id, []).append(row)
+
+        framework_coverage_summary: list[dict[str, Any]] = []
+        for framework_id in framework_ids:
+            framework_obligations = obligations_by_framework.get(framework_id, [])
+            framework_total = len(framework_obligations)
+            framework_with_signal = sum(1 for row in framework_obligations if row.id in evidence_obligation_ids)
+            framework_coverage_pct = (
+                round((framework_with_signal / framework_total) * 100, 2) if framework_total > 0 else 0.0
+            )
+            framework_row = framework_by_id.get(framework_id)
+            framework_coverage_summary.append(
+                {
+                    "framework_id": str(framework_id),
+                    "framework_code": framework_row.code if framework_row else None,
+                    "framework_name": framework_row.name if framework_row else None,
+                    "obligations_total": framework_total,
+                    "obligations_with_evidence_signal": framework_with_signal,
+                    "coverage_pct": framework_coverage_pct,
+                }
+            )
+        weakest_frameworks = sorted(
+            [row for row in framework_coverage_summary if int(row["obligations_total"]) > 0],
+            key=lambda row: (float(row["coverage_pct"]), str(row.get("framework_name") or "")),
+        )[:3]
+
+        latest_sync_run = self.db.execute(
+            select(ComplianceBaselineEvidenceSyncRun)
+            .where(
+                ComplianceBaselineEvidenceSyncRun.organization_id == org_id,
+                ComplianceBaselineEvidenceSyncRun.baseline_run_id == baseline_run_id,
+            )
+            .order_by(ComplianceBaselineEvidenceSyncRun.started_at.desc())
+        ).scalars().first()
+        sync_reference = None
+        if latest_sync_run is not None:
+            sync_reference = self._as_aware_utc(latest_sync_run.completed_at or latest_sync_run.started_at)
+        now = self.utcnow()
+        evidence_sync_age_hours = None
+        evidence_sync_stale = False
+        if sync_reference is not None:
+            evidence_sync_age_hours = round(max(0.0, (now - sync_reference).total_seconds() / 3600), 2)
+            evidence_sync_stale = evidence_sync_age_hours > 24
+
         coverage_pct = 0.0 if total_obligations == 0 else round((len(evidence_obligation_ids) / total_obligations) * 100, 2)
+        if coverage_pct < 25:
+            coverage_band = "critical"
+        elif coverage_pct < 50:
+            coverage_band = "low"
+        elif coverage_pct < 80:
+            coverage_band = "moderate"
+        else:
+            coverage_band = "high"
+
+        context_flags: list[str] = []
+        if total_obligations == 0:
+            context_flags.append("no_obligations_in_scope")
+        if total_obligations > 0 and len(evidence_obligation_ids) == 0:
+            context_flags.append("no_evidence_signal")
+        if coverage_band in {"critical", "low"} and total_obligations > 0:
+            context_flags.append(f"coverage_{coverage_band}")
+        if answered == 0 and intake_items:
+            context_flags.append("intake_unanswered")
+        elif intake_items and answered < len(intake_items):
+            context_flags.append("intake_partially_answered")
+        if needs_review > 0:
+            context_flags.append("intake_needs_review")
+        if evidence_sync_stale:
+            context_flags.append("github_evidence_sync_stale")
+        if any(int(row["obligations_total"]) == 0 for row in framework_coverage_summary):
+            context_flags.append("framework_without_obligations")
+
         report = {
-            "generated_at": self.utcnow().isoformat(),
+            "generated_at": now.isoformat(),
             "frameworks_in_scope": [str(fid) for fid in framework_ids],
             "obligations_total": total_obligations,
             "obligations_with_control_mapping": len(mapped_obligation_ids),
             "obligations_with_evidence_signal": len(evidence_obligation_ids),
             "coverage_pct": coverage_pct,
+            "coverage_band": coverage_band,
             "intake_questions_total": len(intake_items),
             "intake_questions_answered": answered,
             "intake_questions_needing_review": needs_review,
+            "framework_coverage_summary": framework_coverage_summary,
+            "weakest_frameworks": weakest_frameworks,
+            "data_freshness": {
+                "evidence_sync_reference_at": sync_reference.isoformat() if sync_reference else None,
+                "evidence_sync_age_hours": evidence_sync_age_hours,
+                "evidence_sync_stale": evidence_sync_stale,
+            },
+            "context_flags": context_flags,
             "top_uncovered_obligations": [
                 {
                     "obligation_id": str(row.id),
@@ -464,6 +574,7 @@ class TV1BaselineService:
         github_payload: dict,
     ) -> ComplianceBaselineRun:
         user = self._require_user_in_org(org_id, actor_user_id)
+        self._require_no_running_baseline(org_id)
         frameworks = self._active_frameworks(org_id, framework_ids)
         now = self.utcnow()
 
@@ -528,7 +639,13 @@ class TV1BaselineService:
             if isinstance(target_control_id, uuid.UUID):
                 target_control_uuid = target_control_id
             elif target_control_id:
-                target_control_uuid = uuid.UUID(str(target_control_id))
+                try:
+                    target_control_uuid = uuid.UUID(str(target_control_id))
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="github.target_control_id must be a valid UUID",
+                    ) from exc
             else:
                 target_control_uuid = None
             github_details = self._collect_github_evidence(
@@ -544,6 +661,7 @@ class TV1BaselineService:
 
             gap_report = self._compute_gap_report(
                 org_id=org_id,
+                baseline_run_id=run_row.id,
                 framework_ids=[row.id for row in frameworks],
                 intake_session_id=session.id,
             )
