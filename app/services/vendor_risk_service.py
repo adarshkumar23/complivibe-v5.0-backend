@@ -11,6 +11,7 @@ from app.models.vendor import Vendor
 from app.models.vendor_assessment import VendorAssessment
 from app.models.vendor_risk_score import VendorRiskScore
 from app.services.audit_service import AuditService
+from app.services.vendor_concentration_risk_service import VendorConcentrationRiskService
 
 LIKELIHOOD_MAP: dict[str, int] = {
     "very_low": 1,
@@ -142,6 +143,17 @@ class VendorRiskService:
                 },
                 metadata_json={"source": "vendor_risk_score"},
             )
+            # risk_tier is a direct input to T1-6's concentration HHI calculation
+            # (see sanctions_screening.py for the same pattern). Without this, a
+            # manual likelihood x impact score that escalates/de-escalates a vendor's
+            # tier would leave an already-tracked org's concentration detection stale
+            # until an unrelated vendor update or supply-chain change happened to
+            # trigger a recompute.
+            self._refresh_concentration_risk(
+                organization_id=organization_id,
+                actor_user_id=scored_by_user_id,
+                trigger="vendor_risk_score.created",
+            )
 
         EventBus.get_instance().emit(
             EventType.VENDOR_SCORE_UPDATED,
@@ -158,6 +170,36 @@ class VendorRiskService:
         )
 
         return row, previous_score
+
+    def _refresh_concentration_risk(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        actor_user_id: uuid.UUID | None,
+        trigger: str,
+    ) -> None:
+        outcome = VendorConcentrationRiskService(self.db).recompute_if_tracked(
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+        )
+        if outcome is None:
+            return
+        detection, risk_created, state_changed = outcome
+        if not state_changed:
+            return
+        AuditService(self.db).write_audit_log(
+            action="vendor_concentration_risk.recomputed",
+            entity_type="vendor_concentration_risk_detection",
+            entity_id=detection.id,
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+            after_json={
+                "status": detection.status,
+                "hhi_score": detection.hhi_score,
+                "risk_id": str(detection.risk_id) if detection.risk_id else None,
+            },
+            metadata_json={"source": trigger, "risk_created": risk_created},
+        )
 
     @staticmethod
     def risk_level_from_score(score: int) -> str:

@@ -161,7 +161,25 @@ def _assessment_question_read(row: VendorAssessmentQuestion) -> VendorAssessment
     )
 
 
-def _risk_score_read(row: VendorRiskScore) -> VendorRiskScoreRead:
+def _risk_score_read(row: VendorRiskScore, vendor: Vendor | None = None) -> VendorRiskScoreRead:
+    recalculated_since_update = False
+    stale_reason: str | None = None
+    if vendor is not None:
+        if vendor.nth_party_risk_updated_at is not None and vendor.nth_party_risk_updated_at > row.created_at:
+            recalculated_since_update = True
+            stale_reason = (
+                "Vendor's nth-party risk signal changed "
+                f"({vendor.nth_party_risk_severity or 'unspecified'} severity) after this score was computed"
+            )
+        elif vendor.risk_tier != row.risk_level:
+            # The vendor's cached tier no longer matches this score's own risk_level,
+            # meaning a later score (or a sanctions/questionnaire-driven escalation)
+            # has already superseded this one.
+            recalculated_since_update = True
+            stale_reason = (
+                f"Vendor's current risk_tier ('{vendor.risk_tier}') no longer matches this "
+                f"score's risk_level ('{row.risk_level}'); a newer signal has superseded it"
+            )
     return VendorRiskScoreRead(
         id=row.id,
         organization_id=row.organization_id,
@@ -175,6 +193,8 @@ def _risk_score_read(row: VendorRiskScore) -> VendorRiskScoreRead:
         scored_by_user_id=row.scored_by_user_id,
         notes=row.notes,
         created_at=row.created_at,
+        recalculated_since_update=recalculated_since_update,
+        stale_reason=stale_reason,
     )
 
 
@@ -295,6 +315,14 @@ def create_vendor(
         user_agent=request.headers.get("user-agent"),
     )
 
+    if row.risk_tier in ("critical", "high") and row.status == "active":
+        _refresh_concentration_risk(
+            db,
+            organization_id=organization.id,
+            actor_user_id=current_user.id,
+            trigger="vendor.created",
+        )
+
     db.commit()
     db.refresh(row)
     return _vendor_read(row)
@@ -348,6 +376,8 @@ def list_vendors(
     data_access: bool | None = Query(default=None),
     business_unit_id: uuid.UUID | None = Query(default=None),
     include_archived: bool = Query(default=False),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("vendors:read")),
@@ -367,7 +397,9 @@ def list_vendors(
     if not include_archived:
         stmt = stmt.where(Vendor.status != "archived")
 
-    rows = db.execute(stmt.order_by(Vendor.created_at.desc())).scalars().all()
+    rows = db.execute(
+        stmt.order_by(Vendor.created_at.desc(), Vendor.id.desc()).offset(skip).limit(limit)
+    ).scalars().all()
     return [_vendor_read(row) for row in rows]
 
 
@@ -1024,18 +1056,21 @@ def create_vendor_risk_score(
     )
     db.commit()
     db.refresh(row)
-    return _risk_score_read(row)
+    vendor = service.require_vendor_in_org(organization.id, vendor_id)
+    return _risk_score_read(row, vendor)
 
 
 @router.get("/{vendor_id}/risk-scores", response_model=list[VendorRiskScoreRead])
 def list_vendor_risk_scores(
     vendor_id: uuid.UUID,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("vendors:read")),
 ) -> list[VendorRiskScoreRead]:
     service = VendorRiskService(db)
-    _ = service.require_vendor_in_org(organization.id, vendor_id)
+    vendor = service.require_vendor_in_org(organization.id, vendor_id)
     rows = db.execute(
         select(VendorRiskScore)
         .where(
@@ -1043,8 +1078,10 @@ def list_vendor_risk_scores(
             VendorRiskScore.vendor_id == vendor_id,
         )
         .order_by(VendorRiskScore.created_at.desc(), VendorRiskScore.id.desc())
+        .offset(skip)
+        .limit(limit)
     ).scalars().all()
-    return [_risk_score_read(row) for row in rows]
+    return [_risk_score_read(row, vendor) for row in rows]
 
 
 @router.get("/{vendor_id}/risk-scores/latest", response_model=VendorRiskScoreRead)
@@ -1055,7 +1092,7 @@ def get_latest_vendor_risk_score(
     _: Membership = Depends(require_permission("vendors:read")),
 ) -> VendorRiskScoreRead:
     service = VendorRiskService(db)
-    _ = service.require_vendor_in_org(organization.id, vendor_id)
+    vendor = service.require_vendor_in_org(organization.id, vendor_id)
     row = db.execute(
         select(VendorRiskScore)
         .where(
@@ -1067,7 +1104,7 @@ def get_latest_vendor_risk_score(
     ).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor risk score not found")
-    return _risk_score_read(row)
+    return _risk_score_read(row, vendor)
 
 
 @router.get("/{vendor_id}/risk-scores/{score_id}", response_model=VendorRiskScoreRead)
@@ -1079,7 +1116,7 @@ def get_vendor_risk_score(
     _: Membership = Depends(require_permission("vendors:read")),
 ) -> VendorRiskScoreRead:
     service = VendorRiskService(db)
-    _ = service.require_vendor_in_org(organization.id, vendor_id)
+    vendor = service.require_vendor_in_org(organization.id, vendor_id)
     row = db.execute(
         select(VendorRiskScore).where(
             VendorRiskScore.id == score_id,
@@ -1089,7 +1126,7 @@ def get_vendor_risk_score(
     ).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor risk score not found")
-    return _risk_score_read(row)
+    return _risk_score_read(row, vendor)
 
 
 @router.post("/{vendor_id}/links/controls", response_model=VendorControlLinkRead, status_code=status.HTTP_201_CREATED)
