@@ -21,7 +21,8 @@ from app.schemas.pbc_item import (
 router = APIRouter(prefix="/compliance/pbc-items", tags=["pbc-items"])
 
 
-def _read(row: PbcItem) -> PbcItemRead:
+def _read(row: PbcItem, context: dict | None = None) -> PbcItemRead:
+    ctx = context or {}
     return PbcItemRead(
         id=row.id,
         organization_id=row.organization_id,
@@ -37,9 +38,22 @@ def _read(row: PbcItem) -> PbcItemRead:
         accepted_at=row.accepted_at,
         rejected_at=row.rejected_at,
         rejection_reason=row.rejection_reason,
+        days_overdue=ctx.get("days_overdue", 0),
+        fieldwork_deadline=ctx.get("fieldwork_deadline"),
+        overdue_relative_to_fieldwork_deadline=bool(ctx.get("overdue_relative_to_fieldwork_deadline", False)),
+        days_past_fieldwork_deadline=ctx.get("days_past_fieldwork_deadline", 0),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+def _read_one(row: PbcItem, service: PbcService, org_id: uuid.UUID) -> PbcItemRead:
+    return _read(row, service.build_context(org_id, [row]).get(row.id))
+
+
+def _read_many(rows: list[PbcItem], service: PbcService, org_id: uuid.UUID) -> list[PbcItemRead]:
+    context = service.build_context(org_id, rows) if rows else {}
+    return [_read(row, context.get(row.id)) for row in rows]
 
 
 @router.post("", response_model=PbcItemRead, status_code=status.HTTP_201_CREATED)
@@ -51,10 +65,11 @@ def create_pbc_item(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> PbcItemRead:
-    row = PbcService(db).create_pbc_item(organization.id, engagement_id, payload, current_user.id)
+    service = PbcService(db)
+    row = service.create_pbc_item(organization.id, engagement_id, payload, current_user.id)
     db.commit()
     db.refresh(row)
-    return _read(row)
+    return _read_one(row, service, organization.id)
 
 
 @router.get("", response_model=list[PbcItemRead])
@@ -69,7 +84,8 @@ def list_pbc_items(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:read")),
 ) -> list[PbcItemRead]:
-    rows = PbcService(db).list_pbc_items(
+    service = PbcService(db)
+    rows = service.list_pbc_items(
         organization.id,
         engagement_id=engagement_id,
         assignee_id=assignee_id,
@@ -78,7 +94,7 @@ def list_pbc_items(
         skip=skip,
         limit=limit,
     )
-    return [_read(row) for row in rows]
+    return _read_many(rows, service, organization.id)
 
 
 @router.get("/summary", response_model=PbcSummary)
@@ -98,8 +114,9 @@ def get_pbc_item(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:read")),
 ) -> PbcItemRead:
-    row = PbcService(db).get_pbc_item(organization.id, item_id)
-    return _read(row)
+    service = PbcService(db)
+    row = service.get_pbc_item(organization.id, item_id)
+    return _read_one(row, service, organization.id)
 
 
 @router.patch("/{item_id}", response_model=PbcItemRead)
@@ -110,10 +127,11 @@ def update_pbc_item(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> PbcItemRead:
-    row = PbcService(db).update_pbc_item(organization.id, item_id, payload)
+    service = PbcService(db)
+    row = service.update_pbc_item(organization.id, item_id, payload)
     db.commit()
     db.refresh(row)
-    return _read(row)
+    return _read_one(row, service, organization.id)
 
 
 @router.post("/{item_id}/submit", response_model=PbcItemRead)
@@ -125,7 +143,8 @@ def submit_pbc_item(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> PbcItemRead:
-    row = PbcService(db).submit_pbc_item(
+    service = PbcService(db)
+    row = service.submit_pbc_item(
         organization.id,
         item_id,
         current_user.id,
@@ -133,7 +152,7 @@ def submit_pbc_item(
     )
     db.commit()
     db.refresh(row)
-    return _read(row)
+    return _read_one(row, service, organization.id)
 
 
 @router.post("/{item_id}/accept", response_model=PbcItemRead)
@@ -144,10 +163,11 @@ def accept_pbc_item(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> PbcItemRead:
-    row = PbcService(db).accept_pbc_item(organization.id, item_id, current_user.id)
+    service = PbcService(db)
+    row = service.accept_pbc_item(organization.id, item_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return _read(row)
+    return _read_one(row, service, organization.id)
 
 
 @router.post("/{item_id}/reject", response_model=PbcItemRead)
@@ -159,10 +179,11 @@ def reject_pbc_item(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> PbcItemRead:
-    row = PbcService(db).reject_pbc_item(organization.id, item_id, current_user.id, payload.rejection_reason)
+    service = PbcService(db)
+    row = service.reject_pbc_item(organization.id, item_id, current_user.id, payload.rejection_reason)
     db.commit()
     db.refresh(row)
-    return _read(row)
+    return _read_one(row, service, organization.id)
 
 
 @router.delete("/{item_id}", response_model=PbcItemRead)
@@ -173,9 +194,10 @@ def delete_pbc_item(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> PbcItemRead:
-    row = PbcService(db).soft_delete_pbc_item(organization.id, item_id, current_user.id)
+    service = PbcService(db)
+    row = service.soft_delete_pbc_item(organization.id, item_id, current_user.id)
     db.commit()
-    return _read(row)
+    return _read_one(row, service, organization.id)
 
 
 @router.get("/engagement/{engagement_id}", response_model=list[PbcItemRead])
@@ -187,8 +209,9 @@ def list_pbc_items_for_engagement(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:read")),
 ) -> list[PbcItemRead]:
-    rows = PbcService(db).list_pbc_items(organization.id, engagement_id=engagement_id, skip=skip, limit=limit)
-    return [_read(row) for row in rows]
+    service = PbcService(db)
+    rows = service.list_pbc_items(organization.id, engagement_id=engagement_id, skip=skip, limit=limit)
+    return _read_many(rows, service, organization.id)
 
 
 @router.get("/engagement/{engagement_id}/summary", response_model=PbcSummary)

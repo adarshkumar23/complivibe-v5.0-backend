@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.compliance.services.audit_engagement_service import AuditEngagementService
+from app.models.audit_engagement import AuditEngagement
 from app.models.evidence_item import EvidenceItem
 from app.models.membership import Membership
 from app.models.organization import Organization
@@ -131,6 +132,48 @@ class PbcService:
 
     def get_pbc_item(self, org_id: uuid.UUID, item_id: uuid.UUID) -> PbcItem:
         return self.require_pbc_item(org_id, item_id)
+
+    def build_context(self, org_id: uuid.UUID, rows: list[PbcItem]) -> dict[uuid.UUID, dict]:
+        """A PBC item's own due_date isn't the whole story: what actually matters to an
+        auditor is whether the item will be resolved before the *engagement's* fieldwork
+        deadline (end_date). Batch-resolve that per item (not one engagement query per
+        row) and report both how many days overdue against its own due_date, and how many
+        days past the engagement's own fieldwork deadline, rather than a bare status."""
+        if not rows:
+            return {}
+
+        engagement_ids = {row.audit_engagement_id for row in rows}
+        engagements_by_id = {
+            engagement.id: engagement
+            for engagement in self.db.execute(
+                select(AuditEngagement).where(AuditEngagement.id.in_(engagement_ids))
+            ).scalars().all()
+        }
+
+        today = self.utcdate()
+        context: dict[uuid.UUID, dict] = {}
+        for row in rows:
+            engagement = engagements_by_id.get(row.audit_engagement_id)
+            unresolved = row.status not in {"accepted"}
+
+            days_overdue = 0
+            if unresolved and row.due_date < today:
+                days_overdue = (today - row.due_date).days
+
+            fieldwork_deadline = engagement.end_date if engagement is not None else None
+            days_past_fieldwork_deadline = 0
+            overdue_vs_fieldwork = False
+            if unresolved and fieldwork_deadline is not None and fieldwork_deadline < today:
+                overdue_vs_fieldwork = True
+                days_past_fieldwork_deadline = (today - fieldwork_deadline).days
+
+            context[row.id] = {
+                "days_overdue": days_overdue,
+                "fieldwork_deadline": fieldwork_deadline,
+                "overdue_relative_to_fieldwork_deadline": overdue_vs_fieldwork,
+                "days_past_fieldwork_deadline": days_past_fieldwork_deadline,
+            }
+        return context
 
     def list_pbc_items(
         self,
