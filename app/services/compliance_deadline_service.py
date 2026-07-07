@@ -77,6 +77,66 @@ class ComplianceDeadlineService:
             )
         return user
 
+    def owner_activity_map(self, organization_id: uuid.UUID, owner_user_ids: set[uuid.UUID]) -> dict[uuid.UUID, bool]:
+        if not owner_user_ids:
+            return {}
+        active_owner_rows = self.db.execute(
+            select(Membership.user_id)
+            .join(User, User.id == Membership.user_id)
+            .where(
+                Membership.organization_id == organization_id,
+                Membership.status == "active",
+                Membership.user_id.in_(owner_user_ids),
+                User.is_active.is_(True),
+                User.status == "active",
+            )
+        ).scalars().all()
+        active_owner_ids = set(active_owner_rows)
+        return {owner_id: owner_id in active_owner_ids for owner_id in owner_user_ids}
+
+    def deadline_context(
+        self,
+        deadline: ComplianceDeadline,
+        *,
+        owner_is_active: bool = True,
+        today: date | None = None,
+    ) -> dict[str, int | str | bool | list[str] | None]:
+        evaluated_date = today or self.utcdate()
+        days_until_due = (deadline.due_date - evaluated_date).days
+        recommended_status: str | None = None
+        is_status_stale = False
+        context_flags: list[str] = []
+
+        if deadline.status == "upcoming" and deadline.due_date < evaluated_date:
+            recommended_status = "overdue"
+            is_status_stale = True
+            context_flags.append("past_due_not_marked_overdue")
+        elif deadline.status == "overdue" and deadline.due_date >= evaluated_date:
+            recommended_status = "upcoming"
+            is_status_stale = True
+            context_flags.append("overdue_status_but_not_past_due")
+
+        if deadline.status in {"upcoming", "overdue"} and days_until_due <= 7:
+            context_flags.append("due_within_7_days")
+        if deadline.status in {"upcoming", "overdue"} and days_until_due < 0:
+            context_flags.append("past_due")
+        if not owner_is_active:
+            context_flags.append("owner_inactive_or_unassigned")
+        if (
+            deadline.status == "upcoming"
+            and deadline.last_reminder_at is None
+            and deadline.due_date >= evaluated_date
+            and evaluated_date >= (deadline.due_date - timedelta(days=max(0, deadline.reminder_days_before)))
+        ):
+            context_flags.append("reminder_window_open_without_reminder")
+
+        return {
+            "days_until_due": days_until_due,
+            "recommended_status": recommended_status,
+            "is_status_stale": is_status_stale,
+            "context_flags": context_flags,
+        }
+
     def validate_linked_entity(
         self,
         *,
@@ -314,6 +374,36 @@ class ComplianceDeadlineService:
             ).scalar_one()
         )
 
+        high_risk_overdue_count = int(
+            self.db.execute(
+                select(func.count(ComplianceDeadline.id)).where(
+                    ComplianceDeadline.organization_id == organization_id,
+                    ComplianceDeadline.status == "overdue",
+                    ComplianceDeadline.priority.in_(["critical", "high"]),
+                )
+            ).scalar_one()
+        )
+
+        live_deadlines = self.db.execute(
+            select(ComplianceDeadline).where(
+                ComplianceDeadline.organization_id == organization_id,
+                ComplianceDeadline.status.in_(["upcoming", "overdue"]),
+            )
+        ).scalars().all()
+        owner_map = self.owner_activity_map(organization_id, {row.owner_user_id for row in live_deadlines})
+        stale_status_count = 0
+        deadlines_without_active_owner = 0
+        for row in live_deadlines:
+            context = self.deadline_context(
+                row,
+                owner_is_active=owner_map.get(row.owner_user_id, False),
+                today=today,
+            )
+            if context["is_status_stale"]:
+                stale_status_count += 1
+            if "owner_inactive_or_unassigned" in context["context_flags"]:
+                deadlines_without_active_owner += 1
+
         by_status_rows = self.db.execute(
             select(ComplianceDeadline.status, func.count(ComplianceDeadline.id))
             .where(ComplianceDeadline.organization_id == organization_id)
@@ -338,6 +428,9 @@ class ComplianceDeadlineService:
             "waived_deadlines": waived_deadlines,
             "cancelled_deadlines": cancelled_deadlines,
             "due_within_7_days": due_within_7_days,
+            "high_risk_overdue_count": high_risk_overdue_count,
+            "stale_status_count": stale_status_count,
+            "deadlines_without_active_owner": deadlines_without_active_owner,
             "by_status": {str(key): int(value) for key, value in by_status_rows},
             "by_deadline_type": {str(key): int(value) for key, value in by_deadline_type_rows},
             "by_priority": {str(key): int(value) for key, value in by_priority_rows},

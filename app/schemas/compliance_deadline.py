@@ -79,6 +79,10 @@ class ComplianceDeadlineRead(UUIDTimestampSchema):
     tags_json: dict | list | None = None
     notes: str | None = None
     created_by_user_id: UUID
+    days_until_due: int | None = None
+    recommended_status: str | None = None
+    is_status_stale: bool = False
+    context_flags: list[str] = []
 
 
 class ComplianceDeadlineEventRead(BaseModel):
@@ -109,6 +113,9 @@ class ComplianceDeadlineSummary(BaseModel):
     waived_deadlines: int
     cancelled_deadlines: int
     due_within_7_days: int
+    high_risk_overdue_count: int
+    stale_status_count: int
+    deadlines_without_active_owner: int
     by_status: dict[str, int]
     by_deadline_type: dict[str, int]
     by_priority: dict[str, int]

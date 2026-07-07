@@ -323,6 +323,9 @@ def test_phase99_summary_metrics_and_audit_events(client, db_session):
     assert body["by_priority"]["critical"] == 1
     assert body["by_priority"]["high"] == 1
     assert body["by_priority"]["low"] == 1
+    assert "high_risk_overdue_count" in body
+    assert "stale_status_count" in body
+    assert "deadlines_without_active_owner" in body
 
     logs = client.get("/api/v1/audit-logs", headers=org["org_headers"])
     assert logs.status_code == 200
@@ -332,3 +335,27 @@ def test_phase99_summary_metrics_and_audit_events(client, db_session):
     assert "compliance_deadline.waived" in actions
     assert "compliance_deadline.cancelled" in actions
     assert "compliance_deadline.evaluated" in actions
+
+
+def test_phase99_overdue_only_includes_stale_upcoming_and_emits_context_flags(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="p99-stale-list")
+    owner = _create_active_user_with_role(db_session, org["organization_id"], "p99-stale-owner@example.com", "admin")
+
+    stale_deadline = _create_deadline(
+        client,
+        org["org_headers"],
+        owner_user_id=str(owner.id),
+        title="Stale Upcoming",
+        due_date_value=date.today() - timedelta(days=2),
+        deadline_type="custom",
+        priority="high",
+    )
+
+    overdue_only = client.get(f"{BASE}?overdue_only=true", headers=org["org_headers"])
+    assert overdue_only.status_code == 200
+    rows = overdue_only.json()
+    assert any(row["id"] == stale_deadline["id"] for row in rows)
+    stale_row = next(row for row in rows if row["id"] == stale_deadline["id"])
+    assert stale_row["is_status_stale"] is True
+    assert stale_row["recommended_status"] == "overdue"
+    assert "past_due_not_marked_overdue" in stale_row["context_flags"]

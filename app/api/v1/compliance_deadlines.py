@@ -29,7 +29,12 @@ from app.services.compliance_deadline_service import ComplianceDeadlineService
 router = APIRouter(prefix="/compliance/deadlines", tags=["compliance-deadlines"])
 
 
-def _deadline_read(row: ComplianceDeadline) -> ComplianceDeadlineRead:
+def _deadline_read(
+    row: ComplianceDeadline,
+    *,
+    context: dict[str, int | str | bool | list[str] | None] | None = None,
+) -> ComplianceDeadlineRead:
+    resolved_context = context or {}
     return ComplianceDeadlineRead(
         id=row.id,
         organization_id=row.organization_id,
@@ -56,6 +61,10 @@ def _deadline_read(row: ComplianceDeadline) -> ComplianceDeadlineRead:
         created_by_user_id=row.created_by_user_id,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        days_until_due=resolved_context.get("days_until_due"),
+        recommended_status=resolved_context.get("recommended_status"),
+        is_status_stale=bool(resolved_context.get("is_status_stale", False)),
+        context_flags=list(resolved_context.get("context_flags", [])),
     )
 
 
@@ -122,7 +131,8 @@ def create_deadline(
 
     db.commit()
     db.refresh(row)
-    return _deadline_read(row)
+    context = service.deadline_context(row, owner_is_active=True)
+    return _deadline_read(row, context=context)
 
 
 @router.get("/events", response_model=list[ComplianceDeadlineEventRead])
@@ -216,14 +226,24 @@ def list_deadlines(
     if due_after is not None:
         stmt = stmt.where(ComplianceDeadline.due_date >= due_after)
     if overdue_only:
-        stmt = stmt.where(ComplianceDeadline.status == "overdue")
+        stmt = stmt.where(
+            ComplianceDeadline.due_date < today,
+            ComplianceDeadline.status.in_(["upcoming", "overdue"]),
+        )
 
     rows = db.execute(stmt.order_by(ComplianceDeadline.due_date.asc(), ComplianceDeadline.created_at.desc())).scalars().all()
-
-    if overdue_only:
-        rows = [row for row in rows if row.due_date < today and row.status in {"upcoming", "overdue"}]
-
-    return [_deadline_read(row) for row in rows]
+    owner_map = service.owner_activity_map(organization.id, {row.owner_user_id for row in rows})
+    return [
+        _deadline_read(
+            row,
+            context=service.deadline_context(
+                row,
+                owner_is_active=owner_map.get(row.owner_user_id, False),
+                today=today,
+            ),
+        )
+        for row in rows
+    ]
 
 
 @router.get("/{deadline_id}", response_model=ComplianceDeadlineRead)
@@ -233,8 +253,16 @@ def get_deadline(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("compliance_deadlines:read")),
 ) -> ComplianceDeadlineRead:
-    row = ComplianceDeadlineService(db).require_deadline_in_org(organization.id, deadline_id)
-    return _deadline_read(row)
+    service = ComplianceDeadlineService(db)
+    row = service.require_deadline_in_org(organization.id, deadline_id)
+    owner_map = service.owner_activity_map(organization.id, {row.owner_user_id})
+    return _deadline_read(
+        row,
+        context=service.deadline_context(
+            row,
+            owner_is_active=owner_map.get(row.owner_user_id, False),
+        ),
+    )
 
 
 @router.patch("/{deadline_id}", response_model=ComplianceDeadlineRead)
@@ -290,7 +318,14 @@ def update_deadline(
 
     db.commit()
     db.refresh(row)
-    return _deadline_read(row)
+    owner_map = service.owner_activity_map(organization.id, {row.owner_user_id})
+    return _deadline_read(
+        row,
+        context=service.deadline_context(
+            row,
+            owner_is_active=owner_map.get(row.owner_user_id, False),
+        ),
+    )
 
 
 @router.post("/{deadline_id}/complete", response_model=ComplianceDeadlineRead)
@@ -337,7 +372,7 @@ def complete_deadline(
 
     db.commit()
     db.refresh(row)
-    return _deadline_read(row)
+    return _deadline_read(row, context=service.deadline_context(row, owner_is_active=True))
 
 
 @router.post("/{deadline_id}/waive", response_model=ComplianceDeadlineRead)
@@ -382,7 +417,7 @@ def waive_deadline(
 
     db.commit()
     db.refresh(row)
-    return _deadline_read(row)
+    return _deadline_read(row, context=service.deadline_context(row, owner_is_active=True))
 
 
 @router.post("/{deadline_id}/cancel", response_model=ComplianceDeadlineRead)
@@ -429,4 +464,4 @@ def cancel_deadline(
 
     db.commit()
     db.refresh(row)
-    return _deadline_read(row)
+    return _deadline_read(row, context=service.deadline_context(row, owner_is_active=True))
