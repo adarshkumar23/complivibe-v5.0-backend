@@ -1,9 +1,8 @@
 import uuid
-from collections import Counter
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai_governance.services.ai_governance_event_service import AIGovernanceEventService
@@ -86,6 +85,7 @@ class AISystemService:
             affected_population=data.affected_population,
             geographic_scope=data.geographic_scope,
             geography_json=data.geographic_scope,
+            model_version=data.model_version,
             created_by=created_by,
             created_by_user_id=created_by,
             updated_by_user_id=created_by,
@@ -268,24 +268,35 @@ class AISystemService:
         return row
 
     def get_summary(self, org_id: uuid.UUID) -> dict:
-        rows = self.db.execute(
-            select(AISystem).where(
-                AISystem.organization_id == org_id,
-                AISystem.deleted_at.is_(None),
-            )
-        ).scalars().all()
+        # Aggregate in SQL rather than loading every AISystem row into memory --
+        # with thousands of registered systems, a Python-side Counter over the
+        # full result set is an unnecessary full materialization on every call.
+        base_filter = (AISystem.organization_id == org_id, AISystem.deleted_at.is_(None))
 
-        by_type = Counter((row.system_type or "unknown") for row in rows)
-        by_status = Counter((row.deployment_status or "unknown") for row in rows)
-        by_tier = Counter((row.risk_tier or "unassessed") for row in rows)
+        total = self.db.execute(select(func.count()).select_from(AISystem).where(*base_filter)).scalar_one()
 
-        unclassified = sum(1 for row in rows if row.risk_tier is None)
+        def _group_counts(column) -> dict[str, int]:
+            rows = self.db.execute(
+                select(column, func.count()).where(*base_filter).group_by(column)
+            ).all()
+            return {str(key) if key is not None else "unknown": int(count) for key, count in rows}
+
+        by_type = _group_counts(AISystem.system_type)
+        by_status = _group_counts(AISystem.deployment_status)
+        by_tier_raw = _group_counts(AISystem.risk_tier)
+        # Preserve the existing contract: unclassified systems are bucketed
+        # under "unassessed" (not "unknown") in by_risk_tier.
+        by_tier = {("unassessed" if key == "unknown" else key): count for key, count in by_tier_raw.items()}
+
+        unclassified = self.db.execute(
+            select(func.count()).select_from(AISystem).where(*base_filter, AISystem.risk_tier.is_(None))
+        ).scalar_one()
 
         return {
-            "total": len(rows),
-            "by_system_type": {str(k): int(v) for k, v in by_type.items()},
-            "by_deployment_status": {str(k): int(v) for k, v in by_status.items()},
-            "by_risk_tier": {str(k): int(v) for k, v in by_tier.items()},
+            "total": int(total),
+            "by_system_type": by_type,
+            "by_deployment_status": by_status,
+            "by_risk_tier": by_tier,
             "unclassified_count": int(unclassified),
         }
 

@@ -27,6 +27,21 @@ class AIRiskAssessmentRead(BaseModel):
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
+    risk_explanation: str | None = Field(
+        default=None,
+        description="Human-readable explanation of which risk dimensions drove the overall rating.",
+    )
+    reassessment_required: bool = Field(
+        default=False,
+        description=(
+            "True when the AI system's registered attributes were changed after this "
+            "assessment was completed, meaning the rating may no longer reflect reality."
+        ),
+    )
+    ai_system_archived: bool = Field(
+        default=False,
+        description="True when the referenced AI system has since been archived/soft-deleted.",
+    )
 
 
 class AIRiskAssessmentResponseSubmitItem(BaseModel):

@@ -17,6 +17,7 @@ class AISystemCreate(BaseModel):
     purpose: str | None = None
     affected_population: str | None = None
     geographic_scope: list[str] | None = None
+    model_version: str | None = Field(default=None, max_length=128)
 
 
 class AISystemUpdate(BaseModel):
@@ -31,6 +32,7 @@ class AISystemUpdate(BaseModel):
     purpose: str | None = None
     affected_population: str | None = None
     geographic_scope: list[str] | None = None
+    model_version: str | None = Field(default=None, max_length=128)
 
 
 class AISystemStatusUpdate(BaseModel):
@@ -53,6 +55,7 @@ class AISystemRead(BaseModel):
     purpose: str | None
     affected_population: str | None
     geographic_scope: Any | None
+    model_version: str | None = None
     created_by: uuid.UUID | None
     created_at: datetime
     updated_at: datetime

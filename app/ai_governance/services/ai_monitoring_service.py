@@ -93,9 +93,10 @@ class AIMonitoringService:
     def create_config(self, org_id: uuid.UUID, system_id: uuid.UUID, data, created_by: uuid.UUID) -> AIMonitoringConfig:
         payload = data.model_dump()
         self._validate_payload(payload)
-        self._require_ai_system(org_id, system_id)
+        ai_system = self._require_ai_system(org_id, system_id)
 
         now = self.utcnow()
+        baseline_value = payload.get("baseline_value")
         row = AIMonitoringConfig(
             organization_id=org_id,
             ai_system_id=system_id,
@@ -104,7 +105,10 @@ class AIMonitoringService:
             comparison_direction=payload["comparison_direction"],
             alert_on_breach=bool(payload.get("alert_on_breach", True)),
             check_frequency=payload.get("check_frequency"),
-            baseline_value=payload.get("baseline_value"),
+            baseline_value=baseline_value,
+            # Snapshot the system's current model_version alongside the baseline so we
+            # can later detect that the model changed and the baseline is now stale.
+            baseline_model_version=ai_system.model_version if baseline_value is not None else None,
             last_checked_at=None,
             last_reading_value=None,
             api_key_hash=self.hash_api_key(payload["api_key"]),
@@ -172,6 +176,12 @@ class AIMonitoringService:
         api_key = payload.pop("api_key", None)
         for key, value in payload.items():
             setattr(row, key, value)
+
+        if "baseline_value" in payload:
+            # Re-baselining: re-snapshot the system's current model_version so a
+            # later model change can still be detected against this new baseline.
+            ai_system = self._require_ai_system(org_id, row.ai_system_id)
+            row.baseline_model_version = ai_system.model_version if payload["baseline_value"] is not None else None
 
         if api_key is not None:
             row.api_key_hash = self.hash_api_key(api_key)
@@ -487,8 +497,13 @@ class AIMonitoringService:
             },
         }
 
+    # A reading further than this percentage from the recorded baseline is
+    # treated as drift worth surfacing on the dashboard, independent of
+    # whether it also breaches the hard alert threshold.
+    DRIFT_PCT_THRESHOLD = Decimal("20")
+
     def get_monitoring_dashboard(self, org_id: uuid.UUID, system_id: uuid.UUID) -> dict:
-        self._require_ai_system(org_id, system_id)
+        ai_system = self._require_ai_system(org_id, system_id)
         configs = self.list_configs(org_id, system_id=system_id, is_active=None)
         config_ids = [row.id for row in configs]
 
@@ -521,6 +536,17 @@ class AIMonitoringService:
         config_payload: list[dict] = []
         for cfg in configs:
             latest = latest_by_config.get(cfg.id)
+
+            drift_pct = None
+            drift_detected = False
+            if cfg.baseline_value is not None and cfg.last_reading_value is not None and cfg.baseline_value != 0:
+                drift_pct = abs(cfg.last_reading_value - cfg.baseline_value) / abs(cfg.baseline_value) * Decimal("100")
+                drift_detected = drift_pct > self.DRIFT_PCT_THRESHOLD
+
+            baseline_reassessment_required = bool(
+                cfg.baseline_model_version is not None and cfg.baseline_model_version != ai_system.model_version
+            )
+
             config_payload.append(
                 {
                     "config_id": cfg.id,
@@ -531,6 +557,10 @@ class AIMonitoringService:
                     "last_reading_value": cfg.last_reading_value,
                     "within_threshold": None if latest is None else latest.within_threshold,
                     "last_checked_at": cfg.last_checked_at,
+                    "baseline_value": cfg.baseline_value,
+                    "drift_pct": drift_pct,
+                    "drift_detected": drift_detected,
+                    "baseline_reassessment_required": baseline_reassessment_required,
                 }
             )
 
