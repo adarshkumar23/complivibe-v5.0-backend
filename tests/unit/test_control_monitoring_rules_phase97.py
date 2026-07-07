@@ -302,6 +302,210 @@ def test_phase97_archived_inactive_skip_and_scope_filtering(client, db_session):
     assert body["executions"][0]["matched_count"] == 1
 
 
+def test_phase97_task_overdue_rule_correctly_attributes_matches_across_definitions(client, db_session):
+    """Regression test for the task_overdue rule's batched (single grouped-query) match logic:
+    with several scoped definitions, only the ones with actually-overdue linked tasks must match
+    -- the per-definition attribution must stay correct after batching the lookup."""
+    org = bootstrap_org_user(client, email_prefix="p97-task-overdue")
+    owner = _create_active_user_with_role(db_session, org["organization_id"], "p97-task-owner@example.com", "admin")
+
+    control_a = _create_control(client, org["org_headers"], title="P97 Task Control A")
+    control_b = _create_control(client, org["org_headers"], title="P97 Task Control B")
+    control_c = _create_control(client, org["org_headers"], title="P97 Task Control C")
+
+    definition_a = _create_definition(client, org["org_headers"], control_id=control_a["id"], owner_user_id=str(owner.id), name="Task Def A")
+    definition_b = _create_definition(client, org["org_headers"], control_id=control_b["id"], owner_user_id=str(owner.id), name="Task Def B")
+    definition_c = _create_definition(client, org["org_headers"], control_id=control_c["id"], owner_user_id=str(owner.id), name="Task Def C")
+
+    org_id = uuid.UUID(org["organization_id"])
+    now = datetime.now(UTC)
+
+    # A: has an overdue task -> should match.
+    db_session.add(
+        Task(
+            organization_id=org_id,
+            title="Overdue linked task",
+            status="open",
+            priority="normal",
+            task_type="general",
+            owner_user_id=owner.id,
+            created_by_user_id=owner.id,
+            due_date=now - timedelta(days=5),
+            linked_entity_type="control_monitoring_definition",
+            linked_entity_id=uuid.UUID(definition_a["id"]),
+            source="test",
+            reminder_status="none",
+        )
+    )
+    # B: has a linked task, but not overdue -> should NOT match.
+    db_session.add(
+        Task(
+            organization_id=org_id,
+            title="Future linked task",
+            status="open",
+            priority="normal",
+            task_type="general",
+            owner_user_id=owner.id,
+            created_by_user_id=owner.id,
+            due_date=now + timedelta(days=5),
+            linked_entity_type="control_monitoring_definition",
+            linked_entity_id=uuid.UUID(definition_b["id"]),
+            source="test",
+            reminder_status="none",
+        )
+    )
+    # C: no linked tasks at all -> should NOT match.
+    db_session.commit()
+
+    _create_rule(
+        client,
+        org["org_headers"],
+        name="Task Overdue Rule",
+        rule_type="task_overdue",
+        condition_json={"days_overdue_threshold": 1},
+        scope_definition_ids=[definition_a["id"], definition_b["id"], definition_c["id"]],
+    )
+
+    evaluated = client.post(f"{RULES_BASE}/evaluate", headers=org["org_headers"], json={"dry_run": True})
+    assert evaluated.status_code == 200
+    execution = evaluated.json()["executions"][0]
+    assert execution["matched_count"] == 1
+    matched_definition_ids = execution["execution_summary_json"]["matched_definition_ids"]
+    assert matched_definition_ids == [definition_a["id"]]
+
+
+def test_phase97_risk_threshold_breach_rule_correctly_attributes_matches_across_controls(client, db_session):
+    """Regression test for the risk_threshold_breach rule's batched match logic across multiple
+    scoped definitions/controls."""
+    from app.models.risk import Risk
+    from app.models.risk_control_link import RiskControlLink
+
+    org = bootstrap_org_user(client, email_prefix="p97-risk-breach")
+    owner = _create_active_user_with_role(db_session, org["organization_id"], "p97-risk-owner@example.com", "admin")
+    org_id = uuid.UUID(org["organization_id"])
+
+    control_high = _create_control(client, org["org_headers"], title="P97 Risk Control High")
+    control_low = _create_control(client, org["org_headers"], title="P97 Risk Control Low")
+
+    definition_high = _create_definition(client, org["org_headers"], control_id=control_high["id"], owner_user_id=str(owner.id), name="Risk Def High")
+    definition_low = _create_definition(client, org["org_headers"], control_id=control_low["id"], owner_user_id=str(owner.id), name="Risk Def Low")
+
+    high_risk = Risk(
+        organization_id=org_id,
+        title="High severity risk",
+        category="security",
+        severity="high",
+        likelihood=4,
+        impact=5,
+        inherent_score=20,
+        treatment_strategy="mitigate",
+        status="identified",
+        owner_user_id=owner.id,
+    )
+    low_risk = Risk(
+        organization_id=org_id,
+        title="Low severity risk",
+        category="operational",
+        severity="low",
+        likelihood=1,
+        impact=2,
+        inherent_score=2,
+        treatment_strategy="mitigate",
+        status="identified",
+        owner_user_id=owner.id,
+    )
+    db_session.add_all([high_risk, low_risk])
+    db_session.flush()
+    db_session.add_all(
+        [
+            RiskControlLink(
+                organization_id=org_id,
+                risk_id=high_risk.id,
+                control_id=uuid.UUID(control_high["id"]),
+                link_type="mitigates",
+                status="active",
+            ),
+            RiskControlLink(
+                organization_id=org_id,
+                risk_id=low_risk.id,
+                control_id=uuid.UUID(control_low["id"]),
+                link_type="mitigates",
+                status="active",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    _create_rule(
+        client,
+        org["org_headers"],
+        name="Risk Breach Rule",
+        rule_type="risk_threshold_breach",
+        condition_json={"risk_levels": ["critical", "high"]},
+        scope_definition_ids=[definition_high["id"], definition_low["id"]],
+    )
+
+    evaluated = client.post(f"{RULES_BASE}/evaluate", headers=org["org_headers"], json={"dry_run": True})
+    assert evaluated.status_code == 200
+    execution = evaluated.json()["executions"][0]
+    assert execution["matched_count"] == 1
+    assert execution["execution_summary_json"]["matched_definition_ids"] == [definition_high["id"]]
+
+
+def test_phase97_evidence_gap_rule_correctly_attributes_matches_across_controls(client, db_session):
+    """Regression test for the evidence_gap rule's batched match logic across multiple scoped
+    definitions/controls."""
+    org = bootstrap_org_user(client, email_prefix="p97-evidence-gap")
+    owner = _create_active_user_with_role(db_session, org["organization_id"], "p97-evidence-owner@example.com", "admin")
+
+    control_with_evidence = _create_control(client, org["org_headers"], title="P97 Evidence Control Fresh")
+    control_without_evidence = _create_control(client, org["org_headers"], title="P97 Evidence Control Gap")
+
+    definition_fresh = _create_definition(
+        client, org["org_headers"], control_id=control_with_evidence["id"], owner_user_id=str(owner.id), name="Evidence Def Fresh"
+    )
+    definition_gap = _create_definition(
+        client, org["org_headers"], control_id=control_without_evidence["id"], owner_user_id=str(owner.id), name="Evidence Def Gap"
+    )
+
+    evidence_resp = client.post(
+        "/api/v1/evidence",
+        headers=org["org_headers"],
+        json={"title": "Fresh Evidence", "evidence_type": "attestation"},
+    )
+    assert evidence_resp.status_code == 201
+    evidence_id = evidence_resp.json()["id"]
+
+    link_resp = client.post(
+        f"/api/v1/evidence/{evidence_id}/controls",
+        headers=org["org_headers"],
+        json={"control_id": control_with_evidence["id"]},
+    )
+    assert link_resp.status_code == 200
+
+    from app.models.evidence_item import EvidenceItem
+
+    row = db_session.query(EvidenceItem).filter(EvidenceItem.id == uuid.UUID(evidence_id)).one()
+    row.collected_at = datetime.now(UTC) - timedelta(days=1)
+    db_session.commit()
+
+    _create_rule(
+        client,
+        org["org_headers"],
+        name="Evidence Gap Rule",
+        rule_type="evidence_gap",
+        condition_json={"days_without_evidence": 14},
+        scope_definition_ids=[definition_fresh["id"], definition_gap["id"]],
+    )
+
+    evaluated = client.post(f"{RULES_BASE}/evaluate", headers=org["org_headers"], json={"dry_run": True})
+    assert evaluated.status_code == 200
+    execution = evaluated.json()["executions"][0]
+    # Only the control with no (or stale) linked evidence should match.
+    assert execution["matched_count"] == 1
+    assert execution["execution_summary_json"]["matched_definition_ids"] == [definition_gap["id"]]
+
+
 def test_phase97_execution_history_summary_and_audit_events(client, db_session):
     org = bootstrap_org_user(client, email_prefix="p97-summary")
     owner = _create_active_user_with_role(db_session, org["organization_id"], "p97-summary-owner@example.com", "admin")
