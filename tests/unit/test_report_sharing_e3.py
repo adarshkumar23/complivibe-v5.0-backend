@@ -31,15 +31,20 @@ def test_report_sharing_end_to_end(client, db_session):
     created = create.json()
     assert "share_url" in created
     assert created["token"] in created["share_url"]
+    assert "expires_in_hours" in created
+    assert isinstance(created["context_flags"], list)
 
     list_resp = client.get("/api/v1/reports/shared-links", headers=org_a["org_headers"])
     assert list_resp.status_code == 200
     assert list_resp.json()
+    assert "expires_in_hours" in list_resp.json()[0]
+    assert "context_flags" in list_resp.json()[0]
     assert "token" not in list_resp.json()[0]
 
     public_get = client.get(f"/api/v1/reports/shared/{created['token']}")
     assert public_get.status_code == 200
     assert public_get.json()["watermark"] == "Confidential copy"
+    assert isinstance(public_get.json()["context_flags"], list)
 
     invalid = client.get("/api/v1/reports/shared/not-a-real-token")
     assert invalid.status_code == 404
@@ -108,12 +113,22 @@ def test_report_sharing_expiry_views_password_verify_revoke_and_audit(client, db
 
     expired = client.get(f"/api/v1/reports/shared/{expiring_token}")
     assert expired.status_code == 410
+    expired_verify = client.post(
+        f"/api/v1/reports/shared/{expiring_token}/verify",
+        json={"password": None},
+    )
+    assert expired_verify.status_code == 410
 
     revoke = client.delete(
         f"/api/v1/reports/shared-links/{protected.json()['share_id']}",
         headers=org["org_headers"],
     )
     assert revoke.status_code == 204
+    revoke_again = client.delete(
+        f"/api/v1/reports/shared-links/{protected.json()['share_id']}",
+        headers=org["org_headers"],
+    )
+    assert revoke_again.status_code == 204
 
     revoked_access = client.get(f"/api/v1/reports/shared/{protected_token}?password=topsecret")
     assert revoked_access.status_code == 404
@@ -130,5 +145,12 @@ def test_report_sharing_expiry_views_password_verify_revoke_and_audit(client, db
             AuditLog.action == "report.share_link_revoked",
         )
     ).scalars().first()
+    access_audit = db_session.execute(
+        select(AuditLog).where(
+            AuditLog.organization_id == UUID(org["organization_id"]),
+            AuditLog.action == "report.shared_accessed",
+        )
+    ).scalars().first()
     assert created_audit is not None
     assert revoked_audit is not None
+    assert access_audit is not None

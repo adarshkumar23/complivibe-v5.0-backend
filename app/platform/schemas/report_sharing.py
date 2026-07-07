@@ -24,6 +24,8 @@ class ShareLinkResponse(BaseModel):
     password_protected: bool
     max_views: int | None
     watermark_text: str | None
+    expires_in_hours: float
+    context_flags: list[str] = Field(default_factory=list)
     warning: str
 
 
@@ -35,7 +37,13 @@ class ShareLinkListItem(BaseModel):
     expires_at: datetime
     view_count: int
     max_views: int | None
+    views_remaining: int | None = None
     is_active: bool
+    is_expired: bool = False
+    is_locked: bool = False
+    password_protected: bool = False
+    expires_in_hours: float
+    context_flags: list[str] = Field(default_factory=list)
     recipient_email: str | None
     created_at: datetime
 

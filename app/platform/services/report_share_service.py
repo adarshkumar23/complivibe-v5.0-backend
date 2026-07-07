@@ -85,31 +85,16 @@ class ReportShareService:
 
         settings = get_settings()
         resolved_base = (base_url or settings.BASE_URL).rstrip("/")
-        share_url = f"{resolved_base}/api/v1/reports/shared/{token}"
-        return {
-            "share_id": str(link.id),
-            "share_url": share_url,
-            "token": token,
-            "expires_at": expires_at.isoformat(),
-            "password_protected": bool(password),
-            "max_views": max_views,
-            "watermark_text": watermark_text,
-            "warning": "Store this URL securely. It grants access to the report.",
-        }
+        return self.share_link_response_payload(
+            link=link,
+            share_url=f"{resolved_base}/api/v1/reports/shared/{token}",
+        )
 
     def access_shared_report(self, token: str, db: Session, password: str | None = None) -> dict:
         link = self._get_active_link(token, db)
+        self._ensure_link_accessible(link, enforce_view_cap=True)
 
         now = self.utcnow()
-        compare_now = now if link.expires_at.tzinfo is not None else now.replace(tzinfo=None)
-        if link.expires_at < compare_now:
-            raise HTTPException(status_code=status.HTTP_410_GONE, detail="This report link has expired")
-        if link.max_views is not None and link.view_count >= link.max_views:
-            raise HTTPException(
-                status_code=status.HTTP_410_GONE,
-                detail="This report link has reached its maximum view count",
-            )
-
         self._verify_password(link, password, db)
 
         link.view_count += 1
@@ -123,17 +108,33 @@ class ReportShareService:
             db=db,
         )
 
+        context = self.link_context(link)
+        AuditService(db).write_audit_log(
+            action="report.shared_accessed",
+            entity_type="shared_report_links",
+            entity_id=link.id,
+            organization_id=link.organization_id,
+            actor_user_id=None,
+            after_json={
+                "view_count": link.view_count,
+                "views_remaining": context["views_remaining"],
+                "context_flags": context["context_flags"],
+            },
+        )
+
         return {
             "report_type": link.report_type,
             "watermark": link.watermark_text,
             "expires_at": link.expires_at.isoformat(),
-            "views_remaining": (link.max_views - link.view_count) if link.max_views is not None else None,
+            "views_remaining": context["views_remaining"],
             "generated_at": self.utcnow().isoformat(),
+            "context_flags": context["context_flags"],
             "data": data,
         }
 
     def verify_password(self, token: str, db: Session, password: str | None = None) -> bool:
         link = self._get_active_link(token, db)
+        self._ensure_link_accessible(link, enforce_view_cap=True)
         try:
             self._verify_password(link, password, db)
         except HTTPException as exc:
@@ -157,16 +158,21 @@ class ReportShareService:
             .all()
         )
 
+    def list_org_link_payloads(self, org_id: uuid.UUID, db: Session) -> list[dict]:
+        rows = self.list_org_links(org_id, db)
+        return [self.share_link_list_payload(row) for row in rows]
+
     def revoke_link(self, org_id: uuid.UUID, link_id: uuid.UUID, user_id: uuid.UUID, db: Session) -> None:
         link = db.execute(
             select(SharedReportLink).where(
                 SharedReportLink.id == link_id,
                 SharedReportLink.organization_id == org_id,
-                SharedReportLink.deleted_at.is_(None),
             )
         ).scalar_one_or_none()
         if link is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Link not found")
+        if link.deleted_at is not None or not link.is_active:
+            return
 
         now = self.utcnow()
         link.is_active = False
@@ -180,6 +186,93 @@ class ReportShareService:
             actor_user_id=user_id,
             entity_id=link_id,
         )
+
+    def _as_utc(self, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    def link_context(self, link: SharedReportLink) -> dict:
+        now = self.utcnow()
+        expires_at = self._as_utc(link.expires_at) or now
+        locked_until = self._as_utc(link.locked_until)
+        is_expired = expires_at < now
+        views_remaining = (link.max_views - link.view_count) if link.max_views is not None else None
+        is_view_cap_reached = views_remaining is not None and views_remaining <= 0
+        is_locked = locked_until is not None and locked_until > now
+        expires_in_hours = round((expires_at - now).total_seconds() / 3600.0, 2)
+
+        flags: list[str] = []
+        if link.password_hash:
+            flags.append("password_protected")
+        if is_expired:
+            flags.append("share_link_expired")
+        if is_view_cap_reached:
+            flags.append("share_link_view_cap_reached")
+        if is_locked:
+            flags.append("share_link_password_locked")
+        if 0 < expires_in_hours <= 24:
+            flags.append("share_link_expires_within_24h")
+        if views_remaining is not None and views_remaining <= 1 and views_remaining >= 0:
+            flags.append("share_link_near_view_cap")
+        if link.deleted_at is not None or not link.is_active:
+            flags.append("share_link_revoked")
+
+        return {
+            "is_expired": is_expired,
+            "views_remaining": views_remaining,
+            "is_view_cap_reached": is_view_cap_reached,
+            "is_locked": is_locked,
+            "expires_in_hours": expires_in_hours,
+            "password_protected": bool(link.password_hash),
+            "context_flags": flags,
+        }
+
+    def share_link_response_payload(self, link: SharedReportLink, *, share_url: str) -> dict:
+        context = self.link_context(link)
+        return {
+            "share_id": link.id,
+            "share_url": share_url,
+            "token": link.token,
+            "expires_at": link.expires_at,
+            "password_protected": context["password_protected"],
+            "max_views": link.max_views,
+            "watermark_text": link.watermark_text,
+            "expires_in_hours": context["expires_in_hours"],
+            "context_flags": context["context_flags"],
+            "warning": "Store this URL securely. It grants access to the report.",
+        }
+
+    def share_link_list_payload(self, link: SharedReportLink) -> dict:
+        context = self.link_context(link)
+        return {
+            "id": link.id,
+            "report_type": link.report_type,
+            "expires_at": link.expires_at,
+            "view_count": link.view_count,
+            "max_views": link.max_views,
+            "views_remaining": context["views_remaining"],
+            "is_active": link.is_active,
+            "is_expired": context["is_expired"],
+            "is_locked": context["is_locked"],
+            "password_protected": context["password_protected"],
+            "expires_in_hours": context["expires_in_hours"],
+            "context_flags": context["context_flags"],
+            "recipient_email": link.recipient_email,
+            "created_at": link.created_at,
+        }
+
+    def _ensure_link_accessible(self, link: SharedReportLink, *, enforce_view_cap: bool) -> None:
+        context = self.link_context(link)
+        if context["is_expired"]:
+            raise HTTPException(status_code=status.HTTP_410_GONE, detail="This report link has expired")
+        if enforce_view_cap and context["is_view_cap_reached"]:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="This report link has reached its maximum view count",
+            )
 
     def _get_active_link(self, token: str, db: Session) -> SharedReportLink:
         link = db.execute(

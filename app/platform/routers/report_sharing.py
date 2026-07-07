@@ -31,7 +31,8 @@ def create_share_link(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("compliance:read")),
 ) -> ShareLinkResponse:
-    row = ReportShareService().create_share_link(
+    service = ReportShareService()
+    row = service.create_share_link(
         org_id=organization.id,
         created_by=current_user.id,
         report_type=payload.report_type,
@@ -54,7 +55,7 @@ def list_share_links(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("compliance:read")),
 ) -> list[ShareLinkListItem]:
-    rows = ReportShareService().list_org_links(organization.id, db)
+    rows = ReportShareService().list_org_link_payloads(organization.id, db)
     return [ShareLinkListItem.model_validate(row) for row in rows]
 
 
