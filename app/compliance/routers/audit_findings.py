@@ -17,12 +17,17 @@ from app.models.user import User
 router = APIRouter(prefix="/compliance", tags=["audit_findings_v2"])
 
 
-def _read(row) -> AuditFindingResponse:
+def _read(row, context: dict | None = None) -> AuditFindingResponse:
+    ctx = context or {}
     return AuditFindingResponse(
         id=row.id,
         organization_id=row.organization_id,
         audit_id=row.audit_id,
         control_id=row.control_id,
+        control_name=ctx.get("control_name"),
+        control_status=ctx.get("control_status"),
+        control_archived=bool(ctx.get("control_archived", False)),
+        scope_changed_since_creation=bool(ctx.get("scope_changed_since_creation", False)),
         title=row.title,
         description=row.description,
         severity=row.severity,
@@ -40,6 +45,15 @@ def _read(row) -> AuditFindingResponse:
     )
 
 
+def _read_one(row, service: AuditFindingService, org_id: uuid.UUID) -> AuditFindingResponse:
+    return _read(row, service.build_context(org_id, [row]).get(row.id))
+
+
+def _read_many(rows: list, service: AuditFindingService, org_id: uuid.UUID) -> list[AuditFindingResponse]:
+    context = service.build_context(org_id, rows) if rows else {}
+    return [_read(row, context.get(row.id)) for row in rows]
+
+
 @router.post("/audits/{audit_id}/findings", response_model=AuditFindingResponse, status_code=status.HTTP_201_CREATED)
 def create_audit_finding(
     audit_id: uuid.UUID,
@@ -49,7 +63,8 @@ def create_audit_finding(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> AuditFindingResponse:
-    row = AuditFindingService(db).create_finding_v2(
+    service = AuditFindingService(db)
+    row = service.create_finding_v2(
         organization.id,
         audit_id,
         title=payload.title,
@@ -63,7 +78,7 @@ def create_audit_finding(
         created_by=current_user.id,
     )
     db.commit()
-    return _read(row)
+    return _read_one(row, service, organization.id)
 
 
 @router.get("/audits/{audit_id}/findings", response_model=list[AuditFindingResponse])
@@ -77,7 +92,8 @@ def list_audit_findings(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:read")),
 ) -> list[AuditFindingResponse]:
-    rows = AuditFindingService(db).list_findings_v2(
+    service = AuditFindingService(db)
+    rows = service.list_findings_v2(
         organization.id,
         audit_id=audit_id,
         severity=severity,
@@ -85,7 +101,7 @@ def list_audit_findings(
         page=page,
         page_size=page_size,
     )
-    return [_read(row) for row in rows]
+    return _read_many(rows, service, organization.id)
 
 
 @router.get("/audit-findings/summary", response_model=dict)
@@ -104,8 +120,9 @@ def get_audit_finding(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:read")),
 ) -> AuditFindingResponse:
-    row = AuditFindingService(db).require_finding(organization.id, finding_id)
-    return _read(row)
+    service = AuditFindingService(db)
+    row = service.require_finding(organization.id, finding_id)
+    return _read_one(row, service, organization.id)
 
 
 @router.patch("/audit-findings/{finding_id}/remediation", response_model=AuditFindingResponse)
@@ -117,7 +134,8 @@ def update_finding_remediation(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> AuditFindingResponse:
-    row = AuditFindingService(db).update_remediation(
+    service = AuditFindingService(db)
+    row = service.update_remediation(
         organization.id,
         finding_id,
         remediation_plan=payload.remediation_plan,
@@ -126,7 +144,7 @@ def update_finding_remediation(
         updated_by=current_user.id,
     )
     db.commit()
-    return _read(row)
+    return _read_one(row, service, organization.id)
 
 
 @router.post("/audit-findings/{finding_id}/resolve", response_model=AuditFindingResponse)
@@ -137,9 +155,10 @@ def resolve_finding(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> AuditFindingResponse:
-    row = AuditFindingService(db).resolve_finding(organization.id, finding_id, resolved_by=current_user.id)
+    service = AuditFindingService(db)
+    row = service.resolve_finding(organization.id, finding_id, resolved_by=current_user.id)
     db.commit()
-    return _read(row)
+    return _read_one(row, service, organization.id)
 
 
 @router.post("/audit-findings/{finding_id}/accept-risk", response_model=AuditFindingResponse)
@@ -150,9 +169,10 @@ def accept_finding_risk(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> AuditFindingResponse:
-    row = AuditFindingService(db).accept_risk(organization.id, finding_id, accepted_by=current_user.id)
+    service = AuditFindingService(db)
+    row = service.accept_risk(organization.id, finding_id, accepted_by=current_user.id)
     db.commit()
-    return _read(row)
+    return _read_one(row, service, organization.id)
 
 
 @router.post("/audit-findings/{finding_id}/close", response_model=AuditFindingResponse)
@@ -163,6 +183,7 @@ def close_finding(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> AuditFindingResponse:
-    row = AuditFindingService(db).close_finding(organization.id, finding_id, closed_by=current_user.id)
+    service = AuditFindingService(db)
+    row = service.close_finding(organization.id, finding_id, closed_by=current_user.id)
     db.commit()
-    return _read(row)
+    return _read_one(row, service, organization.id)

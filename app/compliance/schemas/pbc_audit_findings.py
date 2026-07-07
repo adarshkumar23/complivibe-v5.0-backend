@@ -66,6 +66,10 @@ class AuditFindingResponse(BaseModel):
     organization_id: UUID
     audit_id: UUID
     control_id: UUID | None = None
+    control_name: str | None = None
+    control_status: str | None = None
+    control_archived: bool = False
+    scope_changed_since_creation: bool = False
     title: str
     description: str
     severity: str

@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.compliance.services.audit_engagement_service import AuditEngagementService
+from app.models.audit_engagement import AuditEngagement
 from app.models.audit_finding import AuditFinding
 from app.models.control import Control
 from app.models.membership import Membership
@@ -120,7 +121,7 @@ class AuditFindingService:
         data: AuditFindingCreate,
         created_by: uuid.UUID,
     ) -> AuditFinding:
-        self.engagement_service.require_engagement(org_id, engagement_id)
+        engagement = self.engagement_service.require_engagement(org_id, engagement_id)
         self._validate_owner(org_id, data.assigned_owner_id)
         self._validate_risk(org_id, data.risk_register_entry_id)
         self._validate_control(org_id, data.control_id)
@@ -151,6 +152,7 @@ class AuditFindingService:
                 risk_register_entry_id=data.risk_register_entry_id,
                 linked_risk_id=data.risk_register_entry_id,
                 control_id=data.control_id,
+                engagement_scope_snapshot=list(engagement.scope_framework_ids or []),
                 created_by=created_by,
                 resolved_at=None,
                 closed_at=None,
@@ -182,6 +184,44 @@ class AuditFindingService:
 
     def get_finding(self, org_id: uuid.UUID, finding_id: uuid.UUID) -> AuditFinding:
         return self.require_finding(org_id, finding_id)
+
+    def build_context(self, org_id: uuid.UUID, rows: list[AuditFinding]) -> dict[uuid.UUID, dict]:
+        """Batch-resolve the linked-control name/status and engagement scope-drift flag
+        for a set of findings in a handful of queries (not one per row), so a finding is
+        never presented as a bare severity/status pair with no insight into *which*
+        control failed, *why* (its current status), or whether the audit's scope has
+        since moved since the finding was raised."""
+        if not rows:
+            return {}
+
+        control_ids = {row.control_id for row in rows if row.control_id is not None}
+        controls_by_id: dict[uuid.UUID, Control] = {}
+        if control_ids:
+            for control in self.db.execute(select(Control).where(Control.id.in_(control_ids))).scalars().all():
+                controls_by_id[control.id] = control
+
+        engagement_ids = {row.audit_engagement_id for row in rows}
+        engagements_by_id = {
+            engagement.id: engagement
+            for engagement in self.db.execute(
+                select(AuditEngagement).where(AuditEngagement.id.in_(engagement_ids))
+            ).scalars().all()
+        }
+
+        context: dict[uuid.UUID, dict] = {}
+        for row in rows:
+            control = controls_by_id.get(row.control_id) if row.control_id else None
+            engagement = engagements_by_id.get(row.audit_engagement_id)
+            finding_scope = list(row.engagement_scope_snapshot or [])
+            engagement_scope = list(engagement.scope_framework_ids or []) if engagement is not None else []
+            scope_changed = engagement is None or set(finding_scope) != set(engagement_scope)
+            context[row.id] = {
+                "control_name": control.title if control is not None else None,
+                "control_status": control.status if control is not None else None,
+                "control_archived": bool(control is not None and control.status == "archived"),
+                "scope_changed_since_creation": scope_changed,
+            }
+        return context
 
     def list_findings(
         self,
@@ -458,7 +498,7 @@ class AuditFindingService:
         remediation_owner_id: uuid.UUID | None,
         created_by: uuid.UUID,
     ) -> AuditFinding:
-        self.engagement_service.require_engagement(org_id, audit_id)
+        engagement = self.engagement_service.require_engagement(org_id, audit_id)
         self._validate_control(org_id, control_id)
         if remediation_owner_id is not None:
             self._validate_owner(org_id, remediation_owner_id)
@@ -484,6 +524,7 @@ class AuditFindingService:
                 remediation_due_date=remediation_due_date,
                 remediation_owner_id=remediation_owner_id,
                 linked_risk_id=None,
+                engagement_scope_snapshot=list(engagement.scope_framework_ids or []),
                 resolved_at=None,
                 created_by=created_by,
                 # legacy compatibility fields

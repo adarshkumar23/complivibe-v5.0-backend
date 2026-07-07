@@ -761,3 +761,43 @@ def test_a43_engagement_scope_shrink_revokes_portal_visibility_immediately(clien
     assert body["scope_changed_since_invitation"] is True
     assert body["effective_framework_ids"] == []
     assert body["scoped_framework_ids"] == [fw_in_scope]
+
+
+def test_a44_finding_surfaces_control_context_and_scope_drift(client, db_session):
+    """Regression: an audit finding only ever exposed a bare control_id, with no
+    indication of which control failed, its current status, or whether the audit's
+    scope had drifted since the finding was raised. Findings must now surface
+    control_name/control_status/control_archived and scope_changed_since_creation."""
+    org = bootstrap_org_user(client, email_prefix="a44-context")
+    fw1, fw2 = _framework_ids(client, org["headers"])
+    engagement = _create_engagement(client, org["org_headers"], fw1, org["user_id"])
+
+    control = _create_control(client, org["org_headers"], "Failing control")
+    finding = _create_finding(client, org["org_headers"], engagement["id"], org["user_id"], control_id=control["id"])
+    assert finding["control_name"] == "Failing control"
+    assert finding["control_status"] == "not_started"
+    assert finding["control_archived"] is False
+    assert finding["scope_changed_since_creation"] is False
+
+    # Archive the linked control after the finding was raised.
+    archived = client.patch(
+        f"/api/v1/controls/{control['id']}",
+        headers=org["org_headers"],
+        json={"status": "archived"},
+    )
+    assert archived.status_code == 200
+
+    # Narrow the engagement's own scope after the finding was raised.
+    patch_resp = client.patch(
+        f"{ENGAGEMENT_BASE}/{engagement['id']}",
+        headers=org["org_headers"],
+        json={"scope_framework_ids": [fw2]},
+    )
+    assert patch_resp.status_code == 200
+
+    listed = client.get(f"{FINDINGS_BASE}", headers=org["org_headers"], params={"engagement_id": engagement["id"]})
+    assert listed.status_code == 200
+    listed_finding = next(row for row in listed.json() if row["id"] == finding["id"])
+    assert listed_finding["control_status"] == "archived"
+    assert listed_finding["control_archived"] is True
+    assert listed_finding["scope_changed_since_creation"] is True
