@@ -411,6 +411,105 @@ class BoardScorecardService:
 
         return {"score": score, "basis": basis, "data_sufficient": data_sufficient}
 
+    def _previous_snapshot(
+        self, org_id: uuid.UUID, business_unit_id: uuid.UUID | None
+    ) -> BoardScorecardSnapshot | None:
+        stmt = select(BoardScorecardSnapshot).where(BoardScorecardSnapshot.organization_id == org_id)
+        if business_unit_id is None:
+            stmt = stmt.where(BoardScorecardSnapshot.business_unit_id.is_(None))
+        else:
+            stmt = stmt.where(BoardScorecardSnapshot.business_unit_id == business_unit_id)
+        return self.db.execute(
+            stmt.order_by(BoardScorecardSnapshot.created_at.desc()).limit(1)
+        ).scalar_one_or_none()
+
+    @staticmethod
+    def _score_change_summary(
+        *,
+        previous: BoardScorecardSnapshot | None,
+        overall_score: float,
+        framework_readiness: dict,
+        controls: dict,
+        posture: dict,
+    ) -> dict:
+        """Explains *why* the score moved since the previous snapshot for this scope, using
+        only data already computed for this snapshot and stored on the previous one -- this
+        never invents data, it only narrates numbers that are already present.
+        """
+        if previous is None:
+            return {
+                "previous_score": None,
+                "delta": None,
+                "narrative": "This is the first board scorecard snapshot on record for this scope; "
+                "no prior snapshot exists for comparison.",
+            }
+
+        prev_data = previous.snapshot_data if isinstance(previous.snapshot_data, dict) else {}
+        previous_score = float(previous.overall_compliance_score)
+        delta = round(overall_score - previous_score, 2)
+
+        drivers: list[str] = []
+
+        prev_controls = prev_data.get("control_effectiveness") or {}
+        prev_effectiveness = float(prev_controls.get("effectiveness_pct", 0.0))
+        cur_effectiveness = float(controls.get("effectiveness_pct", 0.0))
+        effectiveness_delta = round(cur_effectiveness - prev_effectiveness, 2)
+        if abs(effectiveness_delta) >= 0.5:
+            direction = "improved" if effectiveness_delta > 0 else "dropped"
+            drivers.append(f"control effectiveness {direction} {abs(effectiveness_delta)}pts")
+
+        prev_fw = prev_data.get("framework_readiness") or {}
+        prev_fw_rows = prev_fw.get("rows", []) if isinstance(prev_fw, dict) else []
+        prev_fw_avg = (
+            sum(float(item.get("control_coverage_pct", 0.0)) for item in prev_fw_rows) / len(prev_fw_rows)
+            if prev_fw_rows
+            else 0.0
+        )
+        cur_fw_rows = framework_readiness.get("rows", []) if isinstance(framework_readiness, dict) else []
+        cur_fw_avg = (
+            sum(float(item.get("control_coverage_pct", 0.0)) for item in cur_fw_rows) / len(cur_fw_rows)
+            if cur_fw_rows
+            else 0.0
+        )
+        coverage_delta = round(cur_fw_avg - prev_fw_avg, 2)
+        if abs(coverage_delta) >= 0.5:
+            direction = "improved" if coverage_delta > 0 else "dropped"
+            drivers.append(f"framework coverage {direction} {abs(coverage_delta)}pts")
+
+        prev_posture = prev_data.get("posture_summary") or {}
+        prev_risk_severity = (prev_posture.get("risks") or {}).get("by_severity", {})
+        prev_critical_high = int(prev_risk_severity.get("critical", 0)) + int(prev_risk_severity.get("high", 0))
+        cur_risk_severity = (posture.get("risks") or {}).get("by_severity", {})
+        cur_critical_high = int(cur_risk_severity.get("critical", 0)) + int(cur_risk_severity.get("high", 0))
+        risk_delta = cur_critical_high - prev_critical_high
+        if risk_delta != 0:
+            direction = "more" if risk_delta > 0 else "fewer"
+            drivers.append(f"{abs(risk_delta)} {direction} open critical/high risks")
+
+        previous_at = previous.created_at.isoformat() if previous.created_at else "an earlier snapshot"
+        if delta == 0 and not drivers:
+            narrative = f"Score is unchanged at {overall_score} since the previous snapshot on {previous_at}."
+        else:
+            direction = "improved" if delta >= 0 else "dropped"
+            if drivers:
+                narrative = (
+                    f"Score {direction} {abs(delta)}pts since {previous_at} "
+                    f"({previous_score} -> {overall_score}), driven by: " + "; ".join(drivers) + "."
+                )
+            else:
+                narrative = (
+                    f"Score {direction} {abs(delta)}pts since {previous_at} "
+                    f"({previous_score} -> {overall_score}); no single tracked driver crossed the reporting threshold."
+                )
+
+        return {
+            "previous_score": previous_score,
+            "previous_snapshot_id": str(previous.id),
+            "previous_calculated_at": previous_at,
+            "delta": delta,
+            "narrative": narrative,
+        }
+
     def generate_snapshot(
         self,
         org_id: uuid.UUID,
@@ -419,6 +518,8 @@ class BoardScorecardService:
         snapshot_label: str | None = None,
     ) -> BoardScorecardSnapshot:
         bu = self._require_bu(org_id, business_unit_id)
+
+        previous_snapshot = self._previous_snapshot(org_id, business_unit_id)
 
         posture = self._build_posture_summary(org_id, business_unit_id)
         framework = self._framework_readiness(org_id, business_unit_id)
@@ -433,6 +534,13 @@ class BoardScorecardService:
             control_effectiveness=controls,
         )
         overall_score = score_result["score"]
+        score_change = self._score_change_summary(
+            previous=previous_snapshot,
+            overall_score=overall_score,
+            framework_readiness=framework,
+            controls=controls,
+            posture=posture,
+        )
 
         snapshot_data = {
             "scope": {
@@ -450,6 +558,7 @@ class BoardScorecardService:
             "overall_compliance_score": overall_score,
             "overall_compliance_score_basis": score_result["basis"],
             "overall_compliance_score_data_sufficient": score_result["data_sufficient"],
+            "score_change": score_change,
             "generated_at": self._now().isoformat(),
         }
 
@@ -475,6 +584,7 @@ class BoardScorecardService:
                 "snapshot_label": snapshot_label,
                 "overall_compliance_score": overall_score,
                 "overall_compliance_score_data_sufficient": score_result["data_sufficient"],
+                "score_change_delta": score_change["delta"],
             },
         )
         return row
