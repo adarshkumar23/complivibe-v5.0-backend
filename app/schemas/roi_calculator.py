@@ -8,11 +8,15 @@ class ROICalculatorRequest(BaseModel):
     current_tool: str = Field(pattern=CURRENT_TOOL_PATTERN)
     team_size: int = Field(ge=1, le=5000)
     frameworks_count: int = Field(ge=1, le=200)
-    current_annual_cost: float = Field(ge=0, le=1_000_000_000)
+    current_annual_cost: float = Field(ge=0, le=1_000_000_000, allow_inf_nan=False)
 
 
 class ROICalculatorResponse(BaseModel):
     hours_saved_per_week: float
     annual_saving: float
+    projected_platform_annual_cost: float
+    automation_share_pct: float
+    net_annual_impact: float
     payback_period_months: float | None = None
     three_year_roi_pct: float
+    context_flags: list[str] = Field(default_factory=list)

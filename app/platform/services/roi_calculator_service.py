@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP
+import math
 from uuid import UUID
 
 from sqlalchemy import select
@@ -56,14 +57,14 @@ class ROICalculatorService:
         self.db.flush()
         return created.id
 
-    def _projected_platform_annual_cost(self, team_size: int, frameworks_count: int) -> Decimal:
+    def _projected_platform_annual_cost(self, team_size: int, frameworks_count: int) -> tuple[Decimal, str | None, bool]:
         plans = self.db.execute(
             select(SubscriptionPlan)
             .where(SubscriptionPlan.is_active.is_(True))
             .order_by(SubscriptionPlan.price_inr_annual.asc())
         ).scalars().all()
         if not plans:
-            return Decimal("0")
+            return Decimal("0"), None, False
 
         def supports(plan: SubscriptionPlan) -> bool:
             user_ok = plan.max_users is None or team_size <= int(plan.max_users)
@@ -72,8 +73,8 @@ class ROICalculatorService:
 
         selected = next((plan for plan in plans if supports(plan)), plans[-1])
         if selected.price_inr_annual is None:
-            return Decimal("0")
-        return Decimal(str(selected.price_inr_annual)) / Decimal("100")
+            return Decimal("0"), selected.plan_code, True
+        return Decimal(str(selected.price_inr_annual)) / Decimal("100"), selected.plan_code, True
 
     def _automation_share(self, team_size: int, frameworks_count: int) -> Decimal:
         scope_uplift = min(Decimal("0.15"), Decimal(max(frameworks_count - 1, 0)) * Decimal("0.01"))
@@ -81,11 +82,16 @@ class ROICalculatorService:
         return min(Decimal("0.60"), BASE_AUTOMATION_SHARE + scope_uplift + team_uplift)
 
     def calculate_and_capture(self, payload: ROICalculatorRequest) -> dict:
+        if not math.isfinite(payload.current_annual_cost):
+            raise ValueError("current_annual_cost must be a finite number")
         current_annual_cost = Decimal(str(payload.current_annual_cost))
-        projected_platform_annual_cost = self._projected_platform_annual_cost(payload.team_size, payload.frameworks_count)
+        projected_platform_annual_cost, selected_plan_code, has_pricing_catalog = self._projected_platform_annual_cost(
+            payload.team_size, payload.frameworks_count
+        )
 
         automation_share = self._automation_share(payload.team_size, payload.frameworks_count)
         annual_saving = current_annual_cost * automation_share
+        net_annual_impact = annual_saving - projected_platform_annual_cost
 
         hourly_rate = MEDIAN_COMPLIANCE_ANNUAL_WAGE / WORK_HOURS_PER_YEAR
         hours_saved_per_week = Decimal("0")
@@ -103,6 +109,24 @@ class ROICalculatorService:
             three_year_roi_pct = ((total_3y_benefit - total_3y_cost) / total_3y_cost) * Decimal("100")
         else:
             three_year_roi_pct = Decimal("0")
+
+        context_flags: list[str] = []
+        if not has_pricing_catalog:
+            context_flags.append("pricing_catalog_missing")
+        if payload.current_annual_cost == 0:
+            context_flags.append("baseline_cost_zero")
+        if projected_platform_annual_cost == 0:
+            context_flags.append("projected_platform_cost_zero")
+        if payback_period_months is None:
+            context_flags.append("payback_not_available")
+        elif payback_period_months > Decimal("24"):
+            context_flags.append("payback_longer_than_24_months")
+        if net_annual_impact < 0:
+            context_flags.append("negative_net_annual_impact")
+        if payload.frameworks_count >= 12:
+            context_flags.append("high_framework_scope")
+        if payload.team_size >= 100:
+            context_flags.append("large_team_profile")
 
         organization_id = self._get_or_create_public_roi_org_id()
         lead_summary = (
@@ -127,6 +151,8 @@ class ROICalculatorService:
                 "median_compliance_annual_wage": str(MEDIAN_COMPLIANCE_ANNUAL_WAGE),
                 "work_hours_per_year": str(WORK_HOURS_PER_YEAR),
                 "projected_platform_annual_cost": str(self._round(projected_platform_annual_cost)),
+                "selected_plan_code": selected_plan_code,
+                "context_flags": context_flags,
             },
         )
         self.db.add(row)
@@ -143,6 +169,9 @@ class ROICalculatorService:
                 "team_size": row.team_size,
                 "frameworks_count": row.frameworks_count,
                 "annual_saving": float(row.annual_saving),
+                "projected_platform_annual_cost": float(row.projected_platform_annual_cost),
+                "three_year_roi_pct": float(row.three_year_roi_pct),
+                "context_flags": context_flags,
             },
             metadata_json={"source": "public.roi_calculator"},
         )
@@ -150,6 +179,10 @@ class ROICalculatorService:
         return {
             "hours_saved_per_week": float(self._round(hours_saved_per_week)),
             "annual_saving": float(self._round(annual_saving)),
+            "projected_platform_annual_cost": float(self._round(projected_platform_annual_cost)),
+            "automation_share_pct": float(self._round(automation_share * Decimal("100"))),
+            "net_annual_impact": float(self._round(net_annual_impact)),
             "payback_period_months": float(self._round(payback_period_months)) if payback_period_months is not None else None,
             "three_year_roi_pct": float(self._round(three_year_roi_pct)),
+            "context_flags": context_flags,
         }
