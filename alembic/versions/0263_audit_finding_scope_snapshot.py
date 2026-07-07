@@ -1,7 +1,7 @@
 """add audit_findings.engagement_scope_snapshot for scope-drift detection
 
-Revision ID: 0200_audit_finding_scope_snapshot
-Revises: 0199_audit_engagement_source_schedule_link
+Revision ID: 0263_audit_finding_scope_snapshot
+Revises: 0262_escalation_events_reason_column
 Create Date: 2026-07-07 00:00:00.000000
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0200_audit_finding_scope_snapshot"
-down_revision: str | None = "0199_audit_engagement_source_schedule_link"
+revision: str = "0263_audit_finding_scope_snapshot"
+down_revision: str | None = "0262_escalation_events_reason_column"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
