@@ -115,6 +115,7 @@ def submit_pbc_request(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("audit:write")),
 ) -> PBCRequestResponse:
     service = PBCRequestService(db)
     row = service.submit(

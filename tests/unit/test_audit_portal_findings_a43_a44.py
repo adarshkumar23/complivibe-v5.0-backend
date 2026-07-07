@@ -803,6 +803,142 @@ def test_a44_finding_surfaces_control_context_and_scope_drift(client, db_session
     assert listed_finding["scope_changed_since_creation"] is True
 
 
+def test_a44_finding_context_only_shows_current_engagement_controls(client, db_session):
+    """Context fields (control_name, control_status, control_archived) and scope-drift
+    flags must be resolved only for controls linked to findings in the current
+    engagement. Listing findings for one engagement must not surface control data from
+    a sibling engagement or from a framework outside the current engagement's scope."""
+    org = bootstrap_org_user(client, email_prefix="a44-context-scope")
+    fw1, fw2 = _framework_ids(client, org["headers"])
+
+    ob1 = _create_obligation(db_session, fw1, "A44-CTX-1")
+    ob2 = _create_obligation(db_session, fw2, "A44-CTX-2")
+
+    c1 = _create_control(client, org["org_headers"], "Engagement-1 control")
+    c2 = _create_control(client, org["org_headers"], "Engagement-2 control")
+
+    row_c1 = db_session.query(Control).filter_by(id=uuid.UUID(c1["id"])).one()
+    row_c2 = db_session.query(Control).filter_by(id=uuid.UUID(c2["id"])).one()
+    row_c1.obligation_id = ob1.id
+    row_c2.obligation_id = ob2.id
+    db_session.commit()
+
+    engagement1 = _create_engagement(client, org["org_headers"], fw1, org["user_id"], title="Context A")
+    engagement2 = _create_engagement(client, org["org_headers"], fw2, org["user_id"], title="Context B")
+
+    finding1 = _create_finding(
+        client,
+        org["org_headers"],
+        engagement1["id"],
+        org["user_id"],
+        title="Finding in engagement 1",
+        control_id=c1["id"],
+    )
+    finding2 = _create_finding(
+        client,
+        org["org_headers"],
+        engagement2["id"],
+        org["user_id"],
+        title="Finding in engagement 2",
+        control_id=c2["id"],
+    )
+
+    listed = client.get(f"{FINDINGS_BASE}", headers=org["org_headers"], params={"engagement_id": engagement1["id"]})
+    assert listed.status_code == 200
+    items = listed.json()
+    assert len(items) == 1
+    assert items[0]["id"] == finding1["id"]
+    assert items[0]["control_id"] == c1["id"]
+    assert items[0]["control_name"] == "Engagement-1 control"
+    assert items[0]["control_status"] == "not_started"
+    assert items[0]["control_archived"] is False
+    assert items[0]["scope_changed_since_creation"] is False
+    assert all(row["control_id"] != c2["id"] for row in items)
+
+    detail = client.get(f"{FINDINGS_BASE}/{finding1['id']}", headers=org["org_headers"])
+    assert detail.status_code == 200
+    payload = detail.json()
+    assert payload["control_name"] == "Engagement-1 control"
+    assert payload["control_id"] != c2["id"]
+
+    # Narrowing the engagement scope proves the scope-drift flag flips without
+    # exposing the sibling engagement's control information.
+    patch = client.patch(
+        f"{ENGAGEMENT_BASE}/{engagement1['id']}",
+        headers=org["org_headers"],
+        json={"scope_framework_ids": [fw2]},
+    )
+    assert patch.status_code == 200
+
+    listed_after = client.get(
+        f"{FINDINGS_BASE}",
+        headers=org["org_headers"],
+        params={"engagement_id": engagement1["id"]},
+    )
+    assert listed_after.status_code == 200
+    item_after = next(row for row in listed_after.json() if row["id"] == finding1["id"])
+    assert item_after["scope_changed_since_creation"] is True
+    assert item_after["control_name"] == "Engagement-1 control"
+
+    _ = finding2
+
+
+def test_a43_explicit_broad_scope_then_narrow_revokes_access(client, db_session):
+    """Regression: an invitation explicitly granted broad visibility across multiple
+    engagement frameworks must lose visibility into any framework that is later removed
+    from the engagement's live scope, not just block new invitations."""
+    org = bootstrap_org_user(client, email_prefix="a43-broad-narrow")
+    fw1, fw2 = _framework_ids(client, org["headers"])
+
+    engagement = _create_engagement(client, org["org_headers"], fw1, org["user_id"])
+    # Start with both frameworks in scope.
+    patch_resp = client.patch(
+        f"{ENGAGEMENT_BASE}/{engagement['id']}",
+        headers=org["org_headers"],
+        json={"scope_framework_ids": [fw1, fw2]},
+    )
+    assert patch_resp.status_code == 200
+
+    ob1 = _create_obligation(db_session, fw1, "A43-BROAD-1")
+    ob2 = _create_obligation(db_session, fw2, "A43-BROAD-2")
+    c1 = _create_control(client, org["org_headers"], "Broad control 1")
+    c2 = _create_control(client, org["org_headers"], "Broad control 2")
+    row_c1 = db_session.query(Control).filter_by(id=uuid.UUID(c1["id"])).one()
+    row_c2 = db_session.query(Control).filter_by(id=uuid.UUID(c2["id"])).one()
+    row_c1.obligation_id = ob1.id
+    row_c2.obligation_id = ob2.id
+    db_session.commit()
+
+    invitation = _create_invitation(
+        client,
+        org["org_headers"],
+        engagement["id"],
+        {"auditor_email": "broad-auditor@example.com", "scoped_framework_ids": [fw1, fw2], "expires_in_days": 30},
+    )
+    portal_headers = {"Authorization": f"Bearer {invitation['plaintext_token']}"}
+
+    before = client.get(f"{PORTAL_BASE}/controls", headers=portal_headers)
+    assert before.status_code == 200
+    assert {row["id"] for row in before.json()} == {c1["id"], c2["id"]}
+
+    # Remove fw1 from the engagement's live scope.
+    narrow = client.patch(
+        f"{ENGAGEMENT_BASE}/{engagement['id']}",
+        headers=org["org_headers"],
+        json={"scope_framework_ids": [fw2]},
+    )
+    assert narrow.status_code == 200
+
+    after = client.get(f"{PORTAL_BASE}/controls", headers=portal_headers)
+    assert after.status_code == 200
+    assert {row["id"] for row in after.json()} == {c2["id"]}
+
+    me_after = client.get(f"{PORTAL_BASE}/me", headers=portal_headers)
+    assert me_after.status_code == 200
+    assert me_after.json()["effective_framework_ids"] == [fw2]
+    assert me_after.json()["scope_changed_since_invitation"] is True
+
+
 def test_a41_engagement_scope_impact_reports_stale_findings_and_packages(client):
     """Regression: nothing on the engagement itself told a reviewer how many findings or
     evidence packages were created before a scope change and are now stale -- they had
