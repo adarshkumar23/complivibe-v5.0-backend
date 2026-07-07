@@ -18,6 +18,8 @@ def test_public_pricing_endpoint_returns_latest_snapshot(client, db_session):
     payload = response.json()
     assert payload["version_id"]
     assert payload["last_updated"]
+    assert payload["total_competitors"] >= 6
+    assert "context_flags" in payload
     assert {row["competitor_key"] for row in payload["entries"]} == {
         "vanta",
         "drata",
@@ -102,6 +104,8 @@ def test_pricing_refresh_requires_platform_admin_and_writes_versioned_records(cl
     payload = response.json()
     assert payload["source_note"] == "Manual market refresh"
     assert len(payload["entries"]) == 1
+    assert payload["total_competitors"] == 1
+    assert "competitor_coverage_partial" in payload["context_flags"]
 
     after_versions = db_session.execute(select(CompetitorPricingVersion)).scalars().all()
     assert len(after_versions) == before_count + 1
@@ -122,6 +126,54 @@ def test_pricing_refresh_requires_platform_admin_and_writes_versioned_records(cl
     assert len(audit_rows) >= 2
     snapshot_audit = [row for row in audit_rows if row.action == "pricing.snapshot_created"][0]
     assert snapshot_audit.metadata_json.get("actor_is_superuser") is True
+
+
+def test_pricing_refresh_rejects_duplicate_competitor_key(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="pricing-dup")
+    user = db_session.get(User, UUID(org["user_id"]))
+    assert user is not None
+    user.is_superuser = True
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/pricing/refresh",
+        headers=org["org_headers"],
+        json={
+            "source_note": "Bad duplicate payload",
+            "entries": [
+                {
+                    "competitor_key": "drata",
+                    "competitor_name": "Drata",
+                    "pricing_model": "tiered_quote",
+                    "public_pricing_available": False,
+                    "pricing_summary": "Tiered packaging with quote-led commercial process.",
+                    "source_url": "https://drata.com/plans",
+                    "source_excerpt": "Plans and pricing page",
+                    "currency": None,
+                    "starting_price_amount": None,
+                    "starting_price_unit": None,
+                    "last_verified_at": "2026-07-06T00:00:00Z",
+                    "metadata_json": {"capture": "manual"},
+                },
+                {
+                    "competitor_key": "drata",
+                    "competitor_name": "Drata",
+                    "pricing_model": "tiered_quote",
+                    "public_pricing_available": False,
+                    "pricing_summary": "Second duplicate row.",
+                    "source_url": "https://drata.com/plans",
+                    "source_excerpt": "Plans and pricing page",
+                    "currency": None,
+                    "starting_price_amount": None,
+                    "starting_price_unit": None,
+                    "last_verified_at": "2026-07-06T00:00:00Z",
+                    "metadata_json": {"capture": "manual"},
+                },
+            ],
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert "Duplicate competitor_key" in response.json()["detail"]
 
 
 def test_onboarding_select_plan_and_trust_center_public_include_competitor_pricing(client, db_session):

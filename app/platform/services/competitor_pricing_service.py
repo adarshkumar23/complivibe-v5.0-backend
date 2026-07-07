@@ -126,6 +126,35 @@ class CompetitorPricingService:
             .order_by(CompetitorPricingEntry.competitor_name.asc())
         ).scalars().all()
 
+    @staticmethod
+    def _as_aware_utc(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    def _validate_entries(self, entries: list[CompetitorPricingEntryRefresh]) -> None:
+        seen_competitor_keys: set[str] = set()
+        for payload in entries:
+            if payload.competitor_key in seen_competitor_keys:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Duplicate competitor_key in snapshot: {payload.competitor_key}",
+                )
+            seen_competitor_keys.add(payload.competitor_key)
+
+            has_amount = payload.starting_price_amount is not None
+            has_currency = payload.currency is not None
+            if has_amount != has_currency:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="currency and starting_price_amount must be provided together",
+                )
+            if has_amount and not payload.public_pricing_available:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="public_pricing_available must be true when starting_price_amount is provided",
+                )
+
     def ensure_seed_snapshot(self) -> CompetitorPricingVersion:
         version = self._latest_version()
         if version is not None:
@@ -150,6 +179,7 @@ class CompetitorPricingService:
     ) -> CompetitorPricingVersion:
         if not entries:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="At least one pricing entry is required")
+        self._validate_entries(entries)
 
         version = CompetitorPricingVersion(
             created_by_user_id=actor_user_id,
@@ -211,11 +241,39 @@ class CompetitorPricingService:
     def latest_snapshot_payload(self) -> dict[str, Any]:
         version = self.ensure_seed_snapshot()
         entries = self._entries_for_version(version.id)
+        latest_verified_at = max((self._as_aware_utc(row.last_verified_at) for row in entries), default=None)
+        data_age_days: int | None = None
+        if latest_verified_at is not None:
+            data_age_days = max(0, (self._utcnow() - latest_verified_at).days)
+        is_stale = bool(data_age_days is not None and data_age_days > 30)
+        total_competitors = len(entries)
+        public_pricing_available_count = sum(1 for row in entries if row.public_pricing_available)
+        starting_price_available_count = sum(1 for row in entries if row.starting_price_amount is not None)
+        public_pricing_coverage_pct = round((public_pricing_available_count / total_competitors) * 100, 2) if total_competitors else 0
+        context_flags: list[str] = []
+        if is_stale:
+            context_flags.append("pricing_data_stale")
+        if total_competitors < len(DEFAULT_COMPETITOR_PRICING):
+            context_flags.append("competitor_coverage_partial")
+        if total_competitors == 0:
+            context_flags.append("pricing_snapshot_empty")
+        if starting_price_available_count == 0:
+            context_flags.append("no_public_starting_prices")
+        if public_pricing_available_count == 0:
+            context_flags.append("quote_led_market")
         return {
             "version_id": version.id,
             "source_note": version.source_note,
             "published_at": version.published_at,
             "last_updated": version.last_updated,
+            "latest_verified_at": latest_verified_at,
+            "data_age_days": data_age_days,
+            "is_stale": is_stale,
+            "total_competitors": total_competitors,
+            "public_pricing_available_count": public_pricing_available_count,
+            "starting_price_available_count": starting_price_available_count,
+            "public_pricing_coverage_pct": public_pricing_coverage_pct,
+            "context_flags": context_flags,
             "entries": [
                 {
                     "id": row.id,

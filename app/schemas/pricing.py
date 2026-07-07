@@ -31,6 +31,14 @@ class CompetitorPricingSnapshotRead(BaseModel):
     source_note: str | None = None
     published_at: datetime
     last_updated: datetime
+    latest_verified_at: datetime | None = None
+    data_age_days: int | None = None
+    is_stale: bool = False
+    total_competitors: int = 0
+    public_pricing_available_count: int = 0
+    starting_price_available_count: int = 0
+    public_pricing_coverage_pct: float = 0
+    context_flags: list[str] = Field(default_factory=list)
     entries: list[CompetitorPricingEntryRead]
 
 
