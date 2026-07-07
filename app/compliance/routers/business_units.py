@@ -29,6 +29,10 @@ def _require_org_admin(db: Session, membership: Membership) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Org admin role required")
 
 
+def _bu_response(service: BusinessUnitService, organization_id: uuid.UUID, row) -> BusinessUnitResponse:
+    return BusinessUnitResponse.model_validate(service.business_unit_response_payload(organization_id, row))
+
+
 @router.post("", response_model=BusinessUnitResponse, status_code=status.HTTP_201_CREATED)
 def create_business_unit(
     payload: BusinessUnitCreate,
@@ -38,7 +42,8 @@ def create_business_unit(
     membership: Membership = Depends(require_permission("compliance:write")),
 ) -> BusinessUnitResponse:
     _require_org_admin(db, membership)
-    row = BusinessUnitService(db).create_bu(
+    service = BusinessUnitService(db)
+    row = service.create_bu(
         org_id=organization.id,
         name=payload.name,
         code=payload.code,
@@ -50,7 +55,7 @@ def create_business_unit(
     )
     db.commit()
     db.refresh(row)
-    return BusinessUnitResponse.model_validate(row)
+    return _bu_response(service, organization.id, row)
 
 
 @router.get("", response_model=list[BusinessUnitResponse])
@@ -60,8 +65,9 @@ def list_business_units(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("compliance:read")),
 ) -> list[BusinessUnitResponse]:
-    rows = BusinessUnitService(db).list_bus(organization.id, include_inactive=include_inactive)
-    return [BusinessUnitResponse.model_validate(row) for row in rows]
+    service = BusinessUnitService(db)
+    rows = service.list_bus(organization.id, include_inactive=include_inactive)
+    return [_bu_response(service, organization.id, row) for row in rows]
 
 
 @router.get("/tree", response_model=list[dict[str, Any]])
@@ -80,8 +86,9 @@ def get_business_unit(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("compliance:read")),
 ) -> BusinessUnitResponse:
-    row = BusinessUnitService(db).get_bu(organization.id, bu_id)
-    return BusinessUnitResponse.model_validate(row)
+    service = BusinessUnitService(db)
+    row = service.get_bu(organization.id, bu_id)
+    return _bu_response(service, organization.id, row)
 
 
 @router.patch("/{bu_id}", response_model=BusinessUnitResponse)
@@ -94,10 +101,11 @@ def update_business_unit(
     membership: Membership = Depends(require_permission("compliance:write")),
 ) -> BusinessUnitResponse:
     _require_org_admin(db, membership)
-    row = BusinessUnitService(db).update_bu(organization.id, bu_id, payload, current_user.id)
+    service = BusinessUnitService(db)
+    row = service.update_bu(organization.id, bu_id, payload, current_user.id)
     db.commit()
     db.refresh(row)
-    return BusinessUnitResponse.model_validate(row)
+    return _bu_response(service, organization.id, row)
 
 
 @router.post("/{bu_id}/deactivate", response_model=BusinessUnitResponse)
@@ -109,10 +117,11 @@ def deactivate_business_unit(
     membership: Membership = Depends(require_permission("compliance:write")),
 ) -> BusinessUnitResponse:
     _require_org_admin(db, membership)
-    row = BusinessUnitService(db).deactivate_bu(organization.id, bu_id, current_user.id)
+    service = BusinessUnitService(db)
+    row = service.deactivate_bu(organization.id, bu_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return BusinessUnitResponse.model_validate(row)
+    return _bu_response(service, organization.id, row)
 
 
 @router.delete("/{bu_id}", response_model=BusinessUnitResponse)
@@ -124,10 +133,11 @@ def delete_business_unit(
     membership: Membership = Depends(require_permission("compliance:write")),
 ) -> BusinessUnitResponse:
     _require_org_admin(db, membership)
-    row = BusinessUnitService(db).delete_bu(organization.id, bu_id, current_user.id)
+    service = BusinessUnitService(db)
+    row = service.delete_bu(organization.id, bu_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return BusinessUnitResponse.model_validate(row)
+    return _bu_response(service, organization.id, row)
 
 
 @router.get("/{bu_id}/summary", response_model=dict[str, Any])

@@ -36,6 +36,9 @@ def test_business_units_schema_and_crud_tagging(client, db_session):
     assert create_parent.status_code == 201, create_parent.text
     parent = create_parent.json()
     parent_id = UUID(parent["id"])
+    assert "context_flags" in parent
+    assert "tagged_entity_count" in parent
+    assert parent["total_child_count"] == 0
 
     create_child_1 = client.post(
         "/api/v1/compliance/business-units",
@@ -388,3 +391,36 @@ def test_deactivate_blocked_by_active_children_and_reparent_cycle_protection(cli
         headers=headers,
     )
     assert blocked_delete.status_code == 409
+
+
+def test_business_unit_bu_lead_must_be_active_org_member(client):
+    org_a = bootstrap_org_user(client, email_prefix="bu-lead-a")
+    org_b = bootstrap_org_user(client, email_prefix="bu-lead-b")
+
+    create_cross_org_lead = client.post(
+        "/api/v1/compliance/business-units",
+        headers=org_a["org_headers"],
+        json={
+            "name": "Lead Scope",
+            "code": "LEAD",
+            "bu_lead_user_id": org_b["user_id"],
+        },
+    )
+    assert create_cross_org_lead.status_code == 400
+    assert "bu_lead_user_id must be an active organization user" in create_cross_org_lead.json()["detail"]
+
+    created = client.post(
+        "/api/v1/compliance/business-units",
+        headers=org_a["org_headers"],
+        json={"name": "Valid Lead", "code": "VLEAD"},
+    )
+    assert created.status_code == 201
+    bu_id = created.json()["id"]
+
+    patch_cross_org_lead = client.patch(
+        f"/api/v1/compliance/business-units/{bu_id}",
+        headers=org_a["org_headers"],
+        json={"bu_lead_user_id": org_b["user_id"]},
+    )
+    assert patch_cross_org_lead.status_code == 400
+    assert "bu_lead_user_id must be an active organization user" in patch_cross_org_lead.json()["detail"]

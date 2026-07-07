@@ -13,6 +13,8 @@ from app.models.compliance_policy import CompliancePolicy
 from app.models.control import Control
 from app.models.risk import Risk
 from app.models.vendor import Vendor
+from app.models.membership import Membership
+from app.models.user import User
 from app.services.audit_service import AuditService
 
 
@@ -56,6 +58,23 @@ class BusinessUnitService:
             )
             cursor_id = cursor.parent_bu_id if cursor else None
 
+    def _require_active_org_user(self, org_id: uuid.UUID, user_id: uuid.UUID, field_name: str) -> User:
+        row = (
+            self.db.query(User)
+            .join(Membership, Membership.user_id == User.id)
+            .filter(
+                User.id == user_id,
+                User.is_active.is_(True),
+                User.status == "active",
+                Membership.organization_id == org_id,
+                Membership.status == "active",
+            )
+            .first()
+        )
+        if row is None:
+            raise HTTPException(status_code=400, detail=f"{field_name} must be an active organization user")
+        return row
+
     def create_bu(
         self,
         org_id: uuid.UUID,
@@ -85,6 +104,8 @@ class BusinessUnitService:
                     status_code=400,
                     detail=f"Business unit '{parent.name}' ({parent.code}) is inactive and cannot be assigned as a parent",
                 )
+        if bu_lead_user_id is not None:
+            self._require_active_org_user(org_id, bu_lead_user_id, "bu_lead_user_id")
 
         existing = (
             self.db.query(BusinessUnit)
@@ -195,6 +216,8 @@ class BusinessUnitService:
             if existing:
                 raise HTTPException(status_code=409, detail=f"Business unit code '{code}' already exists in this organization")
             changes["code"] = code
+        if "bu_lead_user_id" in changes and changes["bu_lead_user_id"] is not None:
+            self._require_active_org_user(org_id, changes["bu_lead_user_id"], "bu_lead_user_id")
 
         if "parent_bu_id" in changes and changes["parent_bu_id"] is not None:
             parent_id = changes["parent_bu_id"]
@@ -400,9 +423,83 @@ class BusinessUnitService:
             "business_unit_id": str(business_unit_id) if business_unit_id else None,
         }
 
+    def business_unit_response_payload(self, org_id: uuid.UUID, bu: BusinessUnit) -> dict[str, Any]:
+        total_child_count = (
+            self.db.query(BusinessUnit)
+            .filter(
+                BusinessUnit.organization_id == org_id,
+                BusinessUnit.parent_bu_id == bu.id,
+                BusinessUnit.deleted_at.is_(None),
+            )
+            .count()
+        )
+        active_child_count = (
+            self.db.query(BusinessUnit)
+            .filter(
+                BusinessUnit.organization_id == org_id,
+                BusinessUnit.parent_bu_id == bu.id,
+                BusinessUnit.deleted_at.is_(None),
+                BusinessUnit.is_active.is_(True),
+            )
+            .count()
+        )
+
+        counts = self._entity_counts_for_bu(org_id, bu.id)
+        tagged_entity_count = int(sum(int(v) for v in counts.values()))
+        context_flags: list[str] = []
+        if bu.parent_bu_id is not None:
+            parent = (
+                self.db.query(BusinessUnit)
+                .filter(
+                    BusinessUnit.id == bu.parent_bu_id,
+                    BusinessUnit.organization_id == org_id,
+                    BusinessUnit.deleted_at.is_(None),
+                )
+                .first()
+            )
+            if parent is None:
+                context_flags.append("parent_missing_or_deleted")
+            elif not parent.is_active:
+                context_flags.append("parent_inactive")
+        if not bu.is_active and tagged_entity_count > 0:
+            context_flags.append("inactive_bu_still_tagged_to_entities")
+        if active_child_count > 0 and not bu.is_active:
+            context_flags.append("inactive_bu_with_active_children")
+
+        payload = {
+            "id": bu.id,
+            "organization_id": bu.organization_id,
+            "name": bu.name,
+            "code": bu.code,
+            "parent_bu_id": bu.parent_bu_id,
+            "description": bu.description,
+            "cost_center": bu.cost_center,
+            "bu_lead_user_id": bu.bu_lead_user_id,
+            "is_active": bu.is_active,
+            "created_at": bu.created_at,
+            "updated_at": bu.updated_at,
+            "deleted_at": bu.deleted_at,
+            "active_child_count": active_child_count,
+            "total_child_count": total_child_count,
+            "tagged_entity_count": tagged_entity_count,
+            "context_flags": context_flags,
+        }
+        return payload
+
     def get_bu_summary(self, org_id: uuid.UUID, bu_id: uuid.UUID) -> dict[str, Any]:
         bu = self.get_bu(org_id, bu_id)
-        counts = {
+        counts = self._entity_counts_for_bu(org_id, bu_id)
+        return {
+            "bu_id": str(bu.id),
+            "bu_name": bu.name,
+            "is_active": bu.is_active,
+            "entity_counts": counts,
+            "total_tagged": sum(counts.values()),
+            "context_flags": self.business_unit_response_payload(org_id, bu)["context_flags"],
+        }
+
+    def _entity_counts_for_bu(self, org_id: uuid.UUID, bu_id: uuid.UUID) -> dict[str, int]:
+        return {
             "risks": self.db.query(Risk).filter(Risk.organization_id == org_id, Risk.business_unit_id == bu_id).count(),
             "controls": self.db.query(Control).filter(Control.organization_id == org_id, Control.business_unit_id == bu_id).count(),
             "policies": self.db.query(CompliancePolicy)
@@ -412,10 +509,4 @@ class BusinessUnitService:
             "ai_systems": self.db.query(AISystem)
             .filter(AISystem.organization_id == org_id, AISystem.business_unit_id == bu_id)
             .count(),
-        }
-        return {
-            "bu_id": str(bu.id),
-            "bu_name": bu.name,
-            "entity_counts": counts,
-            "total_tagged": sum(counts.values()),
         }

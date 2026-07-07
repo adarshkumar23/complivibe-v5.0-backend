@@ -36,6 +36,12 @@ class BusinessUnitResponse(BaseModel):
     bu_lead_user_id: uuid.UUID | None
     is_active: bool
     created_at: datetime
+    updated_at: datetime
+    deleted_at: datetime | None = None
+    active_child_count: int = 0
+    total_child_count: int = 0
+    tagged_entity_count: int = 0
+    context_flags: list[str] = []
 
 
 class EntityTagRequest(BaseModel):
