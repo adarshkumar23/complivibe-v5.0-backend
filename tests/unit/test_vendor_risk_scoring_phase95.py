@@ -277,3 +277,142 @@ def test_phase95_unlink_non_destructive_summary_and_audit(client, db_session):
     assert "vendor_risk_score.created" in actions
     assert "vendor.control_linked" in actions
     assert "vendor.control_unlinked" in actions
+
+
+def test_phase95_risk_score_flags_stale_after_newer_score_supersedes_it(client, db_session):
+    """A prior VendorRiskScore must be flagged recalculated_since_update once a newer
+    score changes the vendor's cached risk_tier, and the freshly-created score itself
+    must NOT be flagged stale immediately after creation."""
+    org = bootstrap_org_user(client, email_prefix="p95-stale")
+    vendor = _create_vendor(client, org["org_headers"], owner_user_id=org["user_id"], name="Stale Signal Vendor")
+
+    first = _create_score(client, org["org_headers"], vendor["id"], likelihood="low", impact="low")
+    assert first["recalculated_since_update"] is False
+
+    second = _create_score(client, org["org_headers"], vendor["id"], likelihood="very_high", impact="very_high")
+    assert second["recalculated_since_update"] is False
+
+    history = client.get(f"{VENDORS_BASE}/{vendor['id']}/risk-scores", headers=org["org_headers"])
+    assert history.status_code == 200
+    by_id = {row["id"]: row for row in history.json()}
+    assert by_id[first["id"]]["recalculated_since_update"] is True
+    assert by_id[first["id"]]["stale_reason"] is not None
+    assert by_id[second["id"]]["recalculated_since_update"] is False
+
+    latest = client.get(f"{VENDORS_BASE}/{vendor['id']}/risk-scores/latest", headers=org["org_headers"])
+    assert latest.status_code == 200
+    assert latest.json()["id"] == second["id"]
+    assert latest.json()["recalculated_since_update"] is False
+
+
+def test_phase95_risk_score_flags_stale_after_nth_party_signal_update(client, db_session):
+    """If the vendor's nth-party risk flag is raised AFTER a risk score was computed,
+    that score must be surfaced as stale even though its own risk_level still matches
+    the vendor's last manually-set tier at creation time."""
+    org = bootstrap_org_user(client, email_prefix="p95-nth")
+    parent = _create_vendor(client, org["org_headers"], owner_user_id=org["user_id"], name="Nth Parent Vendor")
+    child = _create_vendor(client, org["org_headers"], owner_user_id=org["user_id"], name="Nth Child Vendor")
+
+    score = _create_score(client, org["org_headers"], parent["id"], likelihood="low", impact="low")
+    assert score["recalculated_since_update"] is False
+
+    link_resp = client.post(
+        f"/api/v1/vendors/{parent['id']}/supply-chain-links",
+        headers=org["org_headers"],
+        json={"sub_vendor_id": child["id"], "relationship_type": "supplier"},
+    )
+    assert link_resp.status_code == 201, link_resp.text
+
+    # Drive the nth-party propagation directly via the service (there is no public
+    # "fire an arbitrary signal" endpoint; real callers are satellites like sanctions
+    # screening or KYB checks that call this same method).
+    from app.services.vendor_supply_chain_service import VendorSupplyChainService
+
+    VendorSupplyChainService(db_session).propagate_vendor_signal(
+        organization_id=uuid.UUID(org["organization_id"]),
+        triggering_vendor_id=uuid.UUID(child["id"]),
+        signal_type="sanctions_hit",
+        severity="critical",
+        explanation="test signal",
+        actor_user_id=uuid.UUID(org["user_id"]),
+    )
+    db_session.commit()
+
+    fetched = client.get(f"{VENDORS_BASE}/{parent['id']}/risk-scores/{score['id']}", headers=org["org_headers"])
+    assert fetched.status_code == 200
+    body = fetched.json()
+    assert body["recalculated_since_update"] is True
+    assert "nth-party" in body["stale_reason"]
+
+
+def test_phase95_list_vendors_supports_pagination(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="p95-page")
+    for i in range(5):
+        _create_vendor(client, org["org_headers"], owner_user_id=org["user_id"], name=f"Page Vendor {i}")
+
+    page1 = client.get(f"{VENDORS_BASE}?limit=2&skip=0", headers=org["org_headers"])
+    assert page1.status_code == 200
+    assert len(page1.json()) == 2
+
+    page2 = client.get(f"{VENDORS_BASE}?limit=2&skip=2", headers=org["org_headers"])
+    assert page2.status_code == 200
+    assert len(page2.json()) == 2
+    assert {row["id"] for row in page1.json()}.isdisjoint({row["id"] for row in page2.json()})
+
+
+def test_phase95_creating_critical_vendor_refreshes_tracked_concentration_detection(client, db_session):
+    """A newly-created vendor that starts out critical/active is itself one of T1-6's
+    direct HHI inputs; an org that already opted into concentration tracking must see
+    it reflected immediately, not just after the next unrelated vendor change."""
+    org = bootstrap_org_user(client, email_prefix="p95-conc")
+    _create_vendor(client, org["org_headers"], owner_user_id=org["user_id"], name="Existing Critical Vendor")
+
+    opt_in = client.post("/api/v1/vendor-concentration-risk/recompute", headers=org["org_headers"], json={})
+    assert opt_in.status_code == 200
+    before_count = opt_in.json()["detection"]["critical_vendor_count"]
+
+    new_vendor_resp = client.post(
+        VENDORS_BASE,
+        headers=org["org_headers"],
+        json={
+            "name": "Freshly Created Critical Vendor",
+            "vendor_type": "software",
+            "owner_user_id": org["user_id"],
+            "risk_tier": "critical",
+            "status": "active",
+        },
+    )
+    assert new_vendor_resp.status_code == 201
+
+    detection = client.get("/api/v1/vendor-concentration-risk", headers=org["org_headers"])
+    assert detection.status_code == 200
+    assert detection.json()["critical_vendor_count"] == before_count + 1
+
+
+def test_phase95_manual_risk_score_escalation_refreshes_tracked_concentration_detection(client, db_session):
+    """A manual likelihood x impact score that escalates a vendor to critical is a
+    direct T1-6 HHI input just like a sanctions-driven escalation; a tracked org's
+    detection must reflect it without a separate manual recompute call."""
+    org = bootstrap_org_user(client, email_prefix="p95-conc2")
+    vendor = _create_vendor(client, org["org_headers"], owner_user_id=org["user_id"], name="Escalation Candidate Vendor")
+
+    opt_in = client.post("/api/v1/vendor-concentration-risk/recompute", headers=org["org_headers"], json={})
+    assert opt_in.status_code == 200
+    before_count = opt_in.json()["detection"]["critical_vendor_count"]
+
+    _create_score(client, org["org_headers"], vendor["id"], likelihood="very_high", impact="very_high")
+
+    detection = client.get("/api/v1/vendor-concentration-risk", headers=org["org_headers"])
+    assert detection.status_code == 200
+    assert detection.json()["critical_vendor_count"] == before_count + 1
+
+    from app.models.audit_log import AuditLog
+    from sqlalchemy import select as sa_select
+
+    audits = db_session.execute(
+        sa_select(AuditLog).where(
+            AuditLog.organization_id == uuid.UUID(org["organization_id"]),
+            AuditLog.action == "vendor_concentration_risk.recomputed",
+        )
+    ).scalars().all()
+    assert any(row.metadata_json["source"] == "vendor_risk_score.created" for row in audits)

@@ -27,6 +27,8 @@ class VendorRiskScoreRead(BaseModel):
     scored_by_user_id: UUID
     notes: str | None = None
     created_at: datetime
+    recalculated_since_update: bool = False
+    stale_reason: str | None = None
 
 
 class VendorControlLinkCreate(BaseModel):

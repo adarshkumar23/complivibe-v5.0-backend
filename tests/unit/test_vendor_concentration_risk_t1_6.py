@@ -157,7 +157,13 @@ def test_t1_6_auto_refreshes_when_new_supply_chain_link_created(client, db_sessi
             AuditLog.action == "vendor_concentration_risk.recomputed",
         )
     ).scalars().all()
-    assert len(recompute_audits) == 2
+    # Creating app_c (critical, active) now also triggers an immediate recompute
+    # (see vendors.py create_vendor) so the persisted detection never goes stale
+    # between "a new critical vendor exists" and "a link connects it" -- that's an
+    # extra recompute beyond the baseline + link-created ones this test used to expect.
+    assert len(recompute_audits) == 3
+    sources = [row.metadata_json["source"] for row in recompute_audits]
+    assert "vendor.created" in sources
     assert recompute_audits[-1].metadata_json["source"] == "vendor_supply_chain.link_created"
 
 
