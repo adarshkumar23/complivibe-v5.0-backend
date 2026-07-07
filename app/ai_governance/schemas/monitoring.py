@@ -38,6 +38,7 @@ class MonitoringConfigRead(BaseModel):
     alert_on_breach: bool
     check_frequency: str | None
     baseline_value: Decimal | None
+    baseline_model_version: str | None = None
     last_checked_at: datetime | None
     last_reading_value: Decimal | None
     is_active: bool
@@ -83,6 +84,22 @@ class MonitoringDashboardItem(BaseModel):
     last_reading_value: Decimal | None
     within_threshold: bool | None
     last_checked_at: datetime | None
+    baseline_value: Decimal | None = None
+    drift_pct: Decimal | None = Field(
+        default=None,
+        description="Absolute percentage deviation of the latest reading from baseline_value.",
+    )
+    drift_detected: bool = Field(
+        default=False,
+        description="True when the latest reading has drifted more than 20% from baseline_value.",
+    )
+    baseline_reassessment_required: bool = Field(
+        default=False,
+        description=(
+            "True when the AI system's model_version has changed since this metric's "
+            "baseline was recorded, meaning the baseline may no longer be representative."
+        ),
+    )
 
 
 class MonitoringDashboardRead(BaseModel):

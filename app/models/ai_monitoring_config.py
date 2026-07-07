@@ -35,6 +35,9 @@ class AIMonitoringConfig(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
     alert_on_breach: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     check_frequency: Mapped[str | None] = mapped_column(String(20), nullable=True)
     baseline_value: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
+    # Snapshot of AISystem.model_version at the time the baseline was recorded.
+    # Used to flag a stale/pre-model-change baseline in the monitoring dashboard.
+    baseline_model_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_reading_value: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
     api_key_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -86,6 +86,7 @@ class AISystemService:
             affected_population=data.affected_population,
             geographic_scope=data.geographic_scope,
             geography_json=data.geographic_scope,
+            model_version=data.model_version,
             created_by=created_by,
             created_by_user_id=created_by,
             updated_by_user_id=created_by,
