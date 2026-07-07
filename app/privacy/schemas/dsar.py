@@ -60,6 +60,11 @@ class DataSubjectRequestRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
+    age_days: int = 0
+    days_to_deadline: int = 0
+    is_overdue: bool = False
+    step_completion_rate: float = 0.0
+    context_flags: list[str] = []
 
 
 class DSRTransitionRequest(BaseModel):
@@ -121,3 +126,7 @@ class DSRSummaryRead(BaseModel):
     overdue_count: int
     avg_days_to_fulfill: float
     sla_compliance_rate: float
+    open_count: int = 0
+    breached_open_count: int = 0
+    verified_pending_fulfillment_count: int = 0
+    context_flags: list[str] = []

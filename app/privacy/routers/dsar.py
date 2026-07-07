@@ -44,6 +44,10 @@ def _check_public_rate_limit(client_ip: str) -> None:
     bucket.append(now)
 
 
+def _request_read(service: DSARService, row) -> DataSubjectRequestRead:
+    return DataSubjectRequestRead.model_validate(service.request_response_payload(row))
+
+
 @router.post("/submit", response_model=PublicDSRSubmitResponse, status_code=status.HTTP_201_CREATED)
 @rate_limiter.limiter.limit("120/minute")
 def submit_public_dsr(
@@ -66,10 +70,11 @@ def create_request(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("privacy:write")),
 ) -> DataSubjectRequestRead:
-    row = DSARService(db).create_request(organization.id, payload, created_by=current_user.id)
+    service = DSARService(db)
+    row = service.create_request(organization.id, payload, created_by=current_user.id)
     db.commit()
     db.refresh(row)
-    return DataSubjectRequestRead.model_validate(row)
+    return _request_read(service, row)
 
 
 @router.get("", response_model=list[DataSubjectRequestRead])
@@ -84,7 +89,8 @@ def list_requests(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("privacy:read")),
 ) -> list[DataSubjectRequestRead]:
-    rows = DSARService(db).list_requests(
+    service = DSARService(db)
+    rows = service.list_requests(
         organization.id,
         status_filter=status_filter,
         request_type=request_type,
@@ -93,7 +99,7 @@ def list_requests(
         skip=skip,
         limit=limit,
     )
-    return [DataSubjectRequestRead.model_validate(row) for row in rows]
+    return [DataSubjectRequestRead.model_validate(item) for item in service.request_response_payloads(organization.id, rows)]
 
 
 @router.get("/summary", response_model=DSRSummaryRead)
@@ -114,13 +120,14 @@ def get_overdue_requests(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("privacy:read")),
 ) -> list[DataSubjectRequestRead]:
-    rows = DSARService(db).list_requests(
+    service = DSARService(db)
+    rows = service.list_requests(
         organization.id,
         overdue_only=True,
         skip=skip,
         limit=limit,
     )
-    return [DataSubjectRequestRead.model_validate(row) for row in rows]
+    return [DataSubjectRequestRead.model_validate(item) for item in service.request_response_payloads(organization.id, rows)]
 
 
 @router.get("/{request_id}", response_model=DataSubjectRequestRead)
@@ -130,8 +137,9 @@ def get_request(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("privacy:read")),
 ) -> DataSubjectRequestRead:
-    row = DSARService(db).get_request(organization.id, request_id)
-    return DataSubjectRequestRead.model_validate(row)
+    service = DSARService(db)
+    row = service.get_request(organization.id, request_id)
+    return _request_read(service, row)
 
 
 @router.post("/{request_id}/assign", response_model=DataSubjectRequestRead)
@@ -143,10 +151,11 @@ def assign_handler(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("privacy:write")),
 ) -> DataSubjectRequestRead:
-    row = DSARService(db).assign_handler(organization.id, request_id, payload.handler_id, current_user.id)
+    service = DSARService(db)
+    row = service.assign_handler(organization.id, request_id, payload.handler_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return DataSubjectRequestRead.model_validate(row)
+    return _request_read(service, row)
 
 
 @router.post("/{request_id}/verify-identity", response_model=DataSubjectRequestRead)
@@ -157,10 +166,11 @@ def verify_identity(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("privacy:write")),
 ) -> DataSubjectRequestRead:
-    row = DSARService(db).verify_identity(organization.id, request_id, current_user.id)
+    service = DSARService(db)
+    row = service.verify_identity(organization.id, request_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return DataSubjectRequestRead.model_validate(row)
+    return _request_read(service, row)
 
 
 @router.post("/{request_id}/transition", response_model=DataSubjectRequestRead)
@@ -172,7 +182,8 @@ def transition_status(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("privacy:write")),
 ) -> DataSubjectRequestRead:
-    row = DSARService(db).transition_status(
+    service = DSARService(db)
+    row = service.transition_status(
         organization.id,
         request_id,
         payload.new_status,
@@ -182,7 +193,7 @@ def transition_status(
     )
     db.commit()
     db.refresh(row)
-    return DataSubjectRequestRead.model_validate(row)
+    return _request_read(service, row)
 
 
 @router.post("/{request_id}/grant-extension", response_model=DataSubjectRequestRead)
@@ -194,10 +205,11 @@ def grant_extension(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("privacy:write")),
 ) -> DataSubjectRequestRead:
-    row = DSARService(db).grant_extension(organization.id, request_id, payload.reason, current_user.id)
+    service = DSARService(db)
+    row = service.grant_extension(organization.id, request_id, payload.reason, current_user.id)
     db.commit()
     db.refresh(row)
-    return DataSubjectRequestRead.model_validate(row)
+    return _request_read(service, row)
 
 
 @router.post("/{request_id}/steps", response_model=DSRFulfillmentStepRead, status_code=status.HTTP_201_CREATED)

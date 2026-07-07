@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -63,6 +63,14 @@ class DSARService:
     @staticmethod
     def utcnow() -> datetime:
         return datetime.now(UTC)
+
+    @staticmethod
+    def _as_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
     def _require_request(self, org_id: uuid.UUID, request_id: uuid.UUID) -> DataSubjectRequest:
         row = self.db.execute(
@@ -204,6 +212,174 @@ class DSARService:
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SLA tracking row not found")
         return row
+
+    def _sla_map(self, org_id: uuid.UUID, request_ids: list[uuid.UUID]) -> dict[uuid.UUID, DSRSLATracking]:
+        if not request_ids:
+            return {}
+        rows = self.db.execute(
+            select(DSRSLATracking).where(
+                DSRSLATracking.organization_id == org_id,
+                DSRSLATracking.request_id.in_(request_ids),
+            )
+        ).scalars()
+        return {row.request_id: row for row in rows}
+
+    def _step_progress_map(self, org_id: uuid.UUID, request_ids: list[uuid.UUID]) -> dict[uuid.UUID, tuple[int, int]]:
+        if not request_ids:
+            return {}
+        rows = self.db.execute(
+            select(
+                DSRFulfillmentStep.request_id,
+                func.count(DSRFulfillmentStep.id),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (DSRFulfillmentStep.status == "completed", 1),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ),
+            )
+            .where(
+                DSRFulfillmentStep.organization_id == org_id,
+                DSRFulfillmentStep.request_id.in_(request_ids),
+            )
+            .group_by(DSRFulfillmentStep.request_id)
+        ).all()
+        return {request_id: (int(total), int(completed)) for request_id, total, completed in rows}
+
+    def request_context(
+        self,
+        row: DataSubjectRequest,
+        *,
+        sla: DSRSLATracking | None = None,
+        step_progress: tuple[int, int] | None = None,
+        now: datetime | None = None,
+    ) -> dict:
+        evaluated_now = now or self.utcnow()
+        received_at = self._as_utc(row.received_at) or evaluated_now
+        age_days = max(0, int((evaluated_now - received_at).total_seconds() // 86400))
+
+        effective_deadline_dt = sla.effective_deadline if sla is not None else (row.extension_deadline or row.response_deadline)
+        effective_deadline = self._as_utc(effective_deadline_dt) or evaluated_now
+        seconds_to_deadline = (effective_deadline - evaluated_now).total_seconds()
+        days_to_deadline = int(seconds_to_deadline // 86400)
+        is_overdue = seconds_to_deadline < 0 and row.status not in TERMINAL_STATUSES
+
+        total_steps, completed_steps = step_progress or (0, 0)
+        step_completion_rate = round((completed_steps / total_steps) * 100, 2) if total_steps > 0 else 0.0
+
+        context_flags: list[str] = []
+        if row.assigned_handler_id is None and row.status not in TERMINAL_STATUSES:
+            context_flags.append("unassigned_request")
+        if not row.identity_verified and row.status in {"received", "identity_verification"}:
+            context_flags.append("identity_verification_pending")
+        if row.identity_verified and row.status not in TERMINAL_STATUSES:
+            context_flags.append("verified_pending_fulfillment")
+        if row.extension_granted:
+            context_flags.append("extended_deadline")
+        if is_overdue:
+            context_flags.append("overdue_response")
+        elif row.status not in TERMINAL_STATUSES and days_to_deadline <= 3:
+            context_flags.append("deadline_approaching")
+        if sla is not None and sla.response_breached:
+            context_flags.append("sla_breach_recorded")
+        if total_steps == 0 and row.status in {"in_progress", "on_hold"}:
+            context_flags.append("no_fulfillment_steps")
+
+        return {
+            "age_days": age_days,
+            "days_to_deadline": days_to_deadline,
+            "is_overdue": is_overdue,
+            "step_completion_rate": step_completion_rate,
+            "context_flags": context_flags,
+        }
+
+    def request_response_payload(
+        self,
+        row: DataSubjectRequest,
+        *,
+        sla: DSRSLATracking | None = None,
+        step_progress: tuple[int, int] | None = None,
+    ) -> dict:
+        if sla is None:
+            sla = self.db.execute(
+                select(DSRSLATracking).where(
+                    DSRSLATracking.organization_id == row.organization_id,
+                    DSRSLATracking.request_id == row.id,
+                )
+            ).scalar_one_or_none()
+        if step_progress is None:
+            progress = self.db.execute(
+                select(
+                    func.count(DSRFulfillmentStep.id),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (DSRFulfillmentStep.status == "completed", 1),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ),
+                ).where(
+                    DSRFulfillmentStep.organization_id == row.organization_id,
+                    DSRFulfillmentStep.request_id == row.id,
+                )
+            ).one()
+            step_progress = (int(progress[0] or 0), int(progress[1] or 0))
+
+        context = self.request_context(row, sla=sla, step_progress=step_progress)
+        return {
+            "id": row.id,
+            "organization_id": row.organization_id,
+            "request_ref": row.request_ref,
+            "request_type": row.request_type,
+            "subject_name": row.subject_name,
+            "subject_email": row.subject_email,
+            "subject_identifier": row.subject_identifier,
+            "description": row.description,
+            "status": row.status,
+            "regulatory_framework": row.regulatory_framework,
+            "response_deadline": row.response_deadline,
+            "deadline_days": row.deadline_days,
+            "extension_granted": row.extension_granted,
+            "extension_deadline": row.extension_deadline,
+            "extension_reason": row.extension_reason,
+            "identity_verified": row.identity_verified,
+            "identity_verified_at": row.identity_verified_at,
+            "identity_verified_by": row.identity_verified_by,
+            "assigned_handler_id": row.assigned_handler_id,
+            "response_notes": row.response_notes,
+            "refusal_reason": row.refusal_reason,
+            "received_at": row.received_at,
+            "fulfilled_at": row.fulfilled_at,
+            "created_by": row.created_by,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "deleted_at": row.deleted_at,
+            "age_days": context["age_days"],
+            "days_to_deadline": context["days_to_deadline"],
+            "is_overdue": context["is_overdue"],
+            "step_completion_rate": context["step_completion_rate"],
+            "context_flags": context["context_flags"],
+        }
+
+    def request_response_payloads(self, org_id: uuid.UUID, rows: list[DataSubjectRequest]) -> list[dict]:
+        if not rows:
+            return []
+        request_ids = [row.id for row in rows]
+        sla_map = self._sla_map(org_id, request_ids)
+        step_progress_map = self._step_progress_map(org_id, request_ids)
+        return [
+            self.request_response_payload(
+                row,
+                sla=sla_map.get(row.id),
+                step_progress=step_progress_map.get(row.id, (0, 0)),
+            )
+            for row in rows
+        ]
 
     def create_request(self, org_id: uuid.UUID, data, created_by: uuid.UUID | None = None) -> DataSubjectRequest:
         payload = data.model_dump() if hasattr(data, "model_dump") else dict(data)
@@ -651,6 +827,37 @@ class DSARService:
             ).scalar_one()
             or 0
         )
+        open_count = int(
+            self.db.execute(
+                select(func.count(DataSubjectRequest.id)).where(
+                    *base_filters,
+                    DataSubjectRequest.status.not_in(list(TERMINAL_STATUSES)),
+                )
+            ).scalar_one()
+            or 0
+        )
+        breached_open_count = int(
+            self.db.execute(
+                select(func.count(DataSubjectRequest.id))
+                .join(DSRSLATracking, DSRSLATracking.request_id == DataSubjectRequest.id)
+                .where(
+                    *base_filters,
+                    DataSubjectRequest.status.not_in(list(TERMINAL_STATUSES)),
+                    DSRSLATracking.response_breached.is_(True),
+                )
+            ).scalar_one()
+            or 0
+        )
+        verified_pending_fulfillment_count = int(
+            self.db.execute(
+                select(func.count(DataSubjectRequest.id)).where(
+                    *base_filters,
+                    DataSubjectRequest.identity_verified.is_(True),
+                    DataSubjectRequest.status.not_in(list(TERMINAL_STATUSES)),
+                )
+            ).scalar_one()
+            or 0
+        )
 
         fulfilled_rows = self.db.execute(
             select(DataSubjectRequest, DSRSLATracking)
@@ -673,6 +880,16 @@ class DSARService:
             avg_days_to_fulfill = 0.0
             sla_compliance_rate = 100.0
 
+        context_flags: list[str] = []
+        if overdue_count > 0:
+            context_flags.append("overdue_requests_present")
+        if breached_open_count > 0:
+            context_flags.append("active_sla_breaches")
+        if verified_pending_fulfillment_count > 0:
+            context_flags.append("verified_requests_pending_closure")
+        if total > 0 and open_count == total:
+            context_flags.append("no_terminal_requests_yet")
+
         return {
             "total": total,
             "by_status": by_status,
@@ -681,6 +898,10 @@ class DSARService:
             "overdue_count": overdue_count,
             "avg_days_to_fulfill": avg_days_to_fulfill,
             "sla_compliance_rate": sla_compliance_rate,
+            "open_count": open_count,
+            "breached_open_count": breached_open_count,
+            "verified_pending_fulfillment_count": verified_pending_fulfillment_count,
+            "context_flags": context_flags,
         }
 
     def submit_public_request(self, data) -> dict:

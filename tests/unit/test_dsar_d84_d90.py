@@ -31,9 +31,13 @@ def test_d84_d90_request_lifecycle_and_sla(client, db_session):
 
     first = _create_internal_request(client, org["org_headers"], subject_email="one@example.com")
     assert first["request_ref"] == f"DSR-{year}-001"
+    assert "age_days" in first
+    assert "context_flags" in first
+    assert first["is_overdue"] is False
 
     second = _create_internal_request(client, org["org_headers"], subject_email="two@example.com")
     assert second["request_ref"] == f"DSR-{year}-002"
+    assert "unassigned_request" in second["context_flags"]
 
     first_deadline = datetime.fromisoformat(first["response_deadline"])
     assert 29 <= (first_deadline - datetime.fromisoformat(first["received_at"])).days <= 31
@@ -117,6 +121,7 @@ def test_d84_d90_request_lifecycle_and_sla(client, db_session):
     assert verify.status_code == 200
     assert verify.json()["identity_verified"] is True
     assert verify.json()["status"] == "in_progress"
+    assert "verified_pending_fulfillment" in verify.json()["context_flags"]
 
     step = client.post(
         f"{BASE}/{second['id']}/steps",
@@ -129,6 +134,10 @@ def test_d84_d90_request_lifecycle_and_sla(client, db_session):
     assert step.status_code == 201
     assert step.json()["order_index"] == 1
 
+    second_after_step = client.get(f"{BASE}/{second['id']}", headers=org["org_headers"])
+    assert second_after_step.status_code == 200
+    assert second_after_step.json()["step_completion_rate"] == 0.0
+
     step_complete = client.post(
         f"{BASE}/{second['id']}/steps/{step.json()['id']}/complete",
         headers=org["org_headers"],
@@ -136,6 +145,10 @@ def test_d84_d90_request_lifecycle_and_sla(client, db_session):
     )
     assert step_complete.status_code == 200
     assert step_complete.json()["completed_at"] is not None
+
+    second_after_complete = client.get(f"{BASE}/{second['id']}", headers=org["org_headers"])
+    assert second_after_complete.status_code == 200
+    assert second_after_complete.json()["step_completion_rate"] == 100.0
 
     # Force SLA-breach condition and verify idempotent sweep.
     dsr_row = db_session.query(DataSubjectRequest).filter(DataSubjectRequest.id == uuid.UUID(second["id"])).first()
@@ -165,6 +178,16 @@ def test_d84_d90_request_lifecycle_and_sla(client, db_session):
     assert summary.status_code == 200
     assert summary.json()["overdue_count"] >= 0
     assert "sla_compliance_rate" in summary.json()
+    assert "open_count" in summary.json()
+    assert "breached_open_count" in summary.json()
+    assert "verified_pending_fulfillment_count" in summary.json()
+    assert isinstance(summary.json()["context_flags"], list)
+
+    listed = client.get(BASE, headers=org["org_headers"])
+    assert listed.status_code == 200
+    assert len(listed.json()) >= 2
+    assert "days_to_deadline" in listed.json()[0]
+    assert "step_completion_rate" in listed.json()[0]
 
 
 def test_d84_d90_org_isolation(client):
