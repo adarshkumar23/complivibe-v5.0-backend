@@ -126,6 +126,7 @@ from app.models.export_job_event import ExportJobEvent
 from app.models.import_job import ImportJob
 from app.models.import_parity_tracking import ImportParityTracking
 from app.models.export_attestation import ExportAttestation
+from app.models.attestation_token import AttestationToken
 from app.models.evidence_control_link import EvidenceControlLink
 from app.models.control_obligation_mapping import ControlObligationMapping
 from app.models.cross_framework_obligation_mapping import CrossFrameworkObligationMapping
@@ -547,6 +548,7 @@ __all__ = [
     "ImportJob",
     "ExportJobEvent",
     "ExportAttestation",
+    "AttestationToken",
     "EvidenceControlLink",
     "ControlObligationMapping",
     "EvidenceItem",

@@ -182,6 +182,7 @@ from app.api.v1 import (
     webhooks,
     offboarding,
     attestations,
+    attestation_tokens,
     carbon_accounting,
     connector_marketplace,
     import_jobs,
@@ -346,6 +347,7 @@ api_router.include_router(control_monitoring.router)
 api_router.include_router(control_monitoring_rules.router)
 api_router.include_router(exports.router)
 api_router.include_router(attestations.router)
+api_router.include_router(attestation_tokens.router)
 api_router.include_router(email.router)
 api_router.include_router(vendors.router)
 api_router.include_router(vendor_supply_chain.router)
