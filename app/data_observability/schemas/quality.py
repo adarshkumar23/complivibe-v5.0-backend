@@ -44,6 +44,10 @@ class DataQualityConfigRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
+    expected_check_interval_hours: int | None = None
+    hours_since_last_check: int | None = None
+    check_stale: bool = False
+    context_flags: list[str] = []
 
 
 class DataQualityReadingCreate(BaseModel):
@@ -64,6 +68,9 @@ class DataQualityReadingRead(BaseModel):
     within_threshold: bool
     notes: str | None
     created_at: datetime
+    threshold_delta: Decimal | None = None
+    breach_magnitude: str | None = None
+    context_flags: list[str] = []
 
 
 class MetricDashboardItem(BaseModel):
@@ -81,5 +88,8 @@ class DataQualityDashboardRead(BaseModel):
     total_configs: int
     active_configs: int
     recent_breaches_7d: int
+    stale_config_count: int = 0
+    high_risk_breach_count_7d: int = 0
     by_metric_type: dict[str, MetricDashboardItem]
     assets_with_breaches: list[AssetBreachItem]
+    context_flags: list[str] = []

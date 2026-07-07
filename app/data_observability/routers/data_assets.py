@@ -183,8 +183,9 @@ def list_asset_quality_configs(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:read")),
 ) -> list[DataQualityConfigRead]:
-    rows = DataQualityService(db).list_configs(organization.id, data_asset_id=asset_id)
-    return [DataQualityConfigRead.model_validate(row) for row in rows]
+    service = DataQualityService(db)
+    rows = service.list_configs(organization.id, data_asset_id=asset_id)
+    return [DataQualityConfigRead.model_validate(service.config_response_payload(row)) for row in rows]
 
 
 @router.get("/{asset_id}/access-logs", response_model=list[DataAccessLogRead])

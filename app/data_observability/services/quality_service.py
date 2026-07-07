@@ -28,6 +28,113 @@ class DataQualityService:
     def utcnow() -> datetime:
         return datetime.now(UTC)
 
+    @staticmethod
+    def _as_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    @staticmethod
+    def expected_interval_hours(measurement_frequency: str | None) -> int | None:
+        if measurement_frequency == "realtime":
+            return 1
+        if measurement_frequency == "hourly":
+            return 1
+        if measurement_frequency == "daily":
+            return 24
+        if measurement_frequency == "weekly":
+            return 24 * 7
+        return None
+
+    def config_context(self, row: DataQualityConfig, *, now: datetime | None = None) -> dict:
+        evaluated_now = now or self.utcnow()
+        expected_hours = self.expected_interval_hours(row.measurement_frequency)
+        last_checked_at = self._as_utc(row.last_checked_at)
+        hours_since_last_check: int | None = None
+        check_stale = False
+        if last_checked_at is not None:
+            hours_since_last_check = int((evaluated_now - last_checked_at).total_seconds() // 3600)
+        if row.is_active and expected_hours is not None:
+            if last_checked_at is None:
+                check_stale = True
+            elif hours_since_last_check is not None and hours_since_last_check > (expected_hours * 2):
+                check_stale = True
+
+        context_flags: list[str] = []
+        if row.is_active and row.last_checked_at is None:
+            context_flags.append("no_readings_yet")
+        if check_stale:
+            context_flags.append("stale_check_interval")
+        if row.last_value is not None and not self.check_threshold(row, row.last_value):
+            context_flags.append("last_value_breached_threshold")
+
+        return {
+            "expected_check_interval_hours": expected_hours,
+            "hours_since_last_check": hours_since_last_check,
+            "check_stale": check_stale,
+            "context_flags": context_flags,
+        }
+
+    def config_response_payload(self, row: DataQualityConfig) -> dict:
+        context = self.config_context(row)
+        return {
+            "id": row.id,
+            "organization_id": row.organization_id,
+            "data_asset_id": row.data_asset_id,
+            "metric_type": row.metric_type,
+            "threshold_value": row.threshold_value,
+            "comparison_direction": row.comparison_direction,
+            "alert_on_breach": row.alert_on_breach,
+            "measurement_frequency": row.measurement_frequency,
+            "description": row.description,
+            "is_active": row.is_active,
+            "last_checked_at": row.last_checked_at,
+            "last_value": row.last_value,
+            "created_by": row.created_by,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "deleted_at": row.deleted_at,
+            "expected_check_interval_hours": context["expected_check_interval_hours"],
+            "hours_since_last_check": context["hours_since_last_check"],
+            "check_stale": context["check_stale"],
+            "context_flags": context["context_flags"],
+        }
+
+    def reading_response_payload(self, row: DataQualityReading) -> dict:
+        config = self._require_config(row.organization_id, row.config_id)
+        threshold_delta = row.value - config.threshold_value
+        breach_magnitude: str | None = None
+        if not row.within_threshold:
+            percent_delta = abs(float(threshold_delta / config.threshold_value)) if config.threshold_value != 0 else 1.0
+            if percent_delta >= 0.5:
+                breach_magnitude = "critical"
+            elif percent_delta >= 0.2:
+                breach_magnitude = "high"
+            else:
+                breach_magnitude = "moderate"
+        context_flags: list[str] = []
+        if not row.within_threshold:
+            context_flags.append("threshold_breach")
+        if row.reading_source == "manual":
+            context_flags.append("manual_reading")
+
+        return {
+            "id": row.id,
+            "organization_id": row.organization_id,
+            "config_id": row.config_id,
+            "value": row.value,
+            "reading_source": row.reading_source,
+            "source_tool": row.source_tool,
+            "within_threshold": row.within_threshold,
+            "notes": row.notes,
+            "created_at": row.created_at,
+            "threshold_delta": threshold_delta,
+            "breach_magnitude": breach_magnitude,
+            "context_flags": context_flags,
+        }
+
     def _require_asset(self, org_id: uuid.UUID, asset_id: uuid.UUID) -> DataAsset:
         row = self.db.execute(
             select(DataAsset).where(
@@ -77,6 +184,21 @@ class DataQualityService:
         payload = data.model_dump()
         self._validate_payload(payload)
         self._require_asset(org_id, data_asset_id)
+        duplicate = self.db.execute(
+            select(DataQualityConfig).where(
+                DataQualityConfig.organization_id == org_id,
+                DataQualityConfig.data_asset_id == data_asset_id,
+                DataQualityConfig.metric_type == payload["metric_type"],
+                DataQualityConfig.comparison_direction == payload["comparison_direction"],
+                DataQualityConfig.is_active.is_(True),
+                DataQualityConfig.deleted_at.is_(None),
+            )
+        ).scalar_one_or_none()
+        if duplicate is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Active quality config with the same metric_type and comparison_direction already exists for this asset",
+            )
 
         now = self.utcnow()
         row = DataQualityConfig(
@@ -138,10 +260,17 @@ class DataQualityService:
             stmt = stmt.where(DataQualityConfig.is_active.is_(is_active))
         return self.db.execute(stmt.order_by(DataQualityConfig.created_at.desc())).scalars().all()
 
-    def update_config(self, org_id: uuid.UUID, config_id: uuid.UUID, data) -> DataQualityConfig:
+    def update_config(self, org_id: uuid.UUID, config_id: uuid.UUID, data, actor_user_id: uuid.UUID) -> DataQualityConfig:
         row = self._require_config(org_id, config_id)
         payload = data.model_dump(exclude_unset=True)
         self._validate_payload(payload)
+        before = {
+            "metric_type": row.metric_type,
+            "threshold_value": str(row.threshold_value),
+            "comparison_direction": row.comparison_direction,
+            "is_active": row.is_active,
+            "measurement_frequency": row.measurement_frequency,
+        }
 
         for key, value in payload.items():
             setattr(row, key, value)
@@ -153,7 +282,8 @@ class DataQualityService:
             entity_type="data_quality_config",
             entity_id=row.id,
             organization_id=org_id,
-            actor_user_id=None,
+            actor_user_id=actor_user_id,
+            before_json=before,
             after_json={
                 "data_asset_id": str(row.data_asset_id),
                 "metric_type": row.metric_type,
@@ -218,6 +348,7 @@ class DataQualityService:
         reading_source: str,
         source_tool: str | None,
         notes: str | None,
+        actor_user_id: uuid.UUID | None = None,
     ) -> DataQualityReading:
         reading_source = validate_choice(reading_source, ALLOWED_READING_SOURCES, "reading_source")
         config = self._require_config(org_id, config_id)
@@ -249,7 +380,7 @@ class DataQualityService:
             entity_type="data_quality_reading",
             entity_id=row.id,
             organization_id=org_id,
-            actor_user_id=None,
+            actor_user_id=actor_user_id,
             after_json={
                 "config_id": str(config.id),
                 "value": str(value),
@@ -282,14 +413,14 @@ class DataQualityService:
                     "comparison_direction": config.comparison_direction,
                 },
                 detected_by="rule_engine",
-                actor_user_id=None,
+                actor_user_id=actor_user_id,
             )
             AuditService(self.db).write_audit_log(
                 action="quality.breach",
                 entity_type="control_monitoring_alert",
                 entity_id=alert.id,
                 organization_id=org_id,
-                actor_user_id=None,
+                actor_user_id=actor_user_id,
                 after_json={
                     "config_id": str(config.id),
                     "reading_id": str(row.id),
@@ -312,11 +443,15 @@ class DataQualityService:
         active_configs = int(
             self.db.execute(select(func.count(DataQualityConfig.id)).where(*base_filters, DataQualityConfig.is_active.is_(True))).scalar_one() or 0
         )
+        config_rows = self.db.execute(select(DataQualityConfig).where(*base_filters)).scalars().all()
+        stale_config_count = sum(1 for row in config_rows if self.config_context(row)["check_stale"])
 
         config_ids = self.db.execute(select(DataQualityConfig.id).where(*base_filters)).scalars().all()
         recent_breaches_7d = 0
+        high_risk_breach_count_7d = 0
         if config_ids:
             since = self.utcnow() - timedelta(days=7)
+            high_risk_metric_types = {"freshness", "completeness"}
             recent_breaches_7d = int(
                 self.db.execute(
                     select(func.count(DataQualityReading.id)).where(
@@ -324,6 +459,23 @@ class DataQualityService:
                         DataQualityReading.config_id.in_(config_ids),
                         DataQualityReading.within_threshold.is_(False),
                         DataQualityReading.created_at >= since,
+                    )
+                ).scalar_one()
+                or 0
+            )
+            high_risk_breach_count_7d = int(
+                self.db.execute(
+                    select(func.count(DataQualityReading.id))
+                    .select_from(DataQualityReading)
+                    .join(DataQualityConfig, DataQualityConfig.id == DataQualityReading.config_id)
+                    .join(DataAsset, DataAsset.id == DataQualityConfig.data_asset_id)
+                    .where(
+                        DataQualityReading.organization_id == org_id,
+                        DataQualityReading.config_id.in_(config_ids),
+                        DataQualityReading.within_threshold.is_(False),
+                        DataQualityReading.created_at >= since,
+                        DataQualityConfig.metric_type.in_(high_risk_metric_types),
+                        DataAsset.classification_type.in_(["personal_data", "sensitive_personal_data", "health_data"]),
                     )
                 ).scalar_one()
                 or 0
@@ -374,13 +526,22 @@ class DataQualityService:
             .limit(5)
         ).all()
 
+        context_flags: list[str] = []
+        if stale_config_count > 0:
+            context_flags.append("stale_quality_configs_present")
+        if high_risk_breach_count_7d > 0:
+            context_flags.append("high_risk_breaches_present")
+
         return {
             "total_configs": total_configs,
             "active_configs": active_configs,
             "recent_breaches_7d": recent_breaches_7d,
+            "stale_config_count": stale_config_count,
+            "high_risk_breach_count_7d": high_risk_breach_count_7d,
             "by_metric_type": by_metric_type,
             "assets_with_breaches": [
                 {"asset_id": str(asset_id), "asset_name": asset_name, "breach_count": int(breach_count or 0)}
                 for asset_id, asset_name, breach_count in assets_with_breaches
             ],
+            "context_flags": context_flags,
         }

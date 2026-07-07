@@ -252,6 +252,23 @@ def test_c76_quality_metrics(client):
     )
     assert cfg_breach.status_code == 201
     cfg_breach_id = cfg_breach.json()["id"]
+    assert cfg_breach.json()["expected_check_interval_hours"] == 24
+    assert cfg_breach.json()["check_stale"] is True
+    assert "no_readings_yet" in cfg_breach.json()["context_flags"]
+
+    duplicate_cfg = client.post(
+        f"{QUALITY_BASE}/configs",
+        headers=org["org_headers"],
+        json={
+            "data_asset_id": personal_asset_id,
+            "metric_type": "freshness",
+            "threshold_value": 0.80,
+            "comparison_direction": "below",
+            "alert_on_breach": True,
+            "measurement_frequency": "daily",
+        },
+    )
+    assert duplicate_cfg.status_code == 409
 
     reading_breach = client.post(
         f"{QUALITY_BASE}/configs/{cfg_breach_id}/readings",
@@ -260,6 +277,10 @@ def test_c76_quality_metrics(client):
     )
     assert reading_breach.status_code == 201
     assert reading_breach.json()["within_threshold"] is False
+    assert float(reading_breach.json()["threshold_delta"]) == 0.15
+    assert reading_breach.json()["breach_magnitude"] == "moderate"
+    assert "threshold_breach" in reading_breach.json()["context_flags"]
+    assert "manual_reading" in reading_breach.json()["context_flags"]
 
     alerts = client.get(f"{ALERTS_BASE}?alert_type=data_quality", headers=org["org_headers"])
     assert alerts.status_code == 200
@@ -281,6 +302,21 @@ def test_c76_quality_metrics(client):
     assert cfg_ok.status_code == 201
     cfg_ok_id = cfg_ok.json()["id"]
 
+    cfg_stale = client.post(
+        f"{QUALITY_BASE}/configs",
+        headers=org["org_headers"],
+        json={
+            "data_asset_id": personal_asset_id,
+            "metric_type": "completeness",
+            "threshold_value": 0.99,
+            "comparison_direction": "above",
+            "alert_on_breach": True,
+            "measurement_frequency": "daily",
+        },
+    )
+    assert cfg_stale.status_code == 201
+    cfg_stale_id = cfg_stale.json()["id"]
+
     reading_ok = client.post(
         f"{QUALITY_BASE}/configs/{cfg_ok_id}/readings",
         headers=org["org_headers"],
@@ -288,10 +324,28 @@ def test_c76_quality_metrics(client):
     )
     assert reading_ok.status_code == 201
     assert reading_ok.json()["within_threshold"] is True
+    assert float(reading_ok.json()["threshold_delta"]) > 0
+    assert reading_ok.json()["breach_magnitude"] is None
+    assert "manual_reading" in reading_ok.json()["context_flags"]
+
+    patched = client.patch(
+        f"{QUALITY_BASE}/configs/{cfg_ok_id}",
+        headers=org["org_headers"],
+        json={"description": "Raised after dbt validation"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["description"] == "Raised after dbt validation"
 
     cfg_refreshed = client.get(f"{QUALITY_BASE}/configs/{cfg_ok_id}", headers=org["org_headers"])
     assert cfg_refreshed.status_code == 200
     assert float(cfg_refreshed.json()["last_value"]) == 0.99
+    assert cfg_refreshed.json()["check_stale"] is False
+    assert "last_value_breached_threshold" not in cfg_refreshed.json()["context_flags"]
+
+    stale_cfg_refreshed = client.get(f"{QUALITY_BASE}/configs/{cfg_stale_id}", headers=org["org_headers"])
+    assert stale_cfg_refreshed.status_code == 200
+    assert stale_cfg_refreshed.json()["check_stale"] is True
+    assert "stale_check_interval" in stale_cfg_refreshed.json()["context_flags"]
 
     deactivated = client.post(f"{QUALITY_BASE}/configs/{cfg_ok_id}/deactivate", headers=org["org_headers"])
     assert deactivated.status_code == 200
@@ -307,13 +361,18 @@ def test_c76_quality_metrics(client):
     dashboard = client.get(f"{QUALITY_BASE}/dashboard", headers=org["org_headers"])
     assert dashboard.status_code == 200
     body = dashboard.json()
-    assert body["total_configs"] >= 2
+    assert body["total_configs"] >= 3
     assert body["recent_breaches_7d"] >= 1
+    assert body["stale_config_count"] >= 1
+    assert body["high_risk_breach_count_7d"] >= 1
+    assert "stale_quality_configs_present" in body["context_flags"]
+    assert "high_risk_breaches_present" in body["context_flags"]
     assert "freshness" in body["by_metric_type"]
 
     asset_configs = client.get(f"{ASSETS_BASE}/{personal_asset_id}/quality-configs", headers=org["org_headers"])
     assert asset_configs.status_code == 200
     assert len(asset_configs.json()) >= 1
+    assert any("check_stale" in cfg for cfg in asset_configs.json())
 
     org_b = bootstrap_org_user(client, email_prefix="c76-org-b")
     forbidden = client.get(f"{QUALITY_BASE}/configs/{cfg_breach_id}", headers=org_b["org_headers"])
