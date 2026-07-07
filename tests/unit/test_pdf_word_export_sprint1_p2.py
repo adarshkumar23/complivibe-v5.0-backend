@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import inspect, select
@@ -34,6 +35,9 @@ def test_entity_pdf_docx_exports_and_audit_log(client, db_session):
     pdf_resp = client.get(f"/api/v1/compliance/policies/{policy.id}/export?format=pdf", headers=headers)
     assert pdf_resp.status_code == 200, pdf_resp.text
     assert pdf_resp.headers["content-type"].startswith("application/pdf")
+    assert pdf_resp.headers.get("x-export-checksum-sha256")
+    assert int(pdf_resp.headers.get("x-export-bytes", "0")) == len(pdf_resp.content)
+    assert "x-export-context-flags" in pdf_resp.headers
     assert len(pdf_resp.content) > 20
     assert pdf_resp.content[:4] == b"%PDF"
 
@@ -59,6 +63,8 @@ def test_entity_pdf_docx_exports_and_audit_log(client, db_session):
     )
     assert audit is not None
     assert audit.metadata_json.get("format") in {"pdf", "docx"}
+    assert audit.after_json.get("checksum_sha256")
+    assert int(audit.after_json.get("byte_size", 0)) > 0
 
 
 def test_branding_applied_and_default_fallback(client, db_session):
@@ -135,6 +141,8 @@ def test_export_settings_endpoint_admin_only_and_table_exists(client, db_session
     get_default = client.get("/api/v1/organizations/export-settings", headers=headers)
     assert get_default.status_code == 200
     assert get_default.json()["primary_color_hex"] == "#1F4B99"
+    assert get_default.json()["is_default"] is True
+    assert "default_branding_in_use" in get_default.json()["context_flags"]
 
     put_resp = client.put(
         "/api/v1/organizations/export-settings",
@@ -149,3 +157,49 @@ def test_export_settings_endpoint_admin_only_and_table_exists(client, db_session
     body = put_resp.json()
     assert body["company_display_name"] == "New Name"
     assert body["primary_color_hex"] == "#112233"
+    assert body["is_default"] is False
+
+    unchanged = client.put(
+        "/api/v1/organizations/export-settings",
+        headers=headers,
+        json={
+            "company_display_name": "New Name",
+            "footer_text": "Footer",
+            "primary_color_hex": "#112233",
+        },
+    )
+    assert unchanged.status_code == 200
+
+    owner_org_id = UUID(owner["organization_id"])
+    settings_audits = (
+        db_session.execute(
+            select(AuditLog).where(
+                AuditLog.organization_id == owner_org_id,
+                AuditLog.action == "organization.export_settings_updated",
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(settings_audits) == 1
+
+
+def test_export_settings_context_flags_mark_stale_branding(client, db_session):
+    owner = bootstrap_org_user(client, email_prefix="export-settings-stale")
+    org_id = UUID(owner["organization_id"])
+
+    setting = OrganizationExportSetting(
+        organization_id=org_id,
+        company_display_name="Stale Brand",
+        footer_text="Stale Footer",
+        primary_color_hex="#123456",
+        updated_at=datetime.now(UTC) - timedelta(days=220),
+    )
+    db_session.add(setting)
+    db_session.commit()
+
+    response = client.get("/api/v1/organizations/export-settings", headers=owner["org_headers"])
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["is_stale"] is True
+    assert "branding_configuration_stale" in payload["context_flags"]

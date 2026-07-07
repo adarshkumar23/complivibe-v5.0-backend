@@ -32,5 +32,8 @@ class ExportSettingsRead(BaseModel):
     company_display_name: str | None = None
     footer_text: str | None = None
     primary_color_hex: str | None = None
+    is_default: bool = False
+    is_stale: bool = False
+    context_flags: list[str] = Field(default_factory=list)
     created_at: datetime | None = None
     updated_at: datetime | None = None

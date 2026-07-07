@@ -59,6 +59,7 @@ class ExportDocumentContent:
     report_type: str | None
     branding: ExportBranding
     sections: list[ExportSection]
+    context_flags: list[str] = field(default_factory=list)
 
 
 class ExportContentBuilder:
@@ -127,6 +128,7 @@ class ExportContentBuilder:
 
     def build_policy(self, org_id: uuid.UUID, policy_id: uuid.UUID) -> ExportDocumentContent:
         policy = CompliancePolicyService(self.db).require_policy_in_org(org_id, policy_id)
+        context_flags: list[str] = []
         sections = [
             ExportSection(
                 title="Policy",
@@ -149,19 +151,23 @@ class ExportContentBuilder:
         insights: list[str] = []
         today = datetime.now(UTC).date()
         if policy.archived_at is not None:
+            context_flags.append("policy_archived")
             insights.append("This policy is archived - do not present as current guidance.")
         if policy.review_due_date is not None and policy.review_due_date < today and policy.archived_at is None:
+            context_flags.append("policy_review_overdue")
             days_overdue = (today - policy.review_due_date).days
             insights.append(
                 f"Review is overdue by {days_overdue} day(s) (due {policy.review_due_date}) - "
                 "content may no longer reflect current practice."
             )
         if policy.status == "draft" and policy.effective_date is not None and policy.effective_date <= today:
+            context_flags.append("policy_effective_but_draft")
             insights.append(
                 f"Effective date ({policy.effective_date}) has passed but the policy is still in draft status."
             )
         owner_flag = self._owner_insight(policy.owner_user_id)
         if owner_flag:
+            context_flags.append("policy_owner_gap")
             insights.append(owner_flag)
         if insights:
             sections.append(ExportSection(title="Insights", items=insights))
@@ -176,12 +182,14 @@ class ExportContentBuilder:
             report_type=None,
             branding=self._branding(org_id),
             sections=sections,
+            context_flags=context_flags,
         )
 
     def build_control(self, org_id: uuid.UUID, control_id: uuid.UUID) -> ExportDocumentContent:
         control = ControlRepository(self.db).get_by_id(control_id)
         if control is None or control.organization_id != org_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Control not found")
+        context_flags: list[str] = []
         sections = [
             ExportSection(
                 title="Control",
@@ -203,16 +211,19 @@ class ExportContentBuilder:
 
         insights: list[str] = []
         if control.criticality in {"high", "critical"} and control.status not in {"implemented", "effective"}:
+            context_flags.append("critical_control_not_effective")
             insights.append(
                 f"Criticality is {control.criticality} but status is '{control.status}' - "
                 "this control is not yet operating effectively."
             )
         if control.criticality in {"high", "critical"} and not (control.testing_procedure or "").strip():
+            context_flags.append("critical_control_missing_test_procedure")
             insights.append(
                 f"Criticality is {control.criticality} but no testing procedure is documented."
             )
         owner_flag = self._owner_insight(control.owner_user_id)
         if owner_flag:
+            context_flags.append("control_owner_gap")
             insights.append(owner_flag)
         if insights:
             sections.append(ExportSection(title="Insights", items=insights))
@@ -227,12 +238,14 @@ class ExportContentBuilder:
             report_type=None,
             branding=self._branding(org_id),
             sections=sections,
+            context_flags=context_flags,
         )
 
     def build_risk(self, org_id: uuid.UUID, risk_id: uuid.UUID) -> ExportDocumentContent:
         risk = RiskRepository(self.db).get_by_id(risk_id)
         if risk is None or risk.organization_id != org_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Risk not found")
+        context_flags: list[str] = []
         sections = [
             ExportSection(
                 title="Risk",
@@ -258,13 +271,16 @@ class ExportContentBuilder:
         if risk.review_due_at is not None:
             review_due = risk.review_due_at if risk.review_due_at.tzinfo else risk.review_due_at.replace(tzinfo=UTC)
             if review_due < now and risk.status not in {"closed", "accepted"}:
+                context_flags.append("risk_review_overdue")
                 insights.append(
                     f"Risk review is overdue (was due {review_due.isoformat()}) - "
                     "scoring may be stale."
                 )
         if risk.residual_score is None:
+            context_flags.append("risk_residual_not_assessed")
             insights.append("Residual risk has not been assessed - only inherent risk is quantified here.")
         elif risk.residual_score >= risk.inherent_score:
+            context_flags.append("risk_treatment_not_reducing_score")
             insights.append(
                 "Residual score is not lower than inherent score - documented treatment has not "
                 "measurably reduced this risk."
@@ -274,12 +290,14 @@ class ExportContentBuilder:
             and risk.severity in {"high", "critical"}
             and not risk.residual_risk_acceptable
         ):
+            context_flags.append("risk_acceptance_signoff_missing")
             insights.append(
                 f"Severity is {risk.severity} and treatment is 'accept' but there is no recorded "
                 "acceptance sign-off (residual_risk_acceptable is not set)."
             )
         owner_flag = self._owner_insight(risk.owner_user_id)
         if owner_flag:
+            context_flags.append("risk_owner_gap")
             insights.append(owner_flag)
         if insights:
             sections.append(ExportSection(title="Insights", items=insights))
@@ -294,10 +312,12 @@ class ExportContentBuilder:
             report_type=None,
             branding=self._branding(org_id),
             sections=sections,
+            context_flags=context_flags,
         )
 
     def build_vendor(self, org_id: uuid.UUID, vendor_id: uuid.UUID) -> ExportDocumentContent:
         vendor = VendorService(self.db).require_vendor_in_org(org_id, vendor_id)
+        context_flags: list[str] = []
         sections = [
             ExportSection(
                 title="Vendor",
@@ -319,19 +339,23 @@ class ExportContentBuilder:
 
         insights: list[str] = []
         if vendor.risk_tier == "not_assessed" and (vendor.data_access or vendor.processes_personal_data):
+            context_flags.append("vendor_unassessed_data_processing_risk")
             insights.append(
                 "Vendor has data access or processes personal data but has not been risk-assessed."
             )
         if vendor.nth_party_risk_flag:
+            context_flags.append("vendor_nth_party_risk_flag")
             severity = vendor.nth_party_risk_severity or "unspecified"
             insights.append(f"Nth-party risk signal flagged (severity: {severity}) - review sub-processor chain.")
         if vendor.sub_processor and vendor.risk_tier in {"not_assessed", "low"}:
+            context_flags.append("vendor_subprocessor_risk_mismatch")
             insights.append(
                 "Vendor relies on sub-processors but is rated low/not-assessed risk - "
                 "verify sub-processor due diligence coverage."
             )
         owner_flag = self._owner_insight(vendor.owner_user_id)
         if owner_flag:
+            context_flags.append("vendor_owner_gap")
             insights.append(owner_flag)
         if insights:
             sections.append(ExportSection(title="Insights", items=insights))
@@ -346,16 +370,28 @@ class ExportContentBuilder:
             report_type=None,
             branding=self._branding(org_id),
             sections=sections,
+            context_flags=context_flags,
         )
 
     def build_posture_report(self, org_id: uuid.UUID) -> ExportDocumentContent:
         payload = ComplianceDashboardService(self.db).posture_summary(org_id)
+        context_flags: list[str] = []
+        if int((payload.get("active_frameworks") or {}).get("count", 0)) == 0:
+            context_flags.append("no_active_frameworks")
+        if int((payload.get("tasks") or {}).get("overdue", 0)) > 0:
+            context_flags.append("overdue_tasks_present")
+        if int((payload.get("policies") or {}).get("expired", 0)) > 0:
+            context_flags.append("expired_policies_present")
+        if int((payload.get("deadlines") or {}).get("overdue", 0)) > 0:
+            context_flags.append("overdue_deadlines_present")
         sections = [
             ExportSection(
                 title="Compliance Posture Summary",
                 rows=self._to_rows(payload),
             )
         ]
+        if context_flags:
+            sections.append(ExportSection(title="Context Signals", items=[flag.replace("_", " ") for flag in context_flags]))
         return ExportDocumentContent(
             organization_id=org_id,
             title="Compliance Posture Report",
@@ -366,17 +402,30 @@ class ExportContentBuilder:
             report_type="posture",
             branding=self._branding(org_id),
             sections=sections,
+            context_flags=context_flags,
         )
 
     def build_framework_coverage_report(self, org_id: uuid.UUID) -> ExportDocumentContent:
         payload = ComplianceDashboardService(self.db).framework_readiness(org_id)
+        context_flags: list[str] = []
         rows: list[tuple[str, str]] = []
         for item in payload:
             name = item.get("name", "Framework")
             coverage = item.get("control_coverage_pct")
             evidence = item.get("evidence_verified_pct")
             gaps = item.get("open_gaps_count")
+            last_snapshot = item.get("last_score_snapshot") if isinstance(item, dict) else None
+            if isinstance(last_snapshot, dict):
+                if last_snapshot.get("stale"):
+                    context_flags.append("score_snapshot_stale")
+                if last_snapshot.get("underlying_data_changed_since"):
+                    context_flags.append("score_snapshot_outdated_by_activity")
+            if isinstance(gaps, int) and gaps > 0:
+                context_flags.append("framework_open_gaps_present")
             rows.append((str(name), f"Coverage {coverage}% | Evidence {evidence}% | Open gaps {gaps}"))
+        if not payload:
+            context_flags.append("no_framework_readiness_data")
+        context_flags = sorted(set(context_flags))
         sections = [
             ExportSection(
                 title="Framework Coverage",
@@ -384,6 +433,8 @@ class ExportContentBuilder:
                 items=[f"Total frameworks: {len(payload)}"],
             )
         ]
+        if context_flags:
+            sections.append(ExportSection(title="Context Signals", items=[flag.replace("_", " ") for flag in context_flags]))
         return ExportDocumentContent(
             organization_id=org_id,
             title="Framework Coverage Report",
@@ -394,6 +445,7 @@ class ExportContentBuilder:
             report_type="framework_coverage",
             branding=self._branding(org_id),
             sections=sections,
+            context_flags=context_flags,
         )
 
     def build_board_scorecard(self, snapshot: BoardScorecardSnapshot) -> ExportDocumentContent:
