@@ -326,3 +326,102 @@ def test_obligation_state_rejects_cross_tenant_owner_user(client, db_session):
         .count()
     )
     assert poisoned == 0
+
+
+def test_obligation_state_override_requires_justification_and_audits_context(client, db_session):
+    owner = _register(client, "p20-owner-override@example.com", "Pass1234!@", "P20 Override Org")
+    org_id = client.get("/api/v1/organizations/me", headers=_headers(owner)).json()[0]["id"]
+
+    frameworks = client.get("/api/v1/frameworks", headers=_headers(owner)).json()
+    framework_with_obligations = None
+    obligation_id = None
+    for fw in frameworks:
+        resp = client.get(f"/api/v1/frameworks/{fw['id']}/obligations", headers=_headers(owner))
+        if resp.status_code == 200 and resp.json():
+            framework_with_obligations = fw["id"]
+            obligation_id = resp.json()[0]["id"]
+            break
+
+    assert framework_with_obligations is not None
+    assert obligation_id is not None
+
+    activate = client.post(
+        f"/api/v1/frameworks/{framework_with_obligations}/activate",
+        headers=_headers(owner, org_id),
+        json={},
+    )
+    assert activate.status_code == 200
+
+    question = client.post(
+        f"/api/v1/frameworks/{framework_with_obligations}/applicability-questions",
+        headers=_headers(owner, org_id),
+        json={
+            "obligation_id": obligation_id,
+            "question_key": "p20-override-q",
+            "question_text": "Override scenario question",
+            "answer_type": "boolean",
+            "required": True,
+        },
+    )
+    assert question.status_code == 201
+    question_id = question.json()["id"]
+
+    rule = client.post(
+        f"/api/v1/obligations/{obligation_id}/applicability-rules",
+        headers=_headers(owner, org_id),
+        json={
+            "question_id": question_id,
+            "rule_key": "p20-override-rule",
+            "operator": "equals",
+            "expected_value_json": True,
+            "result_applicability": "applicable",
+            "rationale": "deterministic",
+        },
+    )
+    assert rule.status_code == 201
+
+    answers = client.post(
+        f"/api/v1/frameworks/{framework_with_obligations}/applicability-answers",
+        headers=_headers(owner, org_id),
+        json={"answers": [{"question_id": question_id, "answer_value_json": True}]},
+    )
+    assert answers.status_code == 201
+
+    evaluate = client.post(
+        f"/api/v1/frameworks/{framework_with_obligations}/applicability/evaluate",
+        headers=_headers(owner, org_id),
+        json={"dry_run": False, "update_obligation_states": False},
+    )
+    assert evaluate.status_code == 200
+
+    blocked = client.patch(
+        f"/api/v1/obligations/{obligation_id}/state",
+        headers=_headers(owner, org_id),
+        json={"applicability_status": "needs_review", "implementation_status": "blocked"},
+    )
+    assert blocked.status_code == 400
+    assert "overriding latest suggested applicability" in blocked.json()["detail"]
+
+    allowed = client.patch(
+        f"/api/v1/obligations/{obligation_id}/state",
+        headers=_headers(owner, org_id),
+        json={
+            "applicability_status": "not_applicable",
+            "implementation_status": "blocked",
+            "justification": "Legal review exception",
+        },
+    )
+    assert allowed.status_code == 200
+
+    audit = (
+        db_session.query(AuditLog)
+        .filter(
+            AuditLog.organization_id == uuid.UUID(org_id),
+            AuditLog.action == "obligation.state_updated",
+        )
+        .order_by(AuditLog.created_at.desc())
+        .first()
+    )
+    assert audit is not None
+    assert audit.after_json["overrides_latest_suggestion"] is True
+    assert audit.after_json["latest_suggested_applicability"] == "applicable"

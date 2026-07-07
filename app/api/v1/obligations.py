@@ -851,6 +851,27 @@ def update_obligation_state(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Justification is required when applicability_status is not_applicable",
         )
+    latest_suggestion = ApplicabilityRepository(db).latest_result_for_obligation(
+        organization_id=organization.id,
+        framework_id=obligation.framework_id,
+        obligation_id=obligation.id,
+    )
+    latest_suggested_applicability = (
+        latest_suggestion.suggested_applicability
+        if latest_suggestion and latest_suggestion.suggested_applicability in {"applicable", "not_applicable", "needs_review"}
+        else None
+    )
+    overriding_suggestion = (
+        latest_suggested_applicability is not None and payload.applicability_status != latest_suggested_applicability
+    )
+    if overriding_suggestion and not (payload.justification and payload.justification.strip()):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Justification is required when overriding latest suggested applicability "
+                f"({latest_suggested_applicability})"
+            ),
+        )
     _ensure_active_org_user(db, organization.id, payload.owner_user_id, "owner_user_id")
 
     state = db.execute(
@@ -895,6 +916,11 @@ def update_obligation_state(
             "implementation_status": state.implementation_status,
             "owner_user_id": str(state.owner_user_id) if state.owner_user_id else None,
             "justification": state.justification,
+            "overrides_latest_suggestion": overriding_suggestion,
+            "latest_suggested_applicability": latest_suggested_applicability,
+            "latest_suggestion_stale_inputs": int((latest_suggestion.provenance_json or {}).get("stale_input_count", 0))
+            if latest_suggestion
+            else 0,
         },
         metadata_json={"source": "api"},
         ip_address=request.client.host if request.client else None,
