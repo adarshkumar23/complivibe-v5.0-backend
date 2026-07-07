@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import uuid
-
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
-from app.models.auditor_engagement import AuditorEngagement
 from app.models.membership import Membership
 from app.models.organization import Organization
 from app.models.user import User
@@ -24,24 +20,29 @@ router = APIRouter(prefix="/auditor-marketplace", tags=["auditor-marketplace"])
 
 
 def _auditor_read(row) -> AuditorRead:
+    auditor = row["auditor"] if isinstance(row, dict) else row
+    match_score = float(row.get("match_score", 0.0)) if isinstance(row, dict) else 0.0
+    context_flags = list(row.get("context_flags") or []) if isinstance(row, dict) else []
     return AuditorRead(
-        id=row.id,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-        name=row.name,
-        email=row.email,
-        firm=row.firm,
-        certifications_json=list(row.certifications_json or []),
-        frameworks_json=list(row.frameworks_json or []),
-        rate_usd_per_day=float(row.rate_usd_per_day),
-        availability=row.availability,
-        verified=bool(row.verified),
-        bio=row.bio,
-        status=row.status,
+        id=auditor.id,
+        created_at=auditor.created_at,
+        updated_at=auditor.updated_at,
+        name=auditor.name,
+        email=auditor.email,
+        firm=auditor.firm,
+        certifications_json=list(auditor.certifications_json or []),
+        frameworks_json=list(auditor.frameworks_json or []),
+        rate_usd_per_day=float(auditor.rate_usd_per_day),
+        availability=auditor.availability,
+        verified=bool(auditor.verified),
+        bio=auditor.bio,
+        status=auditor.status,
+        match_score=match_score,
+        context_flags=context_flags,
     )
 
 
-def _engagement_read(row: AuditorEngagement) -> AuditorEngagementRead:
+def _engagement_read(row, *, schedule_start_date=None, schedule_end_date=None, days_until_start=None, context_flags=None) -> AuditorEngagementRead:
     return AuditorEngagementRead(
         id=row.id,
         created_at=row.created_at,
@@ -55,6 +56,10 @@ def _engagement_read(row: AuditorEngagement) -> AuditorEngagementRead:
         revenue_share_fee_pct=float(row.revenue_share_fee_pct),
         notes=row.notes,
         created_by=row.created_by,
+        schedule_start_date=schedule_start_date,
+        schedule_end_date=schedule_end_date,
+        days_until_start=days_until_start,
+        context_flags=list(context_flags or []),
     )
 
 
@@ -91,7 +96,7 @@ def create_auditor_engagement(
     )
     db.commit()
     return AuditorEngagementCreateResponse(
-        engagement=_engagement_read(engagement),
+        engagement=_engagement_read(engagement, context_flags=[]),
         portal_invitation_id=invitation_id,
         portal_token=portal_token,
     )
@@ -103,9 +108,14 @@ def list_auditor_engagements(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("auditor_marketplace:read")),
 ) -> list[AuditorEngagementRead]:
-    rows = db.execute(
-        select(AuditorEngagement)
-        .where(AuditorEngagement.organization_id == organization.id)
-        .order_by(AuditorEngagement.started_at.desc())
-    ).scalars().all()
-    return [_engagement_read(row) for row in rows]
+    rows = AuditorMarketplaceService(db).list_engagements(organization_id=organization.id)
+    return [
+        _engagement_read(
+            row["engagement"],
+            schedule_start_date=row.get("schedule_start_date"),
+            schedule_end_date=row.get("schedule_end_date"),
+            days_until_start=row.get("days_until_start"),
+            context_flags=row.get("context_flags"),
+        )
+        for row in rows
+    ]

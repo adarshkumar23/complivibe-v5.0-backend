@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -19,6 +19,8 @@ class AuditorRead(UUIDTimestampSchema):
     verified: bool
     bio: str | None = None
     status: str
+    match_score: float = 0
+    context_flags: list[str] = Field(default_factory=list)
 
 
 class AuditorEngagementCreate(BaseModel):
@@ -42,6 +44,10 @@ class AuditorEngagementRead(UUIDTimestampSchema):
     revenue_share_fee_pct: float
     notes: str | None = None
     created_by: UUID
+    schedule_start_date: date | None = None
+    schedule_end_date: date | None = None
+    days_until_start: int | None = None
+    context_flags: list[str] = Field(default_factory=list)
 
 
 class AuditorEngagementCreateResponse(BaseModel):

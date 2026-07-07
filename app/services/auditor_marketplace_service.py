@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.compliance.services.audit_engagement_service import AuditEngagementService
 from app.compliance.services.auditor_portal_service import AuditorPortalService
+from app.models.audit_engagement import AuditEngagement
 from app.models.auditor import Auditor
 from app.models.auditor_engagement import AuditorEngagement
 from app.models.framework import Framework
@@ -55,6 +56,14 @@ class AuditorMarketplaceService:
     def utcnow() -> datetime:
         return datetime.now(UTC)
 
+    @staticmethod
+    def _as_aware_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
     def ensure_seed_auditors(self) -> None:
         existing = {
             row.email: row
@@ -65,9 +74,16 @@ class AuditorMarketplaceService:
             if row is None:
                 self.db.add(Auditor(**payload, status="active"))
             else:
-                for field, value in payload.items():
-                    setattr(row, field, value)
-                row.status = "active"
+                # Non-destructive reseed: preserve operational state (availability, status,
+                # verified, pricing adjustments) once an auditor record exists.
+                row.name = row.name or payload["name"]
+                row.firm = row.firm or payload["firm"]
+                if not list(row.certifications_json or []):
+                    row.certifications_json = payload["certifications_json"]
+                if not list(row.frameworks_json or []):
+                    row.frameworks_json = payload["frameworks_json"]
+                if row.bio is None:
+                    row.bio = payload["bio"]
         self.db.flush()
 
     def list_auditors(
@@ -77,13 +93,14 @@ class AuditorMarketplaceService:
         certification: str | None = None,
         verified: bool | None = None,
         max_rate_usd_per_day: float | None = None,
-    ) -> list[Auditor]:
+    ) -> list[dict]:
         self.ensure_seed_auditors()
         rows = self.db.execute(
             select(Auditor).where(Auditor.status == "active").order_by(Auditor.verified.desc(), Auditor.rate_usd_per_day.asc())
         ).scalars().all()
 
-        filtered: list[Auditor] = []
+        filtered: list[dict] = []
+        now = self.utcnow()
         for row in rows:
             if verified is not None and row.verified is not verified:
                 continue
@@ -95,13 +112,44 @@ class AuditorMarketplaceService:
                 continue
             if certification is not None and certification.lower() not in certs:
                 continue
-            filtered.append(row)
+
+            score = 60.0
+            if framework is not None and framework.lower() in frameworks:
+                score += 25.0
+            if certification is not None and certification.lower() in certs:
+                score += 10.0
+            if bool(row.verified):
+                score += 5.0
+            if row.availability == "limited":
+                score -= 5.0
+
+            updated_at = self._as_aware_utc(row.updated_at) or now
+            profile_staleness_days = max(0, (now - updated_at).days)
+            context_flags: list[str] = []
+            if row.availability == "limited":
+                context_flags.append("limited_availability")
+            if not bool(row.verified):
+                context_flags.append("not_verified")
+            if profile_staleness_days > 120:
+                context_flags.append("profile_stale")
+            if max_rate_usd_per_day is not None and float(row.rate_usd_per_day) >= max_rate_usd_per_day * 0.9:
+                context_flags.append("rate_near_budget")
+
+            filtered.append(
+                {
+                    "auditor": row,
+                    "match_score": round(max(0.0, min(100.0, score)), 2),
+                    "context_flags": context_flags,
+                }
+            )
         return filtered
 
     def _require_framework(self, framework_id: uuid.UUID) -> Framework:
         row = self.db.execute(select(Framework).where(Framework.id == framework_id)).scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Framework not found")
+        if row.status != "active":
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Framework must be active")
         return row
 
     def _require_auditor(self, auditor_id: uuid.UUID) -> Auditor:
@@ -111,6 +159,66 @@ class AuditorMarketplaceService:
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Auditor not found")
         return row
+
+    def _ensure_no_overlapping_active_engagement(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        auditor_id: uuid.UUID,
+        framework_code: str,
+        start_date,
+        end_date,
+    ) -> None:
+        rows = self.db.execute(
+            select(AuditorEngagement, AuditEngagement)
+            .join(AuditEngagement, AuditEngagement.id == AuditorEngagement.audit_engagement_id)
+            .where(
+                AuditorEngagement.organization_id == organization_id,
+                AuditorEngagement.auditor_id == auditor_id,
+                AuditorEngagement.framework == framework_code,
+                AuditorEngagement.status == "active",
+                AuditEngagement.deleted_at.is_(None),
+                AuditEngagement.status.in_(["planning", "fieldwork", "review", "report_issuance"]),
+            )
+        ).all()
+        for _, schedule in rows:
+            overlaps = schedule.start_date <= end_date and schedule.end_date >= start_date
+            if overlaps:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Overlapping active engagement already exists for this auditor and framework",
+                )
+
+    def list_engagements(self, *, organization_id: uuid.UUID) -> list[dict]:
+        rows = self.db.execute(
+            select(AuditorEngagement, AuditEngagement)
+            .join(AuditEngagement, AuditEngagement.id == AuditorEngagement.audit_engagement_id)
+            .where(AuditorEngagement.organization_id == organization_id)
+            .order_by(AuditorEngagement.started_at.desc())
+        ).all()
+        today = self.utcnow().date()
+        output: list[dict] = []
+        for engagement, schedule in rows:
+            days_until_start = (schedule.start_date - today).days
+            context_flags: list[str] = []
+            if days_until_start < 0:
+                context_flags.append("schedule_started")
+            elif days_until_start <= 7:
+                context_flags.append("schedule_starts_within_7d")
+            if schedule.status in {"cancelled", "closed"}:
+                context_flags.append(f"audit_engagement_{schedule.status}")
+            if engagement.status != "active":
+                context_flags.append("marketplace_engagement_not_active")
+            output.append(
+                {
+                    "engagement": engagement,
+                    "schedule_start_date": schedule.start_date,
+                    "schedule_end_date": schedule.end_date,
+                    "days_until_start": days_until_start,
+                    "context_flags": context_flags,
+                }
+            )
+        return output
 
     def _require_active_membership(self, organization_id: uuid.UUID, user_id: uuid.UUID) -> None:
         row = self.db.execute(
@@ -137,6 +245,25 @@ class AuditorMarketplaceService:
 
         if payload.end_date.date() < payload.start_date.date():
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="end_date must be on or after start_date")
+        if payload.start_date.date() < self.utcnow().date():
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="start_date cannot be in the past")
+        if framework.code.lower() not in {item.lower() for item in list(auditor.frameworks_json or [])}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Selected auditor does not advertise this framework specialization",
+            )
+        if auditor.availability not in {"available", "limited"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Selected auditor is not currently available for marketplace engagements",
+            )
+        self._ensure_no_overlapping_active_engagement(
+            organization_id=organization_id,
+            auditor_id=auditor.id,
+            framework_code=framework.code,
+            start_date=payload.start_date.date(),
+            end_date=payload.end_date.date(),
+        )
 
         audit_engagement = self.audit_engagement_service.create_engagement(
             organization_id,
