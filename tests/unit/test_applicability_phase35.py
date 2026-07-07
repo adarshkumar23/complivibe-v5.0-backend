@@ -1,10 +1,12 @@
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from app.core.security import get_password_hash
 from app.models.applicability_evaluation_result import ApplicabilityEvaluationResult
 from app.models.applicability_evaluation_run import ApplicabilityEvaluationRun
 from app.models.audit_log import AuditLog
 from app.models.membership import Membership
+from app.models.obligation_applicability_rule import ObligationApplicabilityRule
 from app.models.organization_applicability_answer import OrganizationApplicabilityAnswer
 from app.models.organization_obligation_state import OrganizationObligationState
 from app.models.role import Role
@@ -397,3 +399,44 @@ def test_missing_answers_results_in_unknown_and_run_is_persisted(client):
     obligation_result = next(item for item in results if item["obligation_id"] == obligation["id"])
     assert obligation_result["suggested_applicability"] == "unknown"
     assert obligation_result["missing_answers_json"]
+
+
+def test_evaluation_flags_stale_inputs_after_rule_change(client, db_session):
+    owner = _register(client, "p35-owner8@example.com", "Pass1234!@", "P35 Org8")
+    org = _org_id(client, owner)
+    framework, obligation = _framework_with_obligation(client, owner)
+    _activate_framework(client, owner, org, framework["id"])
+    question = _create_question(client, owner, org, framework["id"], obligation["id"], "p35-q-stale")
+    rule = _create_rule(client, owner, org, obligation["id"], question["id"], "stale-rule", "applicable")
+
+    submit = client.post(
+        f"/api/v1/frameworks/{framework['id']}/applicability-answers",
+        headers=_headers(owner, org),
+        json={"answers": [{"question_id": question["id"], "answer_value_json": True}]},
+    )
+    assert submit.status_code == 201
+
+    fresh_eval = client.post(
+        f"/api/v1/frameworks/{framework['id']}/applicability/evaluate",
+        headers=_headers(owner, org),
+        json={"dry_run": False, "update_obligation_states": False},
+    )
+    assert fresh_eval.status_code == 200
+    fresh_result = next(item for item in fresh_eval.json()["results"] if item["obligation_id"] == obligation["id"])
+    assert fresh_result["suggested_applicability"] == "applicable"
+
+    row = db_session.query(ObligationApplicabilityRule).filter(ObligationApplicabilityRule.id == uuid.UUID(rule["id"])).one()
+    row.updated_at = datetime.now(UTC) + timedelta(minutes=5)
+    db_session.add(row)
+    db_session.commit()
+
+    stale_eval = client.post(
+        f"/api/v1/frameworks/{framework['id']}/applicability/evaluate",
+        headers=_headers(owner, org),
+        json={"dry_run": False, "update_obligation_states": False},
+    )
+    assert stale_eval.status_code == 200
+    stale_result = next(item for item in stale_eval.json()["results"] if item["obligation_id"] == obligation["id"])
+    assert stale_result["suggested_applicability"] == "needs_review"
+    assert "stale" in stale_result["rationale"].lower()
+    assert stale_result["provenance_json"]["stale_input_count"] >= 1

@@ -239,6 +239,7 @@ class ApplicabilityService:
         rules_by_obligation: dict[uuid.UUID, list[ObligationApplicabilityRule]] = {}
         for rule in rules:
             rules_by_obligation.setdefault(rule.obligation_id, []).append(rule)
+        question_cache: dict[uuid.UUID, ObligationApplicabilityQuestion] = {}
 
         run_row: ApplicabilityEvaluationRun | None = None
         now = self.now()
@@ -269,6 +270,7 @@ class ApplicabilityService:
             obligation_rules = rules_by_obligation.get(obligation.id, [])
             matched_rules: list[dict] = []
             missing_answers: list[dict] = []
+            stale_inputs: list[dict] = []
             outcomes: list[str] = []
             rationale = ""
 
@@ -280,7 +282,10 @@ class ApplicabilityService:
                     answer_value = None
                     question_row = None
                     if rule.question_id is not None:
-                        question_row = self._question_or_400(framework_id=framework_id, question_id=rule.question_id)
+                        question_row = question_cache.get(rule.question_id)
+                        if question_row is None:
+                            question_row = self._question_or_400(framework_id=framework_id, question_id=rule.question_id)
+                            question_cache[rule.question_id] = question_row
                         answer = answer_map.get(rule.question_id)
                         if answer is None:
                             missing_answers.append({
@@ -290,6 +295,20 @@ class ApplicabilityService:
                             })
                             continue
                         answer_value = answer.answer_value_json
+                        answer_timestamp = self._as_utc(answer.answered_at) or now
+                        question_timestamp = self._as_utc(question_row.updated_at) or self._as_utc(question_row.created_at) or now
+                        rule_timestamp = self._as_utc(rule.updated_at) or self._as_utc(rule.created_at) or now
+                        stale_boundary = max(question_timestamp, rule_timestamp)
+                        if answer_timestamp < stale_boundary:
+                            stale_inputs.append(
+                                {
+                                    "rule_id": str(rule.id),
+                                    "question_id": str(rule.question_id),
+                                    "question_key": question_row.question_key,
+                                    "answer_timestamp": answer_timestamp.isoformat(),
+                                    "stale_boundary": stale_boundary.isoformat(),
+                                }
+                            )
 
                     matched = self.evaluate_operator(rule.operator, answer_value, rule.expected_value_json)
                     if matched:
@@ -300,6 +319,9 @@ class ApplicabilityService:
                                 "rule_key": rule.rule_key,
                                 "result_applicability": rule.result_applicability,
                                 "question_id": str(rule.question_id) if rule.question_id else None,
+                                "input_stale": bool(stale_inputs and rule.question_id is not None and any(
+                                    item["rule_id"] == str(rule.id) for item in stale_inputs
+                                )),
                             }
                         )
 
@@ -320,6 +342,9 @@ class ApplicabilityService:
                     else:
                         suggested = outcomes[0]
                         rationale = "All matched rules agree on suggested applicability."
+                    if stale_inputs and suggested in {"applicable", "not_applicable"}:
+                        suggested = "needs_review"
+                        rationale = "Matched inputs are stale due to post-answer rule/question changes; review required."
 
             prev_state = self.db.execute(
                 select(OrganizationObligationState).where(
@@ -365,6 +390,8 @@ class ApplicabilityService:
                     "rule_count": len(obligation_rules),
                     "matched_rule_count": len(matched_rules),
                     "missing_answer_count": len(missing_answers),
+                    "stale_input_count": len(stale_inputs),
+                    "stale_inputs": stale_inputs,
                     "answer_snapshot_at": now.isoformat(),
                 },
                 "created_at": now,
