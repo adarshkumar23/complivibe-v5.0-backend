@@ -328,6 +328,8 @@ def test_d89_breach_notification_extension(client, db_session):
     assert created.status_code == 201
     breach_id = created.json()["id"]
     assert created.json()["special_category_data_involved"] is False
+    assert "context_flags" in created.json()
+    assert "regulator_notification_pending" in created.json()["context_flags"]
 
     updated = client.patch(
         f"{BREACH_BASE}/{breach_id}/privacy-fields",
@@ -345,6 +347,7 @@ def test_d89_breach_notification_extension(client, db_session):
     assert body["special_category_data_involved"] is True
     assert body["article34_required"] is True
     assert body["dpa_reference_number"] == "DPA-2026-009"
+    assert "article33_notice_text_missing" in body["context_flags"]
 
     # AI disabled fallback deterministic template.
     draft = client.post(
@@ -373,6 +376,7 @@ def test_d89_breach_notification_extension(client, db_session):
     assert notified.status_code == 200
     assert notified.json()["status"] == "subjects_notified"
     assert notified.json()["subjects_notified_at"] is not None
+    assert notified.json()["regulatory_notified_at"] is not None
     assert notified.json()["data_subjects_affected_count"] == 1550
 
     # No auto-send side effects from draft generation.
@@ -415,6 +419,7 @@ def test_d89_breach_close_requires_article34_subject_notification_completion(cli
             "regulatory_notification_required": True,
             "regulatory_framework": "gdpr",
             "regulatory_notification_hours": 72,
+            "supervisory_authority": "ICO",
             "subject_notification_required": True,
         },
     )
@@ -436,3 +441,29 @@ def test_d89_breach_close_requires_article34_subject_notification_completion(cli
     closed = client.post(f"{BREACH_BASE}/{breach_id}/close", headers=org["org_headers"])
     assert closed.status_code == 200
     assert closed.json()["status"] == "closed"
+
+
+def test_d89_breach_flags_missing_supervisory_authority_when_regulator_notification_needed(client):
+    org = bootstrap_org_user(client, email_prefix="d89-authority")
+    issue = _create_issue(client, org["org_headers"], org["user_id"], issue_type="security_incident")
+
+    created = client.post(
+        f"{ISSUES_BASE}/{issue['id']}/breach-notification",
+        headers=org["org_headers"],
+        json={
+            "breach_type": "personal_data",
+            "personal_data_affected": True,
+            "regulatory_notification_required": True,
+            "regulatory_framework": "gdpr",
+            "regulatory_notification_hours": 72,
+            "subject_notification_required": False,
+        },
+    )
+    assert created.status_code == 201
+    assert "supervisory_authority_missing" in created.json()["context_flags"]
+
+
+def test_d89_breach_list_rejects_invalid_status_filter(client):
+    org = bootstrap_org_user(client, email_prefix="d89-list-status")
+    listed = client.get(f"{BREACH_BASE}?status=not_a_real_status", headers=org["org_headers"])
+    assert listed.status_code == 422

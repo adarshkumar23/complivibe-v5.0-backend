@@ -44,6 +44,10 @@ class BreachNotificationRead(BaseModel):
     created_by: UUID
     created_at: datetime
     updated_at: datetime
+    age_hours: int = 0
+    time_to_deadline_hours: int | None = None
+    overdue_by_hours: int = 0
+    context_flags: list[str] = []
 
 
 class BreachDeadlineSweepResult(BaseModel):

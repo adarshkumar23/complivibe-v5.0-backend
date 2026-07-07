@@ -17,6 +17,7 @@ from app.services.audit_service import AuditService
 
 class BreachNotificationService:
     ALLOWED_ISSUE_TYPES: set[str] = {"security_incident", "data_loss", "unauthorized_access"}
+    ALLOWED_STATUS: set[str] = {"assessing", "notification_due", "regulator_notified", "subjects_notified", "closed"}
     STATUS_TRANSITIONS: dict[str, set[str]] = {
         "assessing": {"notification_due", "closed"},
         "notification_due": {"regulator_notified", "closed"},
@@ -42,6 +43,18 @@ class BreachNotificationService:
     @staticmethod
     def utcnow() -> datetime:
         return datetime.now(UTC)
+
+    @staticmethod
+    def _as_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    @staticmethod
+    def _has_text(value: str | None) -> bool:
+        return bool((value or "").strip())
 
     def _get_issue(self, org_id: uuid.UUID, issue_id: uuid.UUID) -> Issue:
         row = self.db.execute(
@@ -75,6 +88,87 @@ class BreachNotificationService:
             )
         row.status = new_status
 
+    def breach_context(self, row: BreachNotification, *, now: datetime | None = None) -> dict:
+        evaluated_now = now or self.utcnow()
+        created_at = self._as_utc(row.created_at) or evaluated_now
+        age_hours = max(0, int((evaluated_now - created_at).total_seconds() // 3600))
+
+        deadline = self._as_utc(row.regulatory_notification_deadline)
+        time_to_deadline_hours: int | None = None
+        overdue_by_hours = 0
+        if deadline is not None:
+            delta_hours = int((deadline - evaluated_now).total_seconds() // 3600)
+            time_to_deadline_hours = delta_hours
+            if delta_hours < 0:
+                overdue_by_hours = abs(delta_hours)
+
+        context_flags: list[str] = []
+        if row.regulatory_notification_required:
+            if row.regulatory_notified_at is None:
+                context_flags.append("regulator_notification_pending")
+            if not self._has_text(row.supervisory_authority):
+                context_flags.append("supervisory_authority_missing")
+            if time_to_deadline_hours is not None:
+                if time_to_deadline_hours < 0 and row.regulatory_notified_at is None:
+                    context_flags.append("regulatory_deadline_missed")
+                elif time_to_deadline_hours <= 6 and row.regulatory_notified_at is None:
+                    context_flags.append("regulatory_deadline_approaching")
+        if row.article34_required or row.subject_notification_required:
+            if row.subjects_notified_at is None:
+                context_flags.append("subject_notification_pending")
+        if row.special_category_data_involved:
+            context_flags.append("special_category_data_involved")
+        if (
+            row.data_subjects_affected_count is not None
+            and row.estimated_affected_count is not None
+            and row.data_subjects_affected_count < row.estimated_affected_count
+        ):
+            context_flags.append("affected_count_below_initial_estimate")
+        if row.article34_required and not self._has_text(row.subjects_notification_text):
+            context_flags.append("article34_notice_text_missing")
+        if row.regulatory_notification_required and not self._has_text(row.article33_notification_text):
+            context_flags.append("article33_notice_text_missing")
+
+        return {
+            "age_hours": age_hours,
+            "time_to_deadline_hours": time_to_deadline_hours,
+            "overdue_by_hours": overdue_by_hours,
+            "context_flags": context_flags,
+        }
+
+    def breach_response_payload(self, row: BreachNotification) -> dict:
+        context = self.breach_context(row)
+        return {
+            "id": row.id,
+            "organization_id": row.organization_id,
+            "issue_id": row.issue_id,
+            "breach_type": row.breach_type,
+            "personal_data_affected": row.personal_data_affected,
+            "estimated_affected_count": row.estimated_affected_count,
+            "regulatory_notification_required": row.regulatory_notification_required,
+            "regulatory_framework": row.regulatory_framework,
+            "regulatory_notification_hours": row.regulatory_notification_hours,
+            "regulatory_notification_deadline": row.regulatory_notification_deadline,
+            "supervisory_authority": row.supervisory_authority,
+            "regulatory_notified_at": row.regulatory_notified_at,
+            "subject_notification_required": row.subject_notification_required,
+            "subjects_notified_at": row.subjects_notified_at,
+            "data_subjects_affected_count": row.data_subjects_affected_count,
+            "special_category_data_involved": row.special_category_data_involved,
+            "article33_notification_text": row.article33_notification_text,
+            "article34_required": row.article34_required,
+            "subjects_notification_text": row.subjects_notification_text,
+            "dpa_reference_number": row.dpa_reference_number,
+            "status": row.status,
+            "created_by": row.created_by,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "age_hours": context["age_hours"],
+            "time_to_deadline_hours": context["time_to_deadline_hours"],
+            "overdue_by_hours": context["overdue_by_hours"],
+            "context_flags": context["context_flags"],
+        }
+
     def create_breach_notification(self, org_id: uuid.UUID, issue_id: uuid.UUID, data, created_by: uuid.UUID) -> BreachNotification:
         issue = self._get_issue(org_id, issue_id)
         if issue.issue_type not in self.ALLOWED_ISSUE_TYPES:
@@ -92,6 +186,8 @@ class BreachNotificationService:
         if existing is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Breach notification already exists for this issue")
 
+        personal_data_affected = bool(data.personal_data_affected or data.breach_type == "personal_data")
+
         issue_created_at = issue.created_at if issue.created_at.tzinfo is not None else issue.created_at.replace(tzinfo=UTC)
         resolved_hours = resolve_regulatory_sla_hours(data.regulatory_framework, int(data.regulatory_notification_hours))
         deadline = issue_created_at + timedelta(hours=resolved_hours)
@@ -100,7 +196,7 @@ class BreachNotificationService:
             organization_id=org_id,
             issue_id=issue_id,
             breach_type=data.breach_type,
-            personal_data_affected=data.personal_data_affected,
+            personal_data_affected=personal_data_affected,
             estimated_affected_count=data.estimated_affected_count,
             regulatory_notification_required=data.regulatory_notification_required,
             regulatory_framework=data.regulatory_framework,
@@ -142,6 +238,8 @@ class BreachNotificationService:
     def list_breach_notifications(self, org_id: uuid.UUID, *, status_value: str | None = None) -> list[BreachNotification]:
         stmt = select(BreachNotification).where(BreachNotification.organization_id == org_id)
         if status_value is not None:
+            if status_value not in self.ALLOWED_STATUS:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid breach status filter")
             stmt = stmt.where(BreachNotification.status == status_value)
         return self.db.execute(stmt.order_by(BreachNotification.created_at.desc())).scalars().all()
 
@@ -190,6 +288,11 @@ class BreachNotificationService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Cannot close breach until required Article 34 subject notification is completed",
             )
+        if row.regulatory_notification_required and row.regulatory_notified_at is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Cannot close breach until required regulator notification is recorded",
+            )
         self._transition(row, "closed")
         self.db.flush()
 
@@ -218,6 +321,9 @@ class BreachNotificationService:
         ):
             if key in payload:
                 setattr(row, key, payload[key])
+
+        if payload.get("article34_required") is True:
+            row.subject_notification_required = True
 
         self.db.flush()
 
@@ -301,6 +407,11 @@ class BreachNotificationService:
         sent_to: str | None = None,
     ) -> BreachNotification:
         row = self._get_breach(org_id, breach_id)
+        if not row.regulatory_notification_required:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Regulator notification is not required for this breach",
+            )
         if row.status == "assessing":
             self._transition(row, "notification_due")
         if row.status == "notification_due":
@@ -338,6 +449,11 @@ class BreachNotificationService:
         count: int | None = None,
     ) -> BreachNotification:
         row = self._get_breach(org_id, breach_id)
+        if not (row.subject_notification_required or row.article34_required):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Subject notification is not required for this breach",
+            )
         if row.status == "assessing":
             self._transition(row, "notification_due")
         if row.status == "notification_due":
@@ -349,6 +465,8 @@ class BreachNotificationService:
         else:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Breach notification cannot transition to subjects_notified from current status")
 
+        if row.regulatory_notification_required and row.regulatory_notified_at is None:
+            row.regulatory_notified_at = self.utcnow()
         row.subjects_notified_at = self.utcnow()
         if count is not None:
             row.data_subjects_affected_count = int(count)

@@ -115,33 +115,8 @@ def _rca_read(row: RootCauseAnalysis, *, current_issue_severity: str | None = No
     )
 
 
-def _breach_read(row) -> BreachNotificationRead:
-    return BreachNotificationRead(
-        id=row.id,
-        organization_id=row.organization_id,
-        issue_id=row.issue_id,
-        breach_type=row.breach_type,
-        personal_data_affected=row.personal_data_affected,
-        estimated_affected_count=row.estimated_affected_count,
-        regulatory_notification_required=row.regulatory_notification_required,
-        regulatory_framework=row.regulatory_framework,
-        regulatory_notification_hours=row.regulatory_notification_hours,
-        regulatory_notification_deadline=row.regulatory_notification_deadline,
-        supervisory_authority=row.supervisory_authority,
-        regulatory_notified_at=row.regulatory_notified_at,
-        subject_notification_required=row.subject_notification_required,
-        subjects_notified_at=row.subjects_notified_at,
-        data_subjects_affected_count=row.data_subjects_affected_count,
-        special_category_data_involved=row.special_category_data_involved,
-        article33_notification_text=row.article33_notification_text,
-        article34_required=row.article34_required,
-        subjects_notification_text=row.subjects_notification_text,
-        dpa_reference_number=row.dpa_reference_number,
-        status=row.status,
-        created_by=row.created_by,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-    )
+def _breach_read(service: BreachNotificationService, row) -> BreachNotificationRead:
+    return BreachNotificationRead.model_validate(service.breach_response_payload(row))
 
 
 def _policy_link_read(row) -> IssuePolicyLinkRead:
@@ -520,10 +495,11 @@ def create_issue_breach_notification(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("issues:admin")),
 ) -> BreachNotificationRead:
-    row = BreachNotificationService(db).create_breach_notification(organization.id, issue_id, payload, current_user.id)
+    service = BreachNotificationService(db)
+    row = service.create_breach_notification(organization.id, issue_id, payload, current_user.id)
     db.commit()
     db.refresh(row)
-    return _breach_read(row)
+    return _breach_read(service, row)
 
 
 @router.get("/{issue_id}/rca", response_model=RCARead)
