@@ -93,8 +93,24 @@ class AttestationCampaignService:
             return 0.0
         return round((attested_count / total_assigned) * 100.0, 2)
 
+    def _policy_changed_since_campaign_start(self, campaign: PolicyAttestationCampaign) -> tuple[bool, str | None]:
+        """Compare the policy version a campaign asked employees to attest to against the
+        policy's current live version. Never let a campaign silently look "complete" against a
+        policy that has since been re-versioned out from under it.
+        """
+        policy = self.db.execute(
+            select(CompliancePolicy).where(
+                CompliancePolicy.organization_id == campaign.organization_id,
+                CompliancePolicy.id == campaign.policy_id,
+            )
+        ).scalar_one_or_none()
+        if policy is None:
+            return False, None
+        return campaign.policy_version != policy.version, policy.version
+
     def campaign_with_stats(self, campaign: PolicyAttestationCampaign) -> dict:
         counts = self._campaign_counts(campaign.organization_id, campaign.id)
+        policy_changed, current_policy_version = self._policy_changed_since_campaign_start(campaign)
         return {
             "id": campaign.id,
             "organization_id": campaign.organization_id,
@@ -113,6 +129,8 @@ class AttestationCampaignService:
                 attested_count=counts["attested_count"],
                 total_assigned=counts["total_assigned"],
             ),
+            "policy_changed_since_campaign_start": policy_changed,
+            "current_policy_version": current_policy_version,
         }
 
     def _sync_campaign_completed_status(self, campaign: PolicyAttestationCampaign) -> None:
@@ -278,6 +296,7 @@ class AttestationCampaignService:
             )
             .order_by(User.email.asc())
         ).all()
+        today = self.utcdate()
         return [
             {
                 "user_id": user.id,
@@ -287,6 +306,9 @@ class AttestationCampaignService:
                 "attested_at": record.attested_at,
                 "expires_at": record.expires_at,
                 "reminder_sent_at": record.reminder_sent_at,
+                "days_overdue": (today - campaign.due_date).days
+                if record.status == "pending" and campaign.due_date < today
+                else None,
             }
             for record, user in rows
         ]

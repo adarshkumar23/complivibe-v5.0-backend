@@ -39,6 +39,8 @@ class AttestationCampaignResponse(BaseModel):
     expired_count: int
     exempted_count: int
     completion_rate: float
+    policy_changed_since_campaign_start: bool = False
+    current_policy_version: str | None = None
 
 
 class AttestationCampaignCreateResponse(BaseModel):
@@ -78,6 +80,7 @@ class AttestationUserBreakdownResponse(BaseModel):
     attested_at: datetime | None = None
     expires_at: datetime | None = None
     reminder_sent_at: datetime | None = None
+    days_overdue: int | None = None
 
 
 class AttestationDashboardResponse(BaseModel):
