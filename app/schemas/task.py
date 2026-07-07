@@ -62,10 +62,19 @@ class TaskRead(UUIDTimestampSchema):
     reminder_status: str
     last_reminder_at: datetime | None = None
     metadata_json: dict | None = None
+    # Derived, not persisted: whether this task is currently past due (only
+    # meaningful while still open/in_progress/blocked) and by how much.
+    is_overdue: bool = False
+    overdue_by_hours: float | None = None
 
 
 class TaskDetail(TaskRead):
     linked_entity_summary: TaskLinkedEntitySummary | None = None
+    # True when the linked entity's own status suggests the reason this task
+    # exists has already been resolved elsewhere (e.g. the risk it was meant
+    # to treat was separately marked mitigated/accepted) while the task
+    # itself is still open -- flagged instead of silently left stale.
+    linked_entity_stale: bool = False
 
 
 class TaskCompleteRequest(BaseModel):

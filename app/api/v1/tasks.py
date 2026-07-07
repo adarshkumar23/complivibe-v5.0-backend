@@ -30,7 +30,24 @@ from app.services.task_service import TaskService
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
+_OPEN_TASK_STATUSES = ("open", "in_progress", "blocked")
+
+# Linked-entity statuses that indicate the underlying risk/control has
+# already been resolved through its own workflow, independent of this task.
+_RISK_RESOLVED_STATUSES = {"accepted", "mitigated", "archived"}
+_CONTROL_RESOLVED_STATUSES = {"implemented", "not_applicable", "archived"}
+
+
 def _task_read(task: Task) -> TaskRead:
+    now = datetime.now(UTC)
+    is_overdue = False
+    overdue_by_hours: float | None = None
+    if task.status in _OPEN_TASK_STATUSES and task.due_date is not None:
+        due_date = task.due_date if task.due_date.tzinfo is not None else task.due_date.replace(tzinfo=UTC)
+        if due_date < now:
+            is_overdue = True
+            overdue_by_hours = round((now - due_date).total_seconds() / 3600.0, 2)
+
     return TaskRead(
         id=task.id,
         organization_id=task.organization_id,
@@ -54,11 +71,20 @@ def _task_read(task: Task) -> TaskRead:
         metadata_json=task.metadata_json,
         created_at=task.created_at,
         updated_at=task.updated_at,
+        is_overdue=is_overdue,
+        overdue_by_hours=overdue_by_hours,
     )
 
 
 def _get_task_or_404(db: Session, organization_id: uuid.UUID, task_id: uuid.UUID) -> Task:
     task = TaskRepository(db).get_by_id(task_id)
+    if task is None or task.organization_id != organization_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    return task
+
+
+def _get_task_for_update_or_404(db: Session, organization_id: uuid.UUID, task_id: uuid.UUID) -> Task:
+    task = TaskRepository(db).get_by_id_for_update(task_id)
     if task is None or task.organization_id != organization_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     return task
@@ -245,6 +271,7 @@ def get_task_detail(
 ) -> TaskDetail:
     task = _get_task_or_404(db, organization.id, task_id)
     linked_summary = None
+    linked_entity_stale = False
     if task.linked_entity_type and task.linked_entity_id:
         try:
             linked_summary = TaskService(db).validate_linked_entity(
@@ -255,7 +282,21 @@ def get_task_detail(
         except HTTPException:
             linked_summary = None
 
-    return TaskDetail(**_task_read(task).model_dump(), linked_entity_summary=linked_summary)
+        if (
+            linked_summary is not None
+            and task.status in _OPEN_TASK_STATUSES
+        ):
+            entity_status = linked_summary.get("status")
+            if task.linked_entity_type == "risk" and entity_status in _RISK_RESOLVED_STATUSES:
+                linked_entity_stale = True
+            elif task.linked_entity_type == "control" and entity_status in _CONTROL_RESOLVED_STATUSES:
+                linked_entity_stale = True
+
+    return TaskDetail(
+        **_task_read(task).model_dump(),
+        linked_entity_summary=linked_summary,
+        linked_entity_stale=linked_entity_stale,
+    )
 
 
 @router.patch("/{task_id}", response_model=TaskRead)
@@ -268,7 +309,7 @@ def update_task(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("tasks:write")),
 ) -> TaskRead:
-    task = _get_task_or_404(db, organization.id, task_id)
+    task = _get_task_for_update_or_404(db, organization.id, task_id)
     service = TaskService(db)
 
     if payload.owner_user_id is not None:
@@ -335,7 +376,13 @@ def complete_task(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("tasks:write")),
 ) -> TaskRead:
-    task = _get_task_or_404(db, organization.id, task_id)
+    task = _get_task_for_update_or_404(db, organization.id, task_id)
+    if task.status == "completed":
+        # Two concurrent "complete" calls on the same task: the row lock
+        # serializes them, and the second one (now seeing the committed
+        # first) is rejected instead of silently re-stamping completed_at
+        # and completed_by_user_id with its own actor/time.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Task is already completed")
     before_status = task.status
 
     task.status = "completed"
@@ -376,7 +423,12 @@ def cancel_task(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("tasks:write")),
 ) -> TaskRead:
-    task = _get_task_or_404(db, organization.id, task_id)
+    task = _get_task_for_update_or_404(db, organization.id, task_id)
+    if task.status == "cancelled":
+        # Same race protection as complete_task, mirrored for cancel: the row
+        # lock serializes two concurrent cancels and the second is rejected
+        # rather than silently re-stamping cancelled_at/cancelled_by_user_id.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Task is already cancelled")
     before_status = task.status
 
     task.status = "cancelled"
