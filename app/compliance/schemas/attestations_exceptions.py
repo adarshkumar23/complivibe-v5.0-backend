@@ -36,6 +36,8 @@ class AttestationSummaryResponse(BaseModel):
     declined_count: int
     pending_count: int
     completion_pct: float
+    policy_changed_since_campaign_start: bool = False
+    current_policy_version: str | None = None
 
 
 class AttestationRecordResponse(BaseModel):
@@ -82,6 +84,8 @@ class PolicyExceptionResponse(BaseModel):
     expired_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    policy_is_archived: bool = False
+    policy_current_version: str | None = None
 
 
 class PolicyExceptionSnoozeResponse(BaseModel):

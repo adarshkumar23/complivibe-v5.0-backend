@@ -48,6 +48,22 @@ class PolicyExceptionService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Policy exception not found")
         return row
 
+    def policy_context(self, org_id: uuid.UUID, exception: PolicyException) -> tuple[bool, str | None]:
+        """Return (policy_is_archived, policy_current_version) for an exception's underlying policy.
+
+        Surfaces drift so an approved/active exception tied to a policy that has since been
+        archived or re-versioned is never silently reported as compliant.
+        """
+        policy = self.db.execute(
+            select(CompliancePolicy).where(
+                CompliancePolicy.organization_id == org_id,
+                CompliancePolicy.id == exception.policy_id,
+            )
+        ).scalar_one_or_none()
+        if policy is None:
+            return False, None
+        return policy.status == "archived", policy.version
+
     def get_approval(self, org_id: uuid.UUID, exception_id: uuid.UUID) -> PolicyExceptionApproval | None:
         return self.db.execute(
             select(PolicyExceptionApproval).where(
@@ -59,8 +75,17 @@ class PolicyExceptionService:
     def _has_manage(self, actor_id: uuid.UUID, org_id: uuid.UUID) -> bool:
         return RBACService.user_has_permission(self.db, actor_id, org_id, "policy_exceptions:manage")
 
+    @staticmethod
+    def _reject_if_archived(policy: CompliancePolicy) -> None:
+        if policy.status == "archived":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot request an exception against an archived policy",
+            )
+
     def create_exception(self, org_id: uuid.UUID, payload: PolicyExceptionCreate, requested_by: uuid.UUID) -> PolicyException:
-        self.require_policy_in_org(org_id, payload.policy_id)
+        policy = self.require_policy_in_org(org_id, payload.policy_id)
+        self._reject_if_archived(policy)
 
         row = PolicyException(
             organization_id=org_id,
@@ -466,11 +491,12 @@ class PolicyExceptionService:
         requested_by: uuid.UUID,
         compensating_measure_description: str | None = None,
     ) -> PolicyException:
-        self.require_policy_in_org(org_id, policy_id)
+        policy = self.require_policy_in_org(org_id, policy_id)
+        self._reject_if_archived(policy)
         row = PolicyException(
             organization_id=org_id,
             policy_id=policy_id,
-            policy_version=None,
+            policy_version=policy.version,
             title="Policy exception request",
             description=reason,
             justification=reason,

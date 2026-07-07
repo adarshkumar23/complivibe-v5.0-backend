@@ -17,7 +17,12 @@ from app.models.user import User
 router = APIRouter(prefix="/compliance/policy-exceptions", tags=["policy_exceptions_v2"])
 
 
-def _read(row) -> PolicyExceptionResponse:
+def _read(row, service: PolicyExceptionService | None = None, db: Session | None = None) -> PolicyExceptionResponse:
+    policy_is_archived = False
+    policy_current_version: str | None = None
+    resolved_service = service or (PolicyExceptionService(db) if db is not None else None)
+    if resolved_service is not None:
+        policy_is_archived, policy_current_version = resolved_service.policy_context(row.organization_id, row)
     return PolicyExceptionResponse(
         id=row.id,
         organization_id=row.organization_id,
@@ -34,6 +39,8 @@ def _read(row) -> PolicyExceptionResponse:
         expired_at=row.expired_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        policy_is_archived=policy_is_archived,
+        policy_current_version=policy_current_version,
     )
 
 
@@ -53,7 +60,7 @@ def create_exception(
         compensating_measure_description=payload.compensating_measure_description,
     )
     db.commit()
-    return _read(row)
+    return _read(row, db=db)
 
 
 @router.get("", response_model=list[PolicyExceptionResponse])
@@ -73,7 +80,7 @@ def list_exceptions(
     )
     start = max((page - 1) * page_size, 0)
     end = start + page_size
-    return [_read(r) for r in rows[start:end]]
+    return [_read(r, db=db) for r in rows[start:end]]
 
 
 @router.get("/{exception_id}", response_model=PolicyExceptionResponse)
@@ -84,7 +91,7 @@ def get_exception(
     _: Membership = Depends(require_permission("compliance_policies:read")),
 ) -> PolicyExceptionResponse:
     row = PolicyExceptionService(db).require_exception(organization.id, exception_id)
-    return _read(row)
+    return _read(row, db=db)
 
 
 @router.post("/{exception_id}/approve", response_model=PolicyExceptionResponse)
@@ -103,7 +110,7 @@ def approve_exception(
         expiry_date=payload.expiry_date,
     )
     db.commit()
-    return _read(row)
+    return _read(row, db=db)
 
 
 @router.post("/{exception_id}/reject", response_model=PolicyExceptionResponse)
@@ -120,4 +127,4 @@ def reject_exception(
         rejected_by=current_user.id,
     )
     db.commit()
-    return _read(row)
+    return _read(row, db=db)
