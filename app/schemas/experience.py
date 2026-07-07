@@ -100,3 +100,6 @@ class ComplianceSummaryGenerateResponse(BaseModel):
     public_url: str
     expires_at: datetime
     password_protected: bool
+    expires_in_hours: float
+    max_views: int | None = None
+    context_flags: list[str] = Field(default_factory=list)

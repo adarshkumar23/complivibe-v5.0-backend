@@ -61,6 +61,7 @@ ENTITY_MODEL_BY_TYPE: dict[str, type] = {
 }
 
 TIMELINE_SCOPE_ENTITY_TYPES = {"evidence", "control", "risk", "issue", "deadline"}
+ALLOWED_ONE_PAGE_SUMMARY_SECTIONS = {"overview", "controls", "evidence", "risks", "deadlines"}
 
 
 class CommandPaletteService:
@@ -627,9 +628,19 @@ class CommandPaletteService:
         payload: ComplianceSummaryGenerateRequest,
         base_url: str,
     ) -> ComplianceSummaryGenerateResponse:
-        include_sections = [section.strip().lower() for section in payload.include_sections if str(section).strip()]
+        include_sections_raw = [section.strip().lower() for section in payload.include_sections if str(section).strip()]
+        include_sections: list[str] = []
+        for section in include_sections_raw:
+            if section not in include_sections:
+                include_sections.append(section)
         if not include_sections:
             include_sections = ["overview", "controls", "evidence", "risks", "deadlines"]
+        invalid_sections = sorted(set(include_sections) - ALLOWED_ONE_PAGE_SUMMARY_SECTIONS)
+        if invalid_sections:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Unsupported include_sections values: {', '.join(invalid_sections)}",
+            )
 
         share_row = ReportShareService().create_share_link(
             org_id=organization_id,
@@ -647,10 +658,27 @@ class CommandPaletteService:
             db=self.db,
             base_url=base_url,
         )
+        self.audit.write_audit_log(
+            action="experience.compliance_summary_generated",
+            entity_type="shared_report_links",
+            entity_id=uuid.UUID(str(share_row["share_id"])),
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+            after_json={
+                "include_sections": include_sections,
+                "password_protected": bool(share_row["password_protected"]),
+                "max_views": share_row.get("max_views"),
+                "expires_in_hours": share_row.get("expires_in_hours"),
+                "context_flags": share_row.get("context_flags") or [],
+            },
+        )
         return ComplianceSummaryGenerateResponse(
             share_id=uuid.UUID(str(share_row["share_id"])),
             token=str(share_row["token"]),
             public_url=str(share_row["share_url"]),
             expires_at=datetime.fromisoformat(str(share_row["expires_at"])),
             password_protected=bool(share_row["password_protected"]),
+            expires_in_hours=float(share_row.get("expires_in_hours") or 0),
+            max_views=share_row.get("max_views"),
+            context_flags=list(share_row.get("context_flags") or []),
         )

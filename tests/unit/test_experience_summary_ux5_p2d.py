@@ -98,6 +98,8 @@ def test_ux5_generate_one_page_summary_public_url(client, db_session):
     payload = create_resp.json()
     assert payload["public_url"].endswith(payload["token"])
     assert payload["password_protected"] is False
+    assert payload["expires_in_hours"] > 0
+    assert isinstance(payload["context_flags"], list)
 
     access_resp = client.get(f"/api/v1/reports/shared/{payload['token']}")
     assert access_resp.status_code == 200, access_resp.text
@@ -106,6 +108,9 @@ def test_ux5_generate_one_page_summary_public_url(client, db_session):
     assert access["data"]["report_kind"] == "one_page_quick_read"
     assert access["data"]["brand_name"] == "Acme Trust"
     assert "overview" in access["data"]["sections_included"]
+    assert access["data"]["sections"]["overview"]["framework_count"] >= 1
+    assert "context_flags" in access["data"]
+    assert "data_freshness" in access["data"]
     assert len(access["data"]["top_priorities"]) >= 1
 
 
@@ -133,6 +138,7 @@ def test_ux5_summary_password_gate_and_org_isolation(client, db_session):
     assert ok.status_code == 200, ok.text
     data = ok.json()["data"]
     assert data["metrics"]["controls"]["total"] >= 1
+    assert "overview" in data["sections"]
 
 
 def test_ux5_share_password_lockout_and_rate_limit(client, db_session):
@@ -200,3 +206,18 @@ def test_ux5_share_password_lockout_and_rate_limit(client, db_session):
         json={"password": "LockMe#456"},
     )
     assert locked.status_code == 429, locked.text
+
+
+def test_ux5_generate_rejects_invalid_include_sections(client, db_session):
+    ctx = bootstrap_org_user(client, email_prefix="ux5-invalid-sections")
+    _seed_summary_records(db_session, uuid.UUID(ctx["organization_id"]), uuid.UUID(ctx["user_id"]))
+
+    invalid = client.post(
+        "/api/v1/compliance-summary/generate",
+        headers=ctx["org_headers"],
+        json={
+            "include_sections": ["overview", "not-a-section"],
+        },
+    )
+    assert invalid.status_code == 422
+    assert "Unsupported include_sections values" in invalid.json()["detail"]

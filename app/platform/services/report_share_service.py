@@ -26,6 +26,8 @@ from app.services.audit_service import AuditService
 
 MAX_FAILED_PASSWORD_ATTEMPTS = 5
 PASSWORD_LOCKOUT_MINUTES = 15
+ONE_PAGE_SUMMARY_STALE_AFTER_DAYS = 30
+ONE_PAGE_ALLOWED_SECTIONS = {"overview", "controls", "evidence", "risks", "deadlines"}
 
 
 class ReportShareService:
@@ -366,6 +368,17 @@ class ReportShareService:
             }
 
         if report_type == "compliance_one_page_summary":
+            sections_requested_raw = report_params.get("include_sections") or []
+            if not isinstance(sections_requested_raw, list):
+                sections_requested_raw = []
+            sections_requested: list[str] = []
+            for section in sections_requested_raw:
+                key = str(section).strip().lower()
+                if key and key in ONE_PAGE_ALLOWED_SECTIONS and key not in sections_requested:
+                    sections_requested.append(key)
+            if not sections_requested:
+                sections_requested = ["overview", "controls", "evidence", "risks", "deadlines"]
+
             active_framework_rows = (
                 db.execute(
                     select(Framework.code, Framework.name)
@@ -435,6 +448,29 @@ class ReportShareService:
                 ).scalar_one()
             )
 
+            latest_control_at = db.execute(
+                select(func.max(Control.updated_at)).where(Control.organization_id == org_id)
+            ).scalar_one()
+            latest_evidence_at = db.execute(
+                select(func.max(EvidenceItem.updated_at)).where(EvidenceItem.organization_id == org_id)
+            ).scalar_one()
+            latest_risk_at = db.execute(
+                select(func.max(Risk.updated_at)).where(Risk.organization_id == org_id)
+            ).scalar_one()
+            latest_task_at = db.execute(
+                select(func.max(Task.updated_at)).where(Task.organization_id == org_id)
+            ).scalar_one()
+            timestamps = [latest_control_at, latest_evidence_at, latest_risk_at, latest_task_at]
+            latest_activity_at = None
+            for ts in timestamps:
+                if ts is None:
+                    continue
+                normalized = ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC)
+                latest_activity_at = normalized if latest_activity_at is None or normalized > latest_activity_at else latest_activity_at
+            now = self.utcnow()
+            data_age_days = (now.date() - latest_activity_at.date()).days if latest_activity_at else None
+            data_stale = data_age_days is not None and data_age_days > ONE_PAGE_SUMMARY_STALE_AFTER_DAYS
+
             priorities: list[str] = []
             if overdue_tasks > 0:
                 priorities.append(f"{overdue_tasks} overdue task(s) need completion")
@@ -450,10 +486,53 @@ class ReportShareService:
                 priorities.append("No critical blockers detected in current compliance snapshot")
             priorities = priorities[:3]
 
+            context_flags: list[str] = []
+            if not active_frameworks:
+                context_flags.append("no_active_frameworks")
+            if overdue_tasks > 0:
+                context_flags.append("overdue_tasks_present")
+            if overdue_deadlines > 0:
+                context_flags.append("overdue_deadlines_present")
+            if open_high_risks > 0:
+                context_flags.append("open_high_risks_present")
+            if controls_pct < 80:
+                context_flags.append("control_coverage_below_target")
+            if evidence_fresh_pct < 85:
+                context_flags.append("evidence_freshness_below_target")
+            if data_stale:
+                context_flags.append("summary_data_stale")
+
+            section_payloads = {
+                "overview": {
+                    "framework_count": len(active_frameworks),
+                    "open_high_risks": open_high_risks,
+                    "overdue_items_total": overdue_tasks + overdue_deadlines,
+                    "controls_implemented_pct": controls_pct,
+                    "evidence_fresh_pct": evidence_fresh_pct,
+                },
+                "controls": {
+                    "total": total_controls,
+                    "implemented": implemented_controls,
+                    "implemented_pct": controls_pct,
+                },
+                "evidence": {
+                    "total": evidence_total,
+                    "fresh": evidence_fresh,
+                    "fresh_pct": evidence_fresh_pct,
+                },
+                "risks": {
+                    "open_high_risks": open_high_risks,
+                },
+                "deadlines": {
+                    "overdue_tasks": overdue_tasks,
+                    "overdue_deadlines": overdue_deadlines,
+                },
+            }
+
             return {
                 "report_kind": "one_page_quick_read",
                 "brand_name": report_params.get("brand_name") or "CompliVibe",
-                "generated_at": self.utcnow().isoformat(),
+                "generated_at": now.isoformat(),
                 "active_frameworks": active_frameworks,
                 "overview": {
                     "framework_count": len(active_frameworks),
@@ -462,8 +541,15 @@ class ReportShareService:
                     "open_high_risks": open_high_risks,
                     "overdue_items_total": overdue_tasks + overdue_deadlines,
                 },
-                "sections_included": report_params.get("include_sections") or [],
+                "sections_included": sections_requested,
                 "top_priorities": priorities,
+                "context_flags": context_flags,
+                "data_freshness": {
+                    "latest_activity_at": latest_activity_at.isoformat() if latest_activity_at else None,
+                    "data_age_days": data_age_days,
+                    "stale": data_stale,
+                },
+                "sections": {key: section_payloads[key] for key in sections_requested},
                 "metrics": {
                     "controls": {"total": total_controls, "implemented": implemented_controls},
                     "evidence": {"total": evidence_total, "fresh": evidence_fresh},
