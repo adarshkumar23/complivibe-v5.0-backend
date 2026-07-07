@@ -199,7 +199,8 @@ def list_asset_access_logs(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:read")),
 ) -> list[DataAccessLogRead]:
-    rows = AccessMonitoringService(db).list_access_logs(
+    service = AccessMonitoringService(db)
+    rows = service.list_access_logs(
         organization.id,
         data_asset_id=asset_id,
         from_time=from_time,
@@ -207,7 +208,7 @@ def list_asset_access_logs(
         skip=skip,
         limit=limit,
     )
-    return [DataAccessLogRead.model_validate(row) for row in rows]
+    return [DataAccessLogRead.model_validate(service.access_log_response_payload(row)) for row in rows]
 
 
 @router.post("/{asset_id}/obligation-links", response_model=DataAssetObligationLinkRead, status_code=status.HTTP_201_CREATED)

@@ -38,14 +38,23 @@ class DataAccessLogRead(BaseModel):
     access_time: datetime
     created_at: datetime
     metadata_json: dict
+    risk_score: int = 0
+    risk_level: str = "low"
+    context_flags: list[str] = []
 
 
 class DataAccessSummaryRead(BaseModel):
+    window_days: int = 7
     total_accesses_7d: int
     by_access_type: dict[str, int]
     by_access_result: dict[str, int]
     unique_actors: int
     anomalies_detected: int
+    failed_access_rate: float = 0.0
+    anomalous_access_rate: float = 0.0
+    after_hours_accesses: int = 0
+    cross_border_accesses: int = 0
+    context_flags: list[str] = []
 
 
 class DataAccessAnomalyRuleCreate(BaseModel):
@@ -72,3 +81,6 @@ class DataAccessAnomalyRuleRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
+    hit_count_7d: int = 0
+    last_triggered_at: datetime | None = None
+    context_flags: list[str] = []

@@ -58,7 +58,7 @@ def _ingest_event(
     source_country: str | None = "US",
     bytes_transferred: int | None = None,
     actor_external: str | None = None,
-) -> None:
+) -> dict:
     payload = {
         "data_asset_id": asset_id,
         "access_type": access_type,
@@ -76,6 +76,7 @@ def _ingest_event(
         json=payload,
     )
     assert response.status_code == 201
+    return response.json()
 
 
 def test_c77_data_access_monitoring(client):
@@ -173,7 +174,7 @@ def test_c77_data_access_monitoring(client):
         },
     )
     assert cross_border_rule.status_code == 201
-    _ingest_event(
+    cross_border_event = _ingest_event(
         client,
         ingest_key,
         asset_id=compliant_asset_id,
@@ -183,6 +184,8 @@ def test_c77_data_access_monitoring(client):
         actor_id=org["user_id"],
         source_country="IN",
     )
+    assert cross_border_event["risk_level"] in {"medium", "high"}
+    assert "cross_border_region_mismatch" in cross_border_event["context_flags"]
 
     # Compliant event should not add anomalies for this asset.
     before = client.get(
@@ -209,6 +212,9 @@ def test_c77_data_access_monitoring(client):
     )
     assert after.status_code == 200
     assert after.json()["anomalies_detected"] == before_anomalies
+    assert "failed_access_rate" in after.json()
+    assert "anomalous_access_rate" in after.json()
+    assert "context_flags" in after.json()
 
     # Time-range filtered logs.
     _ingest_event(
@@ -238,6 +244,8 @@ def test_c77_data_access_monitoring(client):
         if access_ts.tzinfo is None:
             access_ts = access_ts.replace(tzinfo=UTC)
         assert from_time <= access_ts <= to_time
+        assert "risk_level" in row
+        assert "context_flags" in row
 
     source = Path("app/data_observability/services/access_monitoring_service.py").read_text(encoding="utf-8")
     assert "delete(DataAccessLog" not in source
@@ -247,12 +255,39 @@ def test_c77_data_access_monitoring(client):
     asset_logs = client.get(f"{ASSETS_BASE}/{compliant_asset_id}/access-logs", headers=org["org_headers"])
     assert asset_logs.status_code == 200
     assert len(asset_logs.json()) >= 1
+    assert "risk_score" in asset_logs.json()[0]
 
     # Org isolation.
     org_b = bootstrap_org_user(client, email_prefix="c77-org-b")
     forbidden = client.get(f"{ACCESS_BASE}/logs?data_asset_id={spike_asset_id}", headers=org_b["org_headers"])
     assert forbidden.status_code == 200
     assert forbidden.json() == []
+
+    # Duplicate active anomaly rule for same scope should be rejected.
+    duplicate_rule = client.post(
+        f"{ACCESS_BASE}/anomaly-rules",
+        headers=org["org_headers"],
+        json={
+            "data_asset_id": compliant_asset_id,
+            "rule_type": "cross_border_access",
+            "rule_config": {},
+        },
+    )
+    assert duplicate_rule.status_code == 409
+
+    # List anomaly rules includes context and hit metrics.
+    listed_rules = client.get(f"{ACCESS_BASE}/anomaly-rules", headers=org["org_headers"])
+    assert listed_rules.status_code == 200
+    assert any("hit_count_7d" in row for row in listed_rules.json())
+    assert any("context_flags" in row for row in listed_rules.json())
+
+    # Invalid time window is rejected.
+    invalid_window = client.get(
+        f"{ACCESS_BASE}/logs",
+        headers=org["org_headers"],
+        params={"from_time": (at_noon + timedelta(hours=2)).isoformat(), "to_time": (at_noon - timedelta(hours=1)).isoformat()},
+    )
+    assert invalid_window.status_code == 422
 
 
 def test_c77_ingest_rejects_cross_tenant_actor_id(client, db_session):
@@ -285,6 +320,41 @@ def test_c77_ingest_rejects_cross_tenant_actor_id(client, db_session):
         .count()
     )
     assert persisted == 0
+
+
+def test_c77_ingest_rejects_ambiguous_actor_and_negative_metrics(client):
+    org = bootstrap_org_user(client, email_prefix="c77-ambiguous")
+    ingest_key = "c77-ambiguous-key"
+    _configure_ingest_key(client, org["org_headers"], ingest_key)
+    asset_id = _create_asset(client, org["org_headers"], org["user_id"], name="c77_ambiguous_asset")
+
+    ambiguous_actor = client.post(
+        f"{ACCESS_BASE}/events",
+        headers={"X-CompliVibe-Key": ingest_key},
+        json={
+            "data_asset_id": asset_id,
+            "actor_id": org["user_id"],
+            "actor_external": "etl-service",
+            "access_type": "read",
+            "access_result": "success",
+            "access_time": datetime.now(UTC).isoformat(),
+        },
+    )
+    assert ambiguous_actor.status_code == 422
+
+    negative_metrics = client.post(
+        f"{ACCESS_BASE}/events",
+        headers={"X-CompliVibe-Key": ingest_key},
+        json={
+            "data_asset_id": asset_id,
+            "actor_id": org["user_id"],
+            "access_type": "read",
+            "access_result": "success",
+            "access_time": datetime.now(UTC).isoformat(),
+            "bytes_transferred": -1,
+        },
+    )
+    assert negative_metrics.status_code == 422
 
 
 def test_c78_retention_policy_enforcement(client, db_session):

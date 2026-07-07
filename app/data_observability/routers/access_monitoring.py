@@ -21,6 +21,18 @@ from app.models.user import User
 router = APIRouter(prefix="/data-observability/access", tags=["data-observability-access"])
 
 
+def _access_log_read(service: AccessMonitoringService, row) -> DataAccessLogRead:
+    return DataAccessLogRead.model_validate(service.access_log_response_payload(row))
+
+
+def _anomaly_rule_read(
+    service: AccessMonitoringService, row, *, hit_count_7d: int = 0, last_triggered_at: datetime | None = None
+) -> DataAccessAnomalyRuleRead:
+    return DataAccessAnomalyRuleRead.model_validate(
+        service.anomaly_rule_response_payload(row, hit_count_7d=hit_count_7d, last_triggered_at=last_triggered_at)
+    )
+
+
 @router.post("/events", response_model=DataAccessLogRead, status_code=status.HTTP_201_CREATED)
 def ingest_access_event(
     payload: DataAccessEventIngest,
@@ -32,7 +44,7 @@ def ingest_access_event(
     row = service.log_access_event(org_id, payload.data_asset_id, payload)
     db.commit()
     db.refresh(row)
-    return DataAccessLogRead.model_validate(row)
+    return _access_log_read(service, row)
 
 
 @router.get("/logs", response_model=list[DataAccessLogRead])
@@ -49,7 +61,8 @@ def list_access_logs(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:read")),
 ) -> list[DataAccessLogRead]:
-    rows = AccessMonitoringService(db).list_access_logs(
+    service = AccessMonitoringService(db)
+    rows = service.list_access_logs(
         organization.id,
         data_asset_id=data_asset_id,
         actor_id=actor_id,
@@ -60,7 +73,7 @@ def list_access_logs(
         skip=skip,
         limit=limit,
     )
-    return [DataAccessLogRead.model_validate(row) for row in rows]
+    return [_access_log_read(service, row) for row in rows]
 
 
 @router.get("/summary", response_model=DataAccessSummaryRead)
@@ -82,8 +95,18 @@ def list_anomaly_rules(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:read")),
 ) -> list[DataAccessAnomalyRuleRead]:
-    rows = AccessMonitoringService(db).list_anomaly_rules(organization.id, data_asset_id=data_asset_id)
-    return [DataAccessAnomalyRuleRead.model_validate(row) for row in rows]
+    service = AccessMonitoringService(db)
+    rows = service.list_anomaly_rules(organization.id, data_asset_id=data_asset_id)
+    hit_counts, latest_hits = service.summarize_rule_hits(organization.id)
+    return [
+        _anomaly_rule_read(
+            service,
+            row,
+            hit_count_7d=hit_counts.get(str(row.id), 0),
+            last_triggered_at=latest_hits.get(str(row.id)),
+        )
+        for row in rows
+    ]
 
 
 @router.post("/anomaly-rules", response_model=DataAccessAnomalyRuleRead, status_code=status.HTTP_201_CREATED)
@@ -94,10 +117,11 @@ def create_anomaly_rule(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:write")),
 ) -> DataAccessAnomalyRuleRead:
-    row = AccessMonitoringService(db).create_anomaly_rule(organization.id, payload, current_user.id)
+    service = AccessMonitoringService(db)
+    row = service.create_anomaly_rule(organization.id, payload, current_user.id)
     db.commit()
     db.refresh(row)
-    return DataAccessAnomalyRuleRead.model_validate(row)
+    return _anomaly_rule_read(service, row)
 
 
 @router.patch("/anomaly-rules/{rule_id}", response_model=DataAccessAnomalyRuleRead)
@@ -105,13 +129,15 @@ def update_anomaly_rule(
     rule_id: uuid.UUID,
     payload: DataAccessAnomalyRuleUpdate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:write")),
 ) -> DataAccessAnomalyRuleRead:
-    row = AccessMonitoringService(db).update_anomaly_rule(organization.id, rule_id, payload)
+    service = AccessMonitoringService(db)
+    row = service.update_anomaly_rule(organization.id, rule_id, payload, current_user.id)
     db.commit()
     db.refresh(row)
-    return DataAccessAnomalyRuleRead.model_validate(row)
+    return _anomaly_rule_read(service, row)
 
 
 @router.post("/anomaly-rules/{rule_id}/deactivate", response_model=DataAccessAnomalyRuleRead)
@@ -122,7 +148,8 @@ def deactivate_anomaly_rule(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:write")),
 ) -> DataAccessAnomalyRuleRead:
-    row = AccessMonitoringService(db).deactivate_rule(organization.id, rule_id, current_user.id)
+    service = AccessMonitoringService(db)
+    row = service.deactivate_rule(organization.id, rule_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return DataAccessAnomalyRuleRead.model_validate(row)
+    return _anomaly_rule_read(service, row)
