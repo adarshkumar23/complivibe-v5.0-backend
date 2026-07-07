@@ -4304,36 +4304,39 @@ def _risk_classification_snapshot_read(
     )
 
 
-def _governance_signal_read(row: GovernanceSignal) -> GovernanceSignalRead:
+def _governance_signal_read(payload: dict) -> GovernanceSignalRead:
     return GovernanceSignalRead(
-        id=row.id,
-        organization_id=row.organization_id,
-        domain=row.domain,
-        entity_type=row.entity_type,
-        entity_id=row.entity_id,
-        related_ai_system_id=row.related_ai_system_id,
-        related_risk_assessment_id=row.related_risk_assessment_id,
-        signal_type=row.signal_type,
-        reason_code=row.reason_code,
-        severity=row.severity,
-        status=row.status,
-        title=row.title,
-        message=row.message,
-        source_json=row.source_json,
-        created_by_system=row.created_by_system,
-        resolved_at=row.resolved_at,
-        resolved_by_user_id=row.resolved_by_user_id,
-        resolve_reason=row.resolve_reason,
-        dismissed_at=row.dismissed_at,
-        dismissed_by_user_id=row.dismissed_by_user_id,
-        dismiss_reason=row.dismiss_reason,
-        priority_score=None,
-        priority_band=None,
-        priority_explanation_json=None,
-        group_key=None,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-        caveat=AI_RISK_GOVERNANCE_SIGNAL_CAVEAT,
+        id=payload["id"],
+        organization_id=payload["organization_id"],
+        domain=payload["domain"],
+        entity_type=payload["entity_type"],
+        entity_id=payload["entity_id"],
+        related_ai_system_id=payload.get("related_ai_system_id"),
+        related_risk_assessment_id=payload.get("related_risk_assessment_id"),
+        signal_type=payload["signal_type"],
+        reason_code=payload["reason_code"],
+        severity=payload["severity"],
+        status=payload["status"],
+        title=payload["title"],
+        message=payload["message"],
+        source_json=payload["source_json"],
+        created_by_system=bool(payload["created_by_system"]),
+        resolved_at=payload.get("resolved_at"),
+        resolved_by_user_id=payload.get("resolved_by_user_id"),
+        resolve_reason=payload.get("resolve_reason"),
+        dismissed_at=payload.get("dismissed_at"),
+        dismissed_by_user_id=payload.get("dismissed_by_user_id"),
+        dismiss_reason=payload.get("dismiss_reason"),
+        priority_score=float(payload["priority_score"]) if payload.get("priority_score") is not None else None,
+        priority_band=payload.get("priority_band"),
+        priority_explanation_json=payload.get("priority_explanation_json"),
+        group_key=payload.get("group_key"),
+        age_days=int(payload["age_days"]) if payload.get("age_days") is not None else None,
+        stale_signal=bool(payload.get("stale_signal", False)),
+        context_flags=[str(item) for item in payload.get("context_flags", [])],
+        created_at=payload["created_at"],
+        updated_at=payload["updated_at"],
+        caveat=payload.get("caveat", AI_RISK_GOVERNANCE_SIGNAL_CAVEAT),
     )
 
 
@@ -4353,6 +4356,7 @@ def _governance_signal_prioritized_read(payload: dict) -> GovernanceSignalPriori
         priority_explanation_json=payload["priority_explanation_json"],
         age_days=int(payload["age_days"]),
         group_key=payload["group_key"],
+        context_flags=[str(item) for item in payload.get("context_flags", [])],
         created_at=payload["created_at"],
         caveat=payload.get("caveat", AI_RISK_GOVERNANCE_SIGNAL_PRIORITY_CAVEAT),
     )
@@ -6978,7 +6982,8 @@ def list_governance_signals(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("ai_systems:read")),
 ) -> list[GovernanceSignalRead]:
-    rows = AISystemRiskAssessmentService(db).list_governance_signals(
+    service = AISystemRiskAssessmentService(db)
+    rows = service.list_governance_signals(
         organization_id=organization.id,
         domain=domain,
         entity_type=entity_type,
@@ -6992,7 +6997,16 @@ def list_governance_signals(
         limit=limit,
         offset=offset,
     )
-    return [_governance_signal_read(row) for row in rows]
+    priority_map = service._priority_payload_map_for_signal_rows(organization_id=organization.id, rows=rows)
+    return [
+        _governance_signal_read(
+            service.governance_signal_payload(
+                row=row,
+                priority_payload=priority_map.get(row.id),
+            )
+        )
+        for row in rows
+    ]
 
 
 @router.get("/signals/{signal_id}", response_model=GovernanceSignalRead)
@@ -7002,11 +7016,18 @@ def get_governance_signal_detail(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("ai_systems:read")),
 ) -> GovernanceSignalRead:
-    row = AISystemRiskAssessmentService(db).require_governance_signal(
+    service = AISystemRiskAssessmentService(db)
+    row = service.require_governance_signal(
         organization_id=organization.id,
         signal_id=signal_id,
     )
-    return _governance_signal_read(row)
+    priority_map = service._priority_payload_map_for_signal_rows(organization_id=organization.id, rows=[row])
+    return _governance_signal_read(
+        service.governance_signal_payload(
+            row=row,
+            priority_payload=priority_map.get(row.id),
+        )
+    )
 
 
 @router.get("/signals/{signal_id}/priority-explanation", response_model=GovernanceSignalPriorityExplanation)
@@ -7049,7 +7070,13 @@ def resolve_governance_signal(
     )
     db.commit()
     db.refresh(row)
-    return _governance_signal_read(row)
+    priority_map = service._priority_payload_map_for_signal_rows(organization_id=organization.id, rows=[row])
+    return _governance_signal_read(
+        service.governance_signal_payload(
+            row=row,
+            priority_payload=priority_map.get(row.id),
+        )
+    )
 
 
 @router.get("/ai-systems/{ai_system_id}/attention", response_model=GovernanceSignalAttentionRead)
@@ -7123,7 +7150,13 @@ def dismiss_governance_signal(
     )
     db.commit()
     db.refresh(row)
-    return _governance_signal_read(row)
+    priority_map = service._priority_payload_map_for_signal_rows(organization_id=organization.id, rows=[row])
+    return _governance_signal_read(
+        service.governance_signal_payload(
+            row=row,
+            priority_payload=priority_map.get(row.id),
+        )
+    )
 
 
 @router.get(

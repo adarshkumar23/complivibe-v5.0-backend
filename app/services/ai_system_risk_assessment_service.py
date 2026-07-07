@@ -168,6 +168,7 @@ GOVERNANCE_SIGNAL_DOMAIN_VALUES: tuple[str, ...] = ("ai_risk",)
 GOVERNANCE_SIGNAL_ENTITY_TYPE_VALUES: tuple[str, ...] = ("ai_system", "risk_assessment", "risk_classification")
 GOVERNANCE_SIGNAL_STATUS_VALUES: tuple[str, ...] = ("open", "resolved", "dismissed", "archived")
 GOVERNANCE_SIGNAL_SEVERITY_VALUES: tuple[str, ...] = ("info", "warning", "critical")
+GOVERNANCE_SIGNAL_STALE_THRESHOLD_DAYS = 30
 AI_RISK_GOVERNANCE_SIGNAL_CAVEAT = (
     "Governance signals are deterministic indicators for human attention. They do not approve, reject, certify, "
     "classify legally, or trigger automation."
@@ -2635,6 +2636,88 @@ class AISystemRiskAssessmentService:
             .all()
         )
 
+    def _priority_payload_map_for_signal_rows(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        rows: list[GovernanceSignal],
+    ) -> dict[uuid.UUID, dict]:
+        if not rows:
+            return {}
+        density_counts = self._signal_density_open_counts(organization_id=organization_id)
+        assessment_ids = [row.related_risk_assessment_id for row in rows if row.related_risk_assessment_id is not None]
+        assessment_map = self._assessment_context_map(organization_id=organization_id, assessment_ids=assessment_ids)
+        now = self.now()
+        out: dict[uuid.UUID, dict] = {}
+        for row in rows:
+            out[row.id] = self._priority_payload_for_signal(
+                row=row,
+                now=now,
+                assessment=assessment_map.get(row.related_risk_assessment_id) if row.related_risk_assessment_id else None,
+                open_density_count=density_counts.get(row.related_ai_system_id, 0) if row.related_ai_system_id else 0,
+            )
+        return out
+
+    def governance_signal_payload(
+        self,
+        *,
+        row: GovernanceSignal,
+        priority_payload: dict | None = None,
+    ) -> dict[str, Any]:
+        payload = dict(priority_payload or {})
+        priority_score = float(payload["priority_score"]) if payload.get("priority_score") is not None else None
+        priority_band = str(payload["priority_band"]) if payload.get("priority_band") is not None else None
+        age_days = int(payload["age_days"]) if payload.get("age_days") is not None else None
+        if age_days is None:
+            now = self.now()
+            effective_now = now if row.created_at.tzinfo else now.replace(tzinfo=None)
+            age_days = max(0, int((effective_now - row.created_at).total_seconds() // 86400))
+        stale_signal = bool(row.status == "open" and age_days >= GOVERNANCE_SIGNAL_STALE_THRESHOLD_DAYS)
+        context_flags: list[str] = []
+        if row.status == "open":
+            context_flags.append("open_signal")
+        if stale_signal:
+            context_flags.append("stale_open_signal")
+        if row.status == "open" and row.severity == "critical":
+            context_flags.append("critical_open_signal")
+        if priority_band in {"high", "urgent"}:
+            context_flags.append("high_attention_priority")
+        if not bool(row.created_by_system):
+            context_flags.append("human_reported_signal")
+        return {
+            "id": row.id,
+            "organization_id": row.organization_id,
+            "domain": row.domain,
+            "entity_type": row.entity_type,
+            "entity_id": row.entity_id,
+            "related_ai_system_id": row.related_ai_system_id,
+            "related_risk_assessment_id": row.related_risk_assessment_id,
+            "signal_type": row.signal_type,
+            "reason_code": row.reason_code,
+            "severity": row.severity,
+            "status": row.status,
+            "title": row.title,
+            "message": row.message,
+            "source_json": row.source_json,
+            "created_by_system": row.created_by_system,
+            "resolved_at": row.resolved_at,
+            "resolved_by_user_id": row.resolved_by_user_id,
+            "resolve_reason": row.resolve_reason,
+            "dismissed_at": row.dismissed_at,
+            "dismissed_by_user_id": row.dismissed_by_user_id,
+            "dismiss_reason": row.dismiss_reason,
+            "priority_score": priority_score,
+            "priority_band": priority_band,
+            "priority_explanation_json": payload.get("priority_explanation_json"),
+            "group_key": payload.get("group_key"),
+            "age_days": age_days,
+            "stale_signal": stale_signal,
+            "context_flags": context_flags,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "caveat": AI_RISK_GOVERNANCE_SIGNAL_CAVEAT,
+        }
+
     def require_governance_signal(self, *, organization_id: uuid.UUID, signal_id: uuid.UUID) -> GovernanceSignal:
         row = self.db.execute(
             select(GovernanceSignal).where(
@@ -2655,10 +2738,16 @@ class AISystemRiskAssessmentService:
     ) -> GovernanceSignal:
         if row.status != "open":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only open signals can be resolved")
+        reason_normalized = str(reason).strip()
+        if not reason_normalized:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="reason cannot be blank")
         row.status = "resolved"
         row.resolved_at = self.now()
         row.resolved_by_user_id = actor_user_id
-        row.resolve_reason = reason
+        row.resolve_reason = reason_normalized
+        row.dismissed_at = None
+        row.dismissed_by_user_id = None
+        row.dismiss_reason = None
         self.db.flush()
         if row.related_risk_assessment_id:
             assessment = self.require_assessment(organization_id=row.organization_id, assessment_id=row.related_risk_assessment_id)
@@ -2675,10 +2764,16 @@ class AISystemRiskAssessmentService:
     ) -> GovernanceSignal:
         if row.status != "open":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only open signals can be dismissed")
+        reason_normalized = str(reason).strip()
+        if not reason_normalized:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="reason cannot be blank")
         row.status = "dismissed"
         row.dismissed_at = self.now()
         row.dismissed_by_user_id = actor_user_id
-        row.dismiss_reason = reason
+        row.dismiss_reason = reason_normalized
+        row.resolved_at = None
+        row.resolved_by_user_id = None
+        row.resolve_reason = None
         self.db.flush()
         if row.related_risk_assessment_id:
             assessment = self.require_assessment(organization_id=row.organization_id, assessment_id=row.related_risk_assessment_id)
@@ -2741,6 +2836,27 @@ class AISystemRiskAssessmentService:
         latest_signal_at = self.db.execute(
             select(func.max(GovernanceSignal.created_at)).where(GovernanceSignal.organization_id == organization_id)
         ).scalar_one_or_none()
+        prioritized_open = self._compute_prioritized_governance_signals(
+            organization_id=organization_id,
+            status_filter="open",
+        )
+        stale_open_signals = int(
+            sum(1 for row in prioritized_open if int(row.get("age_days") or 0) >= GOVERNANCE_SIGNAL_STALE_THRESHOLD_DAYS)
+        )
+        oldest_open_signal_age_days = max((int(row.get("age_days") or 0) for row in prioritized_open), default=None)
+        open_critical_signals = int(sum(1 for row in prioritized_open if str(row.get("severity")) == "critical"))
+        open_high_or_urgent_priority_signals = int(
+            sum(1 for row in prioritized_open if str(row.get("priority_band")) in {"high", "urgent"})
+        )
+        context_flags: list[str] = []
+        if open_signals == 0:
+            context_flags.append("no_open_signals")
+        if stale_open_signals > 0:
+            context_flags.append("stale_open_signals_present")
+        if open_critical_signals > 0:
+            context_flags.append("critical_signal_backlog")
+        if int(sum(1 for row in prioritized_open if str(row.get("priority_band")) == "urgent")) > 0:
+            context_flags.append("urgent_attention_required")
         return {
             "total_signals": total_signals,
             "open_signals": open_signals,
@@ -2750,6 +2866,11 @@ class AISystemRiskAssessmentService:
             "by_signal_type": by_signal_type,
             "by_entity_type": by_entity_type,
             "latest_signal_at": latest_signal_at,
+            "stale_open_signals": stale_open_signals,
+            "oldest_open_signal_age_days": oldest_open_signal_age_days,
+            "open_critical_signals": open_critical_signals,
+            "open_high_or_urgent_priority_signals": open_high_or_urgent_priority_signals,
+            "context_flags": context_flags,
             "caveat": AI_RISK_GOVERNANCE_SIGNAL_CAVEAT,
         }
 
@@ -3078,6 +3199,15 @@ class AISystemRiskAssessmentService:
             },
             "algorithm": "governance_signal_priority_v1",
         }
+        context_flags: list[str] = []
+        if row.status == "open" and age_days >= GOVERNANCE_SIGNAL_STALE_THRESHOLD_DAYS:
+            context_flags.append("stale_open_signal")
+        if row.status == "open" and row.severity == "critical":
+            context_flags.append("critical_open_signal")
+        if band in {"high", "urgent"}:
+            context_flags.append("high_attention_priority")
+        if open_density_count >= 5:
+            context_flags.append("high_signal_density")
         return {
             "signal_id": row.id,
             "signal_type": row.signal_type,
@@ -3093,6 +3223,7 @@ class AISystemRiskAssessmentService:
             "priority_explanation_json": explanation,
             "age_days": age_days,
             "group_key": self._signal_group_key(row),
+            "context_flags": context_flags,
             "created_at": row.created_at,
             "caveat": AI_RISK_GOVERNANCE_SIGNAL_PRIORITY_CAVEAT,
         }

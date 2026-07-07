@@ -563,6 +563,9 @@ class GovernanceSignalRead(UUIDTimestampSchema):
     priority_band: str | None = Field(default=None, pattern=GOVERNANCE_SIGNAL_PRIORITY_BAND_PATTERN)
     priority_explanation_json: dict | list | None = None
     group_key: str | None = None
+    age_days: int | None = None
+    stale_signal: bool = False
+    context_flags: list[str] = Field(default_factory=list)
     caveat: str
 
 
@@ -579,6 +582,11 @@ class GovernanceSignalSummary(BaseModel):
     by_signal_type: dict[str, int]
     by_entity_type: dict[str, int]
     latest_signal_at: datetime | None = None
+    stale_open_signals: int = 0
+    oldest_open_signal_age_days: int | None = None
+    open_critical_signals: int = 0
+    open_high_or_urgent_priority_signals: int = 0
+    context_flags: list[str] = Field(default_factory=list)
     caveat: str
 
 
@@ -597,6 +605,7 @@ class GovernanceSignalPrioritizedRead(BaseModel):
     priority_explanation_json: dict
     age_days: int
     group_key: str
+    context_flags: list[str] = Field(default_factory=list)
     created_at: datetime
     caveat: str
 
