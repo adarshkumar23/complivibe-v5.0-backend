@@ -1,7 +1,7 @@
 """add severity/issue-type snapshot columns for RCA + classification staleness detection
 
-Revision ID: 0200_rca_classification_staleness_snapshots
-Revises: 0199_audit_engagement_source_schedule_link
+Revision ID: 0261_rca_classification_staleness_snapshots
+Revises: 0260_generic_attestation_tokens
 Create Date: 2026-07-07 00:00:00.000000
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0200_rca_classification_staleness_snapshots"
-down_revision: str | None = "0199_audit_engagement_source_schedule_link"
+revision: str = "0261_rca_classification_staleness_snapshots"
+down_revision: str | None = "0260_generic_attestation_tokens"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
