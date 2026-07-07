@@ -53,6 +53,14 @@ class ComplianceTimelineEvent(BaseModel):
 
 class ComplianceTimelineResponse(BaseModel):
     total_events: int
+    has_more: bool = Field(
+        default=False,
+        description=(
+            "True if additional matching events exist beyond what is returned in `events` -- "
+            "either because the merged result set exceeded `limit`, or because one of the "
+            "underlying per-source queries itself hit `limit` (so its own tail may be missing)."
+        ),
+    )
     events: list[ComplianceTimelineEvent]
 
 
@@ -61,6 +69,10 @@ class ComplianceInboxItem(BaseModel):
     item_type: str
     title: str
     detail: str | None = None
+    reason: str | None = Field(
+        default=None,
+        description="Short explanation of why this item is prioritized where it is (e.g. days overdue).",
+    )
     priority_score: int
     due_at: datetime | None = None
     navigate_path: str | None = None

@@ -257,6 +257,10 @@ class CommandPaletteService:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="start_at must be less than or equal to end_at")
 
         events: list[ComplianceTimelineEvent] = []
+        # True if any single per-source query below returned exactly `limit` rows -- meaning
+        # that source may have additional matching rows beyond what was fetched, even if the
+        # final merged/sorted response ends up shorter than `limit` overall.
+        source_truncated = False
 
         if normalized_entity_type in {None, "evidence"}:
             evidence_stmt = select(EvidenceItem).where(EvidenceItem.organization_id == organization_id)
@@ -267,6 +271,7 @@ class CommandPaletteService:
             if end_at:
                 evidence_stmt = evidence_stmt.where(EvidenceItem.created_at <= end_at)
             evidence_rows = self.db.execute(evidence_stmt.order_by(EvidenceItem.created_at.desc()).limit(limit)).scalars().all()
+            source_truncated = source_truncated or len(evidence_rows) >= limit
             for row in evidence_rows:
                 occurred_at = row.collected_at or row.created_at
                 if start_at and occurred_at < start_at:
@@ -295,6 +300,7 @@ class CommandPaletteService:
             if end_at:
                 test_stmt = test_stmt.where(ControlTestRun.created_at <= end_at)
             test_rows = self.db.execute(test_stmt.order_by(ControlTestRun.created_at.desc()).limit(limit)).scalars().all()
+            source_truncated = source_truncated or len(test_rows) >= limit
             for row in test_rows:
                 events.append(
                     ComplianceTimelineEvent(
@@ -318,6 +324,7 @@ class CommandPaletteService:
             if end_at:
                 risk_stmt = risk_stmt.where(Risk.created_at <= end_at)
             risk_rows = self.db.execute(risk_stmt.order_by(Risk.created_at.desc()).limit(limit)).scalars().all()
+            source_truncated = source_truncated or len(risk_rows) >= limit
             for row in risk_rows:
                 events.append(
                     ComplianceTimelineEvent(
@@ -341,6 +348,7 @@ class CommandPaletteService:
             if end_at:
                 issue_stmt = issue_stmt.where(Issue.resolved_at <= end_at)
             issue_rows = self.db.execute(issue_stmt.order_by(Issue.resolved_at.desc()).limit(limit)).scalars().all()
+            source_truncated = source_truncated or len(issue_rows) >= limit
             for row in issue_rows:
                 resolved_at = row.resolved_at
                 if resolved_at is None:
@@ -379,6 +387,7 @@ class CommandPaletteService:
         if end_at:
             met_stmt = met_stmt.where(ComplianceDeadline.completed_at <= end_at)
         met_rows = self.db.execute(met_stmt.order_by(ComplianceDeadline.completed_at.desc()).limit(limit)).scalars().all()
+        source_truncated = source_truncated or len(met_rows) >= limit
         for row in met_rows:
             if row.completed_at is None:
                 continue
@@ -422,6 +431,7 @@ class CommandPaletteService:
         if end_at:
             missed_stmt = missed_stmt.where(ComplianceDeadlineEvent.created_at <= end_at)
         missed_rows = self.db.execute(missed_stmt.order_by(ComplianceDeadlineEvent.created_at.desc()).limit(limit)).all()
+        source_truncated = source_truncated or len(missed_rows) >= limit
         for event_row, deadline in missed_rows:
             events.append(
                 ComplianceTimelineEvent(
@@ -438,7 +448,8 @@ class CommandPaletteService:
 
         events.sort(key=lambda item: item.occurred_at, reverse=True)
         trimmed = events[:limit]
-        return ComplianceTimelineResponse(total_events=len(trimmed), events=trimmed)
+        has_more = source_truncated or len(events) > limit
+        return ComplianceTimelineResponse(total_events=len(trimmed), has_more=has_more, events=trimmed)
 
     def compliance_inbox(
         self,
@@ -465,12 +476,14 @@ class CommandPaletteService:
             due_at = self._as_utc(row.due_date)
             overdue_days = max(0, int((now - due_at).total_seconds() // 86400)) if due_at else 0
             priority_score = 140 + min(40, overdue_days * 3)
+            reason = f"{overdue_days} day{'s' if overdue_days != 1 else ''} overdue" if overdue_days > 0 else "Past due date"
             items.append(
                 ComplianceInboxItem(
                     item_key=f"task_overdue:{row.id}",
                     item_type="overdue_task",
                     title=row.title,
                     detail="Task is overdue",
+                    reason=reason,
                     priority_score=priority_score,
                     due_at=due_at,
                     navigate_path=f"/tasks/{row.id}",
@@ -490,10 +503,16 @@ class CommandPaletteService:
         for row in pbc_rows:
             due_at = None
             score_bump = 0
+            reason = "No due date set"
             if row.due_date is not None:
                 due_at = datetime.combine(row.due_date, dt_time.min, tzinfo=UTC)
                 if due_at < now:
                     score_bump = 18
+                    overdue_days = max(0, int((now - due_at).total_seconds() // 86400))
+                    reason = f"{overdue_days} day{'s' if overdue_days != 1 else ''} overdue"
+                else:
+                    days_to_due = max(0, int((due_at - now).total_seconds() // 86400))
+                    reason = f"Due in {days_to_due} day{'s' if days_to_due != 1 else ''}"
             priority_score = 120 + score_bump
             items.append(
                 ComplianceInboxItem(
@@ -501,6 +520,7 @@ class CommandPaletteService:
                     item_type="evidence_request",
                     title=row.item_description[:140],
                     detail="Evidence request assigned to you",
+                    reason=reason,
                     priority_score=priority_score,
                     due_at=due_at,
                     navigate_path=f"/audits/pbc/{row.id}",
@@ -526,16 +546,20 @@ class CommandPaletteService:
             days_to_due = int((due_at - now).total_seconds() // 86400)
             if days_to_due < 0:
                 priority_score = 135
+                reason = f"{abs(days_to_due)} day{'s' if abs(days_to_due) != 1 else ''} overdue"
             elif days_to_due <= 3:
                 priority_score = 125
+                reason = f"Due in {days_to_due} day{'s' if days_to_due != 1 else ''}"
             else:
                 priority_score = 110
+                reason = f"Due in {days_to_due} days"
             items.append(
                 ComplianceInboxItem(
                     item_key=f"attestation:{record.id}",
                     item_type="attestation_pending",
                     title=campaign.title or campaign.name,
                     detail="Policy attestation pending your response",
+                    reason=reason,
                     priority_score=priority_score,
                     due_at=due_at,
                     navigate_path=f"/compliance/attestation-campaigns/{campaign.id}",
@@ -559,6 +583,7 @@ class CommandPaletteService:
                     item_type="approval_request",
                     title="Policy approval request",
                     detail="Policy version requires your approval",
+                    reason="Awaiting your approval decision",
                     priority_score=130,
                     due_at=None,
                     navigate_path=f"/compliance/policies/{row.policy_id}/approvals/{row.id}",
@@ -582,6 +607,7 @@ class CommandPaletteService:
                     item_type="approval_request",
                     title="Control exception approval",
                     detail="Control exception decision pending",
+                    reason="Awaiting your approval decision",
                     priority_score=128,
                     due_at=None,
                     navigate_path=f"/control-exceptions/{row.exception_id}",
