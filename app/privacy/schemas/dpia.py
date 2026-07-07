@@ -105,6 +105,12 @@ class DPIARead(BaseModel):
     updated_at: datetime
     deleted_at: datetime | None
     checklist_items: list[DPIAChecklistItemRead] = Field(default_factory=list)
+    total_checklist_items: int = 0
+    answered_checklist_items: int = 0
+    checklist_completion_rate: float = 0.0
+    pending_review_days: int = 0
+    age_days: int = 0
+    context_flags: list[str] = []
 
 
 class DPIASummaryRead(BaseModel):
@@ -113,3 +119,8 @@ class DPIASummaryRead(BaseModel):
     by_residual_risk: dict[str, int]
     approved_count: int
     required_but_missing: int
+    under_review_count: int = 0
+    overdue_review_count: int = 0
+    approval_blocked_count: int = 0
+    approved_stale_activity_count: int = 0
+    context_flags: list[str] = []

@@ -59,6 +59,22 @@ def test_d86_dpia_workflow(client, db_session):
 
     created = _create_dpia(client, org["org_headers"], activity["id"])
     assert len(created["checklist_items"]) == 10
+    assert created["total_checklist_items"] == 10
+    assert created["answered_checklist_items"] == 0
+    assert created["checklist_completion_rate"] == 0.0
+    assert "checklist_incomplete" in created["context_flags"]
+
+    duplicate_response = client.post(
+        f"{DPIA_BASE}/{created['id']}/checklist",
+        headers=org["org_headers"],
+        json={
+            "responses": [
+                {"criterion_key": created["checklist_items"][0]["criterion_key"], "response": "yes"},
+                {"criterion_key": created["checklist_items"][0]["criterion_key"], "response": "yes"},
+            ]
+        },
+    )
+    assert duplicate_response.status_code == 422
 
     # Four-eyes: same creator approving should fail.
     submit = client.post(
@@ -67,6 +83,7 @@ def test_d86_dpia_workflow(client, db_session):
         json={"reviewer_id": org["user_id"]},
     )
     assert submit.status_code == 200
+    assert submit.json()["pending_review_days"] >= 0
 
     same_approver = client.post(
         f"{DPIA_BASE}/{created['id']}/approve",
@@ -133,6 +150,8 @@ def test_d86_dpia_workflow(client, db_session):
         json=checklist_payload,
     )
     assert checklist.status_code == 200
+    assert checklist.json()["answered_checklist_items"] == checklist.json()["total_checklist_items"]
+    assert checklist.json()["checklist_completion_rate"] == 100.0
 
     submit3 = client.post(
         f"{DPIA_BASE}/{third_dpia['id']}/submit-for-review",
@@ -165,6 +184,16 @@ def test_d86_dpia_workflow(client, db_session):
     summary = client.get(f"{DPIA_BASE}/summary", headers=third["org_headers"])
     assert summary.status_code == 200
     assert summary.json()["required_but_missing"] >= 0
+    assert "under_review_count" in summary.json()
+    assert "approval_blocked_count" in summary.json()
+    assert "approved_stale_activity_count" in summary.json()
+    assert isinstance(summary.json()["context_flags"], list)
+
+    listed = client.get(DPIA_BASE, headers=third["org_headers"])
+    assert listed.status_code == 200
+    assert len(listed.json()) >= 1
+    assert "context_flags" in listed.json()[0]
+    assert "checklist_completion_rate" in listed.json()[0]
 
     # soft delete from draft success
     draft = _create_dpia(client, third["org_headers"], third_activity["id"], title="Draft deletable")
@@ -197,6 +226,97 @@ def test_d86_submit_for_review_rejects_cross_tenant_reviewer(client, db_session)
     assert row is not None
     assert row.status == "draft"
     assert row.assigned_reviewer_id is None
+
+
+def test_d86_approval_guards_for_high_and_unacceptable_risk(client, db_session):
+    from uuid import UUID
+
+    from sqlalchemy import select
+
+    from app.models.membership import Membership
+    from app.models.role import Role
+    from app.models.user import User
+
+    org = bootstrap_org_user(client, email_prefix="d86-guards")
+    org_id = UUID(org["organization_id"])
+
+    reviewer_user = User(
+        email="d86-guards-reviewer@example.com",
+        full_name="d86-guards-reviewer",
+        hashed_password=db_session.query(User).filter(User.id == UUID(org["user_id"])).first().hashed_password,  # type: ignore[union-attr]
+        status="active",
+        is_active=True,
+        is_superuser=False,
+    )
+    db_session.add(reviewer_user)
+    db_session.flush()
+    role = db_session.execute(select(Role).where(Role.organization_id == org_id, Role.name == "admin")).scalar_one()
+    db_session.add(Membership(organization_id=org_id, user_id=reviewer_user.id, role_id=role.id, status="active", invited_by=reviewer_user.id))
+    db_session.commit()
+
+    login = client.post("/api/v1/auth/login", json={"email": reviewer_user.email, "password": "Pass1234!@"})
+    assert login.status_code == 200
+    reviewer_headers = {"Authorization": f"Bearer {login.json()['access_token']}", "X-Organization-ID": org["organization_id"]}
+
+    activity = _create_activity(client, org["org_headers"], org["user_id"], risk_level="high")
+    created = _create_dpia(client, org["org_headers"], activity["id"], title="Guarded DPIA")
+
+    checklist_payload = {"responses": [{"criterion_key": item["criterion_key"], "response": "yes", "notes": "ok"} for item in created["checklist_items"]]}
+    checklist = client.post(f"{DPIA_BASE}/{created['id']}/checklist", headers=org["org_headers"], json=checklist_payload)
+    assert checklist.status_code == 200
+
+    submit = client.post(
+        f"{DPIA_BASE}/{created['id']}/submit-for-review",
+        headers=org["org_headers"],
+        json={"reviewer_id": str(reviewer_user.id)},
+    )
+    assert submit.status_code == 200
+
+    high_risk_blocked = client.patch(
+        f"{DPIA_BASE}/{created['id']}",
+        headers=org["org_headers"],
+        json={"residual_risk_level": "high", "dpo_consulted": False},
+    )
+    assert high_risk_blocked.status_code == 200
+
+    approve_high = client.post(
+        f"{DPIA_BASE}/{created['id']}/approve",
+        headers=reviewer_headers,
+        json={"notes": "approve"},
+    )
+    assert approve_high.status_code == 422
+    assert "dpo_consulted" in approve_high.json()["detail"]
+
+    unacceptable = client.patch(
+        f"{DPIA_BASE}/{created['id']}",
+        headers=org["org_headers"],
+        json={"residual_risk_level": "unacceptable", "dpo_consulted": True, "dpo_opinion": "consulted", "supervisory_authority_consulted": False},
+    )
+    assert unacceptable.status_code == 200
+
+    approve_unacceptable = client.post(
+        f"{DPIA_BASE}/{created['id']}/approve",
+        headers=reviewer_headers,
+        json={"notes": "approve"},
+    )
+    assert approve_unacceptable.status_code == 422
+    assert "supervisory_authority_consulted" in approve_unacceptable.json()["detail"]
+
+    with_sa = client.patch(
+        f"{DPIA_BASE}/{created['id']}",
+        headers=org["org_headers"],
+        json={
+            "supervisory_authority_consulted": True,
+            "sa_consultation_notes": "SA consultation completed",
+        },
+    )
+    assert with_sa.status_code == 200
+    approved = client.post(
+        f"{DPIA_BASE}/{created['id']}/approve",
+        headers=reviewer_headers,
+        json={"notes": "approve"},
+    )
+    assert approved.status_code == 200
 
 
 def test_d91_lawful_basis_registry(client):

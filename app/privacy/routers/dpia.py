@@ -22,6 +22,10 @@ from app.privacy.services.dpia_service import DPIAService
 router = APIRouter(prefix="/privacy/dpias", tags=["privacy-dpias"])
 
 
+def _dpia_read(service: DPIAService, row) -> DPIARead:
+    return DPIARead.model_validate(service.dpia_response_payload(row))
+
+
 @router.post("", response_model=DPIARead, status_code=status.HTTP_201_CREATED)
 def create_dpia(
     payload: DPIACreate,
@@ -33,7 +37,7 @@ def create_dpia(
     service = DPIAService(db)
     row = service.create_dpia(organization.id, payload.processing_activity_id, payload, current_user.id)
     db.commit()
-    return DPIARead.model_validate(service.get_dpia(organization.id, row.id))
+    return _dpia_read(service, row)
 
 
 @router.get("", response_model=list[DPIARead])
@@ -52,7 +56,7 @@ def list_dpias(
         processing_activity_id=processing_activity_id,
         residual_risk_level=residual_risk_level,
     )
-    return [DPIARead.model_validate(service.get_dpia(organization.id, row.id)) for row in rows]
+    return [DPIARead.model_validate(item) for item in service.dpia_response_payloads(organization.id, rows)]
 
 
 @router.get("/summary", response_model=DPIASummaryRead)
@@ -72,8 +76,9 @@ def get_dpia(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("privacy:read")),
 ) -> DPIARead:
-    row = DPIAService(db).get_dpia(organization.id, dpia_id)
-    return DPIARead.model_validate(row)
+    service = DPIAService(db)
+    row = service.get_dpia(organization.id, dpia_id)
+    return _dpia_read(service, row)
 
 
 @router.patch("/{dpia_id}", response_model=DPIARead)
@@ -88,7 +93,7 @@ def update_dpia(
     service = DPIAService(db)
     row = service.update_dpia(organization.id, dpia_id, payload, current_user.id)
     db.commit()
-    return DPIARead.model_validate(service.get_dpia(organization.id, row.id))
+    return _dpia_read(service, row)
 
 
 @router.post("/{dpia_id}/checklist", response_model=DPIARead)
@@ -103,7 +108,7 @@ def respond_checklist(
     service = DPIAService(db)
     row = service.respond_checklist(organization.id, dpia_id, [item.model_dump() for item in payload.responses], current_user.id)
     db.commit()
-    return DPIARead.model_validate(service.get_dpia(organization.id, row.id))
+    return _dpia_read(service, row)
 
 
 @router.post("/{dpia_id}/submit-for-review", response_model=DPIARead)
@@ -118,7 +123,7 @@ def submit_for_review(
     service = DPIAService(db)
     row = service.submit_for_review(organization.id, dpia_id, payload.reviewer_id, current_user.id)
     db.commit()
-    return DPIARead.model_validate(service.get_dpia(organization.id, row.id))
+    return _dpia_read(service, row)
 
 
 @router.post("/{dpia_id}/approve", response_model=DPIARead)
@@ -133,7 +138,7 @@ def approve_dpia(
     service = DPIAService(db)
     row = service.approve_dpia(organization.id, dpia_id, current_user.id, notes=payload.notes)
     db.commit()
-    return DPIARead.model_validate(service.get_dpia(organization.id, row.id))
+    return _dpia_read(service, row)
 
 
 @router.post("/{dpia_id}/reject", response_model=DPIARead)
@@ -148,7 +153,7 @@ def reject_dpia(
     service = DPIAService(db)
     row = service.reject_dpia(organization.id, dpia_id, current_user.id, payload.notes)
     db.commit()
-    return DPIARead.model_validate(service.get_dpia(organization.id, row.id))
+    return _dpia_read(service, row)
 
 
 @router.delete("/{dpia_id}", status_code=status.HTTP_204_NO_CONTENT)
