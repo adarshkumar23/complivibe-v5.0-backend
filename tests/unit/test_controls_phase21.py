@@ -230,6 +230,123 @@ def test_control_status_transitions_enforced(client, db_session):
     assert revive.status_code == 422
     assert "archived" in revive.json()["detail"]
     assert "terminal" in revive.json()["detail"]
+def test_control_owner_membership_active_flag_reflects_deactivation(client, db_session):
+    owner1 = _register(client, "p21-flag-owner@example.com", "Pass1234!@", "P21 Flag Org")
+    org1 = client.get("/api/v1/organizations/me", headers=_headers(owner1)).json()[0]["id"]
+
+    delegate = _create_active_user_with_role(db_session, org1, "p21-flag-delegate@example.com", "admin")
+
+    created = client.post(
+        "/api/v1/controls",
+        headers=_headers(owner1, org1),
+        json={
+            "title": "Delegated Control",
+            "control_type": "process",
+            "criticality": "medium",
+            "owner_user_id": str(delegate.id),
+        },
+    )
+    assert created.status_code == 201
+    control_id = created.json()["id"]
+    assert created.json()["owner_membership_active"] is True
+
+    detail = client.get(f"/api/v1/controls/{control_id}", headers=_headers(owner1, org1))
+    assert detail.status_code == 200
+    assert detail.json()["owner_membership_active"] is True
+
+    listed = client.get("/api/v1/controls", headers=_headers(owner1, org1))
+    by_id = {row["id"]: row for row in listed.json()}
+    assert by_id[control_id]["owner_membership_active"] is True
+
+    unowned = client.post(
+        "/api/v1/controls",
+        headers=_headers(owner1, org1),
+        json={"title": "Unowned Control", "control_type": "process", "criticality": "low"},
+    )
+    assert unowned.status_code == 201
+    assert unowned.json()["owner_membership_active"] is None
+
+    memberships = client.get("/api/v1/memberships", headers=_headers(owner1, org1)).json()
+    delegate_membership_id = next(m["id"] for m in memberships if m["user_id"] == str(delegate.id))
+    deactivate_resp = client.patch(
+        f"/api/v1/memberships/{delegate_membership_id}/deactivate",
+        headers=_headers(owner1, org1),
+    )
+    assert deactivate_resp.status_code == 200
+
+    stale_detail = client.get(f"/api/v1/controls/{control_id}", headers=_headers(owner1, org1))
+    assert stale_detail.json()["owner_user_id"] == str(delegate.id)
+    assert stale_detail.json()["owner_membership_active"] is False
+
+    stale_listed = client.get("/api/v1/controls", headers=_headers(owner1, org1))
+    by_id_after = {row["id"]: row for row in stale_listed.json()}
+    assert by_id_after[control_id]["owner_membership_active"] is False
+
+
+def test_control_detail_active_exception_flags_overdue_review(client, db_session):
+    from app.models.control_exception import ControlException
+
+    owner1 = _register(client, "p21-exc-owner@example.com", "Pass1234!@", "P21 Exception Org")
+    org1 = client.get("/api/v1/organizations/me", headers=_headers(owner1)).json()[0]["id"]
+
+    control_resp = client.post(
+        "/api/v1/controls",
+        headers=_headers(owner1, org1),
+        json={"title": "Exception Control", "control_type": "process", "criticality": "medium"},
+    )
+    assert control_resp.status_code == 201
+    control_id = control_resp.json()["id"]
+
+    from datetime import date, timedelta
+
+    exception_owner = _create_active_user_with_role(db_session, org1, "p21-exc-delegate@example.com", "admin")
+    approver = _create_active_user_with_role(db_session, org1, "p21-exc-approver@example.com", "admin")
+    approver_token = _login(client, approver.email, "Pass1234!@")
+
+    exception_resp = client.post(
+        "/api/v1/compliance/control-exceptions",
+        headers=_headers(owner1, org1),
+        json={
+            "control_id": control_id,
+            "title": "Temporary waiver",
+            "description": "Cannot meet control this quarter",
+            "exception_type": "temporary",
+            "risk_acceptance_reason": "Vendor migration in progress",
+            "owner_user_id": str(exception_owner.id),
+            "effective_date": (date.today() - timedelta(days=5)).isoformat(),
+            "expiry_date": (date.today() + timedelta(days=60)).isoformat(),
+        },
+    )
+    assert exception_resp.status_code == 201
+    exception_id = exception_resp.json()["id"]
+    assert exception_resp.json()["status"] == "pending_approval"
+
+    approved = client.post(
+        f"/api/v1/compliance/control-exceptions/{exception_id}/approve",
+        headers=_headers(approver_token, org1),
+        json={"decision_notes": "approved for testing"},
+    )
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "active"
+
+    # Backdate review_date directly (not settable at create time in this flow) to simulate a
+    # review that's now overdue.
+    row = db_session.query(ControlException).filter(ControlException.id == uuid.UUID(exception_id)).one()
+    row.review_date = date.today() - timedelta(days=1)
+    db_session.commit()
+
+    detail = client.get(f"/api/v1/controls/{control_id}", headers=_headers(owner1, org1))
+    assert detail.status_code == 200
+    active_exception = detail.json()["active_exception"]
+    assert active_exception is not None
+    assert active_exception["risk_acceptance_reason"] == "Vendor migration in progress"
+    assert active_exception["review_overdue"] is True
+
+    # Push review_date into the future -- no longer overdue.
+    row.review_date = date.today() + timedelta(days=30)
+    db_session.commit()
+    detail2 = client.get(f"/api/v1/controls/{control_id}", headers=_headers(owner1, org1))
+    assert detail2.json()["active_exception"]["review_overdue"] is False
 
 
 def test_control_mapping_unmapping_obligation_controls_and_gap_summary(client):

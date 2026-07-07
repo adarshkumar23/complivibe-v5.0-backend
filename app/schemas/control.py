@@ -48,6 +48,7 @@ class ControlRead(BaseModel):
     created_by_user_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
+    owner_membership_active: bool | None = None
 
 
 class ControlDetail(ControlRead):

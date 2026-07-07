@@ -36,7 +36,7 @@ from app.schemas.issue_links import ControlAssociatedIssuesGroupedRead, ControlF
 router = APIRouter(prefix="/controls", tags=["controls"])
 
 
-def _control_read(control: Control) -> ControlRead:
+def _control_read(control: Control, *, owner_membership_active: bool | None = None) -> ControlRead:
     return ControlRead(
         id=control.id,
         organization_id=control.organization_id,
@@ -53,6 +53,7 @@ def _control_read(control: Control) -> ControlRead:
         created_by_user_id=control.created_by_user_id,
         created_at=control.created_at,
         updated_at=control.updated_at,
+        owner_membership_active=owner_membership_active,
     )
 
 
@@ -61,6 +62,28 @@ def _get_control_or_404(db: Session, organization_id: uuid.UUID, control_id: uui
     if control is None or control.organization_id != organization_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Control not found")
     return control
+
+
+def _active_owner_ids(db: Session, organization_id: uuid.UUID, owner_ids: set[uuid.UUID]) -> set[uuid.UUID]:
+    """Batch-resolve which of the given user ids currently hold an active membership in the
+    org, in a single query -- so listing N controls doesn't cost N membership lookups."""
+    if not owner_ids:
+        return set()
+    rows = db.execute(
+        select(Membership.user_id).where(
+            Membership.organization_id == organization_id,
+            Membership.user_id.in_(owner_ids),
+            Membership.status == "active",
+        )
+    ).scalars().all()
+    return set(rows)
+
+
+def _control_read_with_owner_status(db: Session, organization_id: uuid.UUID, control: Control) -> ControlRead:
+    owner_membership_active = None
+    if control.owner_user_id is not None:
+        owner_membership_active = control.owner_user_id in _active_owner_ids(db, organization_id, {control.owner_user_id})
+    return _control_read(control, owner_membership_active=owner_membership_active)
 
 
 def _evidence_read(item: EvidenceItem) -> EvidenceRead:
@@ -126,7 +149,15 @@ def list_controls(
         limit=limit,
         offset=offset,
     )
-    return [_control_read(c) for c in controls]
+    owner_ids = {c.owner_user_id for c in controls if c.owner_user_id is not None}
+    active_owner_ids = _active_owner_ids(db, organization.id, owner_ids)
+    return [
+        _control_read(
+            c,
+            owner_membership_active=(c.owner_user_id in active_owner_ids) if c.owner_user_id is not None else None,
+        )
+        for c in controls
+    ]
 
 
 @router.post("", response_model=ControlRead, status_code=status.HTTP_201_CREATED)
@@ -171,7 +202,7 @@ def create_control(
 
     db.commit()
     db.refresh(control)
-    return _control_read(control)
+    return _control_read_with_owner_status(db, organization.id, control)
 
 
 @router.get("/{control_id}", response_model=ControlDetail)
@@ -202,14 +233,20 @@ def get_control_detail(
             "title": active_exception.title,
             "status": active_exception.status,
             "exception_type": active_exception.exception_type,
+            "risk_acceptance_reason": active_exception.risk_acceptance_reason,
             "effective_date": str(active_exception.effective_date),
             "expiry_date": str(active_exception.expiry_date) if active_exception.expiry_date else None,
+            "review_date": str(active_exception.review_date) if active_exception.review_date else None,
+            "review_overdue": (
+                active_exception.review_date is not None
+                and active_exception.review_date < ControlExceptionService.utcdate()
+            ),
         }
         if active_exception is not None
         else None
     )
     return ControlDetail(
-        **_control_read(control).model_dump(),
+        **_control_read_with_owner_status(db, organization.id, control).model_dump(),
         mapped_obligations=mapped_summary,
         evidence_count=evidence_count,
         active_exception=exception_context,
@@ -348,7 +385,7 @@ def update_control(
         triggered_by="user_action",
     )
     db.refresh(control)
-    return _control_read(control)
+    return _control_read_with_owner_status(db, organization.id, control)
 
 
 @router.patch("/{control_id}/archive", response_model=ControlRead)
@@ -388,7 +425,7 @@ def archive_control(
         triggered_by="user_action",
     )
     db.refresh(control)
-    return _control_read(control)
+    return _control_read_with_owner_status(db, organization.id, control)
 
 
 @router.post("/{control_id}/obligations", response_model=ControlObligationMapRead)
