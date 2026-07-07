@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+import uuid
+
+from app.models.data_asset import DataAsset
 
 from app.data_observability.services.classification_service import classify_metadata, classify_sample
 from tests.helpers.auth_org import bootstrap_org_user
@@ -49,6 +53,9 @@ def test_c73_data_asset_catalog_flow(client):
     assert float(body["classification_confidence"]) > 0.70
     assert body["classification_confirmed"] is False
     assert body["classification_source"] == "metadata_rules"
+    assert "context_flags" in body
+    assert "classification_unconfirmed" in body["context_flags"]
+    assert body["recommended_review"] == "confirm_classification"
 
     unmatched = _create_asset(
         client,
@@ -77,6 +84,7 @@ def test_c73_data_asset_catalog_flow(client):
     assert confirmed_body["classification_confirmed"] is True
     assert confirmed_body["classification_source"] == "manual"
     assert confirmed_body["sensitivity_tier"] == "restricted"
+    assert confirmed_body["recommended_review"] is None
 
     updated = client.patch(
         f"{ASSETS_BASE}/{unmatched_body['id']}",
@@ -103,6 +111,8 @@ def test_c73_data_asset_catalog_flow(client):
     assert summary_body["unconfirmed_count"] == 1
     assert summary_body["by_classification_type"]["personal_data"] >= 1
     assert summary_body["by_classification_type"]["health_data"] >= 1
+    assert "stale_classification_count" in summary_body
+    assert "high_risk_unconfirmed_count" in summary_body
 
     org_b = bootstrap_org_user(client, email_prefix="c73-org-b")
     isolated = client.get(f"{ASSETS_BASE}/{body['id']}", headers=org_b["org_headers"])
@@ -228,3 +238,35 @@ def test_c74_classification_engine(monkeypatch, client):
     refreshed = client.get(f"{ASSETS_BASE}/{asset['id']}", headers=org["org_headers"])
     assert refreshed.status_code == 200
     assert refreshed.json()["classification_confirmed"] is False
+
+
+def test_data_asset_context_flags_stale_and_summary_risk_insight(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="c73-stale-org")
+    created = _create_asset(
+        client,
+        org["org_headers"],
+        org["user_id"],
+        name="stale_financial_records",
+        description="bank account and transaction dataset",
+        schema_column_names=["account_number", "transaction_amount"],
+    )
+    assert created.status_code == 201
+    asset_id = created.json()["id"]
+
+    row = db_session.query(DataAsset).filter(DataAsset.id == uuid.UUID(asset_id)).one()
+    row.updated_at = datetime.now(UTC) - timedelta(days=45)
+    db_session.add(row)
+    db_session.commit()
+
+    fetched = client.get(f"{ASSETS_BASE}/{asset_id}", headers=org["org_headers"])
+    assert fetched.status_code == 200
+    payload = fetched.json()
+    assert payload["classification_stale"] is True
+    assert "classification_stale" in payload["context_flags"]
+    assert payload["recommended_review"] == "confirm_classification"
+
+    summary = client.get(f"{ASSETS_BASE}/summary", headers=org["org_headers"])
+    assert summary.status_code == 200
+    body = summary.json()
+    assert body["stale_classification_count"] >= 1
+    assert body["high_risk_unconfirmed_count"] >= 1

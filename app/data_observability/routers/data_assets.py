@@ -35,6 +35,10 @@ from app.models.user import User
 router = APIRouter(prefix="/data-observability/assets", tags=["data-observability-assets"])
 
 
+def _asset_read(service: DataAssetService, row) -> DataAssetRead:
+    return DataAssetRead.model_validate(service.asset_response_payload(row))
+
+
 @router.post("", response_model=DataAssetRead, status_code=status.HTTP_201_CREATED)
 def create_data_asset(
     payload: DataAssetCreate,
@@ -43,10 +47,11 @@ def create_data_asset(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:write")),
 ) -> DataAssetRead:
-    row = DataAssetService(db).create_asset(organization.id, payload, current_user.id)
+    service = DataAssetService(db)
+    row = service.create_asset(organization.id, payload, current_user.id)
     db.commit()
     db.refresh(row)
-    return DataAssetRead.model_validate(row)
+    return _asset_read(service, row)
 
 
 @router.get("", response_model=list[DataAssetRead])
@@ -62,7 +67,8 @@ def list_data_assets(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:read")),
 ) -> list[DataAssetRead]:
-    rows = DataAssetService(db).list_assets(
+    service = DataAssetService(db)
+    rows = service.list_assets(
         organization.id,
         asset_type=asset_type,
         sensitivity_tier=sensitivity_tier,
@@ -72,7 +78,7 @@ def list_data_assets(
         skip=skip,
         limit=limit,
     )
-    return [DataAssetRead.model_validate(row) for row in rows]
+    return [_asset_read(service, row) for row in rows]
 
 
 @router.get("/summary", response_model=DataAssetSummaryRead)
@@ -92,8 +98,9 @@ def get_data_asset(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:read")),
 ) -> DataAssetRead:
-    row = DataAssetService(db).get_asset(organization.id, asset_id)
-    return DataAssetRead.model_validate(row)
+    service = DataAssetService(db)
+    row = service.get_asset(organization.id, asset_id)
+    return _asset_read(service, row)
 
 
 @router.patch("/{asset_id}", response_model=DataAssetRead)
@@ -105,10 +112,11 @@ def update_data_asset(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:write")),
 ) -> DataAssetRead:
-    row = DataAssetService(db).update_asset(organization.id, asset_id, payload, current_user.id)
+    service = DataAssetService(db)
+    row = service.update_asset(organization.id, asset_id, payload, current_user.id)
     db.commit()
     db.refresh(row)
-    return DataAssetRead.model_validate(row)
+    return _asset_read(service, row)
 
 
 @router.post("/{asset_id}/confirm-classification", response_model=DataAssetRead)
@@ -120,7 +128,8 @@ def confirm_data_asset_classification(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:write")),
 ) -> DataAssetRead:
-    row = DataAssetService(db).confirm_classification(
+    service = DataAssetService(db)
+    row = service.confirm_classification(
         organization.id,
         asset_id,
         payload.classification_type,
@@ -129,7 +138,7 @@ def confirm_data_asset_classification(
     )
     db.commit()
     db.refresh(row)
-    return DataAssetRead.model_validate(row)
+    return _asset_read(service, row)
 
 
 @router.post("/{asset_id}/classify-sample", response_model=DataAssetSampleClassificationRead)
@@ -160,10 +169,11 @@ def delete_data_asset(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:write")),
 ) -> DataAssetRead:
-    row = DataAssetService(db).soft_delete_asset(organization.id, asset_id, current_user.id)
+    service = DataAssetService(db)
+    row = service.soft_delete_asset(organization.id, asset_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return DataAssetRead.model_validate(row)
+    return _asset_read(service, row)
 
 
 @router.get("/{asset_id}/quality-configs", response_model=list[DataQualityConfigRead])

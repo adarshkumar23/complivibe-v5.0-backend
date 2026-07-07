@@ -93,6 +93,10 @@ class DataAssetRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
+    classification_age_days: int | None = None
+    classification_stale: bool = False
+    recommended_review: str | None = None
+    context_flags: list[str] = []
 
 
 class DataAssetSummaryRead(BaseModel):
@@ -103,6 +107,8 @@ class DataAssetSummaryRead(BaseModel):
     confirmed_count: int
     unconfirmed_count: int
     needs_review_count: int
+    stale_classification_count: int
+    high_risk_unconfirmed_count: int
 
 
 class PresidioEntity(BaseModel):

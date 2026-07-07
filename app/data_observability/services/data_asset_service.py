@@ -69,6 +69,14 @@ class DataAssetService:
     def utcnow() -> datetime:
         return datetime.now(UTC)
 
+    @staticmethod
+    def _as_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
     def _require_asset(self, org_id: uuid.UUID, asset_id: uuid.UUID) -> DataAsset:
         row = self.db.execute(
             select(DataAsset).where(
@@ -230,6 +238,84 @@ class DataAssetService:
 
     def get_asset(self, org_id: uuid.UUID, asset_id: uuid.UUID) -> DataAsset:
         return self._require_asset(org_id, asset_id)
+
+    def asset_context(self, row: DataAsset, *, now: datetime | None = None) -> dict:
+        evaluated_now = now or self.utcnow()
+        updated_at = self._as_utc(row.updated_at) or evaluated_now
+        classification_age_days = max(0, (evaluated_now - updated_at).days)
+        classification_stale = (
+            row.status == "active"
+            and (
+                (not row.classification_confirmed and classification_age_days >= 30)
+                or (row.classification_confirmed and classification_age_days >= 365)
+            )
+        )
+        context_flags: list[str] = []
+        if row.classification_type is None:
+            context_flags.append("classification_missing")
+        if row.classification_confidence is None:
+            context_flags.append("classification_confidence_missing")
+        elif row.classification_confidence < Decimal("0.5"):
+            context_flags.append("classification_low_confidence")
+        if not row.classification_confirmed:
+            context_flags.append("classification_unconfirmed")
+        if classification_stale:
+            context_flags.append("classification_stale")
+        if row.sensitivity_tier in {"restricted", "secret"} and not row.retention_policy_days:
+            context_flags.append("retention_policy_missing_for_sensitive_asset")
+        if row.classification_type in {"health_data", "financial_data", "sensitive_personal_data"} and not row.geographic_locations:
+            context_flags.append("geographic_location_missing_for_regulated_data")
+
+        recommended_review: str | None = None
+        if row.classification_type is None:
+            recommended_review = "classify_asset"
+        elif not row.classification_confirmed:
+            recommended_review = "confirm_classification"
+        elif classification_stale:
+            recommended_review = "revalidate_classification"
+
+        return {
+            "classification_age_days": classification_age_days,
+            "classification_stale": classification_stale,
+            "recommended_review": recommended_review,
+            "context_flags": context_flags,
+        }
+
+    def asset_response_payload(self, row: DataAsset) -> dict:
+        context = self.asset_context(row)
+        return {
+            "id": row.id,
+            "organization_id": row.organization_id,
+            "name": row.name,
+            "asset_type": row.asset_type,
+            "description": row.description,
+            "owner_id": row.owner_id,
+            "custodian_id": row.custodian_id,
+            "sensitivity_tier": row.sensitivity_tier,
+            "classification_type": row.classification_type,
+            "classification_confidence": row.classification_confidence,
+            "classification_source": row.classification_source,
+            "classification_confirmed": row.classification_confirmed,
+            "geographic_locations": row.geographic_locations,
+            "permitted_regions": row.permitted_regions,
+            "schema_column_names": row.schema_column_names,
+            "retention_policy_days": row.retention_policy_days,
+            "retention_review_date": row.retention_review_date,
+            "data_volume_estimate": row.data_volume_estimate,
+            "source_system": row.source_system,
+            "tags": row.tags,
+            "is_phi": row.is_phi,
+            "hipaa_safeguard_required": row.hipaa_safeguard_required,
+            "status": row.status,
+            "created_by": row.created_by,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "deleted_at": row.deleted_at,
+            "classification_age_days": context["classification_age_days"],
+            "classification_stale": context["classification_stale"],
+            "recommended_review": context["recommended_review"],
+            "context_flags": context["context_flags"],
+        }
 
     def list_assets(
         self,
@@ -428,6 +514,19 @@ class DataAssetService:
             or 0
         )
 
+        rows = self.db.execute(select(DataAsset).where(*base_filters)).scalars().all()
+        stale_classification_count = 0
+        high_risk_unconfirmed_count = 0
+        for row in rows:
+            context = self.asset_context(row)
+            if context["classification_stale"]:
+                stale_classification_count += 1
+            if (
+                row.classification_type in {"health_data", "financial_data", "sensitive_personal_data"}
+                and not row.classification_confirmed
+            ):
+                high_risk_unconfirmed_count += 1
+
         return {
             "total_assets": total_assets,
             "by_asset_type": by_asset_type,
@@ -436,6 +535,8 @@ class DataAssetService:
             "confirmed_count": confirmed_count,
             "unconfirmed_count": unconfirmed_count,
             "needs_review_count": needs_review_count,
+            "stale_classification_count": stale_classification_count,
+            "high_risk_unconfirmed_count": high_risk_unconfirmed_count,
         }
 
     def archive_asset(self, org_id: uuid.UUID, asset_id: uuid.UUID, user_id: uuid.UUID) -> DataAsset:
