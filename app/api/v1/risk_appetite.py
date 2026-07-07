@@ -313,6 +313,9 @@ def update_threshold(
         user_agent=request.headers.get("user-agent"),
     )
 
+    if row.max_acceptable_score > before["max_acceptable_score"]:
+        service.resync_alerts_for_threshold(org_id=organization.id, threshold_id=row.id, threshold=row)
+
     db.commit()
     db.refresh(row)
     return _threshold_read(row)
@@ -328,7 +331,8 @@ def deactivate_threshold(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("risk_appetite:write")),
 ) -> RiskAppetiteThresholdRead:
-    row = RiskAppetiteService(db).require_threshold_in_org(organization.id, threshold_id)
+    service = RiskAppetiteService(db)
+    row = service.require_threshold_in_org(organization.id, threshold_id)
 
     if row.is_active:
         row.is_active = False
@@ -348,6 +352,8 @@ def deactivate_threshold(
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
         )
+
+        service.resync_alerts_for_threshold(org_id=organization.id, threshold_id=row.id, threshold=None)
 
     db.commit()
     db.refresh(row)

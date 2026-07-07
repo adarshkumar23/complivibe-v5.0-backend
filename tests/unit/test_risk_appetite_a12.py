@@ -513,7 +513,11 @@ def test_a12_check_appetite_breach_idempotent_second_call_no_duplicate(client, d
     db_session.commit()
 
     assert first is not None
-    assert second is None
+    # Second call with an unchanged score doesn't create a duplicate alert -- it now returns the
+    # same still-open alert (rather than None) so callers get a reference to it, but the alert
+    # count below is the real "no duplicate" invariant this test is about.
+    assert second is not None
+    assert second.id == first.id
     count = (
         db_session.query(ControlMonitoringAlert)
         .filter(
@@ -524,6 +528,204 @@ def test_a12_check_appetite_breach_idempotent_second_call_no_duplicate(client, d
         .count()
     )
     assert count == 1
+
+
+def test_a12_breach_alert_auto_resolves_when_score_drops_back_under_threshold(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="a12-autoresolve-score")
+    escalation_owner = _create_active_user_with_role(db_session, org["organization_id"], "a12-ar-score-owner@example.com", "admin")
+    org_id = uuid.UUID(org["organization_id"])
+
+    risk = Risk(
+        organization_id=org_id,
+        title="Recovering Risk",
+        category="compliance",
+        severity="high",
+        likelihood=5,
+        impact=3,
+        inherent_score=15,
+        treatment_strategy="mitigate",
+        status="identified",
+        owner_user_id=escalation_owner.id,
+    )
+    threshold = RiskAppetiteThreshold(
+        organization_id=org_id,
+        scope_type="org",
+        scope_id=None,
+        risk_category="compliance",
+        max_acceptable_score=8,
+        escalation_owner_id=escalation_owner.id,
+        is_active=True,
+        created_by_user_id=escalation_owner.id,
+    )
+    db_session.add_all([risk, threshold])
+    db_session.commit()
+
+    service = RiskAppetiteService(db_session)
+    breach_alert = service.check_appetite_breach(org_id=org_id, risk_id=risk.id, new_score=15, risk_category="compliance")
+    db_session.commit()
+    assert breach_alert is not None
+    assert breach_alert.status == "open"
+
+    # Score drops back under the threshold (e.g. after mitigation) -- the prior alert must not
+    # keep reporting a "live" breach.
+    resolved = service.check_appetite_breach(org_id=org_id, risk_id=risk.id, new_score=6, risk_category="compliance")
+    db_session.commit()
+    assert resolved is None
+
+    db_session.refresh(breach_alert)
+    assert breach_alert.status == "resolved"
+    assert breach_alert.resolved_at is not None
+    assert "no longer applies" in (breach_alert.resolution_notes or "")
+
+    logs = client.get("/api/v1/audit-logs", headers=org["org_headers"]).json()
+    actions = [item["action"] for item in logs]
+    assert "risk_appetite.breach_auto_resolved" in actions
+
+    # A subsequent re-breach creates a fresh alert rather than trying to reopen the resolved one.
+    rebreach = service.check_appetite_breach(org_id=org_id, risk_id=risk.id, new_score=15, risk_category="compliance")
+    db_session.commit()
+    assert rebreach is not None
+    assert rebreach.id != breach_alert.id
+    assert rebreach.status == "open"
+
+
+def test_a12_breach_alert_context_score_refreshed_on_repeat_breach(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="a12-refresh-score")
+    escalation_owner = _create_active_user_with_role(db_session, org["organization_id"], "a12-refresh-owner@example.com", "admin")
+    org_id = uuid.UUID(org["organization_id"])
+
+    risk = Risk(
+        organization_id=org_id,
+        title="Worsening Risk",
+        category="compliance",
+        severity="high",
+        likelihood=5,
+        impact=3,
+        inherent_score=15,
+        treatment_strategy="mitigate",
+        status="identified",
+        owner_user_id=escalation_owner.id,
+    )
+    threshold = RiskAppetiteThreshold(
+        organization_id=org_id,
+        scope_type="org",
+        scope_id=None,
+        risk_category="compliance",
+        max_acceptable_score=8,
+        escalation_owner_id=escalation_owner.id,
+        is_active=True,
+        created_by_user_id=escalation_owner.id,
+    )
+    db_session.add_all([risk, threshold])
+    db_session.commit()
+
+    service = RiskAppetiteService(db_session)
+    first = service.check_appetite_breach(org_id=org_id, risk_id=risk.id, new_score=15, risk_category="compliance")
+    db_session.commit()
+    assert first.alert_context_json["new_score"] == 15
+
+    # Risk gets worse while the alert is still open -- the existing alert's snapshot should track
+    # the new value instead of continuing to show the original (now stale) score.
+    worse = service.check_appetite_breach(org_id=org_id, risk_id=risk.id, new_score=20, risk_category="compliance")
+    db_session.commit()
+    assert worse.id == first.id
+    db_session.refresh(first)
+    assert first.alert_context_json["new_score"] == 20
+    assert "20" in first.title
+
+
+def test_a12_raising_threshold_auto_resolves_no_longer_breaching_alerts(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="a12-autoresolve-raise")
+    escalation_owner = _create_active_user_with_role(db_session, org["organization_id"], "a12-ar-raise-owner@example.com", "admin")
+    org_id = uuid.UUID(org["organization_id"])
+
+    risk = Risk(
+        organization_id=org_id,
+        title="Threshold Raised Risk",
+        category="compliance",
+        severity="high",
+        likelihood=5,
+        impact=3,
+        inherent_score=15,
+        treatment_strategy="mitigate",
+        status="identified",
+        owner_user_id=escalation_owner.id,
+    )
+    threshold = RiskAppetiteThreshold(
+        organization_id=org_id,
+        scope_type="org",
+        scope_id=None,
+        risk_category="compliance",
+        max_acceptable_score=8,
+        escalation_owner_id=escalation_owner.id,
+        is_active=True,
+        created_by_user_id=escalation_owner.id,
+    )
+    db_session.add_all([risk, threshold])
+    db_session.commit()
+
+    service = RiskAppetiteService(db_session)
+    breach_alert = service.check_appetite_breach(org_id=org_id, risk_id=risk.id, new_score=15, risk_category="compliance")
+    db_session.commit()
+    assert breach_alert.status == "open"
+
+    raise_threshold = client.patch(
+        f"{BASE}/{threshold.id}",
+        headers=org["org_headers"],
+        json={"max_acceptable_score": 20},
+    )
+    assert raise_threshold.status_code == 200
+
+    db_session.refresh(breach_alert)
+    assert breach_alert.status == "resolved"
+    assert "raised" in (breach_alert.resolution_notes or "")
+
+
+def test_a12_deactivating_threshold_auto_resolves_its_open_alerts(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="a12-autoresolve-deactivate")
+    escalation_owner = _create_active_user_with_role(db_session, org["organization_id"], "a12-ar-deact-owner@example.com", "admin")
+    org_id = uuid.UUID(org["organization_id"])
+
+    risk = Risk(
+        organization_id=org_id,
+        title="Threshold Deactivated Risk",
+        category="compliance",
+        severity="high",
+        likelihood=5,
+        impact=3,
+        inherent_score=15,
+        treatment_strategy="mitigate",
+        status="identified",
+        owner_user_id=escalation_owner.id,
+    )
+    threshold = RiskAppetiteThreshold(
+        organization_id=org_id,
+        scope_type="org",
+        scope_id=None,
+        risk_category="compliance",
+        max_acceptable_score=8,
+        escalation_owner_id=escalation_owner.id,
+        is_active=True,
+        created_by_user_id=escalation_owner.id,
+    )
+    db_session.add_all([risk, threshold])
+    db_session.commit()
+
+    service = RiskAppetiteService(db_session)
+    breach_alert = service.check_appetite_breach(org_id=org_id, risk_id=risk.id, new_score=15, risk_category="compliance")
+    db_session.commit()
+    assert breach_alert.status == "open"
+
+    deactivate = client.post(
+        f"{BASE}/{threshold.id}/deactivate",
+        headers=org["org_headers"],
+        json={"reason": "No longer relevant"},
+    )
+    assert deactivate.status_code == 200
+
+    db_session.refresh(breach_alert)
+    assert breach_alert.status == "resolved"
+    assert "deactivated" in (breach_alert.resolution_notes or "")
 
 
 def test_a12_derive_severity_bands():

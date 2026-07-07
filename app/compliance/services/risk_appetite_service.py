@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy import case, select
@@ -144,6 +145,52 @@ class RiskAppetiteService:
 
         return None
 
+    def _find_open_breach_alert(self, *, org_id: uuid.UUID, risk_id: uuid.UUID) -> ControlMonitoringAlert | None:
+        open_alerts = self.db.execute(
+            select(ControlMonitoringAlert).where(
+                ControlMonitoringAlert.organization_id == org_id,
+                ControlMonitoringAlert.alert_type == "risk_threshold_breach",
+                ControlMonitoringAlert.status == "open",
+            )
+        ).scalars().all()
+        for row in open_alerts:
+            if not isinstance(row.alert_context_json, dict):
+                continue
+            if str(row.alert_context_json.get("risk_id")) == str(risk_id):
+                return row
+        return None
+
+    def _auto_resolve_breach_alert(
+        self,
+        *,
+        alert: ControlMonitoringAlert,
+        org_id: uuid.UUID,
+        new_score: int,
+        reason: str,
+    ) -> None:
+        """Close a previously-open risk_threshold_breach alert once the condition that raised
+        it no longer holds (score dropped back under the resolved threshold, or the threshold
+        itself was relaxed) -- otherwise a "live breach" would keep being reported forever after
+        it stopped being true."""
+        alert.status = "resolved"
+        alert.resolved_at = datetime.now(UTC)
+        alert.resolved_by_user_id = None
+        alert.resolution_notes = reason
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="risk_appetite.breach_auto_resolved",
+            entity_type="control_monitoring_alert",
+            entity_id=alert.id,
+            organization_id=org_id,
+            actor_user_id=None,
+            after_json={"status": alert.status, "resolved_at": alert.resolved_at.isoformat(), "reason": reason},
+            metadata_json={
+                "source": "system",
+                "context_json": {"current_score": new_score, "reason": reason},
+            },
+        )
+
     def check_appetite_breach(
         self,
         *,
@@ -176,24 +223,47 @@ class RiskAppetiteService:
             risk_category=risk_category,
             scope_id=scope_id,
         )
+
+        existing_alert = self._find_open_breach_alert(org_id=org_id, risk_id=risk_id)
+
         if threshold is None:
+            # No active threshold applies anymore (e.g. it was deactivated) -- any open breach
+            # alert for this risk no longer has anything to be breaching.
+            if existing_alert is not None:
+                self._auto_resolve_breach_alert(
+                    alert=existing_alert,
+                    org_id=org_id,
+                    new_score=new_score,
+                    reason="No active risk appetite threshold applies to this risk anymore.",
+                )
             return None
 
         if new_score <= threshold.max_acceptable_score:
+            if existing_alert is not None:
+                self._auto_resolve_breach_alert(
+                    alert=existing_alert,
+                    org_id=org_id,
+                    new_score=new_score,
+                    reason=(
+                        f"Risk score {new_score} is now at or under threshold "
+                        f"{threshold.max_acceptable_score}; breach no longer applies."
+                    ),
+                )
             return None
 
-        open_alerts = self.db.execute(
-            select(ControlMonitoringAlert).where(
-                ControlMonitoringAlert.organization_id == org_id,
-                ControlMonitoringAlert.alert_type == "risk_threshold_breach",
-                ControlMonitoringAlert.status == "open",
-            )
-        ).scalars().all()
-        for row in open_alerts:
-            if not isinstance(row.alert_context_json, dict):
-                continue
-            if str(row.alert_context_json.get("risk_id")) == str(risk_id):
-                return None
+        if existing_alert is not None:
+            # Already have an open alert for this risk -- keep its snapshot of new_score current
+            # rather than silently leaving stale numbers in a "live" alert.
+            ctx = dict(existing_alert.alert_context_json or {})
+            if ctx.get("new_score") != new_score:
+                ctx["new_score"] = new_score
+                existing_alert.alert_context_json = ctx
+                existing_alert.title = (
+                    f"Risk appetite breach: {risk_category} score "
+                    f"{new_score} exceeds threshold {threshold.max_acceptable_score}"
+                )
+                self.db.flush()
+            return existing_alert
 
         severity = self.derive_severity(new_score, threshold.max_acceptable_score)
         title = (
@@ -251,3 +321,54 @@ class RiskAppetiteService:
             },
         )
         return alert
+
+    def resync_alerts_for_threshold(
+        self,
+        *,
+        org_id: uuid.UUID,
+        threshold_id: uuid.UUID,
+        threshold: RiskAppetiteThreshold | None,
+    ) -> int:
+        """Re-evaluate open risk_threshold_breach alerts raised against a specific threshold
+        after that threshold was edited (raised) or deactivated. Without this, an alert created
+        while max_acceptable_score was e.g. 10 keeps reporting a "live breach" forever even after
+        an admin raises the threshold to 20 or turns it off -- nothing else re-triggers a check
+        for that risk unless its own score happens to change again.
+
+        `threshold` is None when the threshold was deactivated; otherwise it's the row with its
+        already-updated max_acceptable_score.
+        """
+        open_alerts = self.db.execute(
+            select(ControlMonitoringAlert).where(
+                ControlMonitoringAlert.organization_id == org_id,
+                ControlMonitoringAlert.alert_type == "risk_threshold_breach",
+                ControlMonitoringAlert.status == "open",
+            )
+        ).scalars().all()
+
+        resolved_count = 0
+        for alert in open_alerts:
+            ctx = alert.alert_context_json if isinstance(alert.alert_context_json, dict) else {}
+            if str(ctx.get("threshold_id")) != str(threshold_id):
+                continue
+
+            new_score = ctx.get("new_score")
+            if threshold is None:
+                reason = "Risk appetite threshold was deactivated; breach no longer applies."
+            elif isinstance(new_score, int) and new_score <= threshold.max_acceptable_score:
+                reason = (
+                    f"Risk appetite threshold was raised to {threshold.max_acceptable_score}; "
+                    f"recorded score {new_score} no longer breaches it."
+                )
+            else:
+                continue
+
+            self._auto_resolve_breach_alert(
+                alert=alert,
+                org_id=org_id,
+                new_score=new_score if isinstance(new_score, int) else 0,
+                reason=reason,
+            )
+            resolved_count += 1
+
+        return resolved_count
