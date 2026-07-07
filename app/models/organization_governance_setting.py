@@ -19,6 +19,9 @@ class OrganizationGovernanceSetting(UUIDPrimaryKeyMixin, TimestampMixin, Organiz
 
     batch_cancellation_requires_approval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     batch_cancellation_policy_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    autopilot_auto_execute_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    autopilot_auto_execute_confidence_threshold: Mapped[float] = mapped_column(nullable=False, default=0.95)
+    autopilot_auto_execute_reversal_window_hours: Mapped[int] = mapped_column(nullable=False, default=24)
     updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey("users.id", ondelete="SET NULL"),

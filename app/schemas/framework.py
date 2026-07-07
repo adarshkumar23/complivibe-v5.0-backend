@@ -183,6 +183,20 @@ class FrameworkContentPackValidationResponse(BaseModel):
     persisted: bool = False
 
 
+class FrameworkContentConsistencyDriftItem(BaseModel):
+    pack_key: str
+    framework_code: str
+    reference_code: str
+    fields: list[str]
+
+
+class FrameworkContentConsistencyCheckResponse(BaseModel):
+    pack_count_checked: int
+    drift_count: int
+    drift_rows: list[FrameworkContentConsistencyDriftItem]
+    ok: bool
+
+
 class FrameworkCoverageReportRead(BaseModel):
     id: UUID | None = None
     framework_id: UUID

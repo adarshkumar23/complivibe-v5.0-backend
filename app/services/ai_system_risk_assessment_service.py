@@ -24,6 +24,7 @@ from app.models.governance_signal import GovernanceSignal
 from app.models.governance_autopilot_policy import GovernanceAutopilotPolicy
 from app.models.governance_autopilot_approval_policy import GovernanceAutopilotApprovalPolicy
 from app.models.governance_autopilot_execution_intent import GovernanceAutopilotExecutionIntent
+from app.models.governance_autopilot_execution import GovernanceAutopilotExecution
 from app.models.governance_autopilot_execution_approval import GovernanceAutopilotExecutionApproval
 from app.models.governance_autopilot_execution_approval_vote import GovernanceAutopilotExecutionApprovalVote
 from app.models.governance_autopilot_runner_simulation import GovernanceAutopilotRunnerSimulation
@@ -37,7 +38,14 @@ from app.models.governance_copilot_draft_snapshot import GovernanceCopilotDraftS
 from app.models.control import Control
 from app.models.evidence_item import EvidenceItem
 from app.models.risk import Risk
+from app.models.task import Task
+from app.models.membership import Membership
+from app.models.role import Role
+from app.models.user import User
+from app.models.organization_governance_setting import OrganizationGovernanceSetting
 from app.services.ai_system_service import AISystemService
+from app.services.email_service import EmailService
+from app.services.seed_service import SeedService
 from app.core.validation import validate_choice
 
 AI_RISK_ASSESSMENT_CAVEAT = (
@@ -194,6 +202,17 @@ AUTOPILOT_POLICY_MODE_VALUES: tuple[str, ...] = (
     "execute_safe_later",
 )
 AUTOPILOT_PRIORITY_BANDS: tuple[str, ...] = ("low", "medium", "high", "urgent")
+AUTOPILOT_ACTION_RISK_TIERS: tuple[str, ...] = ("low", "medium", "high")
+AUTOPILOT_DEFAULT_CONFIDENCE_SCORE = 0.5
+AUTOPILOT_DEFAULT_AUTO_EXECUTE_THRESHOLD = 0.95
+AUTOPILOT_DEFAULT_REVERSAL_WINDOW_HOURS = 24
+AUTOPILOT_CIRCUIT_BREAKER_REVERSAL_RATE_THRESHOLD = 0.2
+AUTOPILOT_CIRCUIT_BREAKER_MIN_SAMPLE_SIZE = 3
+AUTOPILOT_CIRCUIT_BREAKER_ABSOLUTE_REVERSAL_MIN_SAMPLE_SIZE = 2
+AUTOPILOT_CIRCUIT_BREAKER_WINDOW_HOURS = 24
+AUTOPILOT_CIRCUIT_BREAKER_SPIKE_WINDOW_HOURS = 1
+AUTOPILOT_CIRCUIT_BREAKER_SPIKE_MULTIPLIER = 3.0
+AUTOPILOT_CIRCUIT_BREAKER_SPIKE_MIN_EXECUTIONS = 10
 AUTOPILOT_SAFE_FALLBACK_MODE = "suggest_only"
 AUTOPILOT_SAFE_FALLBACK_CAVEAT = (
     "Autopilot policies define deterministic guardrails and evaluation decisions. "
@@ -590,6 +609,12 @@ class AISystemRiskAssessmentService:
     @staticmethod
     def now() -> datetime:
         return datetime.now(UTC)
+
+    @staticmethod
+    def as_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
     @staticmethod
     def canonical_json(payload: dict) -> str:
@@ -3372,6 +3397,38 @@ class AISystemRiskAssessmentService:
             return (1, "")
         return (0, str(value))
 
+    @classmethod
+    def classify_candidate_action_risk_tier(
+        cls,
+        *,
+        action_key: str,
+        action_type: str,
+    ) -> str:
+        key = str(action_key or "").strip().lower()
+        action_type_normalized = str(action_type or "").strip().lower()
+        low_keys = {"flag_stale_evidence", "send_reminder", "refresh_signals"}
+        high_keys = {
+            "close_risk",
+            "delete_evidence",
+            "delete_control",
+            "delete_record",
+            "purge_record",
+            "archive_record",
+            "revoke_access",
+        }
+        destructive_tokens = ("delete", "remove", "purge", "revoke", "destroy", "close")
+        if key in low_keys:
+            return "low"
+        if key in high_keys or any(token in key for token in destructive_tokens):
+            return "high"
+        if action_type_normalized in {"attach_evidence", "review_record", "refresh_signals"}:
+            return "low"
+        if action_type_normalized in {"update_record", "create_record"}:
+            return "medium"
+        if action_type_normalized in {"resolve_issue", "create_snapshot", "prepare_draft"}:
+            return "medium"
+        return "high"
+
     def _candidate_actions_from_prioritized_signals(
         self,
         *,
@@ -3411,6 +3468,11 @@ class AISystemRiskAssessmentService:
                     "related_risk_assessment_id": signal.get("related_risk_assessment_id"),
                     "human_approval_required": bool(template["human_approval_required"]),
                     "automation_allowed": bool(template["automation_allowed"]),
+                    "risk_tier": self.classify_candidate_action_risk_tier(
+                        action_key=str(template["action_key"]),
+                        action_type=str(template["action_type"]),
+                    ),
+                    "confidence_score": AUTOPILOT_DEFAULT_CONFIDENCE_SCORE,
                     "target_route_hint": template.get("target_route_hint"),
                     "caveat": AI_RISK_GOVERNANCE_CANDIDATE_ACTION_CAVEAT,
                 }
@@ -3455,6 +3517,8 @@ class AISystemRiskAssessmentService:
                     "rationale_json": rationale_json,
                     "human_approval_required": bool(group["human_approval_required"]),
                     "automation_allowed": bool(group["automation_allowed"]),
+                    "risk_tier": str(group["risk_tier"]),
+                    "confidence_score": float(group["confidence_score"]),
                     "target_route_hint": group.get("target_route_hint"),
                     "caveat": AI_RISK_GOVERNANCE_CANDIDATE_ACTION_CAVEAT,
                 }
@@ -5766,6 +5830,19 @@ class AISystemRiskAssessmentService:
         normalized["action_type"] = action_type.strip()
         normalized["priority_band"] = priority_band
         normalized["source_reason_codes"] = sorted(set(normalized_reason_codes))
+        # SECURITY: risk_tier must never be trusted from client input. It is always
+        # derived server-side from action_key/action_type so a caller cannot
+        # self-declare a destructive action (e.g. delete_evidence) as low-risk to
+        # bypass the human-approval gate. Any client-supplied risk_tier is ignored.
+        normalized["risk_tier"] = self.classify_candidate_action_risk_tier(
+            action_key=normalized["action_key"],
+            action_type=normalized["action_type"],
+        )
+        # SECURITY: confidence_score is likewise never accepted from client input on
+        # this path -- it is the value the internal candidate-generation pipeline
+        # uses (AUTOPILOT_DEFAULT_CONFIDENCE_SCORE), never a caller-attested number,
+        # since a self-declared 1.0 could otherwise force auto-execution.
+        normalized["confidence_score"] = AUTOPILOT_DEFAULT_CONFIDENCE_SCORE
         return normalized
 
     def evaluate_candidate_action_against_policy(
@@ -5788,6 +5865,8 @@ class AISystemRiskAssessmentService:
 
         action_type = str(action["action_type"])
         action_band = str(action["priority_band"])
+        action_risk_tier = str(action["risk_tier"])
+        confidence_score = float(action["confidence_score"])
         reason_codes = set(str(code) for code in action.get("source_reason_codes", []))
 
         allowed_action_types = set(str(v) for v in policy.get("allowed_action_types_json", []))
@@ -5813,6 +5892,8 @@ class AISystemRiskAssessmentService:
             requires_human_approval = True
         if action_band in approval_bands:
             requires_human_approval = True
+        if action_risk_tier == "high":
+            requires_human_approval = True
 
         if bool(action.get("automation_allowed")) and not bool(policy.get("external_effects_allowed", False)):
             blocked_reasons.append("external_effects_not_allowed")
@@ -5835,6 +5916,8 @@ class AISystemRiskAssessmentService:
             "allowed_by_policy": allowed,
             "required_mode": mode,
             "requires_human_approval": requires_human_approval,
+            "risk_tier": action_risk_tier,
+            "confidence_score": confidence_score,
             "blocked_reasons": sorted(set(blocked_reasons)),
             "policy_decision": policy_decision,
             "policy_explanation_json": {
@@ -5844,6 +5927,8 @@ class AISystemRiskAssessmentService:
                 "checks": {
                     "action_type": action_type,
                     "priority_band": action_band,
+                    "risk_tier": action_risk_tier,
+                    "confidence_score": confidence_score,
                     "source_reason_codes": sorted(reason_codes),
                     "max_allowed_priority_band_for_auto": max_auto_band,
                     "approval_required_action_types_json": sorted(approval_action_types),
@@ -6059,6 +6144,8 @@ class AISystemRiskAssessmentService:
             "related_ai_system_id": action.get("related_ai_system_id"),
             "related_risk_assessment_id": action.get("related_risk_assessment_id"),
             "priority_band": action.get("priority_band"),
+            "risk_tier": action.get("risk_tier"),
+            "confidence_score": action.get("confidence_score"),
             "capability_key": capability.get("capability_key"),
             "allowed_in_phase_7_1": bool(capability.get("allowed_in_phase_7_1", False)),
             "allowed_by_policy": bool(policy_eval["allowed_by_policy"]) and not blocked,
@@ -6231,6 +6318,477 @@ class AISystemRiskAssessmentService:
             "caveat": AUTOPILOT_EXECUTION_INTENT_CAVEAT,
         }
 
+    def _governance_settings_for_org(self, *, organization_id: uuid.UUID) -> OrganizationGovernanceSetting:
+        row = self.db.execute(
+            select(OrganizationGovernanceSetting).where(OrganizationGovernanceSetting.organization_id == organization_id)
+        ).scalar_one_or_none()
+        if row is not None:
+            return row
+        row = OrganizationGovernanceSetting(
+            organization_id=organization_id,
+            batch_cancellation_requires_approval=False,
+            batch_cancellation_policy_reason=None,
+            autopilot_auto_execute_enabled=False,
+            autopilot_auto_execute_confidence_threshold=AUTOPILOT_DEFAULT_AUTO_EXECUTE_THRESHOLD,
+            autopilot_auto_execute_reversal_window_hours=AUTOPILOT_DEFAULT_REVERSAL_WINDOW_HOURS,
+            updated_by_user_id=None,
+        )
+        self.db.add(row)
+        self.db.flush()
+        return row
+
+    def _autopilot_admin_members(self, *, organization_id: uuid.UUID) -> list[tuple[User, str]]:
+        rows = self.db.execute(
+            select(User, Role.name)
+            .join(Membership, Membership.user_id == User.id)
+            .join(Role, Role.id == Membership.role_id)
+            .where(
+                Membership.organization_id == organization_id,
+                Membership.status == "active",
+                Role.name.in_(["owner", "admin"]),
+                User.is_active.is_(True),
+                User.status == "active",
+            )
+            .order_by(Role.name.asc(), User.created_at.asc())
+        ).all()
+        out: list[tuple[User, str]] = []
+        seen_user_ids: set[uuid.UUID] = set()
+        for user_row, role_name in rows:
+            if user_row.id in seen_user_ids:
+                continue
+            seen_user_ids.add(user_row.id)
+            out.append((user_row, str(role_name)))
+        return out
+
+    def _queue_autopilot_notification(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        actor_user_id: uuid.UUID | None,
+        subject_title: str,
+        details_json: dict[str, Any],
+    ) -> int:
+        SeedService.ensure_global_email_templates(self.db)
+        template = EmailService(self.db).resolve_template_for_org(
+            organization_id=organization_id,
+            template_id=None,
+            template_key="task_assigned",
+        )
+        sent = 0
+        for user_row, _role_name in self._autopilot_admin_members(organization_id=organization_id):
+            if not user_row.email:
+                continue
+            EmailService(self.db).queue_email(
+                organization_id=organization_id,
+                template=template,
+                event_type="autopilot.auto_execution",
+                recipient_email=user_row.email,
+                recipient_user_id=user_row.id,
+                priority="high",
+                scheduled_at=None,
+                metadata_json={
+                    "notification_type": "autopilot_auto_execution",
+                    "severity": "high",
+                    **details_json,
+                },
+                created_by_user_id=actor_user_id or user_row.id,
+                variables_json={
+                    "user_name": user_row.full_name or user_row.email,
+                    "task_title": subject_title,
+                },
+                initial_status="queued",
+            )
+            sent += 1
+        return sent
+
+    def _execute_action_flag_stale_evidence(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        action: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        target_entity_id = action.get("target_entity_id")
+        if target_entity_id is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="target_entity_id is required for flag_stale_evidence")
+        assessment = self.require_assessment(organization_id=organization_id, assessment_id=uuid.UUID(str(target_entity_id)))
+        old_value = assessment.mitigation_summary
+        marker = "[AUTOPILOT] Evidence flagged stale for manual review."
+        assessment.mitigation_summary = marker if not old_value else f"{old_value}\n{marker}"
+        before = {"operation": "flag_stale_evidence", "assessment_id": str(assessment.id), "mitigation_summary": old_value}
+        after = {"operation": "flag_stale_evidence", "assessment_id": str(assessment.id), "mitigation_summary": assessment.mitigation_summary}
+        metadata = {"operation": "flag_stale_evidence", "assessment_id": str(assessment.id)}
+        return before, after, metadata
+
+    def _execute_action_send_reminder(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        action: dict[str, Any],
+        actor_user_id: uuid.UUID | None,
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        target_entity_type = str(action.get("target_entity_type") or "risk_assessment")
+        target_entity_id = action.get("target_entity_id")
+        linked_entity_id = uuid.UUID(str(target_entity_id)) if target_entity_id else None
+        task = Task(
+            organization_id=organization_id,
+            title=str(action.get("title") or "Autopilot reminder"),
+            description=str(action.get("description") or "Autopilot-generated reminder"),
+            status="open",
+            priority="high",
+            task_type="governance_followup",
+            owner_user_id=actor_user_id,
+            created_by_user_id=actor_user_id,
+            linked_entity_type=target_entity_type,
+            linked_entity_id=linked_entity_id,
+            source="autopilot",
+            reminder_status="none",
+            metadata_json={
+                "autopilot": True,
+                "action_key": action.get("action_key"),
+                "risk_tier": action.get("risk_tier"),
+                "confidence_score": action.get("confidence_score"),
+            },
+        )
+        self.db.add(task)
+        self.db.flush()
+        before = {"operation": "send_reminder", "task_id": None}
+        after = {
+            "operation": "send_reminder",
+            "task_id": str(task.id),
+            "linked_entity_type": target_entity_type,
+            "linked_entity_id": str(linked_entity_id) if linked_entity_id else None,
+        }
+        metadata = {"operation": "send_reminder", "task_id": str(task.id)}
+        return before, after, metadata
+
+    def _execute_action_refresh_signals(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        action: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        target_entity_id = action.get("target_entity_id") or action.get("related_risk_assessment_id")
+        if target_entity_id is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="target_entity_id is required for refresh_signals")
+        assessment = self.require_assessment(organization_id=organization_id, assessment_id=uuid.UUID(str(target_entity_id)))
+        before_risk_factors = dict(assessment.risk_factors_json or {}) if isinstance(assessment.risk_factors_json, dict) else {}
+        updated = dict(before_risk_factors)
+        updated["autopilot_last_refresh_at"] = self.now().isoformat()
+        assessment.risk_factors_json = updated
+        before = {"operation": "refresh_signals", "assessment_id": str(assessment.id), "risk_factors_json": before_risk_factors}
+        after = {"operation": "refresh_signals", "assessment_id": str(assessment.id), "risk_factors_json": updated}
+        metadata = {"operation": "refresh_signals", "assessment_id": str(assessment.id)}
+        return before, after, metadata
+
+    def _auto_execute_candidate_action(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        intent: GovernanceAutopilotExecutionIntent,
+        action: dict[str, Any],
+        actor_user_id: uuid.UUID | None,
+    ) -> GovernanceAutopilotExecution:
+        settings = self._governance_settings_for_org(organization_id=organization_id)
+        reversal_window_hours = int(
+            settings.autopilot_auto_execute_reversal_window_hours
+            if settings.autopilot_auto_execute_reversal_window_hours
+            else AUTOPILOT_DEFAULT_REVERSAL_WINDOW_HOURS
+        )
+        # SECURITY: an auto-execution must never happen silently. If the org has no
+        # active owner/admin to notify, block the auto-execution entirely (rather
+        # than executing with notification_count == 0) so a human is guaranteed to
+        # see it before it can happen unnoticed.
+        if not self._autopilot_admin_members(organization_id=organization_id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Autopilot auto-execution blocked: organization has no active owner/admin to notify",
+            )
+        action_key = str(action.get("action_key") or "").strip()
+        action_type = str(action.get("action_type") or "").strip()
+        if action_key == "flag_stale_evidence":
+            before_snapshot, after_snapshot, op_meta = self._execute_action_flag_stale_evidence(
+                organization_id=organization_id,
+                action=action,
+            )
+        elif action_key == "send_reminder":
+            before_snapshot, after_snapshot, op_meta = self._execute_action_send_reminder(
+                organization_id=organization_id,
+                action=action,
+                actor_user_id=actor_user_id,
+            )
+        elif action_type == "refresh_signals":
+            before_snapshot, after_snapshot, op_meta = self._execute_action_refresh_signals(
+                organization_id=organization_id,
+                action=action,
+            )
+        else:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported auto-execution action")
+
+        row = GovernanceAutopilotExecution(
+            organization_id=organization_id,
+            execution_intent_id=intent.id,
+            action_key=action_key,
+            action_type=action_type,
+            risk_tier=str(action.get("risk_tier")),
+            confidence_score=float(action.get("confidence_score") or AUTOPILOT_DEFAULT_CONFIDENCE_SCORE),
+            target_entity_type=action.get("target_entity_type"),
+            target_entity_id=uuid.UUID(str(action["target_entity_id"])) if action.get("target_entity_id") else None,
+            execution_status="executed",
+            before_snapshot_json=self.to_json_compatible(before_snapshot),
+            after_snapshot_json=self.to_json_compatible(after_snapshot),
+            reversal_deadline_at=self.now() + timedelta(hours=max(1, reversal_window_hours)),
+            metadata_json=self.to_json_compatible(
+                {
+                    "mode": "auto_execute",
+                    "operation": op_meta.get("operation"),
+                    "intent_id": str(intent.id),
+                }
+            ),
+        )
+        self.db.add(row)
+        self.db.flush()
+        notification_count = self._queue_autopilot_notification(
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+            subject_title=f"Autopilot auto-executed: {action_key}",
+            details_json={
+                "execution_id": str(row.id),
+                "intent_id": str(intent.id),
+                "action_key": action_key,
+                "risk_tier": row.risk_tier,
+            },
+        )
+        row.metadata_json = self.to_json_compatible(
+            {
+                **dict(row.metadata_json or {}),
+                "notification_count": notification_count,
+            }
+        )
+        self._run_autopilot_circuit_breaker(organization_id=organization_id, actor_user_id=actor_user_id)
+        return row
+
+    def _should_auto_execute_action(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        action: dict[str, Any],
+        policy_preview: dict[str, Any],
+    ) -> tuple[bool, list[str]]:
+        reasons: list[str] = []
+        settings = self._governance_settings_for_org(organization_id=organization_id)
+        risk_tier = str(action.get("risk_tier"))
+        confidence_score = float(action.get("confidence_score") or AUTOPILOT_DEFAULT_CONFIDENCE_SCORE)
+        threshold = float(
+            settings.autopilot_auto_execute_confidence_threshold
+            if settings.autopilot_auto_execute_confidence_threshold is not None
+            else AUTOPILOT_DEFAULT_AUTO_EXECUTE_THRESHOLD
+        )
+        if risk_tier != "low":
+            reasons.append("risk_tier_not_low")
+        if risk_tier == "high":
+            reasons.append("high_risk_requires_human_approval")
+        if confidence_score < threshold:
+            reasons.append("confidence_below_threshold")
+        if not bool(action.get("automation_allowed", False)):
+            reasons.append("action_not_marked_automation_allowed")
+        if not bool(policy_preview.get("allowed_by_policy")):
+            reasons.append("policy_denied")
+        if bool(policy_preview.get("requires_human_approval", False)):
+            reasons.append("policy_requires_human_approval")
+        if not bool(settings.autopilot_auto_execute_enabled):
+            reasons.append("organization_not_opted_in")
+        return (len(reasons) == 0, sorted(set(reasons)))
+
+    def _run_autopilot_circuit_breaker(self, *, organization_id: uuid.UUID, actor_user_id: uuid.UUID | None) -> None:
+        settings = self._governance_settings_for_org(organization_id=organization_id)
+        if not bool(settings.autopilot_auto_execute_enabled):
+            return
+        now = self.now()
+        lookback_start = now - timedelta(hours=AUTOPILOT_CIRCUIT_BREAKER_WINDOW_HOURS)
+        rows = list(
+            self.db.execute(
+                select(
+                    GovernanceAutopilotExecution.created_at,
+                    GovernanceAutopilotExecution.reversed_at,
+                ).where(
+                    GovernanceAutopilotExecution.organization_id == organization_id,
+                    GovernanceAutopilotExecution.created_at >= lookback_start,
+                )
+            ).all()
+        )
+        total_window = len(rows)
+        reversed_window = int(sum(1 for _created_at, reversed_at in rows if reversed_at is not None))
+        reversal_rate = (reversed_window / total_window) if total_window else 0.0
+
+        spike_start = now - timedelta(hours=AUTOPILOT_CIRCUIT_BREAKER_SPIKE_WINDOW_HOURS)
+        current_window_count = int(
+            sum(1 for created_at, _ in rows if (self.as_utc(created_at) or now) >= spike_start)
+        )
+        previous_span_hours = max(1, AUTOPILOT_CIRCUIT_BREAKER_WINDOW_HOURS - AUTOPILOT_CIRCUIT_BREAKER_SPIKE_WINDOW_HOURS)
+        previous_window_count = int(
+            sum(
+                1
+                for created_at, _ in rows
+                if lookback_start <= (self.as_utc(created_at) or now) < spike_start
+            )
+        )
+        baseline_per_hour = previous_window_count / previous_span_hours
+        spike_threshold = max(
+            AUTOPILOT_CIRCUIT_BREAKER_SPIKE_MIN_EXECUTIONS,
+            int(round(baseline_per_hour * AUTOPILOT_CIRCUIT_BREAKER_SPIKE_MULTIPLIER)),
+        )
+
+        trip_reasons: list[str] = []
+        if total_window >= AUTOPILOT_CIRCUIT_BREAKER_MIN_SAMPLE_SIZE and reversal_rate > AUTOPILOT_CIRCUIT_BREAKER_REVERSAL_RATE_THRESHOLD:
+            trip_reasons.append("reversal_rate_threshold_breached")
+        # SECURITY: a low absolute execution count must not be usable to stay under
+        # AUTOPILOT_CIRCUIT_BREAKER_MIN_SAMPLE_SIZE while every single execution in
+        # a smaller window is reversed. Trip unconditionally on a 100% reversal rate
+        # once a minimal sample exists, regardless of total volume.
+        if total_window >= AUTOPILOT_CIRCUIT_BREAKER_ABSOLUTE_REVERSAL_MIN_SAMPLE_SIZE and reversal_rate >= 1.0:
+            trip_reasons.append("full_reversal_rate_detected")
+        if current_window_count >= spike_threshold and current_window_count >= AUTOPILOT_CIRCUIT_BREAKER_SPIKE_MIN_EXECUTIONS:
+            trip_reasons.append("execution_volume_spike_detected")
+        if not trip_reasons:
+            return
+
+        settings.autopilot_auto_execute_enabled = False
+        settings.updated_by_user_id = actor_user_id
+        self.db.flush()
+        self._queue_autopilot_notification(
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+            subject_title="Autopilot auto-execution disabled by circuit breaker",
+            details_json={
+                "reasons": trip_reasons,
+                "total_window": total_window,
+                "reversed_window": reversed_window,
+                "reversal_rate": round(reversal_rate, 6),
+                "current_window_count": current_window_count,
+                "spike_threshold": spike_threshold,
+            },
+        )
+
+    def require_autopilot_execution(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        execution_id: uuid.UUID,
+    ) -> GovernanceAutopilotExecution:
+        row = self.db.execute(
+            select(GovernanceAutopilotExecution).where(
+                GovernanceAutopilotExecution.organization_id == organization_id,
+                GovernanceAutopilotExecution.id == execution_id,
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Autopilot execution not found")
+        return row
+
+    def list_autopilot_executions(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        execution_status: str | None,
+        execution_intent_id: uuid.UUID | None,
+        limit: int,
+        offset: int,
+    ) -> list[GovernanceAutopilotExecution]:
+        query = select(GovernanceAutopilotExecution).where(
+            GovernanceAutopilotExecution.organization_id == organization_id
+        )
+        if execution_status is not None:
+            query = query.where(GovernanceAutopilotExecution.execution_status == execution_status)
+        if execution_intent_id is not None:
+            query = query.where(GovernanceAutopilotExecution.execution_intent_id == execution_intent_id)
+        query = query.order_by(
+            GovernanceAutopilotExecution.created_at.desc(),
+            GovernanceAutopilotExecution.id.desc(),
+        ).offset(offset).limit(limit)
+        return list(self.db.execute(query).scalars().all())
+
+    def reverse_autopilot_execution(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        execution_id: uuid.UUID,
+        reason: str | None,
+        actor_user_id: uuid.UUID | None,
+    ) -> GovernanceAutopilotExecution:
+        row = self.require_autopilot_execution(organization_id=organization_id, execution_id=execution_id)
+        now = self.now()
+        if row.reversed_at is not None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Execution has already been reversed")
+        deadline = self.as_utc(row.reversal_deadline_at)
+        if deadline is not None and now > deadline:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Reversal window has expired")
+
+        operation = str((row.metadata_json or {}).get("operation") or "")
+        before_snapshot = dict(row.before_snapshot_json or {}) if isinstance(row.before_snapshot_json, dict) else {}
+        after_snapshot = dict(row.after_snapshot_json or {}) if isinstance(row.after_snapshot_json, dict) else {}
+
+        if operation == "flag_stale_evidence":
+            assessment = self.require_assessment(
+                organization_id=organization_id,
+                assessment_id=uuid.UUID(str(before_snapshot.get("assessment_id"))),
+            )
+            assessment.mitigation_summary = before_snapshot.get("mitigation_summary")
+        elif operation == "refresh_signals":
+            assessment = self.require_assessment(
+                organization_id=organization_id,
+                assessment_id=uuid.UUID(str(before_snapshot.get("assessment_id"))),
+            )
+            assessment.risk_factors_json = before_snapshot.get("risk_factors_json")
+        elif operation == "send_reminder":
+            task_id = after_snapshot.get("task_id")
+            if task_id:
+                task = self.db.get(Task, uuid.UUID(str(task_id)))
+                if task is not None and task.organization_id == organization_id:
+                    self.db.delete(task)
+        else:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Execution cannot be reversed")
+
+        row.execution_status = "reversed"
+        row.reversed_at = now
+        row.reversed_by_user_id = actor_user_id
+        row.reversal_reason = reason
+        row.reversal_snapshot_json = self.to_json_compatible(
+            {
+                "operation": operation,
+                "reversed_at": now.isoformat(),
+                "reason": reason,
+            }
+        )
+        self.db.flush()
+        self._run_autopilot_circuit_breaker(organization_id=organization_id, actor_user_id=actor_user_id)
+        return row
+
+    @staticmethod
+    def autopilot_execution_payload(row: GovernanceAutopilotExecution) -> dict[str, Any]:
+        return {
+            "id": row.id,
+            "execution_id": row.id,
+            "organization_id": row.organization_id,
+            "execution_intent_id": row.execution_intent_id,
+            "action_key": row.action_key,
+            "action_type": row.action_type,
+            "risk_tier": row.risk_tier,
+            "confidence_score": float(row.confidence_score),
+            "target_entity_type": row.target_entity_type,
+            "target_entity_id": row.target_entity_id,
+            "execution_status": row.execution_status,
+            "before_snapshot_json": row.before_snapshot_json,
+            "after_snapshot_json": row.after_snapshot_json,
+            "reversal_deadline_at": row.reversal_deadline_at,
+            "reversed_at": row.reversed_at,
+            "reversed_by_user_id": row.reversed_by_user_id,
+            "reversal_reason": row.reversal_reason,
+            "reversal_snapshot_json": row.reversal_snapshot_json,
+            "metadata_json": row.metadata_json,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+
     def create_execution_intent(
         self,
         *,
@@ -6278,6 +6836,34 @@ class AISystemRiskAssessmentService:
 
         blocked = bool(preview["blocked"])
         approval_required = bool(preview["approval_required"])
+        auto_execute_now = False
+        auto_execute_reasons: list[str] = []
+        candidate_action_for_auto: dict[str, Any] | None = None
+        if source_type == "candidate_action" and isinstance(preview.get("plan_payload_json"), dict):
+            candidate_payload = preview["plan_payload_json"].get("candidate_action")
+            if isinstance(candidate_payload, dict):
+                candidate_action_for_auto = self._validate_candidate_action_shape(candidate_action_json=candidate_payload)
+                policy_preview = self.evaluate_candidate_action_against_policy(
+                    organization_id=organization_id,
+                    candidate_action_json=candidate_action_for_auto,
+                    policy_id=policy_id,
+                )
+                if candidate_action_for_auto["risk_tier"] == "high":
+                    approval_required = True
+                settings = self._governance_settings_for_org(organization_id=organization_id)
+                threshold = float(
+                    settings.autopilot_auto_execute_confidence_threshold
+                    if settings.autopilot_auto_execute_confidence_threshold is not None
+                    else AUTOPILOT_DEFAULT_AUTO_EXECUTE_THRESHOLD
+                )
+                if candidate_action_for_auto["risk_tier"] == "low" and float(candidate_action_for_auto["confidence_score"]) < threshold:
+                    approval_required = True
+                auto_execute_now, auto_execute_reasons = self._should_auto_execute_action(
+                    organization_id=organization_id,
+                    action=candidate_action_for_auto,
+                    policy_preview=policy_preview,
+                )
+                preview["plan_payload_json"]["candidate_action"] = candidate_action_for_auto
         if blocked:
             intent_status = "blocked"
         elif approval_required:
@@ -6317,6 +6903,23 @@ class AISystemRiskAssessmentService:
         )
         self.db.add(row)
         self.db.flush()
+        if auto_execute_now and candidate_action_for_auto is not None and row.intent_status == "planned":
+            self._auto_execute_candidate_action(
+                organization_id=organization_id,
+                intent=row,
+                action=candidate_action_for_auto,
+                actor_user_id=actor_user_id,
+            )
+        elif source_type == "candidate_action":
+            row.plan_payload_json = self.to_json_compatible(
+                {
+                    **dict(row.plan_payload_json or {}),
+                    "auto_execute": {
+                        "eligible": bool(auto_execute_now),
+                        "reasons": auto_execute_reasons,
+                    },
+                }
+            )
         return row
 
     def list_execution_intents(

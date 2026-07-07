@@ -99,6 +99,7 @@ from app.models.governance_signal import GovernanceSignal
 from app.models.governance_autopilot_policy import GovernanceAutopilotPolicy
 from app.models.governance_autopilot_approval_policy import GovernanceAutopilotApprovalPolicy
 from app.models.governance_autopilot_execution_intent import GovernanceAutopilotExecutionIntent
+from app.models.governance_autopilot_execution import GovernanceAutopilotExecution
 from app.models.governance_autopilot_execution_approval import GovernanceAutopilotExecutionApproval
 from app.models.governance_autopilot_execution_approval_vote import GovernanceAutopilotExecutionApprovalVote
 from app.models.governance_autopilot_runner_simulation import GovernanceAutopilotRunnerSimulation
@@ -275,6 +276,8 @@ from app.schemas.ai_system import (
     GovernanceAutopilotExecutionApprovalApproveRequest,
     GovernanceAutopilotExecutionApprovalRejectRequest,
     GovernanceAutopilotExecutionApprovalCancelRequest,
+    GovernanceAutopilotExecutionReverseRequest,
+    GovernanceAutopilotExecutionRead,
     GovernanceAutopilotExecutionApprovalRead,
     GovernanceAutopilotExecutionApprovalVoteApproveRequest,
     GovernanceAutopilotExecutionApprovalVoteRejectRequest,
@@ -1122,6 +1125,85 @@ def create_governance_autopilot_execution_intent(
     db.commit()
     db.refresh(row)
     return _governance_autopilot_execution_intent_read(service.execution_intent_payload(row))
+
+
+@router.get(
+    "/autopilot/executions",
+    response_model=list[GovernanceAutopilotExecutionRead],
+)
+def list_governance_autopilot_executions(
+    execution_status: str | None = Query(default=None, pattern="^(executed|reversed)$"),
+    execution_intent_id: uuid.UUID | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("ai_systems:read")),
+) -> list[GovernanceAutopilotExecutionRead]:
+    service = AISystemRiskAssessmentService(db)
+    rows = service.list_autopilot_executions(
+        organization_id=organization.id,
+        execution_status=execution_status,
+        execution_intent_id=execution_intent_id,
+        limit=limit,
+        offset=offset,
+    )
+    return [GovernanceAutopilotExecutionRead(**service.autopilot_execution_payload(row)) for row in rows]
+
+
+@router.get(
+    "/autopilot/executions/{execution_id}",
+    response_model=GovernanceAutopilotExecutionRead,
+)
+def get_governance_autopilot_execution_detail(
+    execution_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("ai_systems:read")),
+) -> GovernanceAutopilotExecutionRead:
+    service = AISystemRiskAssessmentService(db)
+    row = service.require_autopilot_execution(organization_id=organization.id, execution_id=execution_id)
+    return GovernanceAutopilotExecutionRead(**service.autopilot_execution_payload(row))
+
+
+@router.post(
+    "/autopilot/executions/{execution_id}/reverse",
+    response_model=GovernanceAutopilotExecutionRead,
+)
+def reverse_governance_autopilot_execution(
+    execution_id: uuid.UUID,
+    payload: GovernanceAutopilotExecutionReverseRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("ai_systems:write")),
+) -> GovernanceAutopilotExecutionRead:
+    service = AISystemRiskAssessmentService(db)
+    row = service.reverse_autopilot_execution(
+        organization_id=organization.id,
+        execution_id=execution_id,
+        reason=payload.reason,
+        actor_user_id=current_user.id,
+    )
+    AuditService(db).write_audit_log(
+        action="governance_autopilot_execution.reversed",
+        entity_type="governance_autopilot_execution",
+        entity_id=row.id,
+        organization_id=organization.id,
+        actor_user_id=current_user.id,
+        after_json={
+            "execution_status": row.execution_status,
+            "execution_intent_id": str(row.execution_intent_id),
+            "reversal_reason": row.reversal_reason,
+        },
+        metadata_json={"source": "api"},
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    db.commit()
+    db.refresh(row)
+    return GovernanceAutopilotExecutionRead(**service.autopilot_execution_payload(row))
 
 
 @router.post(

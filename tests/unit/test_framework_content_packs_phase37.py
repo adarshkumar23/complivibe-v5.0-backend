@@ -195,3 +195,43 @@ def test_framework_content_pack_phase37_audit_log_written(client, db_session):
 
     logs = db_session.query(AuditLog).filter(AuditLog.action == "framework_content_pack.applied").all()
     assert len(logs) >= 1
+
+
+def test_seed_pack_consistency_check_reports_zero_drift_for_current_packs(client):
+    owner = _register(client, "p37-owner7@example.com", "Pass1234!@", "P37 Org7")
+    org_id = _org_id(client, owner)
+
+    result = client.get("/api/v1/framework-content/consistency-check", headers=_headers(owner, org_id))
+    assert result.status_code == 200
+    body = result.json()
+    assert body["ok"] is True
+    assert body["drift_count"] == 0
+    assert body["drift_rows"] == []
+
+
+def test_seed_pack_consistency_check_catches_reintroduced_gdpr_drift(client, monkeypatch, tmp_path):
+    owner = _register(client, "p37-owner8@example.com", "Pass1234!@", "P37 Org8")
+    org_id = _org_id(client, owner)
+
+    pack_dir = tmp_path / "frameworks"
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    source_path = FrameworkContentPackService.PACK_ROOT / "gdpr_starter.json"
+    payload = json.loads(source_path.read_text())
+    for item in payload["obligations"]:
+        if item.get("reference_code") == "GDPR-OBL-02":
+            item["description"] = "DRIFTED DESCRIPTION"
+            break
+    (pack_dir / "gdpr_starter.json").write_text(json.dumps(payload))
+    monkeypatch.setattr(FrameworkContentPackService, "PACK_ROOT", pack_dir)
+
+    consistency = client.get("/api/v1/framework-content/consistency-check?pack_key=gdpr_starter", headers=_headers(owner, org_id))
+    assert consistency.status_code == 200
+    body = consistency.json()
+    assert body["ok"] is False
+    assert body["drift_count"] >= 1
+    assert any(row["reference_code"] == "GDPR-OBL-02" for row in body["drift_rows"])
+
+    validate = client.post("/api/v1/framework-content/packs/gdpr_starter/validate", headers=_headers(owner, org_id))
+    assert validate.status_code == 200
+    assert validate.json()["valid"] is False
+    assert any("seed/pack drift" in msg for msg in validate.json()["validation_errors"])

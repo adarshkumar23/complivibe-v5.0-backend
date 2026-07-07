@@ -126,6 +126,7 @@ from app.models.export_job_event import ExportJobEvent
 from app.models.import_job import ImportJob
 from app.models.import_parity_tracking import ImportParityTracking
 from app.models.export_attestation import ExportAttestation
+from app.models.attestation_token import AttestationToken
 from app.models.evidence_control_link import EvidenceControlLink
 from app.models.control_obligation_mapping import ControlObligationMapping
 from app.models.cross_framework_obligation_mapping import CrossFrameworkObligationMapping
@@ -213,6 +214,7 @@ from app.models.governance_signal import GovernanceSignal
 from app.models.governance_autopilot_policy import GovernanceAutopilotPolicy
 from app.models.governance_autopilot_approval_policy import GovernanceAutopilotApprovalPolicy
 from app.models.governance_autopilot_execution_intent import GovernanceAutopilotExecutionIntent
+from app.models.governance_autopilot_execution import GovernanceAutopilotExecution
 from app.models.governance_autopilot_execution_approval import GovernanceAutopilotExecutionApproval
 from app.models.governance_autopilot_execution_approval_vote import GovernanceAutopilotExecutionApprovalVote
 from app.models.governance_autopilot_runner_simulation import GovernanceAutopilotRunnerSimulation
@@ -546,6 +548,7 @@ __all__ = [
     "ImportJob",
     "ExportJobEvent",
     "ExportAttestation",
+    "AttestationToken",
     "EvidenceControlLink",
     "ControlObligationMapping",
     "EvidenceItem",
@@ -556,6 +559,7 @@ __all__ = [
     "GovernanceAutopilotPolicy",
     "GovernanceAutopilotApprovalPolicy",
     "GovernanceAutopilotExecutionIntent",
+    "GovernanceAutopilotExecution",
     "GovernanceAutopilotExecutionApproval",
     "GovernanceAutopilotExecutionApprovalVote",
     "GovernanceAutopilotRunnerSimulation",

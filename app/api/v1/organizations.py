@@ -179,12 +179,18 @@ def _governance_settings_read(
         return OrganizationGovernanceSettingsRead(
             batch_cancellation_requires_approval=False,
             batch_cancellation_policy_reason=None,
+            autopilot_auto_execute_enabled=False,
+            autopilot_auto_execute_confidence_threshold=0.95,
+            autopilot_auto_execute_reversal_window_hours=24,
             updated_by_user_id=None,
             updated_at=None,
         )
     return OrganizationGovernanceSettingsRead(
         batch_cancellation_requires_approval=bool(row.batch_cancellation_requires_approval),
         batch_cancellation_policy_reason=row.batch_cancellation_policy_reason,
+        autopilot_auto_execute_enabled=bool(row.autopilot_auto_execute_enabled),
+        autopilot_auto_execute_confidence_threshold=float(row.autopilot_auto_execute_confidence_threshold),
+        autopilot_auto_execute_reversal_window_hours=int(row.autopilot_auto_execute_reversal_window_hours),
         updated_by_user_id=row.updated_by_user_id,
         updated_at=row.updated_at,
     )
@@ -669,6 +675,9 @@ def update_organization_governance_settings(
     if (
         payload.batch_cancellation_requires_approval is None
         and payload.batch_cancellation_policy_reason is None
+        and payload.autopilot_auto_execute_enabled is None
+        and payload.autopilot_auto_execute_confidence_threshold is None
+        and payload.autopilot_auto_execute_reversal_window_hours is None
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -695,6 +704,9 @@ def update_organization_governance_settings(
         row = OrganizationGovernanceSetting(
             organization_id=organization.id,
             batch_cancellation_requires_approval=False,
+            autopilot_auto_execute_enabled=False,
+            autopilot_auto_execute_confidence_threshold=0.95,
+            autopilot_auto_execute_reversal_window_hours=24,
         )
         db.add(row)
         db.flush()
@@ -702,24 +714,41 @@ def update_organization_governance_settings(
     before = {
         "batch_cancellation_requires_approval": bool(row.batch_cancellation_requires_approval),
         "batch_cancellation_policy_reason": row.batch_cancellation_policy_reason,
+        "autopilot_auto_execute_enabled": bool(row.autopilot_auto_execute_enabled),
+        "autopilot_auto_execute_confidence_threshold": float(row.autopilot_auto_execute_confidence_threshold),
+        "autopilot_auto_execute_reversal_window_hours": int(row.autopilot_auto_execute_reversal_window_hours),
         "updated_by_user_id": str(row.updated_by_user_id) if row.updated_by_user_id else None,
     }
     if payload.batch_cancellation_requires_approval is not None:
         row.batch_cancellation_requires_approval = bool(payload.batch_cancellation_requires_approval)
     if payload.batch_cancellation_policy_reason is not None:
         row.batch_cancellation_policy_reason = payload.batch_cancellation_policy_reason.strip() or None
+    if payload.autopilot_auto_execute_enabled is not None:
+        row.autopilot_auto_execute_enabled = bool(payload.autopilot_auto_execute_enabled)
+    if payload.autopilot_auto_execute_confidence_threshold is not None:
+        row.autopilot_auto_execute_confidence_threshold = float(payload.autopilot_auto_execute_confidence_threshold)
+    if payload.autopilot_auto_execute_reversal_window_hours is not None:
+        row.autopilot_auto_execute_reversal_window_hours = int(payload.autopilot_auto_execute_reversal_window_hours)
     row.updated_by_user_id = current_user.id
     db.flush()
 
-    setting_key = (
-        "batch_cancellation_requires_approval"
-        if payload.batch_cancellation_requires_approval is not None
-        else "batch_cancellation_policy_reason"
-    )
+    setting_key = "batch_cancellation_policy_reason"
+    if payload.batch_cancellation_requires_approval is not None:
+        setting_key = "batch_cancellation_requires_approval"
+    elif payload.autopilot_auto_execute_enabled is not None:
+        setting_key = "autopilot_auto_execute_enabled"
+    elif payload.autopilot_auto_execute_confidence_threshold is not None:
+        setting_key = "autopilot_auto_execute_confidence_threshold"
+    elif payload.autopilot_auto_execute_reversal_window_hours is not None:
+        setting_key = "autopilot_auto_execute_reversal_window_hours"
+
     history_reason = (payload.batch_cancellation_policy_reason or "").strip() or "Governance settings updated"
     after = {
         "batch_cancellation_requires_approval": bool(row.batch_cancellation_requires_approval),
         "batch_cancellation_policy_reason": row.batch_cancellation_policy_reason,
+        "autopilot_auto_execute_enabled": bool(row.autopilot_auto_execute_enabled),
+        "autopilot_auto_execute_confidence_threshold": float(row.autopilot_auto_execute_confidence_threshold),
+        "autopilot_auto_execute_reversal_window_hours": int(row.autopilot_auto_execute_reversal_window_hours),
         "updated_by_user_id": str(row.updated_by_user_id) if row.updated_by_user_id else None,
     }
     audit_row = AuditService(db).write_audit_log(

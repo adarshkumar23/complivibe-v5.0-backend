@@ -8,6 +8,7 @@ from app.models.membership import Membership
 from app.models.user import User
 from app.schemas.framework import (
     FrameworkContentPackApplyRequest,
+    FrameworkContentConsistencyCheckResponse,
     FrameworkContentPackValidationResponse,
     GlobalFrameworkCoverageItem,
     LocalFrameworkPackRead,
@@ -115,3 +116,13 @@ def global_framework_coverage_summary(
     db.commit()
     rows = FrameworkContentPackService(db).global_coverage_summary()
     return [GlobalFrameworkCoverageItem(**item) for item in rows]
+
+
+@router.get("/consistency-check", response_model=FrameworkContentConsistencyCheckResponse)
+def framework_content_consistency_check(
+    pack_key: str | None = None,
+    db: Session = Depends(get_db),
+    _: Membership = Depends(require_permission("frameworks:read")),
+) -> FrameworkContentConsistencyCheckResponse:
+    result = FrameworkContentPackService(db).consistency_check(pack_key=pack_key)
+    return FrameworkContentConsistencyCheckResponse(**result)
