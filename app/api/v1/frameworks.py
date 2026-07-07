@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -71,12 +71,29 @@ compliance_router = APIRouter(prefix="/compliance/frameworks", tags=["frameworks
 semantic_router = APIRouter(prefix="/compliance/semantic", tags=["frameworks"])
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 class SemanticDiscoverRequest(BaseModel):
     target_framework_id: uuid.UUID
     min_score: float = Field(default=0.75, ge=0.0, le=1.0)
 
 
 def _framework_read(framework: Framework) -> FrameworkRead:
+    today = date.today()
+    is_currently_effective = framework.effective_date is None or framework.effective_date <= today
+    framework_updated_at = _as_utc(framework.updated_at) or datetime.now(UTC)
+    staleness_days = max(0, (datetime.now(UTC) - framework_updated_at).days)
+    context_flags: list[str] = []
+    if framework.effective_date and framework.effective_date > today:
+        context_flags.append("future_effective_date")
+    if staleness_days >= 365:
+        context_flags.append("catalog_entry_stale_365d")
     return FrameworkRead(
         id=framework.id,
         code=framework.code,
@@ -92,6 +109,9 @@ def _framework_read(framework: Framework) -> FrameworkRead:
         effective_date=framework.effective_date,
         created_at=framework.created_at,
         updated_at=framework.updated_at,
+        is_currently_effective=is_currently_effective,
+        staleness_days=staleness_days,
+        context_flags=context_flags,
     )
 
 
@@ -239,6 +259,28 @@ def _coverage_report_read(row: FrameworkPackCoverageReport) -> FrameworkCoverage
 
 def _organization_framework_read(db: Session, org_framework: OrganizationFramework) -> OrganizationFrameworkRead:
     framework = db.execute(select(Framework).where(Framework.id == org_framework.framework_id)).scalar_one()
+    total_obligation_count = int(
+        db.execute(select(func.count(Obligation.id)).where(Obligation.framework_id == framework.id)).scalar_one()
+    )
+    active_obligation_count = int(
+        db.execute(
+            select(func.count(Obligation.id)).where(
+                Obligation.framework_id == framework.id,
+                Obligation.status == "active",
+            )
+        ).scalar_one()
+    )
+    activation_outdated = bool(
+        org_framework.activated_at
+        and framework.updated_at
+        and (_as_utc(framework.updated_at) or datetime.min.replace(tzinfo=UTC))
+        > (_as_utc(org_framework.activated_at) or datetime.min.replace(tzinfo=UTC))
+    )
+    context_flags: list[str] = []
+    if activation_outdated:
+        context_flags.append("framework_updated_since_activation")
+    if framework.status != "active":
+        context_flags.append("framework_catalog_status_not_active")
     return OrganizationFrameworkRead(
         id=org_framework.id,
         organization_id=org_framework.organization_id,
@@ -250,6 +292,10 @@ def _organization_framework_read(db: Session, org_framework: OrganizationFramewo
         deactivated_at=org_framework.deactivated_at,
         notes=org_framework.notes,
         framework=_framework_read(framework),
+        total_obligation_count=total_obligation_count,
+        active_obligation_count=active_obligation_count,
+        activation_outdated=activation_outdated,
+        context_flags=context_flags,
     )
 
 
@@ -286,7 +332,29 @@ def list_framework_catalog(
     db.commit()
 
     frameworks = db.execute(select(Framework).order_by(Framework.name.asc())).scalars().all()
-    return [_framework_read(framework) for framework in frameworks]
+    total_counts = {
+        framework_id: int(count)
+        for framework_id, count in db.execute(
+            select(Obligation.framework_id, func.count(Obligation.id)).group_by(Obligation.framework_id)
+        ).all()
+    }
+    active_counts = {
+        framework_id: int(count)
+        for framework_id, count in db.execute(
+            select(Obligation.framework_id, func.count(Obligation.id))
+            .where(Obligation.status == "active")
+            .group_by(Obligation.framework_id)
+        ).all()
+    }
+    payload: list[FrameworkRead] = []
+    for framework in frameworks:
+        item = _framework_read(framework)
+        item.total_obligation_count = total_counts.get(framework.id, 0)
+        item.active_obligation_count = active_counts.get(framework.id, 0)
+        if item.total_obligation_count == 0:
+            item.context_flags.append("no_seeded_obligations")
+        payload.append(item)
+    return payload
 
 
 @router.get("/active", response_model=list[OrganizationFrameworkRead])
@@ -332,6 +400,7 @@ def activate_framework(
     org_framework = db.execute(stmt).scalar_one_or_none()
 
     now = datetime.now(UTC)
+    state_changed = False
     if org_framework is None:
         org_framework = OrganizationFramework(
             organization_id=membership.organization_id,
@@ -342,6 +411,7 @@ def activate_framework(
             notes=payload.notes,
         )
         db.add(org_framework)
+        state_changed = True
     elif org_framework.status != "active":
         org_framework.status = "active"
         org_framework.activated_by_user_id = current_user.id
@@ -350,20 +420,22 @@ def activate_framework(
         org_framework.deactivated_at = None
         if payload.notes is not None:
             org_framework.notes = payload.notes
+        state_changed = True
 
     db.flush()
 
-    AuditService(db).write_audit_log(
-        action="framework.activated",
-        entity_type="organization_framework",
-        entity_id=org_framework.id,
-        organization_id=membership.organization_id,
-        actor_user_id=current_user.id,
-        after_json={"framework_id": str(framework_id), "status": org_framework.status},
-        metadata_json={"source": "api"},
-        ip_address=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-    )
+    if state_changed:
+        AuditService(db).write_audit_log(
+            action="framework.activated",
+            entity_type="organization_framework",
+            entity_id=org_framework.id,
+            organization_id=membership.organization_id,
+            actor_user_id=current_user.id,
+            after_json={"framework_id": str(framework_id), "status": org_framework.status},
+            metadata_json={"source": "api"},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
 
     db.commit()
     db.refresh(org_framework)
@@ -388,26 +460,30 @@ def deactivate_framework(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization framework not found")
 
     now = datetime.now(UTC)
-    org_framework.status = "inactive"
-    org_framework.deactivated_by_user_id = current_user.id
-    org_framework.deactivated_at = now
-    if payload.notes is not None:
-        org_framework.notes = payload.notes
+    before_status = org_framework.status
+    state_changed = org_framework.status != "inactive"
+    if state_changed:
+        org_framework.status = "inactive"
+        org_framework.deactivated_by_user_id = current_user.id
+        org_framework.deactivated_at = now
+        if payload.notes is not None:
+            org_framework.notes = payload.notes
 
     db.flush()
 
-    AuditService(db).write_audit_log(
-        action="framework.deactivated",
-        entity_type="organization_framework",
-        entity_id=org_framework.id,
-        organization_id=membership.organization_id,
-        actor_user_id=current_user.id,
-        before_json={"status": "active"},
-        after_json={"status": "inactive", "framework_id": str(framework_id)},
-        metadata_json={"source": "api"},
-        ip_address=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-    )
+    if state_changed:
+        AuditService(db).write_audit_log(
+            action="framework.deactivated",
+            entity_type="organization_framework",
+            entity_id=org_framework.id,
+            organization_id=membership.organization_id,
+            actor_user_id=current_user.id,
+            before_json={"status": before_status},
+            after_json={"status": "inactive", "framework_id": str(framework_id)},
+            metadata_json={"source": "api"},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
 
     db.commit()
     db.refresh(org_framework)
@@ -439,7 +515,8 @@ def get_framework_detail(
     )
 
     base = _framework_read(framework)
-    return FrameworkDetail(**base.model_dump(), obligation_count=obligation_count, active_obligation_count=active_obligation_count)
+    payload = base.model_dump(exclude={"active_obligation_count"})
+    return FrameworkDetail(**payload, obligation_count=obligation_count, active_obligation_count=active_obligation_count)
 
 
 @router.get("/{framework_id}/versions", response_model=list[FrameworkVersionRead])

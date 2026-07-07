@@ -19,6 +19,11 @@ class FrameworkRead(BaseModel):
     effective_date: date | None = None
     created_at: datetime
     updated_at: datetime
+    total_obligation_count: int | None = None
+    active_obligation_count: int | None = None
+    is_currently_effective: bool | None = None
+    staleness_days: int | None = None
+    context_flags: list[str] = []
 
 
 class FrameworkDetail(FrameworkRead):
@@ -41,6 +46,10 @@ class OrganizationFrameworkRead(BaseModel):
     deactivated_at: datetime | None = None
     notes: str | None = None
     framework: FrameworkRead
+    total_obligation_count: int | None = None
+    active_obligation_count: int | None = None
+    activation_outdated: bool = False
+    context_flags: list[str] = []
 
 
 class FrameworkVersionRead(BaseModel):

@@ -1,6 +1,9 @@
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from app.core.security import get_password_hash
+from app.models.audit_log import AuditLog
+from app.models.framework import Framework
 from app.models.membership import Membership
 from app.models.organization_obligation_state import OrganizationObligationState
 from app.models.role import Role
@@ -63,6 +66,9 @@ def test_framework_catalog_and_detail_counts(client):
     codes = {item["code"] for item in items}
     assert {"EU_AI_ACT", "GDPR", "SOC2"}.issubset(codes)
     assert all(item["coverage_level"] in {"metadata_only", "starter", "partial", "mapped", "evidence_backed"} for item in items)
+    assert all("total_obligation_count" in item for item in items)
+    assert all("active_obligation_count" in item for item in items)
+    assert all("context_flags" in item for item in items)
 
     framework_id = items[0]["id"]
     detail = client.get(f"/api/v1/frameworks/{framework_id}", headers=_headers(owner_token))
@@ -103,6 +109,16 @@ def test_framework_activation_permissions_and_idempotency(client, db_session):
     )
     assert idempotent.status_code == 200
     assert idempotent.json()["id"] == activation_id
+
+    activation_audits = (
+        db_session.query(AuditLog)
+        .filter(
+            AuditLog.organization_id == uuid.UUID(org_id),
+            AuditLog.action == "framework.activated",
+        )
+        .all()
+    )
+    assert len(activation_audits) == 1
 
     admin_activate = client.post(
         f"/api/v1/frameworks/{framework_id}/activate",
@@ -168,6 +184,30 @@ def test_framework_activation_is_tenant_scoped_and_deactivation_audited(client):
     actions = [item["action"] for item in logs.json()]
     assert "framework.activated" in actions
     assert "framework.deactivated" in actions
+
+
+def test_active_framework_marks_outdated_when_catalog_changes(client, db_session):
+    owner = _register(client, "p20-owner-outdated@example.com", "Pass1234!@", "P20 Org Outdated")
+    org_id = client.get("/api/v1/organizations/me", headers=_headers(owner)).json()[0]["id"]
+    framework_id = client.get("/api/v1/frameworks", headers=_headers(owner)).json()[0]["id"]
+
+    activate = client.post(
+        f"/api/v1/frameworks/{framework_id}/activate",
+        headers=_headers(owner, org_id),
+        json={"notes": "enable"},
+    )
+    assert activate.status_code == 200
+
+    row = db_session.query(Framework).filter(Framework.id == uuid.UUID(framework_id)).one()
+    row.updated_at = datetime.now(UTC) + timedelta(minutes=1)
+    db_session.add(row)
+    db_session.commit()
+
+    active = client.get("/api/v1/frameworks/active", headers=_headers(owner, org_id))
+    assert active.status_code == 200
+    item = next(x for x in active.json() if x["framework_id"] == framework_id)
+    assert item["activation_outdated"] is True
+    assert "framework_updated_since_activation" in item["context_flags"]
 
 
 def test_obligation_list_detail_and_state_update_rules(client):
