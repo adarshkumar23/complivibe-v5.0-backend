@@ -642,3 +642,122 @@ def test_a43_scoped_framework_ids_must_be_within_engagement_scope(client, db_ses
     assert detail.status_code == 200
     assert detail.json()["scoped_framework_ids"] == [fw_in_scope]
     assert detail.json()["framework_id"] == fw_in_scope
+
+
+def test_a43_explicit_scoped_control_ids_must_resolve_within_engagement_framework_scope(client, db_session):
+    """Regression: explicit scoped_control_ids bypassed framework-containment validation
+    entirely (only an org-id check was performed), which meant an admin could hand an
+    auditor invitation direct visibility into controls from frameworks the parent
+    engagement was never scoped to. Explicit control ids must now resolve (via their
+    obligation's framework) to a framework within the engagement's own scope."""
+    org = bootstrap_org_user(client, email_prefix="a43-control-containment")
+    fw_in_scope, fw_out_of_scope = _framework_ids(client, org["headers"])
+    engagement = _create_engagement(client, org["org_headers"], fw_in_scope, org["user_id"])
+
+    ob_in = _create_obligation(db_session, fw_in_scope, "A43-CTRL-IN")
+    ob_out = _create_obligation(db_session, fw_out_of_scope, "A43-CTRL-OUT")
+
+    c_in = _create_control(client, org["org_headers"], "In-scope control")
+    c_out = _create_control(client, org["org_headers"], "Out-of-scope control")
+    c_unlinked = _create_control(client, org["org_headers"], "Unlinked control")
+
+    row_in = db_session.query(Control).filter_by(id=uuid.UUID(c_in["id"])).one()
+    row_out = db_session.query(Control).filter_by(id=uuid.UUID(c_out["id"])).one()
+    row_in.obligation_id = ob_in.id
+    row_out.obligation_id = ob_out.id
+    db_session.commit()
+
+    # A control whose framework is out of the engagement's scope must be rejected.
+    rejected = client.post(
+        f"{PORTAL_BASE}/invitations?engagement_id={engagement['id']}",
+        headers=org["org_headers"],
+        json={
+            "auditor_email": "control-overscope@example.com",
+            "scoped_control_ids": [c_out["id"]],
+            "expires_in_days": 30,
+        },
+    )
+    assert rejected.status_code == 422
+
+    # A control with no obligation/framework link at all is un-verifiable, so it must
+    # also be rejected rather than silently trusted.
+    rejected_unlinked = client.post(
+        f"{PORTAL_BASE}/invitations?engagement_id={engagement['id']}",
+        headers=org["org_headers"],
+        json={
+            "auditor_email": "control-unlinked@example.com",
+            "scoped_control_ids": [c_unlinked["id"]],
+            "expires_in_days": 30,
+        },
+    )
+    assert rejected_unlinked.status_code == 422
+
+    # A control resolving to the engagement's own in-scope framework is accepted.
+    accepted = _create_invitation(
+        client,
+        org["org_headers"],
+        engagement["id"],
+        {
+            "auditor_email": "control-inscope@example.com",
+            "scoped_control_ids": [c_in["id"]],
+            "expires_in_days": 30,
+        },
+    )
+    portal_headers = {"Authorization": f"Bearer {accepted['plaintext_token']}"}
+    controls = client.get(f"{PORTAL_BASE}/controls", headers=portal_headers)
+    assert controls.status_code == 200
+    ids = {row["id"] for row in controls.json()}
+    assert ids == {c_in["id"]}
+
+
+def test_a43_engagement_scope_shrink_revokes_portal_visibility_immediately(client, db_session):
+    """Regression: framework-based (default) scoping snapshotted the engagement's
+    scope_framework_ids only at invitation-creation time. If the engagement's own scope
+    was later narrowed (e.g. a framework removed from the audit), a previously-issued
+    invitation kept full visibility into the now-removed framework's controls/evidence/
+    reports until it expired -- a scope-drift containment bug. Access must now be
+    computed against the *live* engagement scope on every request."""
+    org = bootstrap_org_user(client, email_prefix="a43-scope-drift")
+    fw_in_scope, fw_other = _framework_ids(client, org["headers"])
+    engagement = _create_engagement(client, org["org_headers"], fw_in_scope, org["user_id"])
+
+    ob_in = _create_obligation(db_session, fw_in_scope, "A43-DRIFT-IN")
+    c_in = _create_control(client, org["org_headers"], "Drift control")
+    row_in = db_session.query(Control).filter_by(id=uuid.UUID(c_in["id"])).one()
+    row_in.obligation_id = ob_in.id
+    db_session.commit()
+
+    invitation = _create_invitation(
+        client,
+        org["org_headers"],
+        engagement["id"],
+        {"auditor_email": "drift-auditor@example.com", "expires_in_days": 30},
+    )
+    portal_headers = {"Authorization": f"Bearer {invitation['plaintext_token']}"}
+
+    before = client.get(f"{PORTAL_BASE}/controls", headers=portal_headers)
+    assert before.status_code == 200
+    assert {row["id"] for row in before.json()} == {c_in["id"]}
+
+    me_before = client.get(f"{PORTAL_BASE}/me", headers=portal_headers)
+    assert me_before.status_code == 200
+    assert me_before.json()["scope_changed_since_invitation"] is False
+
+    # Shrink the engagement's own scope to remove fw_in_scope entirely.
+    patch_resp = client.patch(
+        f"{ENGAGEMENT_BASE}/{engagement['id']}",
+        headers=org["org_headers"],
+        json={"scope_framework_ids": [fw_other]},
+    )
+    assert patch_resp.status_code == 200
+
+    after = client.get(f"{PORTAL_BASE}/controls", headers=portal_headers)
+    assert after.status_code == 200
+    assert after.json() == []
+
+    me_after = client.get(f"{PORTAL_BASE}/me", headers=portal_headers)
+    assert me_after.status_code == 200
+    body = me_after.json()
+    assert body["scope_changed_since_invitation"] is True
+    assert body["effective_framework_ids"] == []
+    assert body["scoped_framework_ids"] == [fw_in_scope]
