@@ -3,6 +3,8 @@ from __future__ import annotations
 import uuid
 from collections import defaultdict
 from decimal import Decimal
+import math
+from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -20,6 +22,7 @@ from app.services.audit_service import AuditService
 MODULES: tuple[str, ...] = ("control", "evidence", "policy", "business_unit")
 SOURCES: tuple[str, ...] = ("vanta", "drata", "sprinto", "scrut", "generic")
 TERMINAL_IMPORT_STATES: tuple[str, ...] = ("preview_ready", "completed", "failed")
+PARITY_DASHBOARD_STALE_AFTER_HOURS = 24 * 14
 
 
 class ImportParityService:
@@ -272,6 +275,8 @@ class ImportParityService:
         )
 
     def dashboard(self, organization_id: uuid.UUID, threshold_pct: float = 95.0, actor_user_id: uuid.UUID | None = None) -> dict:
+        if not math.isfinite(threshold_pct):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="threshold_pct must be a finite number")
         if threshold_pct < 0 or threshold_pct > 100:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="threshold_pct must be between 0 and 100")
 
@@ -366,9 +371,48 @@ class ImportParityService:
             overall_verified += verified_count
 
         overall_parity = self._parity_pct(verified_count=overall_verified, expected_count=overall_expected)
+        generated_at = datetime.now(UTC)
+        latest_import_job_at = self.db.execute(
+            select(func.max(ImportJob.updated_at)).where(
+                ImportJob.organization_id == organization_id,
+                ImportJob.status.in_(TERMINAL_IMPORT_STATES),
+            )
+        ).scalar_one()
+        latest_import_job_at_utc = None
+        data_age_hours = None
+        is_stale = False
+        if latest_import_job_at is not None:
+            latest_import_job_at_utc = latest_import_job_at if latest_import_job_at.tzinfo else latest_import_job_at.replace(tzinfo=UTC)
+            data_age_hours = round((generated_at - latest_import_job_at_utc).total_seconds() / 3600.0, 2)
+            is_stale = data_age_hours > PARITY_DASHBOARD_STALE_AFTER_HOURS
+
+        weakest_modules = [
+            row["entity_type"]
+            for row in sorted(modules, key=lambda item: float(item["parity_pct"]))[:2]
+            if float(row["parity_pct"]) < threshold_pct
+        ]
+        context_flags: list[str] = []
+        if overall_expected == 0:
+            context_flags.append("no_expected_import_rows")
+        ready_to_switch = overall_parity >= threshold_pct
+        if not ready_to_switch:
+            context_flags.append("switch_readiness_below_threshold")
+        if weakest_modules:
+            context_flags.append("module_parity_gaps_present")
+        if is_stale:
+            context_flags.append("parity_data_stale")
+        if overall_imported < overall_expected:
+            context_flags.append("imported_rows_below_expected")
+
         return {
             "threshold_pct": round(threshold_pct, 2),
-            "ready_to_switch": overall_parity >= threshold_pct,
+            "ready_to_switch": ready_to_switch,
+            "generated_at": generated_at,
+            "latest_import_job_at": latest_import_job_at_utc,
+            "data_age_hours": data_age_hours,
+            "is_stale": is_stale,
+            "weakest_modules": weakest_modules,
+            "context_flags": context_flags,
             "overall": {
                 "entity_type": "overall",
                 "expected_count": overall_expected,

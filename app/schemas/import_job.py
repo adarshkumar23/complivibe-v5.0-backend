@@ -78,6 +78,12 @@ class ImportParityBySourceRead(BaseModel):
 class ImportParityDashboardRead(BaseModel):
     threshold_pct: float
     ready_to_switch: bool
+    generated_at: datetime
+    latest_import_job_at: datetime | None = None
+    data_age_hours: float | None = None
+    is_stale: bool = False
+    weakest_modules: list[str] = Field(default_factory=list)
+    context_flags: list[str] = Field(default_factory=list)
     overall: dict[str, Any]
     modules: list[ImportParityModuleRead]
     by_source: list[ImportParityBySourceRead]

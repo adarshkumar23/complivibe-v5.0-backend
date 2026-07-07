@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import zipfile
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
@@ -236,6 +236,10 @@ def test_import_parity_dashboard_zero_expected_defaults_to_ready(client, db_sess
     body = response.json()
     assert body["threshold_pct"] == 95.0
     assert body["ready_to_switch"] is True
+    assert body["generated_at"] is not None
+    assert body["latest_import_job_at"] is None
+    assert body["is_stale"] is False
+    assert "no_expected_import_rows" in body["context_flags"]
     assert body["overall"]["expected_count"] == 0
     assert body["overall"]["verified_count"] == 0
     assert body["overall"]["parity_pct"] == 100.0
@@ -311,6 +315,9 @@ def test_import_parity_dashboard_mixed_modules_uses_real_counts(client, db_sessi
     assert payload["overall"]["verified_count"] == 3
     assert payload["overall"]["parity_pct"] == 60.0
     assert payload["ready_to_switch"] is False
+    assert payload["latest_import_job_at"] is not None
+    assert isinstance(payload["weakest_modules"], list)
+    assert "module_parity_gaps_present" in payload["context_flags"]
 
     tracking_rows = db_session.execute(
         select(ImportParityTracking).where(ImportParityTracking.organization_id == org_id)
@@ -350,6 +357,34 @@ def test_import_parity_dashboard_threshold_override(client, db_session):
     assert lowered_threshold.status_code == 200
     assert lowered_threshold.json()["threshold_pct"] == 0.0
     assert lowered_threshold.json()["ready_to_switch"] is True
+
+
+def test_import_parity_dashboard_flags_stale_data(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="import-parity-stale")
+    create = client.post(
+        f"{BASE}/generic",
+        headers=org["org_headers"],
+        json={
+            "dry_run": False,
+            "conflict_strategy": "skip",
+            "records": [{"entity_type": "control", "title": "Old Control"}],
+        },
+    )
+    assert create.status_code == 201
+    job_id = create.json()["id"]
+    assert client.post(f"{BASE}/{job_id}/commit", headers=org["org_headers"]).status_code == 200
+
+    job = db_session.execute(select(ImportJob).where(ImportJob.id == UUID(job_id))).scalar_one()
+    old_ts = datetime.now(UTC) - timedelta(days=16)
+    job.updated_at = old_ts
+    db_session.flush()
+
+    dashboard = client.get(f"{BASE}/parity-dashboard", headers=org["org_headers"])
+    assert dashboard.status_code == 200
+    body = dashboard.json()
+    assert body["is_stale"] is True
+    assert body["data_age_hours"] is not None and body["data_age_hours"] >= (24 * 14)
+    assert "parity_data_stale" in body["context_flags"]
 
 
 def test_import_job_source_mappers_cover_all_five_sources(client, db_session):
