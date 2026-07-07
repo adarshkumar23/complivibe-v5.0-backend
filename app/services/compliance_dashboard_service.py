@@ -123,6 +123,36 @@ class ComplianceDashboardService:
             "open_gaps_count": max(0, obligation_count - mapped_obligation_count),
         }
 
+    # A score snapshot older than this is considered stale for dashboard display purposes,
+    # regardless of whether the underlying data has changed since -- the number itself is
+    # simply too old to present as "current" without a caveat.
+    SCORE_SNAPSHOT_STALE_AFTER_HOURS = 24
+
+    # Audit log action prefixes that indicate data feeding into the compliance score may
+    # have changed since a snapshot was calculated (mirrors the recent_activity() scope).
+    _SCORE_RELEVANT_ACTION_PREFIXES = (
+        "control.",
+        "evidence.",
+        "control_obligation_mapping.",
+        "obligation.",
+        "risk.",
+        "compliance_policy.",
+        "vendor_assessment.",
+    )
+
+    def _underlying_data_changed_since(self, organization_id: uuid.UUID, since: datetime) -> bool:
+        conditions = [AuditLog.action.like(f"{prefix}%") for prefix in self._SCORE_RELEVANT_ACTION_PREFIXES]
+        changed = self.db.execute(
+            select(AuditLog.id)
+            .where(
+                AuditLog.organization_id == organization_id,
+                AuditLog.created_at > since,
+                or_(*conditions),
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+        return changed is not None
+
     def _latest_score_snapshot(self, organization_id: uuid.UUID) -> dict | None:
         snapshot = self.db.execute(
             select(ScoreSnapshot)
@@ -132,12 +162,24 @@ class ComplianceDashboardService:
         ).scalar_one_or_none()
         if snapshot is None:
             return None
+
+        calculated_at = snapshot.calculated_at
+        if calculated_at.tzinfo is None:
+            calculated_at = calculated_at.replace(tzinfo=UTC)
+        now = self.utcnow()
+        age_hours = round((now - calculated_at).total_seconds() / 3600.0, 2)
+        stale = age_hours > self.SCORE_SNAPSHOT_STALE_AFTER_HOURS
+        underlying_data_changed_since = self._underlying_data_changed_since(organization_id, calculated_at)
+
         return {
             "id": str(snapshot.id),
             "snapshot_type": snapshot.snapshot_type,
             "score": snapshot.score,
             "grade": snapshot.grade,
             "calculated_at": snapshot.calculated_at,
+            "age_hours": age_hours,
+            "stale": stale,
+            "underlying_data_changed_since": underlying_data_changed_since,
         }
 
     def posture_summary(self, organization_id: uuid.UUID) -> dict:
@@ -339,6 +381,39 @@ class ComplianceDashboardService:
             },
         }
 
+    @staticmethod
+    def _framework_readiness_insight(counts: dict[str, int | float]) -> str:
+        """Synthesizes a short, human-readable explanation of *why* a framework's
+        readiness looks the way it does, from counts already computed for the row.
+        Never invents data -- only narrates numbers already present in `counts`.
+        """
+        obligation_count = int(counts["obligation_count"])
+        mapped_obligation_count = int(counts["mapped_obligation_count"])
+        mapped_control_count = int(counts["mapped_control_count"])
+        open_gaps_count = int(counts["open_gaps_count"])
+        evidence_verified_pct = float(counts["evidence_verified_pct"])
+        control_coverage_pct = float(counts["control_coverage_pct"])
+
+        if obligation_count == 0:
+            return "No active obligations defined for this framework yet."
+
+        parts: list[str] = []
+        if open_gaps_count > 0:
+            parts.append(
+                f"{open_gaps_count} of {obligation_count} obligations ({round(100 - control_coverage_pct, 2)}%) "
+                "have no mapped control."
+            )
+        else:
+            parts.append(f"All {obligation_count} obligations are mapped to at least one control.")
+
+        if mapped_control_count > 0 and evidence_verified_pct < 100.0:
+            unverified_pct = round(100.0 - evidence_verified_pct, 2)
+            parts.append(f"{unverified_pct}% of mapped controls lack verified evidence.")
+        elif mapped_control_count > 0:
+            parts.append("All mapped controls have verified evidence.")
+
+        return " ".join(parts)
+
     def framework_readiness(self, organization_id: uuid.UUID) -> list[dict]:
         rows = self._active_framework_rows(organization_id)
         latest_snapshot = self._latest_score_snapshot(organization_id)
@@ -355,6 +430,7 @@ class ComplianceDashboardService:
                     "control_coverage_pct": float(counts["control_coverage_pct"]),
                     "evidence_verified_pct": float(counts["evidence_verified_pct"]),
                     "open_gaps_count": int(counts["open_gaps_count"]),
+                    "readiness_insight": self._framework_readiness_insight(counts),
                     "last_score_snapshot": latest_snapshot,
                 }
             )

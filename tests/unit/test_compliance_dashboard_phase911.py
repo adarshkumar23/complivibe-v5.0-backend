@@ -161,6 +161,7 @@ def test_phase911_framework_readiness_per_active_framework(client):
         "control_coverage_pct",
         "evidence_verified_pct",
         "open_gaps_count",
+        "readiness_insight",
         "last_score_snapshot",
     }
     for row in rows:
