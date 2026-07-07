@@ -19,17 +19,33 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column("audit_engagements", sa.Column("source_schedule_id", sa.Uuid(), nullable=True))
-    op.create_foreign_key(
-        "fk_audit_engagements_source_schedule_id",
-        "audit_engagements",
-        "audit_schedules",
-        ["source_schedule_id"],
-        ["id"],
-        ondelete="SET NULL",
-    )
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    columns = {column["name"] for column in inspector.get_columns("audit_engagements")}
+    fk_names = {fk["name"] for fk in inspector.get_foreign_keys("audit_engagements")}
+
+    if "source_schedule_id" not in columns:
+        op.add_column("audit_engagements", sa.Column("source_schedule_id", sa.Uuid(), nullable=True))
+
+    if "fk_audit_engagements_source_schedule_id" not in fk_names:
+        op.create_foreign_key(
+            "fk_audit_engagements_source_schedule_id",
+            "audit_engagements",
+            "audit_schedules",
+            ["source_schedule_id"],
+            ["id"],
+            ondelete="SET NULL",
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint("fk_audit_engagements_source_schedule_id", "audit_engagements", type_="foreignkey")
-    op.drop_column("audit_engagements", "source_schedule_id")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    columns = {column["name"] for column in inspector.get_columns("audit_engagements")}
+    fk_names = {fk["name"] for fk in inspector.get_foreign_keys("audit_engagements")}
+
+    if "fk_audit_engagements_source_schedule_id" in fk_names:
+        op.drop_constraint("fk_audit_engagements_source_schedule_id", "audit_engagements", type_="foreignkey")
+
+    if "source_schedule_id" in columns:
+        op.drop_column("audit_engagements", "source_schedule_id")
