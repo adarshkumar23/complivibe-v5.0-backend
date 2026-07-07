@@ -25,13 +25,19 @@ class ShadowAIService:
 
     def _find_active_detection(self, org_id: uuid.UUID, detected_name: str) -> ShadowAIDetection | None:
         normalized = detected_name.strip().lower()
-        return self.db.execute(
-            select(ShadowAIDetection).where(
+        stmt = (
+            select(ShadowAIDetection)
+            .where(
                 ShadowAIDetection.organization_id == org_id,
                 func.lower(ShadowAIDetection.detected_name) == normalized,
                 ShadowAIDetection.status.in_(["new", "under_review"]),
             )
-        ).scalar_one_or_none()
+            # Lock matching rows so two concurrent reports of the same tool name
+            # can't both pass this check and create duplicate detections. SQLite
+            # (used in tests) ignores FOR UPDATE; Postgres honors it.
+            .with_for_update()
+        )
+        return self.db.execute(stmt).scalars().first()
 
     def report_detection(
         self,
@@ -84,11 +90,18 @@ class ShadowAIService:
             )
         return row
 
-    def list_detections(self, org_id: uuid.UUID, status_value: str | None = None) -> list[ShadowAIDetection]:
+    def list_detections(
+        self,
+        org_id: uuid.UUID,
+        status_value: str | None = None,
+        skip: int = 0,
+        limit: int = 50,
+    ) -> list[ShadowAIDetection]:
         stmt = select(ShadowAIDetection).where(ShadowAIDetection.organization_id == org_id)
         if status_value is not None:
             stmt = stmt.where(ShadowAIDetection.status == status_value)
-        return self.db.execute(stmt.order_by(ShadowAIDetection.detected_at.desc())).scalars().all()
+        stmt = stmt.order_by(ShadowAIDetection.detected_at.desc()).offset(skip).limit(limit)
+        return self.db.execute(stmt).scalars().all()
 
     def get_detection(self, org_id: uuid.UUID, detection_id: uuid.UUID) -> ShadowAIDetection:
         row = self.db.execute(
@@ -133,10 +146,7 @@ class ShadowAIService:
         if detection.status == "registered":
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    "Detection is already registered as AI system "
-                    f"{detection.registered_system_id}"
-                ),
+                detail="Detection has already been registered as an AI system",
             )
 
         payload_dict = system_data.model_dump()
