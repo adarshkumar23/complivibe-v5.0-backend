@@ -63,6 +63,96 @@ INDIA_PACK_SECTIONS: dict[str, list[dict[str, int | str]]] = {
     ],
 }
 
+# Section-level context that UI/API consumers can surface to explain time-bound
+# obligations and regulatory focus areas for India-first packs.
+INDIA_PACK_SECTION_METADATA: dict[str, dict[str, int | str | list[str]]] = {
+    "RBI-ITGRC-GOV": {
+        "review_cycle_days": 180,
+        "signal": "board_oversight",
+        "context_flags": ["periodic_governance_review"],
+    },
+    "RBI-ITGRC-CTRL": {
+        "review_cycle_days": 180,
+        "signal": "independent_assurance",
+        "context_flags": ["assurance_evidence_required"],
+    },
+    "RBI-OUTSCOPE": {
+        "review_cycle_days": 180,
+        "signal": "third_party_due_diligence",
+        "context_flags": ["outsourcing_risk_assessment_required"],
+    },
+    "RBI-OUTMON": {
+        "review_cycle_days": 90,
+        "signal": "third_party_monitoring",
+        "context_flags": ["outsourcing_continuous_monitoring"],
+    },
+    "SEBI-CSCRF-GOV": {
+        "review_cycle_days": 180,
+        "signal": "cyber_governance",
+        "context_flags": ["board_level_reporting_expected"],
+    },
+    "SEBI-CSCRF-RES": {
+        "review_cycle_days": 90,
+        "signal": "resilience_testing",
+        "context_flags": ["continuous_detection_response_required"],
+    },
+    "SEBI-CLOUD-RISK": {
+        "review_cycle_days": 180,
+        "signal": "cloud_due_diligence",
+        "context_flags": ["cloud_adoption_risk_gate"],
+    },
+    "SEBI-CLOUD-OPS": {
+        "review_cycle_days": 90,
+        "signal": "cloud_auditability",
+        "context_flags": ["cloud_monitoring_evidence_required"],
+    },
+    "IRDAI-GOV": {
+        "review_cycle_days": 180,
+        "signal": "security_governance",
+        "context_flags": ["governance_program_maturity"],
+    },
+    "IRDAI-IR": {
+        "review_cycle_days": 90,
+        "signal": "incident_reporting",
+        "context_flags": ["regulator_aligned_incident_response"],
+    },
+    "CERT-REPORT": {
+        "freshness_sla_hours": 6,
+        "signal": "time_bound_incident_reporting",
+        "context_flags": ["certin_six_hour_reporting_window"],
+    },
+    "CERT-RETENTION": {
+        "review_cycle_days": 90,
+        "signal": "log_retention_time_sync",
+        "context_flags": ["forensic_readiness_required"],
+    },
+    "ITA-SEC43A": {
+        "review_cycle_days": 180,
+        "signal": "reasonable_security_practices",
+        "context_flags": ["personal_data_protection_control_baseline"],
+    },
+    "ITA-SEC70B": {
+        "review_cycle_days": 90,
+        "signal": "certin_coordination",
+        "context_flags": ["incident_coordination_protocol_required"],
+    },
+    "MCA-ANNUAL": {
+        "review_cycle_days": 365,
+        "signal": "annual_statutory_window",
+        "context_flags": ["calendar_deadline_management_required"],
+    },
+    "DPIIT-ELIG": {
+        "review_cycle_days": 365,
+        "signal": "recognition_eligibility",
+        "context_flags": ["startup_recognition_prerequisites"],
+    },
+    "DPIIT-COMPLIANCE": {
+        "review_cycle_days": 180,
+        "signal": "recognition_continuity",
+        "context_flags": ["ongoing_eligibility_monitoring_required"],
+    },
+}
+
 # (reference_code, title, description, section_code, evidence_hints)
 INDIA_PACK_OBLIGATIONS: dict[str, list[tuple[str, str, str, str, list[str]]]] = {
     "RBI_IT_GOV": [
@@ -213,6 +303,7 @@ INDIA_PACK_QUESTIONS: dict[str, list[dict[str, int | str]]] = {
             "triggers_scope": "all",
             "order_index": 1,
             "answer_type": "boolean",
+            "metadata_json": {"review_cycle_days": 180, "context_flags": ["regulatory_perimeter_gate"]},
         },
     ],
     "SEBI_CSCRF": [
@@ -223,6 +314,7 @@ INDIA_PACK_QUESTIONS: dict[str, list[dict[str, int | str]]] = {
             "triggers_scope": "all",
             "order_index": 1,
             "answer_type": "boolean",
+            "metadata_json": {"review_cycle_days": 180, "context_flags": ["regulatory_perimeter_gate"]},
         },
     ],
     "IRDAI_CYBER_2023": [
@@ -233,6 +325,7 @@ INDIA_PACK_QUESTIONS: dict[str, list[dict[str, int | str]]] = {
             "triggers_scope": "all",
             "order_index": 1,
             "answer_type": "boolean",
+            "metadata_json": {"review_cycle_days": 180, "context_flags": ["regulatory_perimeter_gate"]},
         },
     ],
     "CERT_IN_2022": [
@@ -243,6 +336,7 @@ INDIA_PACK_QUESTIONS: dict[str, list[dict[str, int | str]]] = {
             "triggers_scope": "all",
             "order_index": 1,
             "answer_type": "boolean",
+            "metadata_json": {"review_cycle_days": 90, "context_flags": ["incident_reporting_timebound"]},
         },
     ],
     "INDIA_IT_ACT": [
@@ -253,6 +347,7 @@ INDIA_PACK_QUESTIONS: dict[str, list[dict[str, int | str]]] = {
             "triggers_scope": "all",
             "order_index": 1,
             "answer_type": "boolean",
+            "metadata_json": {"review_cycle_days": 180, "context_flags": ["personal_data_scope_gate"]},
         },
     ],
     "MCA_COMPLIANCE_CAL": [
@@ -263,6 +358,7 @@ INDIA_PACK_QUESTIONS: dict[str, list[dict[str, int | str]]] = {
             "triggers_scope": "all",
             "order_index": 1,
             "answer_type": "boolean",
+            "metadata_json": {"review_cycle_days": 365, "context_flags": ["annual_statutory_calendar_gate"]},
         },
     ],
     "DPIIT_STARTUP": [
@@ -273,6 +369,7 @@ INDIA_PACK_QUESTIONS: dict[str, list[dict[str, int | str]]] = {
             "triggers_scope": "all",
             "order_index": 1,
             "answer_type": "boolean",
+            "metadata_json": {"review_cycle_days": 365, "context_flags": ["recognition_eligibility_gate"]},
         },
     ],
 }

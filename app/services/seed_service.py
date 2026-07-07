@@ -96,6 +96,7 @@ from app.services.framework_seed_data_stream_a6 import (
 from app.services.framework_seed_data_stream_b_v1 import (
     INDIA_PACK_OBLIGATIONS,
     INDIA_PACK_QUESTIONS,
+    INDIA_PACK_SECTION_METADATA,
     INDIA_PACK_SECTIONS,
 )
 
@@ -3696,10 +3697,20 @@ class SeedService:
 
         for framework_code in framework_codes:
             framework = frameworks[framework_code]
+            section_seeds: list[dict[str, int | str | dict | list]] = []
+            for section_seed in INDIA_PACK_SECTIONS[framework_code]:
+                section = dict(section_seed)
+                metadata = INDIA_PACK_SECTION_METADATA.get(str(section["code"]), {})
+                section["metadata_json"] = {
+                    "framework_code": framework_code,
+                    "jurisdiction": "IN",
+                    **metadata,
+                }
+                section_seeds.append(section)
             section_map = SeedService._ensure_framework_sections(
                 db,
                 framework=framework,
-                section_seeds=INDIA_PACK_SECTIONS[framework_code],
+                section_seeds=section_seeds,
             )
             existing = {
                 row.reference_code: row
@@ -3747,9 +3758,142 @@ class SeedService:
 
             questions = INDIA_PACK_QUESTIONS.get(framework_code, [])
             if questions:
-                SeedService._ensure_framework_questions(db, framework=framework, question_rows=questions)
+                SeedService._ensure_framework_questions(
+                    db,
+                    framework=framework,
+                    question_rows=questions,
+                    deactivate_missing=True,
+                )
+                SeedService._ensure_india_pack_applicability_rules(
+                    db,
+                    framework=framework,
+                    question_keys=[str(item["question_key"]) for item in questions],
+                )
 
         db.flush()
+
+    @staticmethod
+    def _safe_rule_token(value: str) -> str:
+        lowered = value.lower()
+        return "".join(ch if ch.isalnum() else "_" for ch in lowered).strip("_")
+
+    @staticmethod
+    def _rule_key(prefix: str, *parts: str, suffix: str) -> str:
+        tokens = [SeedService._safe_rule_token(part) for part in parts if part]
+        key = "_".join([prefix, *tokens, suffix]).strip("_")
+        return key[:128]
+
+    @staticmethod
+    def _ensure_india_pack_applicability_rules(
+        db: Session,
+        *,
+        framework: Framework,
+        question_keys: list[str],
+    ) -> list[ObligationApplicabilityRule]:
+        scoped_questions = db.execute(
+            select(ObligationApplicabilityQuestion).where(
+                ObligationApplicabilityQuestion.framework_id == framework.id,
+                ObligationApplicabilityQuestion.organization_id.is_(None),
+                ObligationApplicabilityQuestion.obligation_id.is_(None),
+                ObligationApplicabilityQuestion.question_key.in_(question_keys),
+                ObligationApplicabilityQuestion.status == "active",
+                ObligationApplicabilityQuestion.answer_type == "boolean",
+            )
+        ).scalars().all()
+        if not scoped_questions:
+            return []
+
+        obligations = db.execute(
+            select(Obligation).where(
+                Obligation.framework_id == framework.id,
+                Obligation.status == "active",
+            )
+        ).scalars().all()
+        if not obligations:
+            return []
+
+        existing_seeded = db.execute(
+            select(ObligationApplicabilityRule).where(
+                ObligationApplicabilityRule.framework_id == framework.id,
+                ObligationApplicabilityRule.rule_key.like("seeded_india_%"),
+            )
+        ).scalars().all()
+        existing_by_tuple = {
+            (row.obligation_id, row.question_id, row.rule_key): row
+            for row in existing_seeded
+        }
+        expected_keys: set[tuple[uuid.UUID, uuid.UUID, str]] = set()
+        created_or_updated: list[ObligationApplicabilityRule] = []
+
+        for obligation in obligations:
+            for question in scoped_questions:
+                yes_key = SeedService._rule_key(
+                    "seeded_india",
+                    framework.code,
+                    obligation.reference_code,
+                    question.question_key,
+                    suffix="yes",
+                )
+                no_key = SeedService._rule_key(
+                    "seeded_india",
+                    framework.code,
+                    obligation.reference_code,
+                    question.question_key,
+                    suffix="no",
+                )
+                yes_tuple = (obligation.id, question.id, yes_key)
+                no_tuple = (obligation.id, question.id, no_key)
+                expected_keys.add(yes_tuple)
+                expected_keys.add(no_tuple)
+
+                for key_tuple, expected_value, result, rationale in (
+                    (
+                        yes_tuple,
+                        True,
+                        "applicable",
+                        f"Seeded India-first rule: obligation {obligation.reference_code} is applicable when "
+                        f"'{question.question_key}' is true.",
+                    ),
+                    (
+                        no_tuple,
+                        False,
+                        "not_applicable",
+                        f"Seeded India-first rule: obligation {obligation.reference_code} is not applicable when "
+                        f"'{question.question_key}' is false.",
+                    ),
+                ):
+                    row = existing_by_tuple.get(key_tuple)
+                    if row is None:
+                        row = ObligationApplicabilityRule(
+                            framework_id=framework.id,
+                            obligation_id=obligation.id,
+                            question_id=question.id,
+                            rule_key=key_tuple[2],
+                            operator="equals",
+                            expected_value_json=expected_value,
+                            result_applicability=result,
+                            rationale=rationale,
+                            status="active",
+                            created_by_user_id=None,
+                        )
+                        db.add(row)
+                        db.flush()
+                        existing_by_tuple[key_tuple] = row
+                    else:
+                        row.operator = "equals"
+                        row.expected_value_json = expected_value
+                        row.result_applicability = result
+                        row.rationale = rationale
+                        row.status = "active"
+                    created_or_updated.append(row)
+
+        for row in existing_seeded:
+            row_key = (row.obligation_id, row.question_id, row.rule_key)
+            if row_key not in expected_keys and row.status != "archived":
+                row.status = "archived"
+
+        db.flush()
+        return created_or_updated
 
     @staticmethod
     def ensure_applicability_rules(db: Session) -> list[ObligationApplicabilityRule]:
@@ -3884,7 +4028,7 @@ class SeedService:
         db: Session,
         *,
         framework: Framework,
-        section_seeds: list[dict[str, int | str]],
+        section_seeds: list[dict[str, int | str | dict | list]],
     ) -> dict[str, FrameworkSection]:
         existing = {
             row.section_code: row
@@ -3896,6 +4040,7 @@ class SeedService:
         for item in section_seeds:
             code = str(item["code"])
             row = existing.get(code)
+            metadata_json = item.get("metadata_json")
             if row is None:
                 row = FrameworkSection(
                     framework_id=framework.id,
@@ -3906,7 +4051,7 @@ class SeedService:
                     description=str(item["title"]),
                     sort_order=int(item["order"]),
                     status="active",
-                    metadata_json=None,
+                    metadata_json=metadata_json if isinstance(metadata_json, dict) else None,
                 )
                 db.add(row)
                 db.flush()
@@ -3915,6 +4060,8 @@ class SeedService:
                 row.description = str(item["title"])
                 row.sort_order = int(item["order"])
                 row.status = "active"
+                if "metadata_json" in item:
+                    row.metadata_json = metadata_json if isinstance(metadata_json, dict) else None
             section_map[code] = row
         db.flush()
         return section_map
@@ -3983,6 +4130,7 @@ class SeedService:
         *,
         framework: Framework,
         question_rows: list[dict[str, int | str]],
+        deactivate_missing: bool = False,
     ) -> list[ObligationApplicabilityQuestion]:
         existing = {
             row.question_key: row
@@ -3995,11 +4143,16 @@ class SeedService:
             ).scalars().all()
         }
         seeded: list[ObligationApplicabilityQuestion] = []
+        active_keys: set[str] = set()
         for item in question_rows:
             key = str(item["question_key"])
+            active_keys.add(key)
             metadata = {"triggers_scope": str(item["triggers_scope"])}
             if "choices" in item:
                 metadata["choices"] = list(item["choices"])  # type: ignore[index]
+            extra_metadata = item.get("metadata_json")
+            if isinstance(extra_metadata, dict):
+                metadata.update(extra_metadata)
             answer_type = str(item.get("answer_type", "boolean"))
             row = existing.get(key)
             if row is None:
@@ -4027,6 +4180,10 @@ class SeedService:
                 row.status = "active"
                 row.metadata_json = metadata
             seeded.append(row)
+        if deactivate_missing:
+            for key, row in existing.items():
+                if key not in active_keys and row.status != "inactive":
+                    row.status = "inactive"
         db.flush()
         return seeded
 
