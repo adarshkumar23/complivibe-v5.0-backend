@@ -99,11 +99,15 @@ class ImportGapReportRead(BaseModel):
     job_id: uuid.UUID
     generated_at: datetime
     import_source: str = Field(pattern=SOURCE_PATTERN)
+    import_job_status: str = Field(pattern=STATUS_PATTERN)
+    import_job_updated_at: datetime
+    data_age_hours: float
     stale: bool
     stale_reason: str | None = None
+    context_flags: list[str] = Field(default_factory=list)
     active_frameworks: list[dict[str, Any]]
     obligations_without_coverage: list[ImportGapRowRead]
     controls_without_coverage: list[ImportGapRowRead]
     ai_systems_without_coverage: list[ImportGapRowRead]
     vendors_without_coverage: list[ImportGapRowRead]
-    summary: dict[str, int]
+    summary: dict[str, Any]

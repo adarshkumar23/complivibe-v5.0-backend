@@ -37,6 +37,11 @@ class ImportGapReportService:
         ).scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import job not found")
+        if row.status in {"queued", "processing"}:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Import job is still in progress; gap report is available after import processing finishes",
+            )
         return row
 
     def _active_frameworks(self, organization_id: uuid.UUID) -> list[tuple[OrganizationFramework, Framework]]:
@@ -107,11 +112,18 @@ class ImportGapReportService:
         framework_ids = [framework.id for _, framework in framework_rows]
         imported_text = self._import_signal_corpus(organization_id)
         stale, stale_reason = self._is_stale(job)
+        now = self._utcnow()
+        job_updated_at = job.updated_at if job.updated_at.tzinfo else job.updated_at.replace(tzinfo=UTC)
+        data_age_hours = round((now - job_updated_at).total_seconds() / 3600.0, 2)
 
         obligations_without_coverage: list[dict] = []
         controls_without_coverage: list[dict] = []
         ai_systems_without_coverage: list[dict] = []
         vendors_without_coverage: list[dict] = []
+        obligations_total = 0
+        controls_total = 0
+        ai_systems_total = 0
+        vendors_total = 0
 
         if framework_ids:
             obligations = self.db.execute(
@@ -122,6 +134,7 @@ class ImportGapReportService:
                 )
                 .order_by(Obligation.reference_code.asc(), Obligation.title.asc())
             ).all()
+            obligations_total = len(obligations)
             for obligation_id, reference_code, title in obligations:
                 mapped_count = int(
                     self.db.execute(
@@ -154,6 +167,7 @@ class ImportGapReportService:
             )
             .order_by(Control.title.asc())
         ).all()
+        controls_total = len(controls)
         for control_id, title, source_import_tool in controls:
             if source_import_tool:
                 continue
@@ -189,6 +203,7 @@ class ImportGapReportService:
             )
             .order_by(AISystem.name.asc())
         ).all()
+        ai_systems_total = len(ai_rows)
         for ai_id, name, vendor_name, provider_name, model_name in ai_rows:
             tokens = [name, vendor_name, provider_name, model_name]
             has_signal = any(token and str(token).lower() in imported_text for token in tokens)
@@ -210,6 +225,7 @@ class ImportGapReportService:
             )
             .order_by(Vendor.name.asc())
         ).all()
+        vendors_total = len(vendor_rows)
         for vendor_id, name in vendor_rows:
             if name.lower() in imported_text:
                 continue
@@ -221,12 +237,49 @@ class ImportGapReportService:
                 }
             )
 
+        def _coverage_pct(total: int, gap_count: int) -> float:
+            if total <= 0:
+                return 100.0
+            return round(((total - gap_count) / total) * 100.0, 2)
+
+        context_flags: list[str] = []
+        if not framework_rows:
+            context_flags.append("no_active_frameworks")
+        if stale:
+            context_flags.append("gap_report_stale")
+        if not imported_text.strip():
+            context_flags.append("import_signal_corpus_empty")
+        if obligations_without_coverage:
+            context_flags.append("obligation_coverage_gaps_present")
+        if controls_without_coverage:
+            context_flags.append("control_coverage_gaps_present")
+        if ai_systems_without_coverage:
+            context_flags.append("ai_system_coverage_gaps_present")
+        if vendors_without_coverage:
+            context_flags.append("vendor_coverage_gaps_present")
+
+        domain_gap_counts = {
+            "obligations": len(obligations_without_coverage),
+            "controls": len(controls_without_coverage),
+            "ai_systems": len(ai_systems_without_coverage),
+            "vendors": len(vendors_without_coverage),
+        }
+        top_gap_domains = [
+            domain
+            for domain, gap_count in sorted(domain_gap_counts.items(), key=lambda item: item[1], reverse=True)
+            if gap_count > 0
+        ][:2]
+
         return {
             "job_id": job.id,
-            "generated_at": self._utcnow(),
+            "generated_at": now,
             "import_source": job.source_tool,
+            "import_job_status": job.status,
+            "import_job_updated_at": job_updated_at,
+            "data_age_hours": data_age_hours,
             "stale": stale,
             "stale_reason": stale_reason,
+            "context_flags": context_flags,
             "active_frameworks": [
                 {
                     "framework_id": framework.id,
@@ -241,9 +294,18 @@ class ImportGapReportService:
             "vendors_without_coverage": vendors_without_coverage,
             "summary": {
                 "framework_count": len(framework_rows),
+                "obligations_total": obligations_total,
                 "obligation_gap_count": len(obligations_without_coverage),
+                "obligation_coverage_pct": _coverage_pct(obligations_total, len(obligations_without_coverage)),
+                "controls_total": controls_total,
                 "control_gap_count": len(controls_without_coverage),
+                "control_coverage_pct": _coverage_pct(controls_total, len(controls_without_coverage)),
+                "ai_systems_total": ai_systems_total,
                 "ai_system_gap_count": len(ai_systems_without_coverage),
+                "ai_system_coverage_pct": _coverage_pct(ai_systems_total, len(ai_systems_without_coverage)),
+                "vendors_total": vendors_total,
                 "vendor_gap_count": len(vendors_without_coverage),
+                "vendor_coverage_pct": _coverage_pct(vendors_total, len(vendors_without_coverage)),
+                "top_gap_domains": top_gap_domains,
             },
         }

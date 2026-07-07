@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID
+
+from sqlalchemy import select
 
 from app.models.ai_system import AISystem
 from app.models.control import Control
 from app.models.control_obligation_mapping import ControlObligationMapping
 from app.models.evidence_item import EvidenceItem
 from app.models.framework import Framework
+from app.models.import_job import ImportJob
 from app.models.obligation import Obligation
 from app.models.organization_framework import OrganizationFramework
 from app.models.vendor import Vendor
@@ -194,7 +198,12 @@ def test_import_gap_report_computes_real_gaps_for_active_frameworks(client, db_s
     assert report.status_code == 200
     payload = report.json()
 
+    assert payload["import_job_status"] == "completed"
+    assert payload["data_age_hours"] >= 0
+    assert isinstance(payload["context_flags"], list)
     assert payload["summary"]["framework_count"] == 1
+    assert payload["summary"]["obligations_total"] >= 2
+    assert "top_gap_domains" in payload["summary"]
     assert payload["summary"]["obligation_gap_count"] >= 1
     assert any("IMP-2" in row["name"] for row in payload["obligations_without_coverage"])
     assert any(row["name"] == "Local Gap Control" for row in payload["controls_without_coverage"])
@@ -235,4 +244,29 @@ def test_import_gap_report_marks_stale_when_newer_job_exists(client, db_session)
     stale = client.get(f"{BASE}/{first_id}/gap-report", headers=org["org_headers"])
     assert stale.status_code == 200
     assert stale.json()["stale"] is True
+    assert "gap_report_stale" in stale.json()["context_flags"]
     assert "Newer import job" in (stale.json()["stale_reason"] or "")
+
+
+def test_import_gap_report_rejects_in_progress_job(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="import-gap-inprogress")
+    create = client.post(
+        f"{BASE}/generic",
+        headers=org["org_headers"],
+        json={
+            "dry_run": True,
+            "conflict_strategy": "skip",
+            "records": [{"entity_type": "control", "title": "queued", "code": "QUE-C"}],
+        },
+    )
+    assert create.status_code == 201
+    job_id = create.json()["id"]
+
+    row = db_session.execute(select(ImportJob).where(ImportJob.id == UUID(job_id))).scalar_one()
+    row.status = "processing"
+    row.updated_at = datetime.now(UTC)
+    db_session.flush()
+
+    response = client.get(f"{BASE}/{job_id}/gap-report", headers=org["org_headers"])
+    assert response.status_code == 409
+    assert "still in progress" in response.json()["detail"]
