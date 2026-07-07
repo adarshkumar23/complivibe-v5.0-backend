@@ -80,6 +80,8 @@ class RiskIndicatorRead(UUIDTimestampSchema):
     archived_at: datetime | None = None
     archived_by_user_id: UUID | None = None
     archive_reason: str | None = None
+    stale: bool = False
+    breach_detail: dict | None = None
 
 
 class RiskIndicatorDetail(RiskIndicatorRead):

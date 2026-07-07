@@ -504,6 +504,73 @@ def test_a11_status_derivation_green_amber_red(client, db_session):
     assert red["status"] == "red"
 
 
+def test_a11_breach_detail_explains_which_threshold_and_by_how_much(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="a11-breach")
+    owner = _create_active_user_with_role(db_session, org["organization_id"], "a11-breach-owner@example.com", "admin")
+    org_id = uuid.UUID(org["organization_id"])
+
+    indicator = _create_indicator(
+        client,
+        org["org_headers"],
+        owner_user_id=str(owner.id),
+        name="Open Alerts Breach Detail",
+        metric_type="open_alert_count",
+        warning_threshold=1,
+        critical_threshold=2,
+    )
+
+    # Green: no breach_detail should be surfaced.
+    green = _recalculate(client, org["org_headers"], indicator["id"])
+    assert green["breach_detail"] is None
+
+    db_session.add(ControlMonitoringAlert(organization_id=org_id, alert_type="manual", severity="high", status="open", title="S1"))
+    db_session.add(ControlMonitoringAlert(organization_id=org_id, alert_type="manual", severity="high", status="open", title="S2"))
+    db_session.commit()
+    red = _recalculate(client, org["org_headers"], indicator["id"])
+    assert red["status"] == "red"
+    detail = red["breach_detail"]
+    assert detail is not None
+    assert detail["metric_type"] == "open_alert_count"
+    assert detail["threshold_label"] == "critical_threshold"
+    assert detail["threshold_value"] == 2.0
+    assert detail["current_value"] == 2.0
+    assert detail["margin_over_threshold"] == 0.0
+    assert "critical_threshold" in detail["explanation"]
+
+    # Not stale immediately after a fresh recalculate.
+    assert red["stale"] is False
+
+
+def test_a11_indicator_flagged_stale_when_never_calculated_or_old(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="a11-stale")
+    owner = _create_active_user_with_role(db_session, org["organization_id"], "a11-stale-owner@example.com", "admin")
+
+    indicator = _create_indicator(
+        client,
+        org["org_headers"],
+        owner_user_id=str(owner.id),
+        name="Never Calculated",
+        metric_type="open_alert_count",
+        warning_threshold=1,
+        critical_threshold=2,
+    )
+    # Freshly created, never recalculated -> stale.
+    fetched = client.get(f"{BASE}/{indicator['id']}", headers=org["org_headers"]).json()
+    assert fetched["stale"] is True
+
+    recalculated = _recalculate(client, org["org_headers"], indicator["id"])
+    assert recalculated["stale"] is False
+
+    # Simulate the value having gone stale by backdating last_calculated_at beyond the
+    # 24h staleness window, without anything else about the row changing.
+    row = db_session.query(RiskIndicator).filter(RiskIndicator.id == uuid.UUID(indicator["id"])).one()
+    row.last_calculated_at = datetime.now(UTC) - timedelta(hours=25)
+    db_session.commit()
+
+    fetched_again = client.get(f"{BASE}/{indicator['id']}", headers=org["org_headers"]).json()
+    assert fetched_again["stale"] is True
+
+
 def test_a11_custom_type_recalculate_returns_unchanged(client, db_session):
     org = bootstrap_org_user(client, email_prefix="a11-custom")
     owner = _create_active_user_with_role(db_session, org["organization_id"], "a11-custom-owner@example.com", "admin")
