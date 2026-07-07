@@ -169,8 +169,35 @@ class PolicyAttestationService:
         )
         return campaign, len(deduped_member_ids)
 
+    def _policy_changed_since_campaign_start(self, campaign: PolicyAttestationCampaign) -> tuple[bool, str | None]:
+        """Detect drift between the policy text a campaign asked employees to attest to and the
+        policy's current live version. This must never be silently swallowed: if the policy has
+        moved on (re-approved, re-versioned) since the campaign launched, in-flight and even
+        already-completed attestations may no longer reflect what's actually in force.
+        """
+        policy = self.db.execute(
+            select(CompliancePolicy).where(
+                CompliancePolicy.organization_id == campaign.organization_id,
+                CompliancePolicy.id == campaign.policy_id,
+            )
+        ).scalar_one_or_none()
+        if policy is None:
+            return False, None
+
+        changed = campaign.policy_version != policy.version
+
+        if not changed and campaign.policy_version_id is not None:
+            version_row = self.db.execute(
+                select(CompliancePolicyVersion.status).where(CompliancePolicyVersion.id == campaign.policy_version_id)
+            ).scalar_one_or_none()
+            if version_row is not None and version_row != "approved":
+                changed = True
+
+        return changed, policy.version
+
     def get_campaign_summary(self, org_id: uuid.UUID, campaign_id: uuid.UUID) -> dict:
         campaign = self._campaign_in_org(org_id, campaign_id)
+        policy_changed, current_policy_version = self._policy_changed_since_campaign_start(campaign)
         rows = self.db.execute(
             select(PolicyAttestation.status, func.count(PolicyAttestation.id))
             .where(
@@ -193,6 +220,8 @@ class PolicyAttestationService:
             "declined_count": declined_count,
             "pending_count": pending_count,
             "completion_pct": completion_pct,
+            "policy_changed_since_campaign_start": policy_changed,
+            "current_policy_version": current_policy_version,
         }
 
     def _get_user_attestation(self, org_id: uuid.UUID, campaign_id: uuid.UUID, user_id: uuid.UUID) -> PolicyAttestation:
