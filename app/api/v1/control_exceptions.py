@@ -55,6 +55,11 @@ def _read_exception(row: ControlException) -> ControlExceptionRead:
         notes=row.notes,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        review_overdue=(
+            row.status == "active"
+            and row.review_date is not None
+            and row.review_date < ControlExceptionService.utcdate()
+        ),
     )
 
 

@@ -508,6 +508,17 @@ class ControlExceptionService:
             ).scalar_one()
         )
 
+        review_overdue = int(
+            self.db.execute(
+                select(func.count(ControlException.id)).where(
+                    ControlException.organization_id == org_id,
+                    ControlException.status == "active",
+                    ControlException.review_date.is_not(None),
+                    ControlException.review_date < today,
+                )
+            ).scalar_one()
+        )
+
         return {
             "total": total,
             "by_status": {str(key): int(value) for key, value in by_status_rows},
@@ -515,6 +526,7 @@ class ControlExceptionService:
             "expiring_soon": expiring_soon,
             "expired_unreviewed": expired_unreviewed,
             "controls_with_active_exception": controls_with_active_exception,
+            "review_overdue": review_overdue,
         }
 
     def list_exceptions(
