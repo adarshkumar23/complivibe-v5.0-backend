@@ -44,6 +44,11 @@ class ComplianceReportRead(BaseModel):
     content_markdown: str | None = None
     provenance_json: dict
     inputs_summary_json: dict | None = None
+    age_days: int
+    section_count: int
+    is_archived: bool
+    is_stale: bool
+    context_flags: list[str]
     created_at: datetime
     updated_at: datetime
 
@@ -74,6 +79,9 @@ class ComplianceReportSummary(BaseModel):
     generated_reports: int
     archived_reports: int
     reports_last_30d: int
+    stale_reports_30d: int
+    archived_ratio: float
+    context_flags: list[str]
     latest_executive_summary_at: datetime | None = None
     latest_framework_readiness_at: datetime | None = None
     latest_risk_posture_at: datetime | None = None

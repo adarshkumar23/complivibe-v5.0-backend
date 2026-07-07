@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from app.core.security import get_password_hash
 from app.models.compliance_report import ComplianceReport
@@ -132,12 +133,20 @@ def test_live_report_persists_sections_provenance_and_tenant_scoping(client):
     sections = generated.json()["sections"]
     report_id = report["id"]
     assert report["status"] == "generated"
+    assert report["age_days"] == 0
+    assert report["section_count"] >= 2
+    assert report["is_archived"] is False
+    assert report["is_stale"] is False
+    assert "report_generated" in report["context_flags"]
     assert len(sections) >= 2
     snapshot_section = next(section for section in sections if section["section_key"] == "score_snapshot")
     assert len(snapshot_section["data_json"]["snapshots"]) >= 1
 
     listed = client.get("/api/v1/reports", headers=_headers(owner1, org1))
     assert listed.status_code == 200
+    listed_row = next(row for row in listed.json()["reports"] if row["id"] == report_id)
+    assert listed_row["section_count"] >= 2
+    assert "report_generated" in listed_row["context_flags"]
     assert any(row["id"] == report_id for row in listed.json()["reports"])
 
     detail = client.get(f"/api/v1/reports/{report_id}", headers=_headers(owner1, org1))
@@ -168,6 +177,21 @@ def test_report_archive_and_summary_and_audit(client):
     archived = client.post(f"/api/v1/reports/{report_id}/archive", headers=_headers(owner, org))
     assert archived.status_code == 200
     assert archived.json()["status"] == "archived"
+    assert archived.json()["is_archived"] is True
+    assert "report_archived" in archived.json()["context_flags"]
+
+    logs_first = client.get("/api/v1/audit-logs", headers=_headers(owner, org))
+    assert logs_first.status_code == 200
+    first_archived_actions = [item["action"] for item in logs_first.json()].count("report.archived")
+
+    archived_second = client.post(f"/api/v1/reports/{report_id}/archive", headers=_headers(owner, org))
+    assert archived_second.status_code == 200
+    assert archived_second.json()["status"] == "archived"
+
+    logs_second = client.get("/api/v1/audit-logs", headers=_headers(owner, org))
+    assert logs_second.status_code == 200
+    second_archived_actions = [item["action"] for item in logs_second.json()].count("report.archived")
+    assert second_archived_actions == first_archived_actions
 
     summary = client.get("/api/v1/reports/summary", headers=_headers(owner, org))
     assert summary.status_code == 200
@@ -176,11 +200,12 @@ def test_report_archive_and_summary_and_audit(client):
     assert payload["generated_reports"] >= 0
     assert payload["archived_reports"] >= 1
     assert payload["reports_last_30d"] >= 1
+    assert "stale_reports_30d" in payload
+    assert "archived_ratio" in payload
+    assert isinstance(payload["context_flags"], list)
     assert "latest_risk_posture_at" in payload
 
-    logs = client.get("/api/v1/audit-logs", headers=_headers(owner, org))
-    assert logs.status_code == 200
-    actions = [item["action"] for item in logs.json()]
+    actions = [item["action"] for item in logs_second.json()]
     assert "report.generated" in actions
     assert "report.archived" in actions
 
@@ -233,3 +258,45 @@ def test_deterministic_report_types_render_expected_sections(client):
     assert risk_report.status_code == 200
     risk_section_keys = {item["section_key"] for item in risk_report.json()["sections"]}
     assert {"risk_status", "critical_high_risks", "risks_without_controls", "accepted_risks", "caveats"}.issubset(risk_section_keys)
+
+
+def test_report_generate_rejects_invalid_period_window(client):
+    owner = _register(client, "p29-owner8@example.com", "Pass1234!@", "P29 Org8")
+    org = _org_id(client, owner)
+    now = datetime.now(UTC).replace(microsecond=0)
+
+    invalid = client.post(
+        "/api/v1/reports/generate",
+        headers=_headers(owner, org),
+        json={
+            "report_type": "executive_summary",
+            "dry_run": True,
+            "period_start": now.isoformat(),
+            "period_end": (now - timedelta(days=1)).isoformat(),
+        },
+    )
+    assert invalid.status_code == 422
+    assert "period_end" in invalid.json()["detail"]
+
+
+def test_reports_summary_flags_stale_generated_reports(client, db_session):
+    owner = _register(client, "p29-owner9@example.com", "Pass1234!@", "P29 Org9")
+    org = _org_id(client, owner)
+
+    generated = client.post(
+        "/api/v1/reports/generate",
+        headers=_headers(owner, org),
+        json={"report_type": "task_execution", "dry_run": False},
+    )
+    assert generated.status_code == 200
+    report_id = uuid.UUID(generated.json()["report"]["id"])
+
+    row = db_session.query(ComplianceReport).filter(ComplianceReport.id == report_id).one()
+    row.generated_at = datetime.now(UTC) - timedelta(days=45)
+    db_session.commit()
+
+    summary = client.get("/api/v1/reports/summary", headers=_headers(owner, org))
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert payload["stale_reports_30d"] >= 1
+    assert "stale_generated_reports_present" in payload["context_flags"]

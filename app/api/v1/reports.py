@@ -50,27 +50,8 @@ class FrameworkCoverageMatrixExportRequest(BaseModel):
     framework_id: uuid.UUID
 
 
-def _report_read(row: ComplianceReport) -> ComplianceReportRead:
-    return ComplianceReportRead(
-        id=row.id,
-        organization_id=row.organization_id,
-        report_type=row.report_type,
-        title=row.title,
-        description=row.description,
-        status=row.status,
-        framework_id=row.framework_id,
-        period_start=row.period_start,
-        period_end=row.period_end,
-        generated_by_user_id=row.generated_by_user_id,
-        generated_at=row.generated_at,
-        archived_at=row.archived_at,
-        content_json=row.content_json,
-        content_markdown=row.content_markdown,
-        provenance_json=row.provenance_json,
-        inputs_summary_json=row.inputs_summary_json,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-    )
+def _report_read(service: ReportService, row: ComplianceReport) -> ComplianceReportRead:
+    return ComplianceReportRead(**service.report_response_payload(row))
 
 
 def _section_read(row: ComplianceReportSection) -> ComplianceReportSectionRead:
@@ -179,6 +160,7 @@ def generate_report(
     _: Membership = Depends(require_permission("reports:generate")),
 ) -> ComplianceReportGenerateResponse:
     service = ReportService(db)
+    service.validate_reporting_period(payload.period_start, payload.period_end)
     sections, inputs_summary, provenance = service.build_report(
         organization_id=organization.id,
         report_type=payload.report_type,
@@ -249,7 +231,7 @@ def generate_report(
 
     return ComplianceReportGenerateResponse(
         dry_run=payload.dry_run,
-        report=_report_read(report),
+        report=_report_read(service, report),
         sections=[_section_read(row) for row in section_rows],
     )
 
@@ -285,6 +267,7 @@ def list_reports(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("reports:read")),
 ) -> ComplianceReportListResponse:
+    service = ReportService(db)
     rows = ReportRepository(db).list_reports(
         organization_id=organization.id,
         report_type=report_type,
@@ -293,7 +276,7 @@ def list_reports(
         limit=limit,
         offset=offset,
     )
-    return ComplianceReportListResponse(reports=[_report_read(row) for row in rows])
+    return ComplianceReportListResponse(reports=[_report_read(service, row) for row in rows])
 
 
 @router.get("/regulatory/available-types")
@@ -316,6 +299,7 @@ def generate_regulatory_report(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("reports:read")),
 ) -> ComplianceReportRead:
+    service = ReportService(db)
     report = RegulatoryReportService(db).generate_regulatory_report(
         org_id=organization.id,
         report_type=report_type,
@@ -335,7 +319,7 @@ def generate_regulatory_report(
     )
     db.commit()
     db.refresh(report)
-    return _report_read(report)
+    return _report_read(service, report)
 
 
 @router.get("/framework-coverage-matrix")
@@ -422,7 +406,7 @@ def report_detail(
     service = ReportService(db)
     report = service.report_or_404(organization.id, report_id)
     sections = ReportRepository(db).list_sections(organization.id, report.id)
-    return ComplianceReportDetail(report=_report_read(report), sections=[_section_read(row) for row in sections])
+    return ComplianceReportDetail(report=_report_read(service, report), sections=[_section_read(row) for row in sections])
 
 
 @router.get("/{report_id}/provenance", response_model=ComplianceReportProvenanceResponse)
@@ -461,6 +445,9 @@ def archive_report(
 ) -> ComplianceReportRead:
     service = ReportService(db)
     report = service.report_or_404(organization.id, report_id)
+    if report.status == "archived":
+        return _report_read(service, report)
+
     before_status = report.status
 
     report.status = "archived"
@@ -482,7 +469,7 @@ def archive_report(
 
     db.commit()
     db.refresh(report)
-    return _report_read(report)
+    return _report_read(service, report)
 
 
 @router.post("/board-scorecard", response_model=ComplianceReportRead)
@@ -493,6 +480,7 @@ def generate_board_scorecard(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("reports:read")),
 ) -> ComplianceReportRead:
+    service = ReportService(db)
     report = BoardScorecardService(db).generate_board_scorecard(
         org_id=organization.id,
         created_by=current_user.id,
@@ -510,7 +498,7 @@ def generate_board_scorecard(
     )
     db.commit()
     db.refresh(report)
-    return _report_read(report)
+    return _report_read(service, report)
 
 
 @router.post("/executive-narrative", response_model=ComplianceReportRead)
@@ -521,6 +509,7 @@ def generate_executive_narrative(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("reports:read")),
 ) -> ComplianceReportRead:
+    service = ReportService(db)
     report = ExecutiveNarrativeService(db).generate_executive_narrative(
         org_id=organization.id,
         created_by=current_user.id,
@@ -538,7 +527,7 @@ def generate_executive_narrative(
     )
     db.commit()
     db.refresh(report)
-    return _report_read(report)
+    return _report_read(service, report)
 
 
 def _report_export_path(*, organization_id: uuid.UUID, report_id: uuid.UUID, extension: str) -> str:

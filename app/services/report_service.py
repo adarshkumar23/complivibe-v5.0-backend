@@ -63,6 +63,91 @@ class ReportService:
     @staticmethod
     def validate_report_type(report_type: str) -> None:
         report_type = validate_choice(report_type, ALLOWED_REPORT_TYPES, "report_type", status_code=status.HTTP_400_BAD_REQUEST)
+
+    @staticmethod
+    def _as_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    @staticmethod
+    def _infer_section_count(row: ComplianceReport) -> int:
+        sections = (row.content_json or {}).get("sections") if isinstance(row.content_json, dict) else None
+        if isinstance(sections, list):
+            return len(sections)
+        return 0
+
+    def validate_reporting_period(self, period_start: datetime | None, period_end: datetime | None) -> None:
+        if period_start and period_end and period_end < period_start:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="period_end must be greater than or equal to period_start",
+            )
+
+    def report_context(self, row: ComplianceReport, *, section_count: int | None = None) -> dict:
+        generated_at = self._as_utc(row.generated_at) or self.now()
+        age_days = max(0, (self.now().date() - generated_at.date()).days)
+        is_archived = row.status == "archived" or row.archived_at is not None
+        is_stale = (not is_archived) and age_days > 30
+        count = section_count if section_count is not None else self._infer_section_count(row)
+
+        flags: list[str] = []
+        if row.status == "generated":
+            flags.append("report_generated")
+        if row.status == "draft":
+            flags.append("report_draft")
+        if is_archived:
+            flags.append("report_archived")
+        if is_stale:
+            flags.append("report_stale")
+        if count == 0:
+            flags.append("report_missing_sections")
+        if not isinstance(row.provenance_json, dict) or not row.provenance_json:
+            flags.append("report_missing_provenance")
+        if row.inputs_summary_json is None:
+            flags.append("report_missing_inputs_summary")
+        if row.period_start and row.period_end and row.period_end < row.period_start:
+            flags.append("invalid_period_range")
+        if row.report_type == "framework_readiness" and row.framework_id is None:
+            flags.append("framework_context_missing")
+
+        return {
+            "age_days": age_days,
+            "section_count": count,
+            "is_archived": is_archived,
+            "is_stale": is_stale,
+            "context_flags": flags,
+        }
+
+    def report_response_payload(self, row: ComplianceReport, *, section_count: int | None = None) -> dict:
+        context = self.report_context(row, section_count=section_count)
+        return {
+            "id": row.id,
+            "organization_id": row.organization_id,
+            "report_type": row.report_type,
+            "title": row.title,
+            "description": row.description,
+            "status": row.status,
+            "framework_id": row.framework_id,
+            "period_start": row.period_start,
+            "period_end": row.period_end,
+            "generated_by_user_id": row.generated_by_user_id,
+            "generated_at": row.generated_at,
+            "archived_at": row.archived_at,
+            "content_json": row.content_json,
+            "content_markdown": row.content_markdown,
+            "provenance_json": row.provenance_json,
+            "inputs_summary_json": row.inputs_summary_json,
+            "age_days": context["age_days"],
+            "section_count": context["section_count"],
+            "is_archived": context["is_archived"],
+            "is_stale": context["is_stale"],
+            "context_flags": context["context_flags"],
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
     def require_active_framework(self, organization_id: uuid.UUID, framework_id: uuid.UUID) -> Framework:
         framework = self.db.execute(select(Framework).where(Framework.id == framework_id)).scalar_one_or_none()
         if framework is None:
@@ -982,6 +1067,15 @@ class ReportService:
                 )
             ).scalar_one()
         )
+        stale_reports_30d = int(
+            self.db.execute(
+                select(func.count(ComplianceReport.id)).where(
+                    ComplianceReport.organization_id == organization_id,
+                    ComplianceReport.status == "generated",
+                    ComplianceReport.generated_at < since_30d,
+                )
+            ).scalar_one()
+        )
 
         latest_executive_summary_at = self.db.execute(
             select(func.max(ComplianceReport.generated_at)).where(
@@ -1004,11 +1098,27 @@ class ReportService:
             )
         ).scalar_one()
 
+        archived_ratio = round((archived_reports / total_reports), 4) if total_reports else 0.0
+        context_flags: list[str] = []
+        if total_reports == 0:
+            context_flags.append("no_reports_available")
+        if reports_last_30d == 0 and total_reports > 0:
+            context_flags.append("no_recent_reports")
+        if stale_reports_30d > 0:
+            context_flags.append("stale_generated_reports_present")
+        if total_reports > 0 and archived_reports == total_reports:
+            context_flags.append("all_reports_archived")
+        if total_reports > 0 and generated_reports == 0:
+            context_flags.append("no_active_generated_reports")
+
         return {
             "total_reports": total_reports,
             "generated_reports": generated_reports,
             "archived_reports": archived_reports,
             "reports_last_30d": reports_last_30d,
+            "stale_reports_30d": stale_reports_30d,
+            "archived_ratio": archived_ratio,
+            "context_flags": context_flags,
             "latest_executive_summary_at": latest_executive_summary_at,
             "latest_framework_readiness_at": latest_framework_readiness_at,
             "latest_risk_posture_at": latest_risk_posture_at,
