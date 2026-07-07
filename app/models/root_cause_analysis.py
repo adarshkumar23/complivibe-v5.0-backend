@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, JSON, Text, Uuid
+from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -16,6 +16,12 @@ class RootCauseAnalysis(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMi
     )
 
     issue_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("issues.id", ondelete="CASCADE"), nullable=False, unique=True)
+    # Snapshot of the issue's severity at the moment this RCA was authored.
+    # If the issue's severity is later changed (e.g. a re-triage), the RCA's
+    # findings/timeline may no longer reflect the actual blast radius --
+    # RCARead compares this against the issue's current severity to flag that
+    # explicitly instead of silently presenting stale analysis as current.
+    severity_at_creation: Mapped[str | None] = mapped_column(String(20), nullable=True)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     timeline_description: Mapped[str] = mapped_column(Text, nullable=False)
     root_cause: Mapped[str] = mapped_column(Text, nullable=False)

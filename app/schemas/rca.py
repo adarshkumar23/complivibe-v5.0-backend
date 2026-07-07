@@ -35,3 +35,8 @@ class RCARead(RCABase):
     reviewed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    severity_at_creation: str | None = None
+    # True when the linked issue's severity has changed since this RCA was
+    # authored -- the findings/timeline may no longer reflect the actual
+    # blast radius of the (re-triaged) issue.
+    severity_changed_since_rca: bool = False

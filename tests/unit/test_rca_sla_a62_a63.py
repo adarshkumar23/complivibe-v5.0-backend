@@ -128,6 +128,96 @@ def test_a62_rca_creation_review_and_immutability(client):
     assert update_after_review.status_code == 422
 
 
+def test_a62_rca_flags_stale_when_issue_severity_changes_after_creation(client, db_session):
+    from app.models.issue import Issue
+
+    org = bootstrap_org_user(client, email_prefix="a62-stale")
+    issue = _create_issue(client, org["org_headers"], org["user_id"], severity="medium")
+    _transition_to_resolved(client, org["org_headers"], issue["id"])
+
+    create_rca = client.post(
+        f"{ISSUES_BASE}/{issue['id']}/rca",
+        headers=org["org_headers"],
+        json={
+            "summary": "RCA summary",
+            "timeline_description": "Timeline",
+            "root_cause": "Root cause",
+            "contributing_factors": [],
+            "corrective_actions": [],
+            "preventive_measures": [],
+        },
+    )
+    assert create_rca.status_code == 201
+    assert create_rca.json()["severity_at_creation"] == "medium"
+    assert create_rca.json()["severity_changed_since_rca"] is False
+
+    # Severity has no public update endpoint today, so mutate directly to
+    # simulate an internal re-triage happening after the RCA was authored.
+    issue_row = db_session.query(Issue).filter(Issue.id == uuid.UUID(issue["id"])).one()
+    issue_row.severity = "critical"
+    db_session.commit()
+
+    fetched = client.get(f"{ISSUES_BASE}/{issue['id']}/rca", headers=org["org_headers"])
+    assert fetched.status_code == 200
+    assert fetched.json()["severity_at_creation"] == "medium"
+    assert fetched.json()["severity_changed_since_rca"] is True
+
+
+def test_a62_rca_duplicate_creation_race_returns_409_not_500(client, db_session, monkeypatch):
+    """Two concurrent create_rca calls can both pass the "existing is None"
+    pre-check before either flushes (classic TOCTOU race). The unique
+    constraint on issue_id is the real source of truth -- create_rca must
+    catch the resulting IntegrityError on flush and translate it into a 409,
+    not let it bubble up as an unhandled 500."""
+    from app.compliance.services.rca_service import RCAService
+    from app.schemas.rca import RCACreate
+
+    org = bootstrap_org_user(client, email_prefix="a62-race")
+    issue = _create_issue(client, org["org_headers"], org["user_id"])
+    _transition_to_resolved(client, org["org_headers"], issue["id"])
+
+    payload = RCACreate(
+        summary="First RCA",
+        timeline_description="Timeline",
+        root_cause="Root cause",
+        contributing_factors=[],
+        corrective_actions=[],
+        preventive_measures=[],
+    )
+    service = RCAService(db_session)
+    first = service.create_rca(uuid.UUID(org["organization_id"]), uuid.UUID(issue["id"]), payload, uuid.UUID(org["user_id"]))
+    db_session.commit()
+    assert first is not None
+
+    # Simulate the race: pretend the pre-check found nothing (as it would
+    # for a second request that read before the first committed) so we
+    # exercise the flush-time IntegrityError path instead of the normal
+    # check-then-409 path.
+    from sqlalchemy.engine import Result
+
+    original_scalar_one_or_none = Result.scalar_one_or_none
+    call_count = {"n": 0}
+
+    def _fake_scalar_one_or_none(self):
+        call_count["n"] += 1
+        # Call #1 is create_rca's own issue lookup (_get_issue) -- must
+        # resolve normally. Call #2 is the "existing RCA?" pre-check, which
+        # we force to lie and say "no existing row" to simulate the race.
+        if call_count["n"] == 2:
+            return None
+        return original_scalar_one_or_none(self)
+
+    monkeypatch.setattr(Result, "scalar_one_or_none", _fake_scalar_one_or_none)
+
+    from fastapi import HTTPException
+
+    try:
+        service.create_rca(uuid.UUID(org["organization_id"]), uuid.UUID(issue["id"]), payload, uuid.UUID(org["user_id"]))
+        raise AssertionError("expected HTTPException(409) for racing duplicate RCA create")
+    except HTTPException as exc:
+        assert exc.status_code == 409
+
+
 def test_a62_require_rca_before_close_enforcement(client):
     org = bootstrap_org_user(client, email_prefix="a62-close")
 

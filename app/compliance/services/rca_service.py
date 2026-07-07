@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.issue import Issue
@@ -59,6 +60,7 @@ class RCAService:
         row = RootCauseAnalysis(
             organization_id=org_id,
             issue_id=issue_id,
+            severity_at_creation=issue.severity,
             summary=data.summary,
             timeline_description=data.timeline_description,
             root_cause=data.root_cause,
@@ -70,7 +72,14 @@ class RCAService:
             reviewed_at=None,
         )
         self.db.add(row)
-        self.db.flush()
+        try:
+            self.db.flush()
+        except IntegrityError:
+            # Belt-and-braces for the race where two concurrent requests both
+            # pass the "existing is None" check above before either commits --
+            # the unique constraint on issue_id is the actual source of truth.
+            self.db.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="RCA already exists for this issue") from None
 
         AuditService(self.db).write_audit_log(
             action="rca.created",
