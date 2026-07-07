@@ -447,6 +447,97 @@ def test_a16_by_entity_include_history_modes(client):
     assert len(history.json()) == 2
 
 
+def test_a16_fresh_score_not_flagged_stale(client):
+    org = bootstrap_org_user(client, email_prefix="a16-fresh")
+    vendor_id, _ = _setup_vendor_with_two_linked_risks(client, org["org_headers"], org["user_id"])
+
+    resp = client.post(
+        f"{BASE}/compute-entity",
+        headers=org["org_headers"],
+        json={"entity_type": "vendor", "entity_id": vendor_id},
+    )
+    assert resp.status_code == 201
+
+    latest = client.get(
+        f"{BASE}/by-entity",
+        headers=org["org_headers"],
+        params={"entity_type": "vendor", "entity_id": vendor_id},
+    )
+    body = latest.json()
+    assert body["stale"] is False
+    assert body["stale_reasons"] == []
+
+
+def test_a16_flagged_stale_when_component_risk_score_changes_after_computation(client):
+    org = bootstrap_org_user(client, email_prefix="a16-stale-score")
+    vendor_id, risk_ids = _setup_vendor_with_two_linked_risks(client, org["org_headers"], org["user_id"])
+
+    resp = client.post(
+        f"{BASE}/compute-entity",
+        headers=org["org_headers"],
+        json={"entity_type": "vendor", "entity_id": vendor_id},
+    )
+    assert resp.status_code == 201
+
+    # Re-assess one of the component risks upward after the score snapshot was taken.
+    patch_resp = client.patch(
+        f"/api/v1/risks/{risk_ids[0]}",
+        headers=org["org_headers"],
+        json={"likelihood": 5, "impact": 5},
+    )
+    assert patch_resp.status_code == 200
+
+    latest = client.get(
+        f"{BASE}/by-entity",
+        headers=org["org_headers"],
+        params={"entity_type": "vendor", "entity_id": vendor_id},
+    )
+    body = latest.json()
+    assert body["stale"] is True
+    assert any("inherent_score changed" in reason for reason in body["stale_reasons"])
+
+
+def test_a16_flagged_stale_when_new_risk_linked_after_computation(client):
+    org = bootstrap_org_user(client, email_prefix="a16-stale-newrisk")
+    vendor_id, risk_ids = _setup_vendor_with_two_linked_risks(client, org["org_headers"], org["user_id"])
+
+    resp = client.post(
+        f"{BASE}/compute-entity",
+        headers=org["org_headers"],
+        json={"entity_type": "vendor", "entity_id": vendor_id},
+    )
+    assert resp.status_code == 201
+
+    new_risk = _create_risk(client, org["org_headers"], title="Risk 30", likelihood=3, impact=5)
+    new_control = _create_control(client, org["org_headers"], title="Control 3")
+    _link_risk_control(client, org["org_headers"], risk_id=new_risk, control_id=new_control)
+    _link_vendor_control(client, org["org_headers"], vendor_id=vendor_id, control_id=new_control)
+
+    latest = client.get(
+        f"{BASE}/by-entity",
+        headers=org["org_headers"],
+        params={"entity_type": "vendor", "entity_id": vendor_id},
+    )
+    body = latest.json()
+    assert body["stale"] is True
+    assert any("not included in this score" in reason for reason in body["stale_reasons"])
+    assert any("linked risk count changed" in reason for reason in body["stale_reasons"])
+
+    # Recomputing clears the staleness for the new latest snapshot.
+    recompute = client.post(
+        f"{BASE}/compute-entity",
+        headers=org["org_headers"],
+        json={"entity_type": "vendor", "entity_id": vendor_id},
+    )
+    assert recompute.status_code == 201
+    refreshed = client.get(
+        f"{BASE}/by-entity",
+        headers=org["org_headers"],
+        params={"entity_type": "vendor", "entity_id": vendor_id},
+    )
+    assert refreshed.json()["stale"] is False
+
+
 def test_a16_audit_event_emitted_on_every_compute(client, db_session):
     org = bootstrap_org_user(client, email_prefix="a16-audit")
     org_id = uuid.UUID(org["organization_id"])

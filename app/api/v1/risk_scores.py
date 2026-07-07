@@ -23,7 +23,7 @@ router = APIRouter(prefix="/compliance/risk-scores", tags=["risk-scores"])
 ALL_ENTITY_TYPES = ["vendor", "framework", "asset", "data_asset", "business_unit"]
 
 
-def _as_read(row: EntityRiskScore) -> EntityRiskScoreRead:
+def _as_read(row: EntityRiskScore, *, stale: bool = False, stale_reasons: list[str] | None = None) -> EntityRiskScoreRead:
     return EntityRiskScoreRead(
         id=row.id,
         organization_id=row.organization_id,
@@ -39,6 +39,8 @@ def _as_read(row: EntityRiskScore) -> EntityRiskScoreRead:
         computed_by_user_id=row.computed_by_user_id,
         computed_at=row.computed_at,
         created_at=row.created_at,
+        stale=stale,
+        stale_reasons=stale_reasons or [],
     )
 
 
@@ -125,9 +127,19 @@ def get_scores_by_entity(
         rows = EntityRiskScoreService.get_history(entity_type, entity_id, organization.id, db, limit=10)
         if not rows:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity risk score not found")
-        return [_as_read(row) for row in rows]
+        # Only the most recent snapshot's currency is meaningful to flag -- older history rows
+        # are expected to differ from current state by definition.
+        results = []
+        for i, row in enumerate(rows):
+            if i == 0:
+                stale, reasons = EntityRiskScoreService.staleness(row, organization.id, db)
+                results.append(_as_read(row, stale=stale, stale_reasons=reasons))
+            else:
+                results.append(_as_read(row))
+        return results
 
     row = EntityRiskScoreService.get_latest(entity_type, entity_id, organization.id, db)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity risk score not found")
-    return _as_read(row)
+    stale, reasons = EntityRiskScoreService.staleness(row, organization.id, db)
+    return _as_read(row, stale=stale, stale_reasons=reasons)

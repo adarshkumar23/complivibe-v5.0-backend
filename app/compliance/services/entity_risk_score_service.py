@@ -363,6 +363,54 @@ class EntityRiskScoreService:
         )
         return row
 
+    @classmethod
+    def staleness(
+        cls,
+        row: EntityRiskScore,
+        org_id: uuid.UUID,
+        db: Session,
+    ) -> tuple[bool, list[str]]:
+        """Compare a stored composite score snapshot against the entity's *current* linked
+        risks, without recomputing/persisting anything. A score is stale if the set of linked
+        risks has changed since it was computed, or if a still-linked risk's inherent_score has
+        moved since the snapshot was taken -- either would change the composite score if
+        recomputed right now.
+        """
+        reasons: list[str] = []
+        current_risks = cls.get_linked_risks(row.entity_type, row.entity_id, org_id, db)
+        current_by_id = {r.id: r for r in current_risks}
+
+        stored_component_risks = row.component_risks_json if isinstance(row.component_risks_json, list) else []
+        stored_ids: set[uuid.UUID] = set()
+        for component in stored_component_risks:
+            raw_id = component.get("risk_id")
+            if raw_id is None:
+                continue
+            try:
+                stored_ids.add(uuid.UUID(str(raw_id)))
+            except ValueError:
+                continue
+
+            stored_score = component.get("score")
+            current_risk = current_by_id.get(uuid.UUID(str(raw_id)))
+            if current_risk is None:
+                reasons.append(f"risk {raw_id} is no longer linked/active for this entity")
+                continue
+            current_score = int(current_risk.inherent_score) if current_risk.inherent_score is not None else None
+            if stored_score is not None and current_score is not None and int(stored_score) != current_score:
+                reasons.append(
+                    f"risk {raw_id} inherent_score changed from {stored_score} to {current_score} since this score was computed"
+                )
+
+        new_risk_ids = set(current_by_id.keys()) - stored_ids
+        for new_id in new_risk_ids:
+            reasons.append(f"risk {new_id} is now linked to this entity but was not included in this score")
+
+        if row.risk_count != len(current_risks):
+            reasons.append(f"linked risk count changed from {row.risk_count} to {len(current_risks)} since this score was computed")
+
+        return (len(reasons) > 0, reasons)
+
     @staticmethod
     def get_latest(entity_type: str, entity_id: uuid.UUID, org_id: uuid.UUID, db: Session) -> EntityRiskScore | None:
         return db.execute(
