@@ -91,6 +91,8 @@ class ClassificationService:
             row = IncidentClassification(
                 organization_id=org_id,
                 issue_id=issue_id,
+                classified_issue_type=issue.issue_type,
+                classified_severity=issue.severity,
                 category=str(payload["category"]),
                 sub_category=str(payload.get("sub_category") or "") or None,
                 regulatory_implications=implications,
@@ -102,6 +104,8 @@ class ClassificationService:
             )
             self.db.add(row)
         else:
+            row.classified_issue_type = issue.issue_type
+            row.classified_severity = issue.severity
             row.category = str(payload["category"])
             row.sub_category = str(payload.get("sub_category") or "") or None
             row.regulatory_implications = implications
@@ -130,11 +134,13 @@ class ClassificationService:
         return row
 
     def override_classification(self, org_id: uuid.UUID, issue_id: uuid.UUID, data, user_id: uuid.UUID) -> IncidentClassification:
-        self._get_issue(org_id, issue_id)
+        issue = self._get_issue(org_id, issue_id)
         row = self.get_classification(org_id, issue_id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident classification not found")
 
+        row.classified_issue_type = issue.issue_type
+        row.classified_severity = issue.severity
         row.category = data.category
         row.sub_category = data.sub_category
         row.regulatory_implications = list(data.regulatory_implications or [])

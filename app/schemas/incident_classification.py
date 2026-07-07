@@ -25,6 +25,10 @@ class IncidentClassificationRead(BaseModel):
     classification_by: UUID
     classified_at: datetime
     last_updated_at: datetime
+    # True when the linked issue's type/severity has changed since this
+    # classification was derived -- category/notification_required may no
+    # longer reflect the issue as it stands today.
+    stale: bool = False
 
 
 class IncidentAnalyticsRead(BaseModel):

@@ -179,3 +179,32 @@ def test_a69_incident_classification_and_analytics(client, db_session):
     # Engine fallback sanity.
     fallback = ClassificationEngine.classify("vendor_failure", "low")
     assert fallback["category"] == "service_disruption"
+
+
+def test_a69_classification_flags_stale_when_issue_re_triaged(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="a69-stale")
+    issue = _create_issue(client, org["org_headers"], org["user_id"], issue_type="vendor_failure", severity="low")
+
+    classify = client.post(f"{ISSUES_BASE}/{issue['id']}/classification", headers=org["org_headers"])
+    assert classify.status_code == 200
+    assert classify.json()["stale"] is False
+
+    fresh = client.get(f"{ISSUES_BASE}/{issue['id']}/classification", headers=org["org_headers"])
+    assert fresh.status_code == 200
+    assert fresh.json()["stale"] is False
+
+    # Simulate a re-triage that bumps severity after the classification was
+    # derived (severity has no public update endpoint today, so this mirrors
+    # how an internal re-triage pipeline would mutate the row directly).
+    issue_row = db_session.query(Issue).filter(Issue.id == uuid.UUID(issue["id"])).one()
+    issue_row.severity = "critical"
+    db_session.commit()
+
+    after_retriage = client.get(f"{ISSUES_BASE}/{issue['id']}/classification", headers=org["org_headers"])
+    assert after_retriage.status_code == 200
+    assert after_retriage.json()["stale"] is True
+
+    # Re-classifying (or overriding) refreshes the snapshot and clears staleness.
+    reclassify = client.post(f"{ISSUES_BASE}/{issue['id']}/classification", headers=org["org_headers"])
+    assert reclassify.status_code == 200
+    assert reclassify.json()["stale"] is False

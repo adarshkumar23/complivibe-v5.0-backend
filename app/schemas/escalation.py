@@ -50,6 +50,10 @@ class EscalationEventRead(BaseModel):
     escalated_to: UUID
     notification_sent: bool
     notification_queued_at: datetime | None = None
+    # Explains why this fired: condition_type plus the specific threshold and
+    # the measured value that crossed it, e.g.
+    # {"condition_type": "time_in_state", "threshold_hours": 2, "actual_hours_in_state": 5.1}
+    reason: dict | None = None
 
 
 class EscalationEvaluateResult(BaseModel):

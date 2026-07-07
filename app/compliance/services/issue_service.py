@@ -12,6 +12,7 @@ from app.models.issue import Issue
 from app.models.issue_transition import IssueTransition
 from app.models.membership import Membership
 from app.models.org_issue_settings import OrgIssueSettings
+from app.models.root_cause_analysis import RootCauseAnalysis
 from app.models.user import User
 from app.schemas.issue import IssueCreate, IssuePromoteCreate, IssueUpdate
 from app.services.audit_service import AuditService
@@ -114,6 +115,82 @@ class IssueService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Issue not found")
         return row
 
+    def _get_issue_for_update(self, org_id: uuid.UUID, issue_id: uuid.UUID) -> Issue:
+        """Same lookup as get_issue, but takes a row lock so two concurrent
+        status transitions (e.g. two people closing the same issue at once)
+        serialize instead of racing -- the second caller sees the
+        already-updated status once it acquires the lock. Mirrors the
+        with_for_update() pattern used by EmailWorkerService for claiming rows."""
+        row = self.db.execute(
+            select(Issue)
+            .where(
+                Issue.organization_id == org_id,
+                Issue.id == issue_id,
+                Issue.deleted_at.is_(None),
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Issue not found")
+        return row
+
+    def get_issue_insight(self, org_id: uuid.UUID, issue: Issue) -> dict:
+        """Single-issue, single-extra-query enrichment. Intentionally NOT used
+        by list_issues -- computing this per-row there would be an N+1 query
+        against issue_sla_tracking/root_cause_analyses for every row in a
+        large org."""
+        from app.compliance.services.sla_service import SLAService
+
+        now = self.utcnow()
+        reference_end = issue.closed_at or issue.resolved_at or now
+        created_at = issue.created_at
+        # SQLite round-trips datetimes as naive even though the column is
+        # declared timezone-aware; normalize both sides before subtracting.
+        if reference_end.tzinfo is None:
+            reference_end = reference_end.replace(tzinfo=UTC)
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
+        hours_open = round((reference_end - created_at).total_seconds() / 3600.0, 2)
+
+        response_hours, resolution_hours = SLAService(self.db)._policy_hours(org_id, issue.severity)
+        response_breached: bool | None = None
+        resolution_breached: bool | None = None
+        response_remaining_hours: float | None = None
+        resolution_remaining_hours: float | None = None
+        try:
+            sla_status = SLAService(self.db).get_sla_status(org_id, issue.id)
+            response_breached = sla_status["response_breached"]
+            resolution_breached = sla_status["resolution_breached"]
+            response_remaining_hours = sla_status["response_remaining_hours"]
+            resolution_remaining_hours = sla_status["resolution_remaining_hours"]
+        except HTTPException:
+            # No SLA tracking row (e.g. legacy issue predating SLA rollout).
+            pass
+
+        existing_rca = self.db.execute(
+            select(RootCauseAnalysis).where(
+                RootCauseAnalysis.organization_id == org_id,
+                RootCauseAnalysis.issue_id == issue.id,
+            )
+        ).scalar_one_or_none()
+        if existing_rca is not None:
+            rca_status = "completed" if existing_rca.reviewed_by is not None else "pending_review"
+        elif issue.status in {"resolved", "closed"}:
+            rca_status = "none"
+        else:
+            rca_status = "not_required"
+
+        return {
+            "hours_open": hours_open,
+            "response_sla_hours": response_hours,
+            "resolution_sla_hours": resolution_hours,
+            "response_breached": response_breached,
+            "resolution_breached": resolution_breached,
+            "response_remaining_hours": response_remaining_hours,
+            "resolution_remaining_hours": resolution_remaining_hours,
+            "rca_status": rca_status,
+        }
+
     def list_issues(
         self,
         org_id: uuid.UUID,
@@ -214,7 +291,12 @@ class IssueService:
         notes: str | None = None,
         resolution_note: str | None = None,
     ) -> Issue:
-        row = self.get_issue(org_id, issue_id)
+        # Lock the row for the duration of the transition so two concurrent
+        # transition requests on the same issue (e.g. two reviewers both
+        # closing it) serialize: the second request re-reads the
+        # already-updated status once it acquires the lock and fails the
+        # ALLOWED_TRANSITIONS check below instead of double-applying.
+        row = self._get_issue_for_update(org_id, issue_id)
         expected_next = self.ALLOWED_TRANSITIONS.get(row.status)
         if expected_next is None:
             raise HTTPException(

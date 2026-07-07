@@ -239,6 +239,108 @@ def test_task_owner_validation_update_complete_cancel_notify_and_audit(client, d
     assert "task.notification_queued" in actions
 
 
+def test_task_read_surfaces_overdue_flag_and_hours(client):
+    owner = _register(client, "p24-owner6@example.com", "Pass1234!@", "P24 Org6")
+    org_id = _org_id(client, owner)
+
+    overdue = client.post(
+        "/api/v1/tasks",
+        headers=_headers(owner, org_id),
+        json={"title": "Overdue", "due_date": (datetime.now(UTC) - timedelta(hours=5)).isoformat()},
+    )
+    assert overdue.status_code == 201
+    body = overdue.json()
+    assert body["is_overdue"] is True
+    assert body["overdue_by_hours"] >= 4.9
+
+    on_time = client.post(
+        "/api/v1/tasks",
+        headers=_headers(owner, org_id),
+        json={"title": "Not due yet", "due_date": (datetime.now(UTC) + timedelta(days=1)).isoformat()},
+    )
+    assert on_time.status_code == 201
+    assert on_time.json()["is_overdue"] is False
+    assert on_time.json()["overdue_by_hours"] is None
+
+    # A completed task with a due date in the past is no longer "overdue" --
+    # it's done.
+    complete = client.post(f"/api/v1/tasks/{overdue.json()['id']}/complete", headers=_headers(owner, org_id), json={})
+    assert complete.status_code == 200
+    assert complete.json()["is_overdue"] is False
+
+
+def test_task_double_complete_and_double_cancel_race_return_409(client):
+    owner = _register(client, "p24-owner7@example.com", "Pass1234!@", "P24 Org7")
+    org_id = _org_id(client, owner)
+
+    created = client.post("/api/v1/tasks", headers=_headers(owner, org_id), json={"title": "Race target"})
+    task_id = created.json()["id"]
+
+    first_complete = client.post(f"/api/v1/tasks/{task_id}/complete", headers=_headers(owner, org_id), json={})
+    assert first_complete.status_code == 200
+    second_complete = client.post(f"/api/v1/tasks/{task_id}/complete", headers=_headers(owner, org_id), json={})
+    assert second_complete.status_code == 409
+
+    other_created = client.post("/api/v1/tasks", headers=_headers(owner, org_id), json={"title": "Cancel race target"})
+    other_task_id = other_created.json()["id"]
+    first_cancel = client.post(
+        f"/api/v1/tasks/{other_task_id}/cancel",
+        headers=_headers(owner, org_id),
+        json={"cancellation_reason": "no longer needed"},
+    )
+    assert first_cancel.status_code == 200
+    second_cancel = client.post(
+        f"/api/v1/tasks/{other_task_id}/cancel",
+        headers=_headers(owner, org_id),
+        json={"cancellation_reason": "no longer needed"},
+    )
+    assert second_cancel.status_code == 409
+
+    # Existing behavior: cancelling an already-completed task is still a
+    # valid transition (not a race, an intentional undo), so this must NOT
+    # be blocked by the terminal-state guard above.
+    completed_task = client.post("/api/v1/tasks", headers=_headers(owner, org_id), json={"title": "Complete then cancel"})
+    completed_task_id = completed_task.json()["id"]
+    client.post(f"/api/v1/tasks/{completed_task_id}/complete", headers=_headers(owner, org_id), json={})
+    cancel_after_complete = client.post(
+        f"/api/v1/tasks/{completed_task_id}/cancel",
+        headers=_headers(owner, org_id),
+        json={"cancellation_reason": "superseded"},
+    )
+    assert cancel_after_complete.status_code == 200
+
+
+def test_task_detail_flags_linked_risk_as_stale_when_already_resolved(client):
+    owner = _register(client, "p24-owner8@example.com", "Pass1234!@", "P24 Org8")
+    org_id = _org_id(client, owner)
+    risk_id = _create_risk(client, owner, org_id, "Stale link risk")
+
+    task = client.post(
+        "/api/v1/tasks",
+        headers=_headers(owner, org_id),
+        json={"title": "Treat risk", "linked_entity_type": "risk", "linked_entity_id": risk_id},
+    )
+    task_id = task.json()["id"]
+
+    fresh_detail = client.get(f"/api/v1/tasks/{task_id}", headers=_headers(owner, org_id))
+    assert fresh_detail.status_code == 200
+    assert fresh_detail.json()["linked_entity_stale"] is False
+
+    # Risk gets resolved through its own workflow while the task is still open.
+    risk_update = client.patch(f"/api/v1/risks/{risk_id}", headers=_headers(owner, org_id), json={"status": "mitigated"})
+    assert risk_update.status_code == 200
+
+    stale_detail = client.get(f"/api/v1/tasks/{task_id}", headers=_headers(owner, org_id))
+    assert stale_detail.status_code == 200
+    assert stale_detail.json()["linked_entity_stale"] is True
+
+    # Once the task itself is completed, staleness of the (now moot) link no
+    # longer matters.
+    client.post(f"/api/v1/tasks/{task_id}/complete", headers=_headers(owner, org_id), json={})
+    completed_detail = client.get(f"/api/v1/tasks/{task_id}", headers=_headers(owner, org_id))
+    assert completed_detail.json()["linked_entity_stale"] is False
+
+
 def test_risk_treatment_task_and_reminders_and_summary(client, db_session):
     owner = _register(client, "p24-owner5@example.com", "Pass1234!@", "P24 Org5")
     org_id = _org_id(client, owner)

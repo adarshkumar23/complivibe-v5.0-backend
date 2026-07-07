@@ -21,6 +21,13 @@ class IncidentClassification(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
     )
 
     issue_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("issues.id", ondelete="CASCADE"), nullable=False)
+    # Snapshot of the issue's type/severity used to derive this classification.
+    # If the issue is later re-typed or re-triaged, the classification (and any
+    # notification_required determination based on it) may no longer reflect
+    # reality -- IncidentClassificationRead flags this instead of silently
+    # presenting a stale auto-classification as current.
+    classified_issue_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    classified_severity: Mapped[str | None] = mapped_column(String(20), nullable=True)
     category: Mapped[str] = mapped_column(String(100), nullable=False)
     sub_category: Mapped[str | None] = mapped_column(String(255), nullable=True)
     regulatory_implications: Mapped[list] = mapped_column(JSON, nullable=False, default=list)

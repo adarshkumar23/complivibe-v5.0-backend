@@ -59,6 +59,25 @@ class IssueTransitionRequest(BaseModel):
     resolution_note: str | None = None
 
 
+class IssueInsight(BaseModel):
+    """Derived, point-in-time context for a single issue -- never persisted.
+
+    Surfaces how the issue is tracking against its severity-driven SLA and
+    whether its root cause analysis is outstanding, so callers don't have to
+    stitch together /sla-status and /rca themselves to answer "is this issue
+    actually healthy right now".
+    """
+
+    hours_open: float
+    response_sla_hours: int
+    resolution_sla_hours: int
+    response_breached: bool | None = None
+    resolution_breached: bool | None = None
+    response_remaining_hours: float | None = None
+    resolution_remaining_hours: float | None = None
+    rca_status: str = Field(pattern="^(not_required|none|pending_review|completed)$")
+
+
 class IssueRead(BaseModel):
     id: UUID
     organization_id: UUID
@@ -78,6 +97,7 @@ class IssueRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None = None
+    insight: IssueInsight | None = None
 
 
 class IssueTransitionRead(BaseModel):

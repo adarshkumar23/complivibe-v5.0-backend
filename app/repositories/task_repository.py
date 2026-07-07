@@ -14,6 +14,13 @@ class TaskRepository:
     def get_by_id(self, task_id: uuid.UUID) -> Task | None:
         return self.db.execute(select(Task).where(Task.id == task_id)).scalar_one_or_none()
 
+    def get_by_id_for_update(self, task_id: uuid.UUID) -> Task | None:
+        """Same lookup as get_by_id, but takes a row lock -- used by
+        complete/cancel/update so two concurrent requests against the same
+        task (e.g. two people completing it at once) serialize instead of
+        both applying their terminal state on top of stale in-memory reads."""
+        return self.db.execute(select(Task).where(Task.id == task_id).with_for_update()).scalar_one_or_none()
+
     def list_by_organization(
         self,
         organization_id: uuid.UUID,

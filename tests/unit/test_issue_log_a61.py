@@ -303,6 +303,103 @@ def test_a61_assign_promotions_dashboard_delete_and_org_isolation(client, db_ses
     assert from_finding.json()["source_id"] == str(finding.id)
 
 
+def test_a61_get_issue_surfaces_insight_sla_and_rca_status(client):
+    org = bootstrap_org_user(client, email_prefix="a61-insight")
+    issue = _create_issue(client, org["org_headers"], owner_id=org["user_id"], severity="critical")
+
+    detail = client.get(f"{ISSUES_BASE}/{issue['id']}", headers=org["org_headers"])
+    assert detail.status_code == 200
+    insight = detail.json()["insight"]
+    assert insight["response_sla_hours"] == 1
+    assert insight["resolution_sla_hours"] == 24
+    assert insight["rca_status"] == "not_required"
+    assert insight["hours_open"] >= 0.0
+    assert insight["response_breached"] is False
+
+    for state in ["investigating", "mitigating", "resolved"]:
+        response = client.post(
+            f"{ISSUES_BASE}/{issue['id']}/transition",
+            headers=org["org_headers"],
+            json={"new_status": state},
+        )
+        assert response.status_code == 200
+
+    resolved_detail = client.get(f"{ISSUES_BASE}/{issue['id']}", headers=org["org_headers"])
+    assert resolved_detail.json()["insight"]["rca_status"] == "none"
+
+    create_rca = client.post(
+        f"{ISSUES_BASE}/{issue['id']}/rca",
+        headers=org["org_headers"],
+        json={
+            "summary": "RCA summary",
+            "timeline_description": "Timeline",
+            "root_cause": "Root cause",
+            "contributing_factors": [],
+            "corrective_actions": [],
+            "preventive_measures": [],
+        },
+    )
+    assert create_rca.status_code == 201
+
+    pending_detail = client.get(f"{ISSUES_BASE}/{issue['id']}", headers=org["org_headers"])
+    assert pending_detail.json()["insight"]["rca_status"] == "pending_review"
+
+    reviewer = bootstrap_org_user(client, email_prefix="a61-insight-reviewer")
+    client.post(
+        "/api/v1/memberships",
+        headers=org["org_headers"],
+        json={"email": reviewer["email"], "role_name": "compliance_manager", "status": "active"},
+    )
+    reviewer_headers = org_headers(reviewer["access_token"], org["organization_id"])
+    review = client.post(f"{ISSUES_BASE}/{issue['id']}/rca/review", headers=reviewer_headers)
+    assert review.status_code == 200
+
+    completed_detail = client.get(f"{ISSUES_BASE}/{issue['id']}", headers=org["org_headers"])
+    assert completed_detail.json()["insight"]["rca_status"] == "completed"
+
+    transition_response = client.post(
+        f"{ISSUES_BASE}/{issue['id']}/transition",
+        headers=org["org_headers"],
+        json={"new_status": "closed", "resolution_note": "done"},
+    )
+    assert transition_response.status_code == 200
+    assert transition_response.json()["insight"]["rca_status"] == "completed"
+
+
+def test_a61_concurrent_transition_race_is_serialized_not_double_applied(client):
+    org = bootstrap_org_user(client, email_prefix="a61-race")
+    issue = _create_issue(client, org["org_headers"], owner_id=org["user_id"])
+
+    first = client.post(
+        f"{ISSUES_BASE}/{issue['id']}/transition",
+        headers=org["org_headers"],
+        json={"new_status": "investigating"},
+    )
+    assert first.status_code == 200
+
+    # Simulate two concurrent "close-the-loop" callers both trying to apply
+    # the SAME next transition once the row lock is released -- only one
+    # should succeed since after the first commit the issue is no longer in
+    # the "investigating" state the second caller expected.
+    second_a = client.post(
+        f"{ISSUES_BASE}/{issue['id']}/transition",
+        headers=org["org_headers"],
+        json={"new_status": "mitigating"},
+    )
+    second_b = client.post(
+        f"{ISSUES_BASE}/{issue['id']}/transition",
+        headers=org["org_headers"],
+        json={"new_status": "mitigating"},
+    )
+    statuses = sorted([second_a.status_code, second_b.status_code])
+    assert statuses == [200, 422]
+
+    history = client.get(f"{ISSUES_BASE}/{issue['id']}/transitions", headers=org["org_headers"])
+    to_statuses = [item["to_status"] for item in history.json()]
+    # Exactly one "mitigating" transition should have been recorded, not two.
+    assert to_statuses.count("mitigating") == 1
+
+
 def test_a61_issue_settings_requires_admin_permission(client):
     org_a = bootstrap_org_user(client, email_prefix="a61-settings-a")
     org_b = bootstrap_org_user(client, email_prefix="a61-settings-b")
