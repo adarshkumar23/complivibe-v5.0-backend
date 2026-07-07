@@ -46,4 +46,5 @@ class DataObservabilityDashboardRead(BaseModel):
     access_anomalies: AccessAnomaliesRead
     retention: RetentionDashboardRead
     data_obligation_coverage: DataObligationCoverageRead
+    insights: list[str]
     generated_at: datetime | str
