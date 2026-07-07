@@ -6,6 +6,7 @@ import uuid
 from app.core.security import get_password_hash
 from app.models.audit_log import AuditLog
 from app.models.auditor_portal_invitation import AuditorPortalInvitation
+from app.models.control import Control
 from app.models.evidence_item import EvidenceItem
 from app.models.membership import Membership
 from app.models.obligation import Obligation
@@ -727,6 +728,16 @@ def test_a43_engagement_scope_shrink_revokes_portal_visibility_immediately(clien
     row_in.obligation_id = ob_in.id
     db_session.commit()
 
+    # Real control<->obligation membership is tracked via ControlObligationMapping.
+    activate = client.post(f"/api/v1/frameworks/{fw_in_scope}/activate", headers=org["org_headers"], json={})
+    assert activate.status_code == 200
+    map_in = client.post(
+        f"/api/v1/controls/{c_in['id']}/obligations",
+        headers=org["org_headers"],
+        json={"obligation_id": str(ob_in.id), "mapping_type": "satisfies"},
+    )
+    assert map_in.status_code == 200
+
     invitation = _create_invitation(
         client,
         org["org_headers"],
@@ -908,6 +919,23 @@ def test_a43_explicit_broad_scope_then_narrow_revokes_access(client, db_session)
     row_c1.obligation_id = ob1.id
     row_c2.obligation_id = ob2.id
     db_session.commit()
+
+    # Real control<->obligation membership is tracked via ControlObligationMapping.
+    for fw_id in (fw1, fw2):
+        activate = client.post(f"/api/v1/frameworks/{fw_id}/activate", headers=org["org_headers"], json={})
+        assert activate.status_code == 200
+    map1 = client.post(
+        f"/api/v1/controls/{c1['id']}/obligations",
+        headers=org["org_headers"],
+        json={"obligation_id": str(ob1.id), "mapping_type": "satisfies"},
+    )
+    assert map1.status_code == 200
+    map2 = client.post(
+        f"/api/v1/controls/{c2['id']}/obligations",
+        headers=org["org_headers"],
+        json={"obligation_id": str(ob2.id), "mapping_type": "satisfies"},
+    )
+    assert map2.status_code == 200
 
     invitation = _create_invitation(
         client,
