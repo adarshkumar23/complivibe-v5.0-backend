@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.audit_engagement import AuditEngagement
 from app.models.audit_finding import AuditFinding
+from app.models.evidence_package import EvidencePackage
 from app.models.framework import Framework
 from app.models.membership import Membership
 from app.models.pbc_item import PbcItem
@@ -320,6 +321,47 @@ class AuditEngagementService:
             metadata_json={"source": "api"},
         )
         return row
+
+    def get_scope_impact(self, org_id: uuid.UUID, engagement_id: uuid.UUID) -> dict:
+        """An engagement's scope_framework_ids can change mid-audit (a framework added or
+        dropped from certification scope). When that happens, findings and evidence
+        packages already created under the *old* scope must never be silently presented
+        as fully current. This reports, in one place, exactly how many of each are now
+        stale relative to the engagement's live scope -- so a reviewer can see the blast
+        radius of a scope change instead of having to check each child record."""
+        engagement = self.require_engagement(org_id, engagement_id)
+        current_scope = set(engagement.scope_framework_ids or [])
+
+        findings = self.db.execute(
+            select(AuditFinding).where(
+                AuditFinding.organization_id == org_id,
+                AuditFinding.audit_engagement_id == engagement_id,
+                AuditFinding.deleted_at.is_(None),
+            )
+        ).scalars().all()
+        findings_stale = sum(
+            1 for row in findings if set(row.engagement_scope_snapshot or []) != current_scope
+        )
+
+        packages = self.db.execute(
+            select(EvidencePackage).where(
+                EvidencePackage.organization_id == org_id,
+                EvidencePackage.audit_engagement_id == engagement_id,
+                EvidencePackage.deleted_at.is_(None),
+            )
+        ).scalars().all()
+        packages_stale = sum(
+            1 for row in packages if set(row.scope_framework_ids or []) != current_scope
+        )
+
+        return {
+            "engagement_id": engagement.id,
+            "current_scope_framework_ids": [uuid.UUID(item) for item in engagement.scope_framework_ids or []],
+            "findings_total": len(findings),
+            "findings_created_under_stale_scope": findings_stale,
+            "evidence_packages_total": len(packages),
+            "evidence_packages_created_under_stale_scope": packages_stale,
+        }
 
     def get_engagement_dashboard(self, org_id: uuid.UUID) -> dict:
         today = self.utcdate()

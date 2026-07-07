@@ -13,6 +13,7 @@ from app.schemas.audit_engagement import (
     AuditEngagementCreate,
     AuditEngagementDashboard,
     AuditEngagementRead,
+    AuditEngagementScopeImpact,
     AuditEngagementTransitionRequest,
     AuditEngagementUpdate,
 )
@@ -96,6 +97,17 @@ def get_engagement(
 ) -> AuditEngagementRead:
     row = AuditEngagementService(db).get_engagement(organization.id, engagement_id)
     return _read(row)
+
+
+@router.get("/{engagement_id}/scope-impact", response_model=AuditEngagementScopeImpact)
+def engagement_scope_impact(
+    engagement_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("audit:read")),
+) -> AuditEngagementScopeImpact:
+    payload = AuditEngagementService(db).get_scope_impact(organization.id, engagement_id)
+    return AuditEngagementScopeImpact(**payload)
 
 
 @router.patch("/{engagement_id}", response_model=AuditEngagementRead)

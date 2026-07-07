@@ -801,3 +801,50 @@ def test_a44_finding_surfaces_control_context_and_scope_drift(client, db_session
     assert listed_finding["control_status"] == "archived"
     assert listed_finding["control_archived"] is True
     assert listed_finding["scope_changed_since_creation"] is True
+
+
+def test_a41_engagement_scope_impact_reports_stale_findings_and_packages(client):
+    """Regression: nothing on the engagement itself told a reviewer how many findings or
+    evidence packages were created before a scope change and are now stale -- they had
+    to check each child record one at a time. GET .../scope-impact must report the blast
+    radius of a scope change in one place."""
+    org = bootstrap_org_user(client, email_prefix="a41-scope-impact")
+    fw1, fw2 = _framework_ids(client, org["headers"])
+    engagement = _create_engagement(client, org["org_headers"], fw1, org["user_id"])
+
+    finding_before = _create_finding(client, org["org_headers"], engagement["id"], org["user_id"])
+
+    pkg_resp = client.post(
+        f"/api/v1/compliance/evidence-packages?engagement_id={engagement['id']}",
+        headers=org["org_headers"],
+        json={"title": "Pre-scope-change package", "scope_framework_ids": [fw1]},
+    )
+    assert pkg_resp.status_code == 201
+
+    before = client.get(f"{ENGAGEMENT_BASE}/{engagement['id']}/scope-impact", headers=org["org_headers"])
+    assert before.status_code == 200
+    before_body = before.json()
+    assert before_body["findings_total"] == 1
+    assert before_body["findings_created_under_stale_scope"] == 0
+    assert before_body["evidence_packages_total"] == 1
+    assert before_body["evidence_packages_created_under_stale_scope"] == 0
+
+    patch_resp = client.patch(
+        f"{ENGAGEMENT_BASE}/{engagement['id']}",
+        headers=org["org_headers"],
+        json={"scope_framework_ids": [fw2]},
+    )
+    assert patch_resp.status_code == 200
+
+    finding_after = _create_finding(client, org["org_headers"], engagement["id"], org["user_id"])
+
+    after = client.get(f"{ENGAGEMENT_BASE}/{engagement['id']}/scope-impact", headers=org["org_headers"])
+    assert after.status_code == 200
+    after_body = after.json()
+    assert after_body["findings_total"] == 2
+    assert after_body["findings_created_under_stale_scope"] == 1
+    assert after_body["evidence_packages_total"] == 1
+    assert after_body["evidence_packages_created_under_stale_scope"] == 1
+    assert after_body["current_scope_framework_ids"] == [fw2]
+
+    _ = finding_before, finding_after
