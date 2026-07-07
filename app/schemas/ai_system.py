@@ -1132,6 +1132,8 @@ class GovernanceAutopilotEvaluateCandidateActionResponse(BaseModel):
     blocked_reasons: list[str]
     policy_decision: str
     policy_explanation_json: dict
+    policy_data_age_days: int | None = None
+    context_flags: list[str] = Field(default_factory=list)
     caveat: str
 
 
@@ -1146,7 +1148,10 @@ class GovernanceAutopilotEvaluateRecommendationSnapshotResponse(BaseModel):
     allowed_count: int
     blocked_count: int
     approval_required_count: int
+    blocked_ratio: float = 0
+    highest_risk_tier: str = Field(pattern=GOVERNANCE_AUTOPILOT_ACTION_RISK_TIER_PATTERN)
     decisions: list[dict]
+    context_flags: list[str] = Field(default_factory=list)
     caveat: str
 
 
@@ -1162,6 +1167,8 @@ class GovernanceAutopilotEvaluateCopilotDraftSnapshotResponse(BaseModel):
     requires_human_approval: bool
     blocked_reasons: list[str]
     policy_explanation_json: dict
+    policy_data_age_days: int | None = None
+    context_flags: list[str] = Field(default_factory=list)
     caveat: str
 
 
@@ -1171,10 +1178,17 @@ class GovernanceAutopilotSummary(BaseModel):
     archived_policies: int
     default_policy_id: UUID | None = None
     resolved_mode: str = Field(pattern=GOVERNANCE_AUTOPILOT_POLICY_MODE_PATTERN)
+    resolved_source: str | None = None
     external_effects_allowed: bool
     task_creation_allowed: bool
     review_creation_allowed: bool
     source_record_mutation_allowed: bool
+    pending_execution_intents: int = 0
+    pending_approval_requests: int = 0
+    open_critical_signals: int = 0
+    policy_data_age_days: int | None = None
+    stale_default_policy: bool = False
+    context_flags: list[str] = Field(default_factory=list)
     caveat: str
 
 

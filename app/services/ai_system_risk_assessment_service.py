@@ -5912,6 +5912,25 @@ class AISystemRiskAssessmentService:
         else:
             policy_decision = "allowed"
 
+        resolved_source = str(policy.get("resolved_source") or "")
+        policy_updated_at = self.as_utc(policy.get("updated_at"))
+        policy_data_age_days = None
+        if policy_updated_at is not None:
+            policy_data_age_days = max(0, (self.now() - policy_updated_at).days)
+        context_flags: list[str] = []
+        if resolved_source == "safe_fallback_default":
+            context_flags.append("safe_fallback_policy")
+        if policy_data_age_days is not None and policy_data_age_days >= 90:
+            context_flags.append("policy_definition_stale_90d")
+        if action_risk_tier == "high":
+            context_flags.append("high_risk_action")
+        if requires_human_approval:
+            context_flags.append("human_approval_required")
+        if not allowed:
+            context_flags.append("policy_blocked")
+        if not reason_codes:
+            context_flags.append("no_source_reason_codes")
+
         return {
             "allowed_by_policy": allowed,
             "required_mode": mode,
@@ -5920,10 +5939,13 @@ class AISystemRiskAssessmentService:
             "confidence_score": confidence_score,
             "blocked_reasons": sorted(set(blocked_reasons)),
             "policy_decision": policy_decision,
+            "policy_data_age_days": policy_data_age_days,
+            "context_flags": context_flags,
             "policy_explanation_json": {
                 "mode": mode,
                 "resolved_policy_id": str(policy.get("policy_id")) if policy.get("policy_id") else None,
                 "resolved_source": policy.get("resolved_source"),
+                "policy_data_age_days": policy_data_age_days,
                 "checks": {
                     "action_type": action_type,
                     "priority_band": action_band,
@@ -5973,13 +5995,33 @@ class AISystemRiskAssessmentService:
                 blocked_count += 1
             if decision["requires_human_approval"]:
                 approval_required_count += 1
+        blocked_ratio = round((blocked_count / len(actions)), 4) if actions else 0.0
+        risk_rank = {"low": 1, "medium": 2, "high": 3}
+        highest_risk_tier = "low"
+        if decisions:
+            highest_risk_tier = max(
+                (str(item["decision"].get("risk_tier") or "low") for item in decisions),
+                key=lambda tier: risk_rank.get(tier, 0),
+            )
+        context_flags: list[str] = []
+        if not actions:
+            context_flags.append("snapshot_empty")
+        if blocked_count > 0:
+            context_flags.append("contains_policy_blocked_actions")
+        if approval_required_count > 0:
+            context_flags.append("contains_actions_requiring_approval")
+        if highest_risk_tier == "high":
+            context_flags.append("contains_high_risk_actions")
         return {
             "snapshot_id": snapshot.id,
             "total_actions": len(actions),
             "allowed_count": allowed_count,
             "blocked_count": blocked_count,
             "approval_required_count": approval_required_count,
+            "blocked_ratio": blocked_ratio,
+            "highest_risk_tier": highest_risk_tier,
             "decisions": decisions,
+            "context_flags": context_flags,
             "caveat": AUTOPILOT_SAFE_FALLBACK_CAVEAT,
         }
 
@@ -6018,6 +6060,19 @@ class AISystemRiskAssessmentService:
         if mode in {"require_approval", "execute_safe_later"}:
             requires_human_approval = True
         allowed = len(blocked_reasons) == 0
+        policy_updated_at = self.as_utc(policy.get("updated_at"))
+        policy_data_age_days = None
+        if policy_updated_at is not None:
+            policy_data_age_days = max(0, (self.now() - policy_updated_at).days)
+        context_flags: list[str] = []
+        if str(policy.get("resolved_source")) == "safe_fallback_default":
+            context_flags.append("safe_fallback_policy")
+        if policy_data_age_days is not None and policy_data_age_days >= 90:
+            context_flags.append("policy_definition_stale_90d")
+        if requires_human_approval:
+            context_flags.append("human_approval_required")
+        if not allowed:
+            context_flags.append("policy_blocked")
 
         return {
             "snapshot_id": snapshot.id,
@@ -6025,10 +6080,13 @@ class AISystemRiskAssessmentService:
             "allowed_by_policy": allowed,
             "requires_human_approval": requires_human_approval,
             "blocked_reasons": sorted(set(blocked_reasons)),
+            "policy_data_age_days": policy_data_age_days,
+            "context_flags": context_flags,
             "policy_explanation_json": {
                 "mode": mode,
                 "resolved_policy_id": str(policy.get("policy_id")) if policy.get("policy_id") else None,
                 "resolved_source": policy.get("resolved_source"),
+                "policy_data_age_days": policy_data_age_days,
                 "checks": {
                     "draft_type": draft_type,
                     "allowed_draft_types_json": sorted(allowed_draft_types),
@@ -6062,17 +6120,66 @@ class AISystemRiskAssessmentService:
                 )
             ).scalar_one()
         )
+        pending_execution_intents = int(
+            self.db.execute(
+                select(func.count(GovernanceAutopilotExecutionIntent.id)).where(
+                    GovernanceAutopilotExecutionIntent.organization_id == organization_id,
+                    GovernanceAutopilotExecutionIntent.intent_status.in_(["planned", "approval_required"]),
+                    GovernanceAutopilotExecutionIntent.archived_at.is_(None),
+                )
+            ).scalar_one()
+        )
+        pending_approval_requests = int(
+            self.db.execute(
+                select(func.count(GovernanceAutopilotExecutionApproval.id)).where(
+                    GovernanceAutopilotExecutionApproval.organization_id == organization_id,
+                    GovernanceAutopilotExecutionApproval.approval_status == "requested",
+                )
+            ).scalar_one()
+        )
+        open_critical_signals = int(
+            self.db.execute(
+                select(func.count(GovernanceSignal.id)).where(
+                    GovernanceSignal.organization_id == organization_id,
+                    GovernanceSignal.status == "open",
+                    GovernanceSignal.severity == "critical",
+                )
+            ).scalar_one()
+        )
         resolved = self.resolved_autopilot_policy(organization_id=organization_id)
+        policy_updated_at = self.as_utc(resolved.get("updated_at"))
+        policy_data_age_days = None
+        if policy_updated_at is not None:
+            policy_data_age_days = max(0, (self.now() - policy_updated_at).days)
+        stale_default_policy = bool(resolved.get("policy_id")) and bool(policy_data_age_days is not None and policy_data_age_days >= 90)
+        context_flags: list[str] = []
+        if str(resolved.get("resolved_source")) == "safe_fallback_default":
+            context_flags.append("safe_fallback_policy")
+        if stale_default_policy:
+            context_flags.append("default_policy_stale_90d")
+        if pending_execution_intents > 0:
+            context_flags.append("pending_execution_intents")
+        if pending_approval_requests > 0:
+            context_flags.append("pending_approval_requests")
+        if open_critical_signals > 0:
+            context_flags.append("open_critical_signals")
         return {
             "total_policies": total_policies,
             "active_policies": active_policies,
             "archived_policies": archived_policies,
             "default_policy_id": resolved.get("policy_id"),
             "resolved_mode": resolved["mode"],
+            "resolved_source": resolved.get("resolved_source"),
             "external_effects_allowed": bool(resolved["external_effects_allowed"]),
             "task_creation_allowed": bool(resolved["task_creation_allowed"]),
             "review_creation_allowed": bool(resolved["review_creation_allowed"]),
             "source_record_mutation_allowed": bool(resolved["source_record_mutation_allowed"]),
+            "pending_execution_intents": pending_execution_intents,
+            "pending_approval_requests": pending_approval_requests,
+            "open_critical_signals": open_critical_signals,
+            "policy_data_age_days": policy_data_age_days,
+            "stale_default_policy": stale_default_policy,
+            "context_flags": context_flags,
             "caveat": AUTOPILOT_SAFE_FALLBACK_CAVEAT,
         }
 

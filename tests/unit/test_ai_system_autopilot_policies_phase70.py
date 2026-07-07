@@ -1,4 +1,5 @@
 import uuid
+from datetime import timedelta
 
 from sqlalchemy import func, select
 
@@ -130,6 +131,13 @@ def test_phase70_autopilot_policy_crud_default_resolved_and_summary(client, db_s
     sb = summary.json()
     assert sb["total_policies"] >= 2
     assert "resolved_mode" in sb
+    assert sb["resolved_source"] == "safe_fallback_default"
+    assert sb["pending_execution_intents"] >= 0
+    assert sb["pending_approval_requests"] >= 0
+    assert sb["open_critical_signals"] >= 0
+    assert sb["stale_default_policy"] is False
+    assert "safe_fallback_policy" in sb["context_flags"]
+    assert sb["policy_data_age_days"] is None or sb["policy_data_age_days"] >= 0
 
     # no hard delete
     count_rows = int(
@@ -172,6 +180,7 @@ def test_phase70_candidate_evaluation_blocks_and_requires_approval(client):
     # safe fallback: high/urgent should require approval
     candidate_high = dict(candidate)
     candidate_high["priority_band"] = "high"
+    candidate_high["risk_tier"] = "high"
     eval_fallback = client.post(
         EVAL_CANDIDATE_ENDPOINT,
         headers=headers,
@@ -180,6 +189,11 @@ def test_phase70_candidate_evaluation_blocks_and_requires_approval(client):
     assert eval_fallback.status_code == 200
     fallback_body = eval_fallback.json()
     assert fallback_body["requires_human_approval"] is True
+    assert "human_approval_required" in fallback_body["context_flags"]
+    assert "safe_fallback_policy" in fallback_body["context_flags"]
+    if fallback_body["risk_tier"] == "high":
+        assert "high_risk_action" in fallback_body["context_flags"]
+    assert fallback_body["policy_data_age_days"] is None or fallback_body["policy_data_age_days"] >= 0
 
     policy = client.post(
         POLICY_BASE,
@@ -203,6 +217,7 @@ def test_phase70_candidate_evaluation_blocks_and_requires_approval(client):
     blocked_body = eval_blocked.json()
     assert blocked_body["allowed_by_policy"] is False
     assert "action_type_blocked" in blocked_body["blocked_reasons"]
+    assert "policy_blocked" in blocked_body["context_flags"]
 
 
 def test_phase70_recommendation_and_copilot_evaluation_and_no_mutation(client, db_session):
@@ -238,6 +253,9 @@ def test_phase70_recommendation_and_copilot_evaluation_and_no_mutation(client, d
     assert reco_body["snapshot_id"] == recommendation_snapshot["id"]
     assert reco_body["total_actions"] >= 1
     assert isinstance(reco_body["decisions"], list)
+    assert 0 <= reco_body["blocked_ratio"] <= 1
+    assert reco_body["highest_risk_tier"] in {"low", "medium", "high"}
+    assert isinstance(reco_body["context_flags"], list)
 
     eval_draft = client.post(
         EVAL_DRAFT_ENDPOINT,
@@ -245,8 +263,11 @@ def test_phase70_recommendation_and_copilot_evaluation_and_no_mutation(client, d
         json={"copilot_draft_snapshot_id": draft_snapshot["id"]},
     )
     assert eval_draft.status_code == 200
-    assert eval_draft.json()["snapshot_id"] == draft_snapshot["id"]
-    assert "policy_explanation_json" in eval_draft.json()
+    draft_eval_body = eval_draft.json()
+    assert draft_eval_body["snapshot_id"] == draft_snapshot["id"]
+    assert "policy_explanation_json" in draft_eval_body
+    assert "context_flags" in draft_eval_body
+    assert draft_eval_body["policy_data_age_days"] is None or draft_eval_body["policy_data_age_days"] >= 0
 
     eval_candidate = client.post(
         EVAL_CANDIDATE_ENDPOINT,
@@ -274,6 +295,48 @@ def test_phase70_recommendation_and_copilot_evaluation_and_no_mutation(client, d
     assert after_reviews == before_reviews
     assert after_signals == before_signals
     assert after_payload == before_payload
+
+
+def test_phase70_stale_policy_context_flags_for_candidate_and_summary(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="p70-stale")
+    headers = org["org_headers"]
+    _, assessment, _ = _seed(client, headers, name="P70-Stale")
+    candidate = _first_candidate_action(client, headers, assessment_id=assessment["id"])
+
+    create = client.post(
+        POLICY_BASE,
+        headers=headers,
+        json={
+            "name": "stale-default",
+            "mode": "suggest_only",
+            "is_default": True,
+        },
+    )
+    assert create.status_code == 201
+    policy_id = uuid.UUID(create.json()["policy_id"])
+    policy_row = db_session.get(GovernanceAutopilotPolicy, policy_id)
+    assert policy_row is not None
+    policy_row.updated_at = policy_row.updated_at - timedelta(days=120)
+    db_session.add(policy_row)
+    db_session.commit()
+
+    eval_candidate = client.post(
+        EVAL_CANDIDATE_ENDPOINT,
+        headers=headers,
+        json={"candidate_action_json": candidate, "policy_id": str(policy_id)},
+    )
+    assert eval_candidate.status_code == 200
+    candidate_body = eval_candidate.json()
+    assert candidate_body["policy_data_age_days"] >= 120
+    assert "policy_definition_stale_90d" in candidate_body["context_flags"]
+
+    summary = client.get("/api/v1/ai-governance/autopilot/summary", headers=headers)
+    assert summary.status_code == 200
+    summary_body = summary.json()
+    assert summary_body["default_policy_id"] == str(policy_id)
+    assert summary_body["policy_data_age_days"] >= 120
+    assert summary_body["stale_default_policy"] is True
+    assert "default_policy_stale_90d" in summary_body["context_flags"]
 
 
 def test_phase70_policy_writes_audit_and_evaluation_no_audit(client, db_session):
