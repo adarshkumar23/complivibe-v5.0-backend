@@ -12,6 +12,7 @@ from app.models.compliance_policy import CompliancePolicy
 from app.models.compliance_policy_approval_request import CompliancePolicyApprovalRequest
 from app.models.compliance_policy_version import CompliancePolicyVersion
 from app.models.membership import Membership
+from app.models.policy_attestation_campaign import PolicyAttestationCampaign
 from app.models.user import User
 
 POLICY_STATUSES = {"draft", "under_review", "approved", "deprecated", "archived"}
@@ -167,6 +168,40 @@ class CompliancePolicyService:
     @staticmethod
     def utcnow() -> datetime:
         return datetime.now(UTC)
+
+    def version_context(
+        self,
+        organization_id: uuid.UUID,
+        policy: CompliancePolicy,
+        versions: list[CompliancePolicyVersion],
+    ) -> dict[uuid.UUID, dict[str, bool]]:
+        """Per-version intelligence: which version is currently live/effective, and whether any
+        still-active attestation campaign is referencing a version that is no longer live (e.g.
+        it was superseded or rejected after the campaign was launched). Campaigns may reference a
+        version either by FK (policy_version_id) or by the legacy version-number snapshot string,
+        so both are checked.
+        """
+        active_campaigns = self.db.execute(
+            select(PolicyAttestationCampaign.policy_version_id, PolicyAttestationCampaign.policy_version).where(
+                PolicyAttestationCampaign.organization_id == organization_id,
+                PolicyAttestationCampaign.policy_id == policy.id,
+                PolicyAttestationCampaign.status == "active",
+                PolicyAttestationCampaign.deleted_at.is_(None),
+            )
+        ).all()
+        referenced_version_ids = {row[0] for row in active_campaigns if row[0] is not None}
+        referenced_version_numbers = {row[1] for row in active_campaigns if row[1] is not None}
+
+        context: dict[uuid.UUID, dict[str, bool]] = {}
+        for version in versions:
+            is_live = version.status == "approved" and version.version_number == policy.version
+            referenced = version.id in referenced_version_ids or version.version_number in referenced_version_numbers
+            context[version.id] = {
+                "is_live": is_live,
+                "referenced_by_active_campaign": referenced,
+                "stale_active_campaign_reference": referenced and not is_live,
+            }
+        return context
 
     def create_policy(
         self,
