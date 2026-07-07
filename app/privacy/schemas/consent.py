@@ -57,6 +57,10 @@ class ConsentRecordRead(BaseModel):
     metadata_json: dict
     created_at: datetime
     updated_at: datetime
+    age_days: int = 0
+    time_to_expiry_days: int | None = None
+    is_expired: bool = False
+    context_flags: list[str] = []
 
 
 class ConsentSummaryRead(BaseModel):
@@ -65,6 +69,9 @@ class ConsentSummaryRead(BaseModel):
     withdrawn_count: int
     expired_count: int
     consent_rate_pct: float
+    expiring_soon_30d: int = 0
+    active_without_notice_count: int = 0
+    context_flags: list[str] = []
 
 
 class GoogleConsentModeV2Create(BaseModel):

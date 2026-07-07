@@ -23,16 +23,21 @@ from app.privacy.services.consent_service import ConsentService
 router = APIRouter(prefix="/privacy/consent", tags=["privacy-consent"])
 
 
+def _consent_read(service: ConsentService, row) -> ConsentRecordRead:
+    return ConsentRecordRead.model_validate(service.consent_response_payload(row))
+
+
 @router.post("/events", response_model=ConsentRecordRead, status_code=status.HTTP_201_CREATED)
 def receive_consent_event(
     payload: ConsentInboundEvent,
     db: Session = Depends(get_db),
     x_complivibe_key: str | None = Header(default=None, alias="X-CompliVibe-Key"),
 ) -> ConsentRecordRead:
-    row = ConsentService(db).receive_inbound_event(x_complivibe_key or "", payload)
+    service = ConsentService(db)
+    row = service.receive_inbound_event(x_complivibe_key or "", payload)
     db.commit()
     db.refresh(row)
-    return ConsentRecordRead.model_validate(row)
+    return _consent_read(service, row)
 
 
 @router.post("", response_model=ConsentRecordRead, status_code=status.HTTP_201_CREATED)
@@ -43,7 +48,8 @@ def record_consent(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("privacy:write")),
 ) -> ConsentRecordRead:
-    row = ConsentService(db).record_consent(
+    service = ConsentService(db)
+    row = service.record_consent(
         organization.id,
         payload.processing_activity_id,
         payload,
@@ -52,7 +58,7 @@ def record_consent(
     )
     db.commit()
     db.refresh(row)
-    return ConsentRecordRead.model_validate(row)
+    return _consent_read(service, row)
 
 
 @router.get("", response_model=list[ConsentRecordRead])
@@ -65,14 +71,15 @@ def list_consents(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("privacy:read")),
 ) -> list[ConsentRecordRead]:
-    rows = ConsentService(db).list_consents(
+    service = ConsentService(db)
+    rows = service.list_consents(
         organization.id,
         activity_id=activity_id,
         granted=granted,
         skip=skip,
         limit=limit,
     )
-    return [ConsentRecordRead.model_validate(row) for row in rows]
+    return [ConsentRecordRead.model_validate(item) for item in service.consent_response_payloads(rows)]
 
 
 @router.get("/summary", response_model=ConsentSummaryRead)
@@ -149,7 +156,8 @@ def withdraw_consent(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("privacy:write")),
 ) -> ConsentRecordRead:
-    row = ConsentService(db).withdraw_consent(
+    service = ConsentService(db)
+    row = service.withdraw_consent(
         organization.id,
         consent_id,
         reason=payload.reason,
@@ -157,7 +165,7 @@ def withdraw_consent(
     )
     db.commit()
     db.refresh(row)
-    return ConsentRecordRead.model_validate(row)
+    return _consent_read(service, row)
 
 
 @router.get("/status", response_model=ConsentStatusRead)

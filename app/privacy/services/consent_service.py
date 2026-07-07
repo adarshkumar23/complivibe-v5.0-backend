@@ -1,6 +1,6 @@
 import hashlib
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, func, select
@@ -74,6 +74,82 @@ class ConsentService:
     @staticmethod
     def utcnow() -> datetime:
         return datetime.now(UTC)
+
+    @staticmethod
+    def _as_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    def consent_context(self, row: ConsentRecord, *, now: datetime | None = None) -> dict:
+        evaluated_now = now or self.utcnow()
+        created_at = self._as_utc(row.created_at) or evaluated_now
+        age_days = max(0, int((evaluated_now - created_at).total_seconds() // 86400))
+        time_to_expiry_days: int | None = None
+        is_expired = False
+        if row.expiry_date is not None:
+            time_to_expiry_days = (row.expiry_date - evaluated_now.date()).days
+            is_expired = time_to_expiry_days < 0
+
+        context_flags: list[str] = []
+        if row.granted:
+            context_flags.append("active_consent")
+        else:
+            context_flags.append("withdrawn_consent")
+        if is_expired:
+            context_flags.append("expired_consent")
+            if row.granted:
+                context_flags.append("expired_but_still_granted")
+        elif time_to_expiry_days is not None and time_to_expiry_days <= 30:
+            context_flags.append("consent_expiring_soon")
+        if row.notice_id is None:
+            context_flags.append("notice_reference_missing")
+        if row.granted and row.withdrawn_at is not None:
+            context_flags.append("state_inconsistency_granted_with_withdrawn_timestamp")
+        if not row.granted and row.withdrawn_at is None:
+            context_flags.append("state_inconsistency_missing_withdrawn_timestamp")
+        if row.consent_mechanism == "implied":
+            context_flags.append("implicit_consent")
+        if row.consent_mechanism == "ccpa_opt_out":
+            context_flags.append("ccpa_opt_out_record")
+        return {
+            "age_days": age_days,
+            "time_to_expiry_days": time_to_expiry_days,
+            "is_expired": is_expired,
+            "context_flags": context_flags,
+        }
+
+    def consent_response_payload(self, row: ConsentRecord) -> dict:
+        context = self.consent_context(row)
+        return {
+            "id": row.id,
+            "organization_id": row.organization_id,
+            "processing_activity_id": row.processing_activity_id,
+            "notice_id": row.notice_id,
+            "subject_identifier": row.subject_identifier,
+            "subject_identifier_hash": row.subject_identifier_hash,
+            "consent_mechanism": row.consent_mechanism,
+            "consent_version": row.consent_version,
+            "granted": row.granted,
+            "granted_at": row.granted_at,
+            "withdrawn_at": row.withdrawn_at,
+            "withdrawal_reason": row.withdrawal_reason,
+            "ip_address": row.ip_address,
+            "user_agent": row.user_agent,
+            "expiry_date": row.expiry_date,
+            "metadata_json": row.metadata_json,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "age_days": context["age_days"],
+            "time_to_expiry_days": context["time_to_expiry_days"],
+            "is_expired": context["is_expired"],
+            "context_flags": context["context_flags"],
+        }
+
+    def consent_response_payloads(self, rows: list[ConsentRecord]) -> list[dict]:
+        return [self.consent_response_payload(row) for row in rows]
 
     @staticmethod
     def hash_subject_identifier(subject_identifier: str) -> str:
@@ -182,6 +258,7 @@ class ConsentService:
         subject_hash = self.hash_subject_identifier(subject_identifier)
         stored_identifier = subject_hash
         now = self.utcnow()
+        expiry_date = payload.get("expiry_date")
 
         row = self.db.execute(
             select(ConsentRecord).where(
@@ -192,6 +269,11 @@ class ConsentService:
         ).scalar_one_or_none()
 
         target_granted = bool(payload.get("granted", granted))
+        if target_granted and expiry_date is not None and expiry_date < now.date():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Cannot record granted consent with expiry_date in the past",
+            )
 
         if row is None:
             row = ConsentRecord(
@@ -208,13 +290,15 @@ class ConsentService:
                 withdrawal_reason=None if target_granted else payload.get("withdrawal_reason"),
                 ip_address=payload.get("ip_address"),
                 user_agent=payload.get("user_agent"),
-                expiry_date=payload.get("expiry_date"),
+                expiry_date=expiry_date,
                 metadata_json=payload.get("metadata") or {},
                 created_at=now,
                 updated_at=now,
             )
             self.db.add(row)
+            previous_granted = None
         else:
+            previous_granted = row.granted
             row.notice_id = payload.get("notice_id", row.notice_id)
             row.subject_identifier = stored_identifier
             row.consent_mechanism = mechanism
@@ -244,7 +328,7 @@ class ConsentService:
                 "granted": row.granted,
                 "consent_mechanism": row.consent_mechanism,
             },
-            metadata_json={"source": "api"},
+            metadata_json={"source": "api", "previous_granted": previous_granted},
         )
         return row
 
@@ -257,6 +341,9 @@ class ConsentService:
     ) -> ConsentRecord:
         row = self._require_consent(org_id, consent_id)
         activity = self._require_activity(org_id, row.processing_activity_id)
+
+        if not row.granted and row.withdrawn_at is not None:
+            return row
 
         now = self.utcnow()
         row.granted = False
@@ -346,14 +433,48 @@ class ConsentService:
             ).scalar_one()
             or 0
         )
+        expiring_soon_30d = int(
+            self.db.execute(
+                select(func.count(ConsentRecord.id)).where(
+                    *base_filters,
+                    ConsentRecord.granted.is_(True),
+                    ConsentRecord.expiry_date.is_not(None),
+                    ConsentRecord.expiry_date >= today,
+                    ConsentRecord.expiry_date <= (today + timedelta(days=30)),
+                )
+            ).scalar_one()
+            or 0
+        )
+        active_without_notice_count = int(
+            self.db.execute(
+                select(func.count(ConsentRecord.id)).where(
+                    *base_filters,
+                    ConsentRecord.granted.is_(True),
+                    ConsentRecord.notice_id.is_(None),
+                )
+            ).scalar_one()
+            or 0
+        )
 
         consent_rate = (active_consents / total * 100) if total > 0 else 0.0
+        context_flags: list[str] = []
+        if expired_count > 0:
+            context_flags.append("expired_consents_present")
+        if expiring_soon_30d > 0:
+            context_flags.append("consents_expiring_within_30_days")
+        if active_without_notice_count > 0:
+            context_flags.append("active_consents_missing_notice_reference")
+        if total > 0 and active_consents == 0:
+            context_flags.append("no_active_consents")
         return {
             "total_records": total,
             "active_consents": active_consents,
             "withdrawn_count": withdrawn_count,
             "expired_count": expired_count,
             "consent_rate_pct": round(consent_rate, 2),
+            "expiring_soon_30d": expiring_soon_30d,
+            "active_without_notice_count": active_without_notice_count,
+            "context_flags": context_flags,
         }
 
     def record_google_consent_mode_v2(

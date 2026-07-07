@@ -144,6 +144,9 @@ def test_d85_consent_lifecycle_inbound_and_expiry(client, db_session):
     assert rec.status_code == 201
     rec_body = rec.json()
     assert rec_body["subject_identifier_hash"] == ConsentService.hash_subject_identifier("subject-123")
+    assert "context_flags" in rec_body
+    assert "active_consent" in rec_body["context_flags"]
+    assert rec_body["is_expired"] is False
 
     # Same subject+activity should upsert, not duplicate.
     rec2 = client.post(
@@ -198,6 +201,7 @@ def test_d85_consent_lifecycle_inbound_and_expiry(client, db_session):
     assert withdraw.status_code == 200
     assert withdraw.json()["granted"] is False
     assert withdraw.json()["withdrawn_at"] is not None
+    assert "withdrawn_consent" in withdraw.json()["context_flags"]
 
     outbox = (
         db_session.query(EmailOutbox)
@@ -208,6 +212,24 @@ def test_d85_consent_lifecycle_inbound_and_expiry(client, db_session):
         .all()
     )
     assert len(outbox) >= 1
+    outbox_count_after_first_withdraw = len(outbox)
+
+    # Idempotent withdraw should not queue duplicate notifications.
+    withdraw_again = client.post(
+        f"{CONSENT_BASE}/{rec_body['id']}/withdraw",
+        headers=org["org_headers"],
+        json={"reason": "duplicate request"},
+    )
+    assert withdraw_again.status_code == 200
+    outbox_after_second = (
+        db_session.query(EmailOutbox)
+        .filter(
+            EmailOutbox.organization_id == uuid.UUID(org["organization_id"]),
+            EmailOutbox.event_type == "consent.withdrawn",
+        )
+        .all()
+    )
+    assert len(outbox_after_second) == outbox_count_after_first_withdraw
 
     status_true = client.get(
         f"{CONSENT_BASE}/status",
@@ -261,6 +283,33 @@ def test_d85_consent_lifecycle_inbound_and_expiry(client, db_session):
     assert refreshed is not None
     assert refreshed.granted is False
     assert refreshed.withdrawal_reason == "expired"
+
+    summary = client.get(f"{CONSENT_BASE}/summary", headers=org["org_headers"])
+    assert summary.status_code == 200
+    summary_body = summary.json()
+    assert "expiring_soon_30d" in summary_body
+    assert "active_without_notice_count" in summary_body
+    assert isinstance(summary_body["context_flags"], list)
+
+
+def test_d85_record_granted_consent_rejects_past_expiry_date(client):
+    org = bootstrap_org_user(client, email_prefix="d85-expiry-guard")
+    activity = _create_processing_activity(client, org["org_headers"], org["user_id"])
+    past_expiry = (date.today() - timedelta(days=1)).isoformat()
+
+    response = client.post(
+        CONSENT_BASE,
+        headers=org["org_headers"],
+        json={
+            "processing_activity_id": activity["id"],
+            "subject_identifier": "subject-expired",
+            "consent_mechanism": "explicit_checkbox",
+            "granted": True,
+            "expiry_date": past_expiry,
+        },
+    )
+    assert response.status_code == 422
+    assert "expiry_date" in response.json()["detail"]
 
 
 def test_t1_15_google_consent_mode_v2_signal_handling(client, db_session):
