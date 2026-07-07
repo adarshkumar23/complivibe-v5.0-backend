@@ -41,43 +41,8 @@ from app.services.retention_service import RetentionService
 router = APIRouter(prefix="/exports", tags=["exports"])
 
 
-def _job_read(row: ExportJob) -> ExportJobRead:
-    return ExportJobRead(
-        id=row.id,
-        organization_id=row.organization_id,
-        export_type=row.export_type,
-        title=row.title,
-        description=row.description,
-        status=row.status,
-        requested_by_user_id=row.requested_by_user_id,
-        started_at=row.started_at,
-        completed_at=row.completed_at,
-        failed_at=row.failed_at,
-        cancelled_at=row.cancelled_at,
-        archived_at=row.archived_at,
-        error_message=row.error_message,
-        source_report_id=row.source_report_id,
-        framework_id=row.framework_id,
-        period_start=row.period_start,
-        period_end=row.period_end,
-        checksum_sha256=row.checksum_sha256,
-        integrity_signature=row.integrity_signature,
-        signing_key_id=row.signing_key_id,
-        signature_algorithm=row.signature_algorithm,
-        locked_until=row.locked_until,
-        retention_until=row.retention_until,
-        legal_hold=row.legal_hold,
-        legal_hold_reason=row.legal_hold_reason,
-        legal_hold_set_by_user_id=row.legal_hold_set_by_user_id,
-        legal_hold_set_at=row.legal_hold_set_at,
-        attestation_status=row.attestation_status,
-        latest_attestation_id=row.latest_attestation_id,
-        package_version=row.package_version,
-        immutable_after_completion=row.immutable_after_completion,
-        metadata_json=row.metadata_json,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-    )
+def _job_read(service: ExportService, row: ExportJob) -> ExportJobRead:
+    return ExportJobRead(**service.job_response_payload(row))
 
 
 def _event_read(row: ExportJobEvent) -> ExportJobEventRead:
@@ -153,7 +118,7 @@ def create_export_job(
     )
     db.commit()
     db.refresh(row)
-    return _job_read(row)
+    return _job_read(service, row)
 
 
 @router.get("/jobs", response_model=ExportJobListResponse)
@@ -167,6 +132,7 @@ def list_export_jobs(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("exports:read")),
 ) -> ExportJobListResponse:
+    service = ExportService(db)
     rows = ExportRepository(db).list_jobs(
         organization_id=organization.id,
         export_type=export_type,
@@ -175,7 +141,7 @@ def list_export_jobs(
         limit=limit,
         offset=offset,
     )
-    return ExportJobListResponse(jobs=[_job_read(row) for row in rows])
+    return ExportJobListResponse(jobs=[_job_read(service, row) for row in rows])
 
 
 @router.get("/jobs/{export_job_id}", response_model=ExportJobDetail)
@@ -188,7 +154,7 @@ def get_export_job_detail(
     service = ExportService(db)
     row = service.require_job(organization_id=organization.id, export_job_id=export_job_id)
     events = ExportRepository(db).list_events(organization_id=organization.id, export_job_id=row.id)
-    return ExportJobDetail(job=_job_read(row), events=[_event_read(item) for item in events])
+    return ExportJobDetail(job=_job_read(service, row), events=[_event_read(item) for item in events])
 
 
 @router.post("/jobs/{export_job_id}/run", response_model=ExportJobRunResponse)
@@ -232,7 +198,7 @@ def run_export_job(
         db.commit()
         raise
     db.refresh(row)
-    return ExportJobRunResponse(job=_job_read(row))
+    return ExportJobRunResponse(job=_job_read(service, row))
 
 
 @router.post("/jobs/{export_job_id}/cancel", response_model=ExportJobRead)
@@ -261,7 +227,7 @@ def cancel_export_job(
     )
     db.commit()
     db.refresh(row)
-    return _job_read(row)
+    return _job_read(service, row)
 
 
 @router.post("/jobs/{export_job_id}/archive", response_model=ExportJobRead)
@@ -275,6 +241,8 @@ def archive_export_job(
 ) -> ExportJobRead:
     service = ExportService(db)
     row = service.require_job(organization_id=organization.id, export_job_id=export_job_id)
+    if row.status == "archived":
+        return _job_read(service, row)
     row = service.archive_job(job=row, actor_user_id=current_user.id)
     AuditService(db).write_audit_log(
         action="export_job.archived",
@@ -289,7 +257,7 @@ def archive_export_job(
     )
     db.commit()
     db.refresh(row)
-    return _job_read(row)
+    return _job_read(service, row)
 
 
 @router.get("/jobs/{export_job_id}/package", response_model=ExportPackageResponse)
@@ -422,7 +390,7 @@ def apply_retention_policy_to_export(
     )
     db.commit()
     db.refresh(row)
-    return _job_read(row)
+    return _job_read(export_service, row)
 
 
 @router.post("/jobs/{export_job_id}/legal-hold", response_model=ExportJobRead)
@@ -469,7 +437,7 @@ def set_export_legal_hold(
     )
     db.commit()
     db.refresh(row)
-    return _job_read(row)
+    return _job_read(export_service, row)
 
 
 @router.post("/jobs/{export_job_id}/attestations", response_model=ExportAttestationRead, status_code=status.HTTP_201_CREATED)

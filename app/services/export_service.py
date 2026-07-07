@@ -74,6 +74,92 @@ class ExportService:
     @staticmethod
     def validate_export_type(export_type: str) -> None:
         export_type = validate_choice(export_type, ALLOWED_EXPORT_TYPES, "export_type", status_code=status.HTTP_400_BAD_REQUEST)
+
+    def validate_period_window(self, period_start: datetime | None, period_end: datetime | None) -> None:
+        if period_start and period_end and period_end < period_start:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="period_end must be greater than or equal to period_start",
+            )
+
+    def job_context(self, row: ExportJob) -> dict[str, Any]:
+        now = self.now()
+        created_at = self.as_utc(row.created_at) or now
+        started_at = self.as_utc(row.started_at)
+        age_days = max(0, (now.date() - created_at.date()).days)
+        is_terminal = row.status in {"completed", "failed", "cancelled", "archived"}
+        is_integrity_bound = bool(row.checksum_sha256 and row.integrity_signature and row.signature_algorithm)
+
+        flags: list[str] = [f"export_{row.status}"]
+        if row.status == "queued" and (now - created_at) > timedelta(hours=24):
+            flags.append("queued_too_long")
+        if row.status == "processing" and started_at and (now - started_at) > timedelta(hours=2):
+            flags.append("processing_too_long")
+        if row.status == "completed" and not is_integrity_bound:
+            flags.append("integrity_artifacts_missing")
+        if row.status == "completed" and not row.immutable_after_completion:
+            flags.append("immutability_disabled")
+        if row.legal_hold:
+            flags.append("legal_hold_enabled")
+        if row.locked_until and self.as_utc(row.locked_until) and self.as_utc(row.locked_until) > now:
+            flags.append("retention_lock_active")
+        if row.period_start and row.period_end and row.period_end < row.period_start:
+            flags.append("invalid_period_range")
+        if row.export_type == "compliance_report_json" and row.source_report_id is None:
+            flags.append("missing_source_report")
+        if row.export_type == "framework_readiness_json" and row.framework_id is None:
+            flags.append("missing_framework_id")
+
+        return {
+            "age_days": age_days,
+            "is_terminal": is_terminal,
+            "is_integrity_bound": is_integrity_bound,
+            "context_flags": flags,
+        }
+
+    def job_response_payload(self, row: ExportJob) -> dict[str, Any]:
+        context = self.job_context(row)
+        return {
+            "id": row.id,
+            "organization_id": row.organization_id,
+            "export_type": row.export_type,
+            "title": row.title,
+            "description": row.description,
+            "status": row.status,
+            "requested_by_user_id": row.requested_by_user_id,
+            "started_at": row.started_at,
+            "completed_at": row.completed_at,
+            "failed_at": row.failed_at,
+            "cancelled_at": row.cancelled_at,
+            "archived_at": row.archived_at,
+            "error_message": row.error_message,
+            "source_report_id": row.source_report_id,
+            "framework_id": row.framework_id,
+            "period_start": row.period_start,
+            "period_end": row.period_end,
+            "checksum_sha256": row.checksum_sha256,
+            "integrity_signature": row.integrity_signature,
+            "signing_key_id": row.signing_key_id,
+            "signature_algorithm": row.signature_algorithm,
+            "locked_until": row.locked_until,
+            "retention_until": row.retention_until,
+            "legal_hold": row.legal_hold,
+            "legal_hold_reason": row.legal_hold_reason,
+            "legal_hold_set_by_user_id": row.legal_hold_set_by_user_id,
+            "legal_hold_set_at": row.legal_hold_set_at,
+            "attestation_status": row.attestation_status,
+            "latest_attestation_id": row.latest_attestation_id,
+            "package_version": row.package_version,
+            "immutable_after_completion": row.immutable_after_completion,
+            "metadata_json": row.metadata_json,
+            "age_days": context["age_days"],
+            "is_terminal": context["is_terminal"],
+            "is_integrity_bound": context["is_integrity_bound"],
+            "context_flags": context["context_flags"],
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+
     def _canonical_json(self, payload: dict[str, Any]) -> str:
         return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
@@ -267,6 +353,7 @@ class ExportService:
         requested_by_user_id: uuid.UUID,
     ) -> ExportJob:
         self.validate_export_type(export_type)
+        self.validate_period_window(period_start, period_end)
         if source_report_id is not None:
             self.require_source_report(organization_id=organization_id, source_report_id=source_report_id)
         if framework_id is not None:
@@ -636,6 +723,8 @@ class ExportService:
             raise
 
     def cancel_job(self, *, job: ExportJob, actor_user_id: uuid.UUID, reason: str | None) -> ExportJob:
+        if job.status == "cancelled":
+            return job
         if job.status not in {"draft", "queued", "failed"}:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Export job cannot be cancelled from current status")
         before = job.status
@@ -653,6 +742,8 @@ class ExportService:
         return job
 
     def archive_job(self, *, job: ExportJob, actor_user_id: uuid.UUID) -> ExportJob:
+        if job.status == "archived":
+            return job
         now = self.now()
         if job.legal_hold:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Export job cannot be archived while legal hold is enabled")
@@ -724,9 +815,27 @@ class ExportService:
         return self.db.execute(stmt).scalars().all()
 
     def summary(self, *, organization_id: uuid.UUID) -> dict[str, Any]:
-        since_30d = self.now() - timedelta(days=30)
+        now = self.now()
+        since_30d = now - timedelta(days=30)
+        since_24h = now - timedelta(hours=24)
         total_exports = int(
             self.db.execute(select(func.count(ExportJob.id)).where(ExportJob.organization_id == organization_id)).scalar_one()
+        )
+        queued_exports = int(
+            self.db.execute(
+                select(func.count(ExportJob.id)).where(
+                    ExportJob.organization_id == organization_id,
+                    ExportJob.status == "queued",
+                )
+            ).scalar_one()
+        )
+        processing_exports = int(
+            self.db.execute(
+                select(func.count(ExportJob.id)).where(
+                    ExportJob.organization_id == organization_id,
+                    ExportJob.status == "processing",
+                )
+            ).scalar_one()
         )
         completed_exports = int(
             self.db.execute(
@@ -760,6 +869,15 @@ class ExportService:
                 )
             ).scalar_one()
         )
+        stale_queued_exports_24h = int(
+            self.db.execute(
+                select(func.count(ExportJob.id)).where(
+                    ExportJob.organization_id == organization_id,
+                    ExportJob.status == "queued",
+                    ExportJob.created_at < since_24h,
+                )
+            ).scalar_one()
+        )
         latest_completed_at = self.db.execute(
             select(func.max(ExportJob.completed_at)).where(
                 ExportJob.organization_id == organization_id,
@@ -772,12 +890,39 @@ class ExportService:
                 ExportJobEvent.event_type == "export.verified",
             )
         ).scalar_one()
+
+        verification_events = int(
+            self.db.execute(
+                select(func.count(ExportJobEvent.id)).where(
+                    ExportJobEvent.organization_id == organization_id,
+                    ExportJobEvent.event_type == "export.verified",
+                )
+            ).scalar_one()
+        )
+        verification_coverage_pct = round((verification_events / completed_exports) * 100, 2) if completed_exports else 0.0
+        context_flags: list[str] = []
+        if total_exports == 0:
+            context_flags.append("no_exports_available")
+        if stale_queued_exports_24h > 0:
+            context_flags.append("stale_queued_exports_present")
+        if processing_exports > 0:
+            context_flags.append("exports_in_progress")
+        if failed_exports > 0:
+            context_flags.append("failed_exports_present")
+        if completed_exports > 0 and verification_events == 0:
+            context_flags.append("no_verified_exports")
+
         return {
             "total_exports": total_exports,
+            "queued_exports": queued_exports,
+            "processing_exports": processing_exports,
             "completed_exports": completed_exports,
             "failed_exports": failed_exports,
             "archived_exports": archived_exports,
             "exports_last_30d": exports_last_30d,
+            "stale_queued_exports_24h": stale_queued_exports_24h,
+            "verification_coverage_pct": verification_coverage_pct,
+            "context_flags": context_flags,
             "latest_completed_at": latest_completed_at,
             "latest_verified_at": latest_verified_at,
         }

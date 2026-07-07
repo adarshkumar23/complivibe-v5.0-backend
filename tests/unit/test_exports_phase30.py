@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from app.core.security import get_password_hash
 from app.models.export_job import ExportJob
@@ -99,12 +100,17 @@ def test_export_job_create_list_tenant_scope_and_validation(client):
     assert create.status_code == 201
     export_id = create.json()["id"]
     assert create.json()["status"] == "queued"
+    assert create.json()["age_days"] == 0
+    assert create.json()["is_terminal"] is False
+    assert "export_queued" in create.json()["context_flags"]
 
     list_org1 = client.get("/api/v1/exports/jobs", headers=_headers(owner1, org1))
     list_org2 = client.get("/api/v1/exports/jobs", headers=_headers(owner2, org2))
     assert list_org1.status_code == 200
     assert list_org2.status_code == 200
-    assert any(item["id"] == export_id for item in list_org1.json()["jobs"])
+    org1_row = next(item for item in list_org1.json()["jobs"] if item["id"] == export_id)
+    assert org1_row["is_terminal"] is False
+    assert "export_queued" in org1_row["context_flags"]
     assert all(item["id"] != export_id for item in list_org2.json()["jobs"])
 
 
@@ -135,6 +141,8 @@ def test_run_compliance_report_export_and_verify_and_tamper_detection(client, db
     run = client.post(f"/api/v1/exports/jobs/{export_id}/run", headers=_headers(owner, org))
     assert run.status_code == 200
     assert run.json()["job"]["status"] == "completed"
+    assert run.json()["job"]["is_integrity_bound"] is True
+    assert "export_completed" in run.json()["job"]["context_flags"]
     assert run.json()["job"]["checksum_sha256"] is not None
     assert run.json()["job"]["signature_algorithm"] == "HMAC-SHA256"
 
@@ -226,6 +234,8 @@ def test_export_cancellation_archive_status_rules_and_summary(client):
     cancel = client.post(f"/api/v1/exports/jobs/{queued_id}/cancel", headers=_headers(owner, org), json={"reason": "not needed"})
     assert cancel.status_code == 200
     assert cancel.json()["status"] == "cancelled"
+    assert cancel.json()["is_terminal"] is True
+    assert "export_cancelled" in cancel.json()["context_flags"]
 
     completed = client.post(
         "/api/v1/exports/jobs",
@@ -244,6 +254,16 @@ def test_export_cancellation_archive_status_rules_and_summary(client):
     archive = client.post(f"/api/v1/exports/jobs/{completed_id}/archive", headers=_headers(owner, org))
     assert archive.status_code == 200
     assert archive.json()["status"] == "archived"
+    assert archive.json()["is_terminal"] is True
+    assert "export_archived" in archive.json()["context_flags"]
+
+    logs_before_second_archive = client.get("/api/v1/audit-logs", headers=_headers(owner, org))
+    archived_actions_before = [item["action"] for item in logs_before_second_archive.json()].count("export_job.archived")
+    archive_again = client.post(f"/api/v1/exports/jobs/{completed_id}/archive", headers=_headers(owner, org))
+    assert archive_again.status_code == 200
+    logs_after_second_archive = client.get("/api/v1/audit-logs", headers=_headers(owner, org))
+    archived_actions_after = [item["action"] for item in logs_after_second_archive.json()].count("export_job.archived")
+    assert archived_actions_after == archived_actions_before
 
     summary = client.get("/api/v1/exports/summary", headers=_headers(owner, org))
     assert summary.status_code == 200
@@ -251,6 +271,11 @@ def test_export_cancellation_archive_status_rules_and_summary(client):
     assert payload["total_exports"] >= 2
     assert payload["completed_exports"] >= 0
     assert payload["archived_exports"] >= 1
+    assert "queued_exports" in payload
+    assert "processing_exports" in payload
+    assert "stale_queued_exports_24h" in payload
+    assert "verification_coverage_pct" in payload
+    assert isinstance(payload["context_flags"], list)
 
     logs = client.get("/api/v1/audit-logs", headers=_headers(owner, org))
     actions = [item["action"] for item in logs.json()]
@@ -292,3 +317,49 @@ def test_package_and_manifest_require_completed_and_source_report_org_validation
     manifest = client.get(f"/api/v1/exports/jobs/{queued_id}/manifest", headers=_headers(owner1, org1))
     assert package.status_code == 400
     assert manifest.status_code == 400
+
+
+def test_export_job_create_rejects_invalid_period_window(client):
+    owner = _register(client, "p30-owner9@example.com", "Pass1234!@", "P30 Org9")
+    org = _org_id(client, owner)
+    now = datetime.now(UTC).replace(microsecond=0)
+
+    invalid = client.post(
+        "/api/v1/exports/jobs",
+        headers=_headers(owner, org),
+        json={
+            "export_type": "task_execution_json",
+            "period_start": now.isoformat(),
+            "period_end": (now - timedelta(days=1)).isoformat(),
+        },
+    )
+    assert invalid.status_code == 422
+    assert "period_end" in invalid.json()["detail"]
+
+
+def test_export_summary_flags_stale_queued_exports(client, db_session):
+    owner = _register(client, "p30-owner10@example.com", "Pass1234!@", "P30 Org10")
+    org = _org_id(client, owner)
+
+    queued = client.post(
+        "/api/v1/exports/jobs",
+        headers=_headers(owner, org),
+        json={"export_type": "task_execution_json"},
+    )
+    assert queued.status_code == 201
+    job_id = uuid.UUID(queued.json()["id"])
+
+    row = db_session.query(ExportJob).filter(ExportJob.id == job_id).one()
+    row.created_at = datetime.now(UTC) - timedelta(hours=30)
+    db_session.commit()
+
+    listed = client.get("/api/v1/exports/jobs", headers=_headers(owner, org))
+    assert listed.status_code == 200
+    stale_row = next(item for item in listed.json()["jobs"] if item["id"] == str(job_id))
+    assert "queued_too_long" in stale_row["context_flags"]
+
+    summary = client.get("/api/v1/exports/summary", headers=_headers(owner, org))
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert payload["stale_queued_exports_24h"] >= 1
+    assert "stale_queued_exports_present" in payload["context_flags"]

@@ -48,6 +48,10 @@ class ExportJobRead(BaseModel):
     package_version: str
     immutable_after_completion: bool
     metadata_json: dict | None = None
+    age_days: int
+    is_terminal: bool
+    is_integrity_bound: bool
+    context_flags: list[str]
     created_at: datetime
     updated_at: datetime
 
@@ -116,10 +120,15 @@ class ExportVerifyResponse(BaseModel):
 
 class ExportSummaryResponse(BaseModel):
     total_exports: int
+    queued_exports: int
+    processing_exports: int
     completed_exports: int
     failed_exports: int
     archived_exports: int
     exports_last_30d: int
+    stale_queued_exports_24h: int
+    verification_coverage_pct: float
+    context_flags: list[str]
     latest_completed_at: datetime | None = None
     latest_verified_at: datetime | None = None
 
