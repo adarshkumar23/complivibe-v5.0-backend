@@ -456,3 +456,75 @@ def test_a42_mark_overdue_summary_and_soft_delete_rules(client, db_session):
 
     allowed_delete = client.delete(f"{PBC_BASE}/{pending_delete['id']}", headers=org["org_headers"])
     assert allowed_delete.status_code == 200
+
+
+def test_a42_pbc_item_overdue_relative_to_fieldwork_deadline(client):
+    """Regression: a PBC item's own due_date isn't what actually matters to an auditor --
+    what matters is whether it will be resolved before the *engagement's* fieldwork
+    deadline (end_date). An item can be "not overdue" by its own due_date yet already
+    past the point where the audit itself can still use it. Both signals, plus exactly
+    how many days overdue against each, must be surfaced."""
+    org = bootstrap_org_user(client, email_prefix="a42-fieldwork-deadline")
+    framework_id = _framework_id(client, org["headers"])
+
+    # Engagement whose fieldwork window has already closed.
+    past_engagement = _create_engagement(
+        client,
+        org["org_headers"],
+        framework_id=framework_id,
+        auditor_user_id=org["user_id"],
+        title="Past fieldwork",
+        start_date_value=date.today() - timedelta(days=20),
+        end_date_value=date.today() - timedelta(days=5),
+    )
+    # Item's own due_date is still in the future -- not overdue by its own date.
+    item = _create_pbc_item(
+        client,
+        org["org_headers"],
+        engagement_id=past_engagement["id"],
+        title="Still-open item past fieldwork deadline",
+        due_days=5,
+    )
+    assert item["days_overdue"] == 0
+    assert item["fieldwork_deadline"] == past_engagement["end_date"]
+    assert item["overdue_relative_to_fieldwork_deadline"] is True
+    assert item["days_past_fieldwork_deadline"] == 5
+
+    detail = client.get(f"{PBC_BASE}/{item['id']}", headers=org["org_headers"])
+    assert detail.status_code == 200
+    assert detail.json()["overdue_relative_to_fieldwork_deadline"] is True
+
+    listed = client.get(PBC_BASE, headers=org["org_headers"], params={"engagement_id": past_engagement["id"]})
+    assert listed.status_code == 200
+    listed_item = next(row for row in listed.json() if row["id"] == item["id"])
+    assert listed_item["overdue_relative_to_fieldwork_deadline"] is True
+    assert listed_item["days_past_fieldwork_deadline"] == 5
+
+    # A currently-active engagement's fieldwork deadline is still ahead -- no flag.
+    active_engagement = _create_engagement(
+        client,
+        org["org_headers"],
+        framework_id=framework_id,
+        auditor_user_id=org["user_id"],
+        title="Active fieldwork",
+    )
+    active_item = _create_pbc_item(
+        client,
+        org["org_headers"],
+        engagement_id=active_engagement["id"],
+        title="On track item",
+        due_days=5,
+    )
+    assert active_item["overdue_relative_to_fieldwork_deadline"] is False
+    assert active_item["days_past_fieldwork_deadline"] == 0
+
+    # Accepting an item resolves it -- it's no longer "at risk" even past deadline.
+    accept_resp = client.post(
+        f"{PBC_BASE}/{item['id']}/submit",
+        headers=org["org_headers"],
+        json={"evidence_id": None},
+    )
+    assert accept_resp.status_code == 200
+    accepted = client.post(f"{PBC_BASE}/{item['id']}/accept", headers=org["org_headers"])
+    assert accepted.status_code == 200
+    assert accepted.json()["overdue_relative_to_fieldwork_deadline"] is False

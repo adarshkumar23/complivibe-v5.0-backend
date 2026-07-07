@@ -58,6 +58,8 @@ class AuditorPortalMeResponse(BaseModel):
     audit_engagement_title: str
     expires_at: datetime
     scoped_framework_ids: list[UUID]
+    effective_framework_ids: list[UUID]
+    scope_changed_since_invitation: bool
     access_count: int
 
 

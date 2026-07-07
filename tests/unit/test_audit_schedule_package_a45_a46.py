@@ -5,7 +5,10 @@ import uuid
 
 from app.models.audit_schedule import AuditSchedule
 from app.models.compliance_deadline import ComplianceDeadline
+from app.models.control import Control
 from app.models.email_outbox import EmailOutbox
+from app.models.evidence_item import EvidenceItem
+from app.models.obligation import Obligation
 from tests.helpers.auth_org import bootstrap_org_user
 
 SCHEDULE_BASE = "/api/v1/compliance/audit-schedules"
@@ -392,3 +395,111 @@ def test_a46_manifest_grouping_custody_append_only_and_soft_delete_rule(client):
 
     blocked_delete = client.delete(f"{PACKAGE_BASE}/{package['id']}", headers=org["org_headers"])
     assert blocked_delete.status_code == 422
+
+
+def test_a46_completeness_flags_missing_expired_and_rejected_evidence(client, db_session):
+    """Regression: an evidence package's "completeness" was only ever a bare item_count.
+    This endpoint must instead say *which* specific controls in the package's framework
+    scope are still missing usable evidence, and *why* (never added, evidence expired,
+    or evidence rejected on review) -- not just a number."""
+    org = bootstrap_org_user(client, email_prefix="a46-completeness")
+    framework_id = _framework_id(client, org["headers"])
+    engagement = _create_engagement(client, org["org_headers"], framework_id, org["user_id"])
+
+    package = client.post(
+        f"{PACKAGE_BASE}?engagement_id={engagement['id']}",
+        headers=org["org_headers"],
+        json={"title": "Completeness pkg", "scope_framework_ids": [framework_id]},
+    ).json()
+
+    obligation = Obligation(
+        framework_id=uuid.UUID(framework_id),
+        reference_code="A46-COMPLETE",
+        title="Obligation A46",
+        description="seeded for test",
+        jurisdiction="US",
+        status="active",
+    )
+    db_session.add(obligation)
+    db_session.commit()
+
+    control_never_added = _create_control(client, org["org_headers"], "Never added control")
+    control_expired = _create_control(client, org["org_headers"], "Expired evidence control")
+    control_rejected = _create_control(client, org["org_headers"], "Rejected evidence control")
+    control_ok = _create_control(client, org["org_headers"], "Compliant control")
+
+    for c in (control_never_added, control_expired, control_rejected, control_ok):
+        row = db_session.query(Control).filter_by(id=uuid.UUID(c["id"])).one()
+        row.obligation_id = obligation.id
+    db_session.commit()
+
+    evidence_expired = _create_evidence(client, org["org_headers"], "Expired evidence")
+    ev_row = db_session.query(EvidenceItem).filter_by(id=uuid.UUID(evidence_expired["id"])).one()
+    ev_row.freshness_status = "expired"
+    db_session.commit()
+
+    evidence_rejected = _create_evidence(client, org["org_headers"], "Rejected evidence")
+    ev_row2 = db_session.query(EvidenceItem).filter_by(id=uuid.UUID(evidence_rejected["id"])).one()
+    ev_row2.review_status = "rejected"
+    db_session.commit()
+
+    evidence_ok = _create_evidence(client, org["org_headers"], "Good evidence")
+
+    for control, evidence in (
+        (control_expired, evidence_expired),
+        (control_rejected, evidence_rejected),
+        (control_ok, evidence_ok),
+    ):
+        resp = client.post(
+            f"{PACKAGE_BASE}/{package['id']}/items",
+            headers=org["org_headers"],
+            json={"control_id": control["id"], "evidence_id": evidence["id"]},
+        )
+        assert resp.status_code == 201
+
+    completeness = client.get(f"{PACKAGE_BASE}/{package['id']}/completeness", headers=org["org_headers"])
+    assert completeness.status_code == 200
+    body = completeness.json()
+    assert body["total_controls_in_scope"] == 4
+    assert body["controls_with_current_evidence"] == 1
+    reasons_by_control = {row["control_id"]: row["reason"] for row in body["controls_missing_evidence"]}
+    assert reasons_by_control[control_never_added["id"]] == "never_added"
+    assert reasons_by_control[control_expired["id"]] == "evidence_expired"
+    assert reasons_by_control[control_rejected["id"]] == "evidence_rejected"
+    assert control_ok["id"] not in reasons_by_control
+    assert body["scope_changed_since_creation"] is False
+
+
+def test_a46_scope_changed_since_creation_flag_after_engagement_scope_narrows(client, db_session):
+    """Regression: a package never signaled when the parent engagement's scope moved
+    out from under it after evidence had already been selected. scope_changed_since_creation
+    must flip to true (on both the package read and the completeness report) once the
+    engagement's own scope_framework_ids no longer matches what the package snapshotted."""
+    org = bootstrap_org_user(client, email_prefix="a46-scope-drift")
+    resp = client.get("/api/v1/frameworks", headers=org["headers"])
+    frameworks = resp.json()
+    assert len(frameworks) >= 2
+    fw1, fw2 = frameworks[0]["id"], frameworks[1]["id"]
+
+    engagement = _create_engagement(client, org["org_headers"], fw1, org["user_id"])
+    package = client.post(
+        f"{PACKAGE_BASE}?engagement_id={engagement['id']}",
+        headers=org["org_headers"],
+        json={"title": "Drift pkg", "scope_framework_ids": [fw1]},
+    ).json()
+    assert package["scope_changed_since_creation"] is False
+
+    patch = client.patch(
+        f"{ENGAGEMENT_BASE}/{engagement['id']}",
+        headers=org["org_headers"],
+        json={"scope_framework_ids": [fw2]},
+    )
+    assert patch.status_code == 200
+
+    detail = client.get(f"{PACKAGE_BASE}/{package['id']}", headers=org["org_headers"])
+    assert detail.status_code == 200
+    assert detail.json()["scope_changed_since_creation"] is True
+
+    completeness = client.get(f"{PACKAGE_BASE}/{package['id']}/completeness", headers=org["org_headers"])
+    assert completeness.status_code == 200
+    assert completeness.json()["scope_changed_since_creation"] is True

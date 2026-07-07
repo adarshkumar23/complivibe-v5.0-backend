@@ -44,6 +44,10 @@ class PbcItemRead(UUIDTimestampSchema):
     accepted_at: datetime | None = None
     rejected_at: datetime | None = None
     rejection_reason: str | None = None
+    days_overdue: int = 0
+    fieldwork_deadline: date | None = None
+    overdue_relative_to_fieldwork_deadline: bool = False
+    days_past_fieldwork_deadline: int = 0
 
 
 class PbcSummary(BaseModel):

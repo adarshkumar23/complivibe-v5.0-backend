@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.compliance.services.audit_engagement_service import AuditEngagementService
+from app.models.audit_engagement import AuditEngagement
 from app.models.evidence_item import EvidenceItem
 from app.models.membership import Membership
 from app.models.organization import Organization
@@ -69,6 +70,47 @@ class PBCRequestService:
         ).scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence not found")
+
+    def build_context(self, org_id: uuid.UUID, rows: list[PBCRequest]) -> dict[uuid.UUID, dict]:
+        """Mirror PbcService.build_context for the v2 PBC surface: report each request's
+        standing against the parent engagement's own fieldwork deadline (end_date), not
+        just its own due_date, batching the engagement lookups rather than querying once
+        per row."""
+        if not rows:
+            return {}
+
+        engagement_ids = {row.audit_id for row in rows}
+        engagements_by_id = {
+            engagement.id: engagement
+            for engagement in self.db.execute(
+                select(AuditEngagement).where(AuditEngagement.id.in_(engagement_ids))
+            ).scalars().all()
+        }
+
+        today = self.utcdate()
+        context: dict[uuid.UUID, dict] = {}
+        for row in rows:
+            engagement = engagements_by_id.get(row.audit_id)
+            unresolved = row.status not in {"accepted"}
+
+            days_overdue = 0
+            if unresolved and row.due_date is not None and row.due_date < today:
+                days_overdue = (today - row.due_date).days
+
+            fieldwork_deadline = engagement.end_date if engagement is not None else None
+            days_past_fieldwork_deadline = 0
+            overdue_vs_fieldwork = False
+            if unresolved and fieldwork_deadline is not None and fieldwork_deadline < today:
+                overdue_vs_fieldwork = True
+                days_past_fieldwork_deadline = (today - fieldwork_deadline).days
+
+            context[row.id] = {
+                "days_overdue": days_overdue,
+                "fieldwork_deadline": fieldwork_deadline,
+                "overdue_relative_to_fieldwork_deadline": overdue_vs_fieldwork,
+                "days_past_fieldwork_deadline": days_past_fieldwork_deadline,
+            }
+        return context
 
     def bulk_create(
         self,

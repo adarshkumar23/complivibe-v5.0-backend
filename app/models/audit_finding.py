@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Index, JSON, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -89,6 +89,11 @@ class AuditFinding(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, 
         ForeignKey("controls.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Snapshot of the parent engagement's scope_framework_ids at the moment this finding
+    # was created, so we can later detect (and flag) that the audit's scope has drifted
+    # since the finding was raised, rather than silently presenting a stale finding as
+    # fully current.
+    engagement_scope_snapshot: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     created_by: Mapped[uuid.UUID] = mapped_column(
         Uuid,
         ForeignKey("users.id", ondelete="RESTRICT"),

@@ -65,24 +65,54 @@ class AuditorPortalService:
                 detail=f"Unknown scoped framework ids: {', '.join(missing)}",
             )
 
-    def _validate_control_ids(self, org_id: uuid.UUID, control_ids: list[uuid.UUID] | None) -> None:
+    def _validate_control_ids(
+        self,
+        org_id: uuid.UUID,
+        control_ids: list[uuid.UUID] | None,
+        framework_ids: list[str] | None = None,
+    ) -> None:
         if not control_ids:
             return
-        found = {
-            row[0]
-            for row in self.db.execute(
-                select(Control.id).where(
-                    Control.organization_id == org_id,
-                    Control.id.in_(control_ids),
-                )
-            ).all()
-        }
+        controls = self.db.execute(
+            select(Control).where(
+                Control.organization_id == org_id,
+                Control.id.in_(control_ids),
+            )
+        ).scalars().all()
+        found = {row.id for row in controls}
         missing = [str(item) for item in control_ids if item not in found]
         if missing:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Unknown scoped control ids: {', '.join(missing)}",
             )
+
+        # Defense-in-depth against framework-scope inheritance bugs: even when an admin
+        # explicitly enumerates control ids, those controls must still resolve to a
+        # framework within the engagement's own scope_framework_ids. Without this, an
+        # invitation could be handed direct visibility into controls belonging to
+        # frameworks the engagement was never scoped to.
+        if framework_ids:
+            obligation_ids = [row.obligation_id for row in controls if row.obligation_id is not None]
+            framework_by_obligation: dict[uuid.UUID, uuid.UUID] = {}
+            if obligation_ids:
+                for obligation in self.db.execute(select(Obligation).where(Obligation.id.in_(obligation_ids))).scalars().all():
+                    framework_by_obligation[obligation.id] = obligation.framework_id
+
+            out_of_scope = [
+                str(row.id)
+                for row in controls
+                if row.obligation_id is None
+                or str(framework_by_obligation.get(row.obligation_id)) not in framework_ids
+            ]
+            if out_of_scope:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "scoped_control_ids must resolve to a framework within the engagement's "
+                        f"scope_framework_ids; out of scope: {', '.join(out_of_scope)}"
+                    ),
+                )
 
     def _validate_evidence_ids(self, org_id: uuid.UUID, evidence_ids: list[uuid.UUID] | None) -> None:
         if not evidence_ids:
@@ -172,7 +202,7 @@ class AuditorPortalService:
             resolved_framework_ids = engagement_framework_ids
 
         self._validate_framework_ids([uuid.UUID(item) for item in resolved_framework_ids])
-        self._validate_control_ids(org_id, data.scoped_control_ids)
+        self._validate_control_ids(org_id, data.scoped_control_ids, framework_ids=resolved_framework_ids)
         self._validate_evidence_ids(org_id, data.scoped_evidence_ids)
 
         plaintext_token = secrets.token_urlsafe(32)
@@ -323,6 +353,28 @@ class AuditorPortalService:
         )
         self.db.flush()
 
+    def effective_framework_ids(self, invitation: AuditorPortalInvitation) -> list[uuid.UUID]:
+        """Intersect the invitation's snapshotted framework scope with the engagement's
+        *current* scope_framework_ids. If the engagement's scope is narrowed (or the
+        engagement is soft-deleted) after an invitation was issued, the invitation must
+        immediately lose visibility into anything no longer in the live engagement scope
+        -- it should never rely solely on the value captured at invitation-creation time.
+        """
+        engagement = self.db.execute(
+            select(AuditEngagement).where(
+                AuditEngagement.organization_id == invitation.organization_id,
+                AuditEngagement.id == invitation.audit_engagement_id,
+                AuditEngagement.deleted_at.is_(None),
+            )
+        ).scalar_one_or_none()
+        if engagement is None:
+            return []
+
+        live_scope = set(engagement.scope_framework_ids or [])
+        invitation_scope = set(invitation.scoped_framework_ids or [])
+        effective = invitation_scope & live_scope
+        return [uuid.UUID(item) for item in effective]
+
     def get_scoped_controls(self, invitation: AuditorPortalInvitation) -> list[Control]:
         scoped_control_ids = invitation.scoped_control_ids
         stmt = select(Control).where(
@@ -331,7 +383,7 @@ class AuditorPortalService:
         )
 
         if scoped_control_ids is None:
-            framework_ids = [uuid.UUID(item) for item in (invitation.scoped_framework_ids or [])]
+            framework_ids = self.effective_framework_ids(invitation)
             if not framework_ids:
                 return []
             # Control.obligation_id is a legacy FK that no API path ever writes to;
@@ -388,7 +440,7 @@ class AuditorPortalService:
         ).scalars().all()
 
     def get_scoped_reports(self, invitation: AuditorPortalInvitation) -> list[ComplianceReport]:
-        framework_ids = [uuid.UUID(item) for item in (invitation.scoped_framework_ids or [])]
+        framework_ids = self.effective_framework_ids(invitation)
         if not framework_ids:
             return []
 

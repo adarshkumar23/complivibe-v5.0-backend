@@ -59,3 +59,12 @@ class AuditEngagementDashboard(BaseModel):
     by_type: dict[str, int]
     upcoming: int
     overdue: int
+
+
+class AuditEngagementScopeImpact(BaseModel):
+    engagement_id: UUID
+    current_scope_framework_ids: list[UUID]
+    findings_total: int
+    findings_created_under_stale_scope: int
+    evidence_packages_total: int
+    evidence_packages_created_under_stale_scope: int

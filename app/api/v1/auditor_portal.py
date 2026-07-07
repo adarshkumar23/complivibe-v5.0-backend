@@ -164,12 +164,16 @@ def portal_me(
 
     AuditorPortalService(db).log_scoped_data_view(invitation, "engagement_summary", [invitation.audit_engagement_id])
     db.commit()
+    invitation_scope = [uuid.UUID(item) for item in (invitation.scoped_framework_ids or [])]
+    effective_scope = AuditorPortalService(db).effective_framework_ids(invitation)
 
     return AuditorPortalMeResponse(
         auditor_email=invitation.auditor_email,
         audit_engagement_title=engagement.title,
         expires_at=invitation.expires_at,
-        scoped_framework_ids=[uuid.UUID(item) for item in (invitation.scoped_framework_ids or [])],
+        scoped_framework_ids=invitation_scope,
+        effective_framework_ids=effective_scope,
+        scope_changed_since_invitation=set(invitation_scope) != set(effective_scope),
         access_count=invitation.access_count,
     )
 

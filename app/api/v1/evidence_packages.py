@@ -12,6 +12,7 @@ from app.models.organization import Organization
 from app.models.user import User
 from app.schemas.evidence_package import (
     EvidencePackageAddItem,
+    EvidencePackageCompleteness,
     EvidencePackageCreate,
     EvidencePackageItemRead,
     EvidencePackageManifest,
@@ -21,7 +22,7 @@ from app.schemas.evidence_package import (
 router = APIRouter(prefix="/compliance/evidence-packages", tags=["evidence-packages"])
 
 
-def _package_read(row: EvidencePackage) -> EvidencePackageRead:
+def _package_read(row: EvidencePackage, service: EvidencePackageService) -> EvidencePackageRead:
     return EvidencePackageRead(
         id=row.id,
         organization_id=row.organization_id,
@@ -35,6 +36,7 @@ def _package_read(row: EvidencePackage) -> EvidencePackageRead:
         assembled_by=row.assembled_by,
         exported_at=row.exported_at,
         item_count=row.item_count,
+        scope_changed_since_creation=service.scope_changed_since_creation(row),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -63,10 +65,11 @@ def create_package(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> EvidencePackageRead:
-    row = EvidencePackageService(db).create_package(organization.id, engagement_id, payload, current_user)
+    service = EvidencePackageService(db)
+    row = service.create_package(organization.id, engagement_id, payload, current_user)
     db.commit()
     db.refresh(row)
-    return _package_read(row)
+    return _package_read(row, service)
 
 
 @router.get("", response_model=list[EvidencePackageRead])
@@ -79,14 +82,15 @@ def list_packages(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:read")),
 ) -> list[EvidencePackageRead]:
-    rows = EvidencePackageService(db).list_packages(
+    service = EvidencePackageService(db)
+    rows = service.list_packages(
         organization.id,
         engagement_id=engagement_id,
         status_value=status_filter,
         skip=skip,
         limit=limit,
     )
-    return [_package_read(row) for row in rows]
+    return [_package_read(row, service) for row in rows]
 
 
 @router.get("/engagement/{engagement_id}", response_model=list[EvidencePackageRead])
@@ -98,8 +102,9 @@ def list_packages_for_engagement(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:read")),
 ) -> list[EvidencePackageRead]:
-    rows = EvidencePackageService(db).list_packages(organization.id, engagement_id=engagement_id, skip=skip, limit=limit)
-    return [_package_read(row) for row in rows]
+    service = EvidencePackageService(db)
+    rows = service.list_packages(organization.id, engagement_id=engagement_id, skip=skip, limit=limit)
+    return [_package_read(row, service) for row in rows]
 
 
 @router.get("/{package_id}", response_model=EvidencePackageRead)
@@ -109,8 +114,9 @@ def get_package(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:read")),
 ) -> EvidencePackageRead:
-    row = EvidencePackageService(db).get_package(organization.id, package_id)
-    return _package_read(row)
+    service = EvidencePackageService(db)
+    row = service.get_package(organization.id, package_id)
+    return _package_read(row, service)
 
 
 @router.get("/{package_id}/manifest", response_model=EvidencePackageManifest)
@@ -122,6 +128,17 @@ def get_package_manifest(
 ) -> EvidencePackageManifest:
     payload = EvidencePackageService(db).get_manifest(organization.id, package_id)
     return EvidencePackageManifest(**payload)
+
+
+@router.get("/{package_id}/completeness", response_model=EvidencePackageCompleteness)
+def get_package_completeness(
+    package_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("audit:read")),
+) -> EvidencePackageCompleteness:
+    payload = EvidencePackageService(db).get_completeness(organization.id, package_id)
+    return EvidencePackageCompleteness(**payload)
 
 
 @router.post("/{package_id}/items", response_model=EvidencePackageItemRead, status_code=status.HTTP_201_CREATED)
@@ -160,10 +177,11 @@ def assemble_package(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> EvidencePackageRead:
-    row = EvidencePackageService(db).assemble_package(organization.id, package_id, current_user)
+    service = EvidencePackageService(db)
+    row = service.assemble_package(organization.id, package_id, current_user)
     db.commit()
     db.refresh(row)
-    return _package_read(row)
+    return _package_read(row, service)
 
 
 @router.post("/{package_id}/export", response_model=EvidencePackageRead)
@@ -174,10 +192,11 @@ def export_package(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> EvidencePackageRead:
-    row = EvidencePackageService(db).mark_exported(organization.id, package_id, current_user)
+    service = EvidencePackageService(db)
+    row = service.mark_exported(organization.id, package_id, current_user)
     db.commit()
     db.refresh(row)
-    return _package_read(row)
+    return _package_read(row, service)
 
 
 @router.post("/{package_id}/archive", response_model=EvidencePackageRead)
@@ -188,10 +207,11 @@ def archive_package(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> EvidencePackageRead:
-    row = EvidencePackageService(db).archive_package(organization.id, package_id, current_user)
+    service = EvidencePackageService(db)
+    row = service.archive_package(organization.id, package_id, current_user)
     db.commit()
     db.refresh(row)
-    return _package_read(row)
+    return _package_read(row, service)
 
 
 @router.delete("/{package_id}", response_model=EvidencePackageRead)
@@ -202,6 +222,7 @@ def delete_package(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> EvidencePackageRead:
-    row = EvidencePackageService(db).soft_delete_package(organization.id, package_id, current_user)
+    service = EvidencePackageService(db)
+    row = service.soft_delete_package(organization.id, package_id, current_user)
     db.commit()
-    return _package_read(row)
+    return _package_read(row, service)

@@ -346,3 +346,62 @@ class EvidenceService:
             )
 
         return evidence, link
+
+    def list_control_gaps(
+        self,
+        organization_id: uuid.UUID,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        """readiness_summary() only ever reported bare counts (e.g. "3 controls without
+        evidence"). This reports exactly *which* controls those are and *why* they don't
+        count as covered: never linked to any active evidence at all, linked only to
+        evidence that has since expired, been rejected on review, or is still awaiting
+        review -- paginated so this stays cheap for organizations with thousands of
+        controls."""
+        controls = self.db.execute(
+            select(Control)
+            .where(Control.organization_id == organization_id, Control.status != "archived")
+            .order_by(Control.created_at.asc())
+        ).scalars().all()
+
+        # Batch-fetch the best (most-recent, active) link+evidence pair per control in a
+        # single query rather than one query per control.
+        link_rows = self.db.execute(
+            select(EvidenceControlLink, EvidenceItem)
+            .join(EvidenceItem, EvidenceItem.id == EvidenceControlLink.evidence_item_id)
+            .where(
+                EvidenceControlLink.organization_id == organization_id,
+                EvidenceControlLink.link_status == "active",
+                EvidenceItem.organization_id == organization_id,
+                EvidenceItem.status != "archived",
+            )
+            .order_by(EvidenceItem.created_at.desc())
+        ).all()
+
+        best_evidence_by_control: dict[uuid.UUID, EvidenceItem] = {}
+        for link, evidence in link_rows:
+            # First row per control (by the ORDER BY above) is verified if any is
+            # verified; otherwise keep the most recent as the representative gap reason.
+            existing = best_evidence_by_control.get(link.control_id)
+            if existing is None:
+                best_evidence_by_control[link.control_id] = evidence
+            elif existing.review_status != "verified" and evidence.review_status == "verified":
+                best_evidence_by_control[link.control_id] = evidence
+
+        gaps: list[dict] = []
+        for control in controls:
+            evidence = best_evidence_by_control.get(control.id)
+            if evidence is None:
+                gaps.append({"control_id": control.id, "control_name": control.title, "reason": "never_linked"})
+            elif evidence.review_status == "rejected":
+                gaps.append({"control_id": control.id, "control_name": control.title, "reason": "linked_but_rejected"})
+            elif evidence.freshness_status == "expired":
+                gaps.append({"control_id": control.id, "control_name": control.title, "reason": "linked_but_expired"})
+            elif evidence.review_status != "verified":
+                gaps.append({"control_id": control.id, "control_name": control.title, "reason": "linked_but_not_reviewed"})
+
+        total = len(gaps)
+        page = gaps[offset : offset + limit]
+        return {"total": total, "limit": limit, "offset": offset, "items": page}

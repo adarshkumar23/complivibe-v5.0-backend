@@ -16,6 +16,7 @@ from app.models.user import User
 from app.repositories.evidence_control_link_repository import EvidenceControlLinkRepository
 from app.repositories.evidence_repository import EvidenceRepository
 from app.schemas.evidence import (
+    EvidenceControlGapPage,
     EvidenceControlLinkCreate,
     EvidenceControlLinkRead,
     EvidenceControlSummary,
@@ -153,6 +154,17 @@ def readiness_summary(
     _: Membership = Depends(require_permission("evidence:read")),
 ) -> EvidenceReadinessSummary:
     return EvidenceReadinessSummary(**EvidenceService(db).readiness_summary(organization.id))
+
+
+@router.get("/readiness/gaps", response_model=EvidenceControlGapPage)
+def readiness_gaps(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("evidence:read")),
+) -> EvidenceControlGapPage:
+    return EvidenceControlGapPage(**EvidenceService(db).list_control_gaps(organization.id, limit=limit, offset=offset))
 
 
 @router.post("", response_model=EvidenceRead, status_code=status.HTTP_201_CREATED)

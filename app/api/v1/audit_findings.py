@@ -26,7 +26,8 @@ from app.schemas.issue import IssuePromoteCreate, IssueRead
 router = APIRouter(prefix="/compliance/audit-findings", tags=["audit-findings"])
 
 
-def _read(row: AuditFinding) -> AuditFindingRead:
+def _read(row: AuditFinding, context: dict | None = None) -> AuditFindingRead:
+    ctx = context or {}
     return AuditFindingRead(
         id=row.id,
         organization_id=row.organization_id,
@@ -42,11 +43,20 @@ def _read(row: AuditFinding) -> AuditFindingRead:
         status=row.status,
         risk_register_entry_id=row.risk_register_entry_id,
         control_id=row.control_id,
+        control_name=ctx.get("control_name"),
+        control_status=ctx.get("control_status"),
+        control_archived=bool(ctx.get("control_archived", False)),
+        scope_changed_since_creation=bool(ctx.get("scope_changed_since_creation", False)),
         closed_at=row.closed_at,
         closed_by=row.closed_by,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+def _read_many(rows: list[AuditFinding], service: AuditFindingService) -> list[AuditFindingRead]:
+    context = service.build_context(rows[0].organization_id, rows) if rows else {}
+    return [_read(row, context.get(row.id)) for row in rows]
 
 
 def _issue_read(row: Issue) -> IssueRead:
@@ -81,10 +91,11 @@ def create_finding(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> AuditFindingRead:
-    row = AuditFindingService(db).create_finding(organization.id, engagement_id, payload, current_user.id)
+    service = AuditFindingService(db)
+    row = service.create_finding(organization.id, engagement_id, payload, current_user.id)
     db.commit()
     db.refresh(row)
-    return _read(row)
+    return _read(row, service.build_context(organization.id, [row]).get(row.id))
 
 
 @router.get("", response_model=list[AuditFindingRead])
@@ -100,7 +111,8 @@ def list_findings(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:read")),
 ) -> list[AuditFindingRead]:
-    rows = AuditFindingService(db).list_findings(
+    service = AuditFindingService(db)
+    rows = service.list_findings(
         organization.id,
         engagement_id=engagement_id,
         severity=severity,
@@ -110,7 +122,7 @@ def list_findings(
         skip=skip,
         limit=limit,
     )
-    return [_read(row) for row in rows]
+    return _read_many(rows, service)
 
 
 @router.get("/engagement/{engagement_id}", response_model=list[AuditFindingRead])
@@ -122,8 +134,9 @@ def list_findings_for_engagement(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:read")),
 ) -> list[AuditFindingRead]:
-    rows = AuditFindingService(db).list_findings(organization.id, engagement_id=engagement_id, skip=skip, limit=limit)
-    return [_read(row) for row in rows]
+    service = AuditFindingService(db)
+    rows = service.list_findings(organization.id, engagement_id=engagement_id, skip=skip, limit=limit)
+    return _read_many(rows, service)
 
 
 @router.get("/engagement/{engagement_id}/summary", response_model=AuditFindingSummary)
@@ -160,10 +173,11 @@ def update_finding(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> AuditFindingRead:
-    row = AuditFindingService(db).update_finding(organization.id, finding_id, payload)
+    service = AuditFindingService(db)
+    row = service.update_finding(organization.id, finding_id, payload)
     db.commit()
     db.refresh(row)
-    return _read(row)
+    return _read(row, service.build_context(organization.id, [row]).get(row.id))
 
 
 @router.post("/{finding_id}/transition", response_model=AuditFindingRead)
@@ -175,10 +189,11 @@ def transition_finding_status(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> AuditFindingRead:
-    row = AuditFindingService(db).transition_status(organization.id, finding_id, payload.new_status, current_user.id)
+    service = AuditFindingService(db)
+    row = service.transition_status(organization.id, finding_id, payload.new_status, current_user.id)
     db.commit()
     db.refresh(row)
-    return _read(row)
+    return _read(row, service.build_context(organization.id, [row]).get(row.id))
 
 
 @router.post("/{finding_id}/link-risk", response_model=AuditFindingRead)
@@ -190,10 +205,11 @@ def link_finding_to_risk(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> AuditFindingRead:
-    row = AuditFindingService(db).link_to_risk(organization.id, finding_id, payload.risk_id, current_user.id)
+    service = AuditFindingService(db)
+    row = service.link_to_risk(organization.id, finding_id, payload.risk_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return _read(row)
+    return _read(row, service.build_context(organization.id, [row]).get(row.id))
 
 
 @router.post("/bulk-transition", response_model=AuditFindingBulkTransitionResponse)
@@ -217,6 +233,7 @@ def delete_finding(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> AuditFindingRead:
-    row = AuditFindingService(db).soft_delete_finding(organization.id, finding_id, current_user.id)
+    service = AuditFindingService(db)
+    row = service.soft_delete_finding(organization.id, finding_id, current_user.id)
     db.commit()
-    return _read(row)
+    return _read(row, service.build_context(organization.id, [row]).get(row.id))

@@ -65,6 +65,10 @@ class AuditFindingRead(UUIDTimestampSchema):
     status: str = Field(pattern=FINDING_STATUS_PATTERN)
     risk_register_entry_id: UUID | None = None
     control_id: UUID | None = None
+    control_name: str | None = None
+    control_status: str | None = None
+    control_archived: bool = False
+    scope_changed_since_creation: bool = False
     closed_at: datetime | None = None
     closed_by: UUID | None = None
 

@@ -332,6 +332,72 @@ class EvidencePackageService:
             "chain_of_custody": list(package.chain_of_custody or []),
         }
 
+    def scope_changed_since_creation(self, package: EvidencePackage) -> bool:
+        """True when the parent engagement's own scope_framework_ids has drifted away
+        from what this package snapshotted at creation/last-assembly time. A package
+        should never be presented as fully current if the audit's scope moved out from
+        under it after evidence was already selected."""
+        engagement = self.db.execute(
+            select(AuditEngagement).where(
+                AuditEngagement.organization_id == package.organization_id,
+                AuditEngagement.id == package.audit_engagement_id,
+            )
+        ).scalar_one_or_none()
+        if engagement is None:
+            return True
+        return set(package.scope_framework_ids or []) != set(engagement.scope_framework_ids or [])
+
+    def get_completeness(self, org_id: uuid.UUID, package_id: uuid.UUID) -> dict:
+        """Report exactly which controls in the package's framework scope are still
+        missing usable evidence, and why (never added to the package, evidence has
+        expired, or evidence was rejected on review) -- rather than a bare count."""
+        package = self.require_package(org_id, package_id)
+
+        scope_ids = [uuid.UUID(item) for item in (package.scope_framework_ids or [])]
+        controls_in_scope: list[Control] = []
+        if scope_ids:
+            controls_in_scope = self.db.execute(
+                select(Control)
+                .join(Obligation, Obligation.id == Control.obligation_id)
+                .where(
+                    Control.organization_id == org_id,
+                    Control.status != "archived",
+                    Obligation.framework_id.in_(scope_ids),
+                )
+            ).scalars().all()
+
+        item_rows = self.db.execute(
+            select(EvidencePackageItem, EvidenceItem)
+            .join(EvidenceItem, EvidenceItem.id == EvidencePackageItem.evidence_id)
+            .where(
+                EvidencePackageItem.package_id == package.id,
+                EvidencePackageItem.organization_id == org_id,
+            )
+        ).all()
+        evidence_by_control: dict[uuid.UUID, EvidenceItem] = {item.control_id: evidence for item, evidence in item_rows}
+
+        missing: list[dict] = []
+        with_current_evidence = 0
+        for control in controls_in_scope:
+            evidence = evidence_by_control.get(control.id)
+            if evidence is None:
+                missing.append({"control_id": control.id, "control_name": control.title, "reason": "never_added"})
+            elif evidence.review_status == "rejected":
+                missing.append({"control_id": control.id, "control_name": control.title, "reason": "evidence_rejected"})
+            elif evidence.freshness_status == "expired":
+                missing.append({"control_id": control.id, "control_name": control.title, "reason": "evidence_expired"})
+            else:
+                with_current_evidence += 1
+
+        return {
+            "package_id": package.id,
+            "status": package.status,
+            "total_controls_in_scope": len(controls_in_scope),
+            "controls_with_current_evidence": with_current_evidence,
+            "controls_missing_evidence": missing,
+            "scope_changed_since_creation": self.scope_changed_since_creation(package),
+        }
+
     def assemble_package(self, org_id: uuid.UUID, package_id: uuid.UUID, user: User) -> EvidencePackage:
         package = self.require_package(org_id, package_id)
         self._require_status(package, "draft", "Only draft packages can be assembled")

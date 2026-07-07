@@ -31,6 +31,7 @@ class EvidencePackageRead(UUIDTimestampSchema):
     assembled_by: UUID | None = None
     exported_at: datetime | None = None
     item_count: int
+    scope_changed_since_creation: bool = False
 
 
 class EvidencePackageItemRead(BaseModel):
@@ -59,3 +60,18 @@ class EvidencePackageManifest(BaseModel):
     items_by_framework_ref: dict[str, list[EvidencePackageManifestItem]]
     items_ungrouped: list[EvidencePackageManifestItem]
     chain_of_custody: list[dict]
+
+
+class EvidencePackageMissingControl(BaseModel):
+    control_id: UUID
+    control_name: str
+    reason: str = Field(description="never_added | evidence_expired | evidence_rejected")
+
+
+class EvidencePackageCompleteness(BaseModel):
+    package_id: UUID
+    status: str = Field(pattern=PACKAGE_STATUS_PATTERN)
+    total_controls_in_scope: int
+    controls_with_current_evidence: int
+    controls_missing_evidence: list[EvidencePackageMissingControl]
+    scope_changed_since_creation: bool
