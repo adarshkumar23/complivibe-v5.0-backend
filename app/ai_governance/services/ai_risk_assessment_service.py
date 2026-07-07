@@ -7,6 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.ai_governance.schemas.ai_risk_assessments import AIRiskAssessmentRead
 from app.ai_governance.services.ai_governance_event_service import AIGovernanceEventService
 from app.ai_governance.services.bias_metrics_service import BiasMetricsService
 from app.models.ai_risk_assessment import AIRiskAssessment
@@ -16,6 +17,17 @@ from app.models.ai_system import AISystem
 from app.models.risk import Risk
 from app.services.audit_service import AuditService
 from app.core.validation import validate_choice
+
+# Why each dimension drives risk when it scores high/critical -- surfaced to
+# the caller instead of a bare "high"/"critical" label.
+DIMENSION_RATIONALE = {
+    "bias": "training data or model outputs show disparate error rates across demographic groups",
+    "fairness": "fairness metrics across protected attributes are missing or below threshold",
+    "explainability": "outputs lack a validated, human-readable explanation for high-stakes decisions",
+    "privacy": "the system processes special-category personal data without adequate DPIA/minimization",
+    "misuse": "controls against prohibited or malicious repurposing of the system are insufficient",
+    "security": "the system lacks adversarial-attack testing or secure supply-chain controls",
+}
 
 RESPONSE_SCORES = {
     "low_risk": Decimal("1"),
@@ -253,6 +265,66 @@ class AIRiskAssessmentService:
             metadata_json={"source": "api"},
         )
         return assessment
+
+    def _get_system_any_status(self, org_id: uuid.UUID, system_id: uuid.UUID) -> AISystem | None:
+        """Like _require_system but does not 404 on an archived/soft-deleted system
+        and does not raise if the system is missing entirely -- used for read-side
+        enrichment where we must never crash just because the linked system was
+        later archived or (in a fully cleaned-up dataset) removed."""
+        return self.db.execute(
+            select(AISystem).where(
+                AISystem.organization_id == org_id,
+                AISystem.id == system_id,
+            )
+        ).scalar_one_or_none()
+
+    def build_risk_explanation(self, assessment: AIRiskAssessment) -> str | None:
+        ratings = {
+            "bias": assessment.bias_risk_rating,
+            "fairness": assessment.fairness_risk_rating,
+            "explainability": assessment.explainability_risk_rating,
+            "privacy": assessment.privacy_risk_rating,
+            "misuse": assessment.misuse_risk_rating,
+            "security": assessment.security_risk_rating,
+        }
+        if all(value is None for value in ratings.values()):
+            return None
+
+        severity_order = {"critical": 3, "high": 2, "medium": 1, "low": 0}
+        driving = [dim for dim, rating in ratings.items() if rating in ("high", "critical")]
+        overall = self._to_rating(assessment.overall_risk_score) if assessment.overall_risk_score is not None else None
+
+        if not driving:
+            if overall is None:
+                return None
+            return f"Overall risk rated {overall}; no individual dimension scored high or critical."
+
+        driving.sort(key=lambda dim: severity_order.get(ratings[dim], 0), reverse=True)
+        reasons = "; ".join(f"{dim} ({ratings[dim]}) - {DIMENSION_RATIONALE[dim]}" for dim in driving)
+        prefix = f"Rated {overall} overall, driven by" if overall else "Driven by"
+        return f"{prefix}: {reasons}."
+
+    def to_read(self, org_id: uuid.UUID, assessment: AIRiskAssessment) -> AIRiskAssessmentRead:
+        system = self._get_system_any_status(org_id, assessment.ai_system_id)
+        ai_system_archived = system is None or system.deleted_at is not None
+
+        reassessment_required = False
+        if (
+            system is not None
+            and assessment.completed_at is not None
+            and system.updated_at is not None
+            and system.updated_at > assessment.completed_at
+        ):
+            # The registered AI system was edited (e.g. data types, deployment
+            # context) after this assessment was completed -- never present a
+            # rating computed against the old attributes as still current.
+            reassessment_required = True
+
+        data = AIRiskAssessmentRead.model_validate(assessment).model_dump()
+        data["risk_explanation"] = self.build_risk_explanation(assessment)
+        data["reassessment_required"] = reassessment_required
+        data["ai_system_archived"] = ai_system_archived
+        return AIRiskAssessmentRead(**data)
 
     def _to_rating(self, score: Decimal) -> str:
         value = float(score)

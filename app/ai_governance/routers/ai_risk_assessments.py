@@ -26,10 +26,11 @@ def create_ai_risk_assessment(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("ai_governance:write")),
 ) -> AIRiskAssessmentRead:
-    row = AIRiskAssessmentService(db).create_assessment(organization.id, system_id, current_user.id)
+    service = AIRiskAssessmentService(db)
+    row = service.create_assessment(organization.id, system_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return AIRiskAssessmentRead.model_validate(row)
+    return service.to_read(organization.id, row)
 
 
 @systems_router.get("/{system_id}/risk-assessments", response_model=list[AIRiskAssessmentRead])
@@ -40,12 +41,13 @@ def list_ai_risk_assessments_for_system(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("ai_governance:read")),
 ) -> list[AIRiskAssessmentRead]:
-    rows = AIRiskAssessmentService(db).list_assessments(
+    service = AIRiskAssessmentService(db)
+    rows = service.list_assessments(
         organization.id,
         system_id=system_id,
         status_filter=status_filter,
     )
-    return [AIRiskAssessmentRead.model_validate(row) for row in rows]
+    return [service.to_read(organization.id, row) for row in rows]
 
 
 @router.get("/{assessment_id}", response_model=AIRiskAssessmentRead)
@@ -55,8 +57,9 @@ def get_ai_risk_assessment(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("ai_governance:read")),
 ) -> AIRiskAssessmentRead:
-    row = AIRiskAssessmentService(db).get_assessment(organization.id, assessment_id)
-    return AIRiskAssessmentRead.model_validate(row)
+    service = AIRiskAssessmentService(db)
+    row = service.get_assessment(organization.id, assessment_id)
+    return service.to_read(organization.id, row)
 
 
 @router.post("/{assessment_id}/submit-responses", response_model=AIRiskAssessmentRead)
@@ -68,7 +71,8 @@ def submit_ai_risk_assessment_responses(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("ai_governance:write")),
 ) -> AIRiskAssessmentRead:
-    row = AIRiskAssessmentService(db).submit_responses(
+    service = AIRiskAssessmentService(db)
+    row = service.submit_responses(
         organization.id,
         assessment_id,
         [item.model_dump() for item in payload.responses],
@@ -76,7 +80,7 @@ def submit_ai_risk_assessment_responses(
     )
     db.commit()
     db.refresh(row)
-    return AIRiskAssessmentRead.model_validate(row)
+    return service.to_read(organization.id, row)
 
 
 @router.post("/{assessment_id}/complete", response_model=AIRiskAssessmentRead)
@@ -87,10 +91,11 @@ def complete_ai_risk_assessment(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("ai_governance:write")),
 ) -> AIRiskAssessmentRead:
-    row = AIRiskAssessmentService(db).complete_assessment(organization.id, assessment_id, current_user.id)
+    service = AIRiskAssessmentService(db)
+    row = service.complete_assessment(organization.id, assessment_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return AIRiskAssessmentRead.model_validate(row)
+    return service.to_read(organization.id, row)
 
 
 @router.post("/{assessment_id}/compute-bias")
