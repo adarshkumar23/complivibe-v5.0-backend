@@ -233,20 +233,31 @@ class ControlTestService:
             ).scalar_one()
         )
 
-        latest_runs = self.db.execute(
-            select(ControlTestRun)
+        # Avoid loading every historical run into memory just to find the latest one per
+        # definition (an org can accumulate thousands of runs over time) -- compute the latest
+        # timestamp per definition in SQL first, then fetch only those rows' results.
+        latest_ts_subquery = (
+            select(
+                ControlTestRun.control_test_definition_id.label("definition_id"),
+                func.max(ControlTestRun.created_at).label("latest_created_at"),
+            )
             .where(ControlTestRun.organization_id == organization_id)
-            .order_by(ControlTestRun.created_at.desc())
+            .group_by(ControlTestRun.control_test_definition_id)
+            .subquery()
+        )
+        latest_results = self.db.execute(
+            select(ControlTestRun.result)
+            .join(
+                latest_ts_subquery,
+                (ControlTestRun.control_test_definition_id == latest_ts_subquery.c.definition_id)
+                & (ControlTestRun.created_at == latest_ts_subquery.c.latest_created_at),
+            )
+            .where(ControlTestRun.organization_id == organization_id)
         ).scalars().all()
 
-        latest_per_test: dict[uuid.UUID, ControlTestRun] = {}
-        for run in latest_runs:
-            if run.control_test_definition_id not in latest_per_test:
-                latest_per_test[run.control_test_definition_id] = run
-
-        latest_passed = sum(1 for r in latest_per_test.values() if r.result == "passed")
-        latest_failed = sum(1 for r in latest_per_test.values() if r.result == "failed")
-        latest_needs_review = sum(1 for r in latest_per_test.values() if r.result == "needs_review")
+        latest_passed = sum(1 for r in latest_results if r == "passed")
+        latest_failed = sum(1 for r in latest_results if r == "failed")
+        latest_needs_review = sum(1 for r in latest_results if r == "needs_review")
 
         active_controls = int(
             self.db.execute(
