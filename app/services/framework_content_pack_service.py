@@ -21,6 +21,7 @@ from app.models.obligation_content_version import ObligationContentVersion
 from app.models.obligation_control_suggestion import ObligationControlSuggestion
 from app.models.obligation_evidence_requirement import ObligationEvidenceRequirement
 from app.services.framework_content_service import FrameworkContentService
+from app.services.seed_service import OBLIGATION_SEEDS
 
 PACK_CAVEAT = (
     "This framework content pack is a structured starter representation and does not constitute legal advice "
@@ -32,6 +33,7 @@ COVERAGE_CAVEAT = (
 )
 _ALLOWED_COVERAGE_LEVELS = {"metadata_only", "starter", "partial", "reviewed", "full_verified"}
 _ALLOWED_REVIEW_STATUSES = {"unreviewed", "internal_review", "expert_reviewed", "full_verified"}
+_SEED_PACK_MATCH_FIELDS = ("title", "description", "plain_language_summary", "obligation_type")
 
 
 class FrameworkContentPackService:
@@ -128,6 +130,11 @@ class FrameworkContentPackService:
         if framework is None:
             errors.append("framework_code does not match a seeded framework")
         else:
+            drift_rows = self._seed_pack_drift_rows(payload)
+            for row in drift_rows:
+                errors.append(
+                    f"seed/pack drift for {row['framework_code']}:{row['reference_code']} on fields {', '.join(row['fields'])}"
+                )
             import_counts, import_errors = self.content_service.validate_import_payload(
                 framework_id=framework.id,
                 payload_json=import_payload,
@@ -149,6 +156,57 @@ class FrameworkContentPackService:
             "payload": payload,
             "import_payload": import_payload,
             "framework": framework,
+        }
+
+    @staticmethod
+    def _seed_obligation_lookup() -> dict[tuple[str, str], dict[str, Any]]:
+        return {(str(item["framework_code"]), str(item["reference_code"])): item for item in OBLIGATION_SEEDS}
+
+    def _seed_pack_drift_rows(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        framework_code = str(payload.get("framework_code") or "")
+        rows: list[dict[str, Any]] = []
+        seed_lookup = self._seed_obligation_lookup()
+        for item in payload.get("obligations", []) or []:
+            reference_code = str(item.get("reference_code") or "")
+            if not reference_code:
+                continue
+            seed = seed_lookup.get((framework_code, reference_code))
+            if seed is None:
+                continue
+            drift_fields: list[str] = []
+            for field in _SEED_PACK_MATCH_FIELDS:
+                pack_value = str(item.get(field) or "").strip()
+                seed_value = str(seed.get(field) or "").strip()
+                if pack_value != seed_value:
+                    drift_fields.append(field)
+            if drift_fields:
+                rows.append(
+                    {
+                        "framework_code": framework_code,
+                        "reference_code": reference_code,
+                        "fields": drift_fields,
+                    }
+                )
+        return rows
+
+    def consistency_check(self, *, pack_key: str | None = None) -> dict[str, Any]:
+        pack_keys: list[str]
+        if pack_key:
+            pack_keys = [pack_key]
+        else:
+            pack_keys = sorted(path.stem for path in self.PACK_ROOT.glob("*.json"))
+        drift_rows: list[dict[str, Any]] = []
+        checked = 0
+        for key in pack_keys:
+            payload = self.load_pack(key)
+            checked += 1
+            for row in self._seed_pack_drift_rows(payload):
+                drift_rows.append({"pack_key": key, **row})
+        return {
+            "pack_count_checked": checked,
+            "drift_count": len(drift_rows),
+            "drift_rows": drift_rows,
+            "ok": len(drift_rows) == 0,
         }
 
     def apply_pack(

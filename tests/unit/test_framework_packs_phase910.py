@@ -67,7 +67,7 @@ def test_phase910_framework_pack_files_validate_counts_and_required_fields(clien
             ]:
                 assert item.get(required_field), f"{pack_key} obligation missing {required_field}"
 
-            assert item["obligation_type"] in {"control", "documentation", "process", "assessment"}
+            assert item["obligation_type"] in {"control", "documentation", "process", "assessment", "privacy"}
             assert item["reference_code"] not in ref_codes, f"Duplicate reference_code in {pack_key}: {item['reference_code']}"
             ref_codes.add(item["reference_code"])
 
