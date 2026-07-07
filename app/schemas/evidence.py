@@ -108,3 +108,16 @@ class EvidenceReadinessSummary(BaseModel):
     controls_with_verified_evidence: int
     controls_without_evidence: int
     controls_with_expired_evidence: int
+
+
+class EvidenceControlGap(BaseModel):
+    control_id: UUID
+    control_name: str
+    reason: str = Field(description="never_linked | linked_but_expired | linked_but_rejected | linked_but_not_reviewed")
+
+
+class EvidenceControlGapPage(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[EvidenceControlGap]

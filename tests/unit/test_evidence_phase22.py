@@ -271,3 +271,76 @@ def test_evidence_review_and_readiness_summary(client):
 
     logs = client.get("/api/v1/audit-logs", headers=_headers(owner, org_id)).json()
     assert "evidence.reviewed" in [item["action"] for item in logs]
+
+
+def test_evidence_readiness_gaps_reports_specific_controls_and_reasons(client):
+    """Regression: readiness/summary only ever reported a bare
+    controls_without_evidence count. This endpoint must instead name exactly which
+    controls are gaps and why: never linked to any evidence, linked but the evidence
+    was rejected, linked but the evidence has since expired, or linked but still
+    awaiting review -- and it must paginate rather than dumping every control."""
+    owner = _register(client, "p22-gaps-owner@example.com", "Pass1234!@", "P22 Gaps Org")
+    org_id = _org_id(client, owner)
+
+    control_never_linked = _create_control(client, owner, org_id, "Never linked control")
+    control_rejected = _create_control(client, owner, org_id, "Rejected evidence control")
+    control_expired = _create_control(client, owner, org_id, "Expired evidence control")
+    control_unreviewed = _create_control(client, owner, org_id, "Unreviewed evidence control")
+    control_verified = _create_control(client, owner, org_id, "Verified control")
+
+    def _create_and_link(title: str, control_id: str, *, valid_until: str | None = None) -> str:
+        payload = {"title": title, "evidence_type": "attestation"}
+        if valid_until is not None:
+            payload["valid_until"] = valid_until
+        evidence_id = client.post("/api/v1/evidence", headers=_headers(owner, org_id), json=payload).json()["id"]
+        link = client.post(
+            f"/api/v1/evidence/{evidence_id}/controls",
+            headers=_headers(owner, org_id),
+            json={"control_id": control_id},
+        )
+        assert link.status_code == 200
+        return evidence_id
+
+    rejected_evidence = _create_and_link("Rejected evidence", control_rejected)
+    client.post(
+        f"/api/v1/evidence/{rejected_evidence}/review",
+        headers=_headers(owner, org_id),
+        json={"review_status": "rejected", "review_notes": "Not sufficient"},
+    )
+
+    _create_and_link(
+        "Expired evidence",
+        control_expired,
+        valid_until=(datetime.now(UTC) - timedelta(days=1)).isoformat(),
+    )
+
+    _create_and_link("Unreviewed evidence", control_unreviewed)
+
+    verified_evidence = _create_and_link("Verified evidence", control_verified)
+    client.post(
+        f"/api/v1/evidence/{verified_evidence}/review",
+        headers=_headers(owner, org_id),
+        json={"review_status": "verified", "review_notes": "Good"},
+    )
+
+    gaps = client.get("/api/v1/evidence/readiness/gaps", headers=_headers(owner, org_id))
+    assert gaps.status_code == 200
+    body = gaps.json()
+    reasons_by_control = {row["control_name"]: row["reason"] for row in body["items"]}
+
+    assert reasons_by_control["Never linked control"] == "never_linked"
+    assert reasons_by_control["Rejected evidence control"] == "linked_but_rejected"
+    assert reasons_by_control["Expired evidence control"] == "linked_but_expired"
+    assert reasons_by_control["Unreviewed evidence control"] == "linked_but_not_reviewed"
+    assert "Verified control" not in reasons_by_control
+    assert body["total"] == 4
+
+    paged = client.get(
+        "/api/v1/evidence/readiness/gaps",
+        headers=_headers(owner, org_id),
+        params={"limit": 2, "offset": 0},
+    )
+    assert paged.status_code == 200
+    paged_body = paged.json()
+    assert paged_body["total"] == 4
+    assert len(paged_body["items"]) == 2
