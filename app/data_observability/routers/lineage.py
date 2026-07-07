@@ -24,6 +24,10 @@ from app.models.user import User
 router = APIRouter(prefix="/data-observability/lineage", tags=["data-observability-lineage"])
 
 
+def _node_read(service: LineageService, organization_id: uuid.UUID, row) -> LineageNodeRead:
+    return LineageNodeRead.model_validate(service.node_response_payload(organization_id, row))
+
+
 @router.post("/nodes", response_model=LineageNodeRead, status_code=status.HTTP_201_CREATED)
 def create_lineage_node(
     payload: LineageNodeCreate,
@@ -32,10 +36,11 @@ def create_lineage_node(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:write")),
 ) -> LineageNodeRead:
-    row = LineageService(db).create_node(organization.id, payload, current_user.id)
+    service = LineageService(db)
+    row = service.create_node(organization.id, payload, current_user.id)
     db.commit()
     db.refresh(row)
-    return LineageNodeRead.model_validate(row)
+    return _node_read(service, organization.id, row)
 
 
 @router.get("/nodes", response_model=list[LineageNodeRead])
@@ -46,8 +51,9 @@ def list_lineage_nodes(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:read")),
 ) -> list[LineageNodeRead]:
-    rows = LineageService(db).list_nodes(organization.id, node_type=node_type, data_asset_id=data_asset_id)
-    return [LineageNodeRead.model_validate(row) for row in rows]
+    service = LineageService(db)
+    rows = service.list_nodes(organization.id, node_type=node_type, data_asset_id=data_asset_id)
+    return [_node_read(service, organization.id, row) for row in rows]
 
 
 @router.post("/nodes/{node_id}/link-asset/{asset_id}", response_model=LineageNodeRead)
@@ -59,10 +65,11 @@ def link_asset_to_lineage_node(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:write")),
 ) -> LineageNodeRead:
-    row = LineageService(db).link_asset_to_node(organization.id, asset_id, node_id, current_user.id)
+    service = LineageService(db)
+    row = service.link_asset_to_node(organization.id, asset_id, node_id, current_user.id)
     db.commit()
     db.refresh(row)
-    return LineageNodeRead.model_validate(row)
+    return _node_read(service, organization.id, row)
 
 
 @router.post("/edges", response_model=LineageEdgeRead, status_code=status.HTTP_201_CREATED)

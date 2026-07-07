@@ -25,6 +25,10 @@ class LineageNodeRead(BaseModel):
     system_name: str | None
     created_at: datetime
     updated_at: datetime
+    upstream_edge_count: int = 0
+    downstream_edge_count: int = 0
+    is_orphan: bool = False
+    context_flags: list[str] = []
 
 
 class LineageEdgeCreate(BaseModel):
@@ -71,6 +75,12 @@ class LineageGraphRead(BaseModel):
     asset_id: str
     nodes: list[LineageGraphNode]
     edges: list[LineageGraphEdge]
+    node_count: int = 0
+    edge_count: int = 0
+    isolated_node_count: int = 0
+    cycle_detected: bool = False
+    stale_edge_count: int = 0
+    context_flags: list[str] = []
 
 
 class OpenMetadataConfigureRequest(BaseModel):

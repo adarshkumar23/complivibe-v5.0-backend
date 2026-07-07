@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.data_observability.integrations.openlineage_receiver import OpenLineageReceiver
@@ -38,6 +38,14 @@ class LineageService:
     @staticmethod
     def utcnow() -> datetime:
         return datetime.now(UTC)
+
+    @staticmethod
+    def _as_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
     @staticmethod
     def hash_api_key(raw_key: str) -> str:
@@ -144,6 +152,48 @@ class LineageService:
     def get_node(self, org_id: uuid.UUID, node_id: uuid.UUID) -> DataLineageNode:
         return self._require_node(org_id, node_id)
 
+    def node_response_payload(self, org_id: uuid.UUID, row: DataLineageNode) -> dict[str, Any]:
+        upstream_edge_count = int(
+            self.db.execute(
+                select(func.count(DataLineageEdge.id)).where(
+                    DataLineageEdge.organization_id == org_id,
+                    DataLineageEdge.downstream_node_id == row.id,
+                )
+            ).scalar_one()
+        )
+        downstream_edge_count = int(
+            self.db.execute(
+                select(func.count(DataLineageEdge.id)).where(
+                    DataLineageEdge.organization_id == org_id,
+                    DataLineageEdge.upstream_node_id == row.id,
+                )
+            ).scalar_one()
+        )
+        is_orphan = upstream_edge_count == 0 and downstream_edge_count == 0
+        context_flags: list[str] = []
+        if is_orphan:
+            context_flags.append("orphan_node")
+        if row.data_asset_id is None:
+            context_flags.append("unlinked_to_data_asset")
+        if row.node_type == "data_asset" and row.data_asset_id is None:
+            context_flags.append("data_asset_node_missing_asset_link")
+
+        return {
+            "id": row.id,
+            "organization_id": row.organization_id,
+            "node_type": row.node_type,
+            "data_asset_id": row.data_asset_id,
+            "name": row.name,
+            "description": row.description,
+            "system_name": row.system_name,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "upstream_edge_count": upstream_edge_count,
+            "downstream_edge_count": downstream_edge_count,
+            "is_orphan": is_orphan,
+            "context_flags": context_flags,
+        }
+
     def list_nodes(self, org_id: uuid.UUID, node_type: str | None = None, data_asset_id: uuid.UUID | None = None) -> list[DataLineageNode]:
         stmt = select(DataLineageNode).where(DataLineageNode.organization_id == org_id)
         if node_type is not None:
@@ -198,6 +248,11 @@ class LineageService:
         actor_user_id: uuid.UUID | None = None,
     ) -> DataLineageEdge:
         source_method = validate_choice(source_method, ALLOWED_SOURCE_METHODS, "source_method")
+        if upstream_node_id == downstream_node_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="upstream_node_id and downstream_node_id cannot be the same",
+            )
         self._require_node(org_id, upstream_node_id)
         self._require_node(org_id, downstream_node_id)
 
@@ -263,7 +318,17 @@ class LineageService:
             )
         ).scalars().all()
         if not start_nodes:
-            return {"asset_id": str(data_asset_id), "nodes": [], "edges": []}
+            return {
+                "asset_id": str(data_asset_id),
+                "nodes": [],
+                "edges": [],
+                "node_count": 0,
+                "edge_count": 0,
+                "isolated_node_count": 0,
+                "cycle_detected": False,
+                "stale_edge_count": 0,
+                "context_flags": ["asset_has_no_lineage_nodes"],
+            }
 
         visited_nodes: dict[uuid.UUID, DataLineageNode] = {node.id: node for node in start_nodes}
         visited_edge_ids: set[uuid.UUID] = set()
@@ -305,6 +370,52 @@ class LineageService:
                     if neighbor_id not in processed_node_ids:
                         queue.append((neighbor_id, current_depth + 1))
 
+        node_ids = set(visited_nodes.keys())
+        upstream_map: dict[uuid.UUID, list[uuid.UUID]] = {}
+        now = self.utcnow()
+        stale_edge_count = 0
+        for edge in collected_edges:
+            upstream_map.setdefault(edge.upstream_node_id, []).append(edge.downstream_node_id)
+            edge_event_time = self._as_utc(edge.event_time)
+            if edge.source_method in {"openlineage_event", "openmetadata_sync"} and (
+                edge_event_time is None or (now - edge_event_time).days >= 30
+            ):
+                stale_edge_count += 1
+
+        visited: set[uuid.UUID] = set()
+        stack: set[uuid.UUID] = set()
+
+        def _has_cycle(node_id: uuid.UUID) -> bool:
+            visited.add(node_id)
+            stack.add(node_id)
+            for neighbor in upstream_map.get(node_id, []):
+                if neighbor not in node_ids:
+                    continue
+                if neighbor not in visited:
+                    if _has_cycle(neighbor):
+                        return True
+                elif neighbor in stack:
+                    return True
+            stack.remove(node_id)
+            return False
+
+        cycle_detected = any(_has_cycle(node_id) for node_id in list(node_ids) if node_id not in visited)
+
+        isolated_node_count = 0
+        has_edges_by_node: dict[uuid.UUID, bool] = {node_id: False for node_id in node_ids}
+        for edge in collected_edges:
+            has_edges_by_node[edge.upstream_node_id] = True
+            has_edges_by_node[edge.downstream_node_id] = True
+        isolated_node_count = sum(1 for has_edges in has_edges_by_node.values() if not has_edges)
+
+        context_flags: list[str] = []
+        if cycle_detected:
+            context_flags.append("cycle_detected")
+        if isolated_node_count > 0:
+            context_flags.append("isolated_nodes_present")
+        if stale_edge_count > 0:
+            context_flags.append("stale_lineage_edges_present")
+
         return {
             "asset_id": str(data_asset_id),
             "nodes": [
@@ -319,6 +430,12 @@ class LineageService:
                 }
                 for edge in collected_edges
             ],
+            "node_count": len(visited_nodes),
+            "edge_count": len(collected_edges),
+            "isolated_node_count": isolated_node_count,
+            "cycle_detected": cycle_detected,
+            "stale_edge_count": stale_edge_count,
+            "context_flags": context_flags,
         }
 
     def process_openlineage_event(self, org_id: uuid.UUID, event: dict, actor_user_id: uuid.UUID | None = None) -> dict:

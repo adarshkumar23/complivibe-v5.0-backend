@@ -35,6 +35,7 @@ def test_c75_lineage_tracking(client):
     )
     assert node_a.status_code == 201
     node_a_id = node_a.json()["id"]
+    assert "context_flags" in node_a.json()
 
     duplicate_node = client.post(
         f"{LINEAGE_BASE}/nodes",
@@ -91,6 +92,9 @@ def test_c75_lineage_tracking(client):
     assert graph.status_code == 200
     assert len(graph.json()["nodes"]) >= 1
     assert len(graph.json()["edges"]) >= 1
+    assert graph.json()["node_count"] >= 1
+    assert graph.json()["edge_count"] >= 1
+    assert "context_flags" in graph.json()
 
     configured = client.post(
         f"{LINEAGE_BASE}/openmetadata/configure",
@@ -166,6 +170,8 @@ def test_c75_lineage_graph_disconnected_node_and_cycle(client):
     disconnected_body = disconnected_graph.json()
     assert len(disconnected_body["nodes"]) == 1
     assert disconnected_body["edges"] == []
+    assert disconnected_body["isolated_node_count"] == 1
+    assert "isolated_nodes_present" in disconnected_body["context_flags"]
 
     # Build a genuine cycle A -> B -> C -> A and confirm traversal terminates cleanly
     # (depth-limit protection) and returns a well-formed, deduplicated graph.
@@ -209,6 +215,15 @@ def test_c75_lineage_graph_disconnected_node_and_cycle(client):
     node_ids = {node["id"] for node in cycle_body["nodes"]}
     assert node_ids == {node_a["id"], node_b["id"], node_c["id"]}
     assert len(cycle_body["edges"]) == 3
+    assert cycle_body["cycle_detected"] is True
+    assert "cycle_detected" in cycle_body["context_flags"]
+
+    self_loop = client.post(
+        f"{LINEAGE_BASE}/edges",
+        headers=org["org_headers"],
+        json={"upstream_node_id": node_a["id"], "downstream_node_id": node_a["id"]},
+    )
+    assert self_loop.status_code == 422
 
     # A nonexistent starting asset must produce a clear 404, not a crash.
     missing = client.get(
