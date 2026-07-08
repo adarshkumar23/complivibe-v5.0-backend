@@ -1,0 +1,30 @@
+{
+  "pack_key": "rbi_it_gov_starter",
+  "framework_code": "RBI_IT_GOV",
+  "framework_name": "RBI IT Governance and Assurance",
+  "version_label": "2023",
+  "version": "1.0",
+  "coverage_level": "starter",
+  "review_status": "unreviewed",
+  "import_type": "starter_pack",
+  "source_name": "local_starter_pack",
+  "source_reference": "rbi_it_gov_starter",
+  "caveat": "This framework content pack is a structured starter representation and does not constitute legal advice or complete regulatory coverage. This is a starter content pack for scoping purposes only. It does not constitute legal advice or a complete compliance determination.",
+  "sections": [
+    {"section_code": "RBI-ITGRC-GOV", "title": "IT Governance and Board Oversight", "description": "Board-level accountability for IT and cyber governance", "status": "active"},
+    {"section_code": "RBI-ITGRC-CTRL", "title": "Controls and Assurance", "description": "Independent assurance over IT and cyber controls", "status": "active"}
+  ],
+  "obligations": [
+    {"stable_key": "RBI_IT_GOV.RBI-ITGRC-01", "reference_code": "RBI-ITGRC-01", "obligation_code": "RBI-ITGRC-01", "title": "Board-approved IT and cyber governance framework", "description": "Maintain board-approved IT governance, risk management, control, and assurance practices with clear accountability.", "obligation_type": "documentation", "applicability_notes": "Applies to all RBI-regulated entities in scope of the IT governance master direction.", "section_code": "RBI-ITGRC-GOV", "jurisdiction": "India", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "RBI_IT_GOV.RBI-ITGRC-02", "reference_code": "RBI-ITGRC-02", "obligation_code": "RBI-ITGRC-02", "title": "Independent assurance over critical IT controls", "description": "Run periodic independent assurance over material IT and cyber controls and track remediation to closure.", "obligation_type": "assessment", "applicability_notes": "Assurance findings should be reported to the IT strategy/risk committee with remediation timelines.", "section_code": "RBI-ITGRC-CTRL", "jurisdiction": "India", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"}
+  ],
+  "content_versions": [
+    {"reference_code": "RBI-ITGRC-01", "version_label": "1.0", "obligation_text": "Maintain a board-approved IT governance framework with defined roles, risk committee oversight, and documented accountability.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "RBI-ITGRC-02", "version_label": "1.0", "obligation_text": "Perform periodic independent assurance over critical IT and cyber controls with tracked remediation.", "coverage_level": "starter", "review_status": "unreviewed"}
+  ],
+  "applicability_questions": [],
+  "evidence_requirements": [],
+  "control_suggestions": [
+    {"reference_code": "RBI-ITGRC-02", "control_title": "Independent IT control assurance", "control_description": "Conduct periodic independent internal audit or assurance testing of material IT and cyber controls, with board-level reporting and tracked remediation.", "priority": "high", "status": "active"}
+  ]
+}
