@@ -169,6 +169,7 @@ GOVERNANCE_SIGNAL_ENTITY_TYPE_VALUES: tuple[str, ...] = ("ai_system", "risk_asse
 GOVERNANCE_SIGNAL_STATUS_VALUES: tuple[str, ...] = ("open", "resolved", "dismissed", "archived")
 GOVERNANCE_SIGNAL_SEVERITY_VALUES: tuple[str, ...] = ("info", "warning", "critical")
 GOVERNANCE_SIGNAL_STALE_THRESHOLD_DAYS = 30
+GOVERNANCE_SIGNAL_ASSESSMENT_STALE_THRESHOLD_DAYS = 30
 AI_RISK_GOVERNANCE_SIGNAL_CAVEAT = (
     "Governance signals are deterministic indicators for human attention. They do not approve, reject, certify, "
     "classify legally, or trigger automation."
@@ -2612,25 +2613,18 @@ class AISystemRiskAssessmentService:
         limit: int,
         offset: int,
     ) -> list[GovernanceSignal]:
-        stmt = select(GovernanceSignal).where(GovernanceSignal.organization_id == organization_id)
-        if domain:
-            stmt = stmt.where(GovernanceSignal.domain == domain)
-        if entity_type:
-            stmt = stmt.where(GovernanceSignal.entity_type == entity_type)
-        if entity_id:
-            stmt = stmt.where(GovernanceSignal.entity_id == entity_id)
-        if related_ai_system_id:
-            stmt = stmt.where(GovernanceSignal.related_ai_system_id == related_ai_system_id)
-        if related_risk_assessment_id:
-            stmt = stmt.where(GovernanceSignal.related_risk_assessment_id == related_risk_assessment_id)
-        if signal_type:
-            stmt = stmt.where(GovernanceSignal.signal_type == signal_type)
-        if reason_code:
-            stmt = stmt.where(GovernanceSignal.reason_code == reason_code)
-        if severity:
-            stmt = stmt.where(GovernanceSignal.severity == severity)
-        if status_filter:
-            stmt = stmt.where(GovernanceSignal.status == status_filter)
+        stmt = self._governance_signal_query(
+            organization_id=organization_id,
+            domain=domain,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            related_ai_system_id=related_ai_system_id,
+            related_risk_assessment_id=related_risk_assessment_id,
+            signal_type=signal_type,
+            reason_code=reason_code,
+            severity=severity,
+            status_filter=status_filter,
+        )
         return (
             self.db.execute(stmt.order_by(GovernanceSignal.created_at.desc()).offset(offset).limit(limit))
             .scalars()
@@ -2669,20 +2663,32 @@ class AISystemRiskAssessmentService:
         priority_score = float(payload["priority_score"]) if payload.get("priority_score") is not None else None
         priority_band = str(payload["priority_band"]) if payload.get("priority_band") is not None else None
         age_days = int(payload["age_days"]) if payload.get("age_days") is not None else None
+        status_age_days = int(payload["status_age_days"]) if payload.get("status_age_days") is not None else None
+        assessment_age_days = int(payload["assessment_age_days"]) if payload.get("assessment_age_days") is not None else None
+        stale_assessment_context = bool(payload.get("stale_assessment_context", False))
         if age_days is None:
             now = self.now()
             effective_now = now if row.created_at.tzinfo else now.replace(tzinfo=None)
             age_days = max(0, int((effective_now - row.created_at).total_seconds() // 86400))
+        if status_age_days is None:
+            now = self.now()
+            status_reference = row.updated_at or row.created_at
+            effective_now = now if status_reference.tzinfo else now.replace(tzinfo=None)
+            status_age_days = max(0, int((effective_now - status_reference).total_seconds() // 86400))
         stale_signal = bool(row.status == "open" and age_days >= GOVERNANCE_SIGNAL_STALE_THRESHOLD_DAYS)
         context_flags: list[str] = []
         if row.status == "open":
             context_flags.append("open_signal")
         if stale_signal:
             context_flags.append("stale_open_signal")
+        if stale_assessment_context:
+            context_flags.append("stale_assessment_context")
         if row.status == "open" and row.severity == "critical":
             context_flags.append("critical_open_signal")
         if priority_band in {"high", "urgent"}:
             context_flags.append("high_attention_priority")
+        if stale_signal and stale_assessment_context:
+            context_flags.append("compound_staleness")
         if not bool(row.created_by_system):
             context_flags.append("human_reported_signal")
         return {
@@ -2712,7 +2718,10 @@ class AISystemRiskAssessmentService:
             "priority_explanation_json": payload.get("priority_explanation_json"),
             "group_key": payload.get("group_key"),
             "age_days": age_days,
+            "status_age_days": status_age_days,
+            "assessment_age_days": assessment_age_days,
             "stale_signal": stale_signal,
+            "stale_assessment_context": stale_assessment_context,
             "context_flags": context_flags,
             "created_at": row.created_at,
             "updated_at": row.updated_at,
@@ -2849,11 +2858,16 @@ class AISystemRiskAssessmentService:
         open_high_or_urgent_priority_signals = int(
             sum(1 for row in prioritized_open if str(row.get("priority_band")) in {"high", "urgent"})
         )
+        open_signals_with_stale_assessment_context = int(
+            sum(1 for row in prioritized_open if bool(row.get("stale_assessment_context")))
+        )
         context_flags: list[str] = []
         if open_signals == 0:
             context_flags.append("no_open_signals")
         if stale_open_signals > 0:
             context_flags.append("stale_open_signals_present")
+        if open_signals_with_stale_assessment_context > 0:
+            context_flags.append("stale_assessment_context_present")
         if open_critical_signals > 0:
             context_flags.append("critical_signal_backlog")
         if int(sum(1 for row in prioritized_open if str(row.get("priority_band")) == "urgent")) > 0:
@@ -2871,6 +2885,7 @@ class AISystemRiskAssessmentService:
             "oldest_open_signal_age_days": oldest_open_signal_age_days,
             "open_critical_signals": open_critical_signals,
             "open_high_or_urgent_priority_signals": open_high_or_urgent_priority_signals,
+            "open_signals_with_stale_assessment_context": open_signals_with_stale_assessment_context,
             "context_flags": context_flags,
             "caveat": AI_RISK_GOVERNANCE_SIGNAL_CAVEAT,
         }
@@ -3057,6 +3072,29 @@ class AISystemRiskAssessmentService:
         severity: str | None = None,
         status_filter: str | None = None,
     ):
+        if domain is not None:
+            domain = validate_choice(domain, GOVERNANCE_SIGNAL_DOMAIN_VALUES, "domain", status_code=status.HTTP_400_BAD_REQUEST)
+        if entity_type is not None:
+            entity_type = validate_choice(
+                entity_type,
+                GOVERNANCE_SIGNAL_ENTITY_TYPE_VALUES,
+                "entity_type",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        if severity is not None:
+            severity = validate_choice(
+                severity,
+                GOVERNANCE_SIGNAL_SEVERITY_VALUES,
+                "severity",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        if status_filter is not None:
+            status_filter = validate_choice(
+                status_filter,
+                GOVERNANCE_SIGNAL_STATUS_VALUES,
+                "status",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
         stmt = select(GovernanceSignal).where(GovernanceSignal.organization_id == organization_id)
         if domain:
             stmt = stmt.where(GovernanceSignal.domain == domain)
@@ -3178,6 +3216,20 @@ class AISystemRiskAssessmentService:
         created_at = row.created_at
         effective_now = now if created_at.tzinfo else now.replace(tzinfo=None)
         age_days = max(0, int((effective_now - created_at).total_seconds() // 86400))
+        status_reference = row.updated_at or row.created_at
+        effective_status_now = now if status_reference.tzinfo else now.replace(tzinfo=None)
+        status_age_days = max(0, int((effective_status_now - status_reference).total_seconds() // 86400))
+        assessment_age_days = None
+        stale_assessment_context = False
+        if assessment is not None:
+            assessment_reference = assessment.updated_at or assessment.created_at
+            if assessment_reference is not None:
+                effective_assessment_now = now if assessment_reference.tzinfo else now.replace(tzinfo=None)
+                assessment_age_days = max(
+                    0,
+                    int((effective_assessment_now - assessment_reference).total_seconds() // 86400),
+                )
+                stale_assessment_context = assessment_age_days >= GOVERNANCE_SIGNAL_ASSESSMENT_STALE_THRESHOLD_DAYS
         base_weight = self._priority_base_severity_weight(row.severity)
         age_weight = self._priority_age_weight(age_days)
         risk_context_weight = self._priority_risk_context_weight(assessment)
@@ -3196,6 +3248,8 @@ class AISystemRiskAssessmentService:
                 "assessment_manual_risk_level": assessment.risk_level if assessment else None,
                 "assessment_calculated_residual_risk_level": assessment.calculated_residual_risk_level if assessment else None,
                 "assessment_calculated_dimension_risk_level": assessment.calculated_dimension_risk_level if assessment else None,
+                "assessment_age_days": assessment_age_days,
+                "stale_assessment_context": stale_assessment_context,
                 "related_ai_system_open_signal_count": open_density_count,
             },
             "algorithm": "governance_signal_priority_v1",
@@ -3209,6 +3263,8 @@ class AISystemRiskAssessmentService:
             context_flags.append("high_attention_priority")
         if open_density_count >= 5:
             context_flags.append("high_signal_density")
+        if stale_assessment_context:
+            context_flags.append("stale_assessment_context")
         return {
             "signal_id": row.id,
             "signal_type": row.signal_type,
@@ -3223,6 +3279,9 @@ class AISystemRiskAssessmentService:
             "priority_band": band,
             "priority_explanation_json": explanation,
             "age_days": age_days,
+            "status_age_days": status_age_days,
+            "assessment_age_days": assessment_age_days,
+            "stale_assessment_context": stale_assessment_context,
             "group_key": self._signal_group_key(row),
             "context_flags": context_flags,
             "created_at": row.created_at,
