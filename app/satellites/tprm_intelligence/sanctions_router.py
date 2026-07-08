@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
@@ -11,8 +11,10 @@ from app.models.membership import Membership
 from app.models.organization import Organization
 from app.models.sanctions_screen_result import SanctionsScreenResult
 from app.models.user import User
+from app.models.vendor import Vendor
 from app.satellites.tprm_intelligence.sanctions_screening import (
     SANCTIONS_ESCALATED_RISK_TIER,
+    SANCTIONS_RESULT_STALE_AFTER_DAYS,
     SanctionsDatasetUnavailable,
     SanctionsScreeningService,
     screen_vendor_and_apply_effects,
@@ -24,8 +26,20 @@ from app.services.vendor_supply_chain_service import VendorSupplyChainService
 router = APIRouter(prefix="/vendors", tags=["tprm-intelligence"])
 
 
-def _result_payload(row: SanctionsScreenResult) -> dict:
+def _result_payload(row: SanctionsScreenResult, vendor: Vendor | None = None) -> dict:
     details = row.match_details or {}
+    age_days: float | None = None
+    is_stale = True
+    if row.screened_at is not None:
+        screened_at = row.screened_at if row.screened_at.tzinfo else row.screened_at.replace(tzinfo=UTC)
+        age_days = round((datetime.now(UTC) - screened_at).total_seconds() / 86400.0, 2)
+        is_stale = age_days > SANCTIONS_RESULT_STALE_AFTER_DAYS
+    # A result screened under an old company name is only as trustworthy as that name:
+    # if the vendor has since been renamed (merger, rebrand, data correction) the result
+    # reflects the WRONG query and must not be presented as current coverage for the
+    # vendor's current identity.
+    query_name = details.get("query_name")
+    name_changed_since_screening = bool(vendor is not None and query_name and query_name != vendor.name)
     return {
         "id": str(row.id),
         "organization_id": str(row.organization_id),
@@ -37,8 +51,13 @@ def _result_payload(row: SanctionsScreenResult) -> dict:
         "match_found": row.match_found,
         "match_details": details,
         "top_score": details.get("top_score"),
+        "near_miss": bool(details.get("near_miss")),
         "cleared_by": str(row.cleared_by) if row.cleared_by else None,
         "cleared_at": row.cleared_at.isoformat() if row.cleared_at else None,
+        "days_since_screened": age_days,
+        "is_stale": is_stale,
+        "stale_after_days": SANCTIONS_RESULT_STALE_AFTER_DAYS,
+        "name_changed_since_screening": name_changed_since_screening,
     }
 
 
@@ -68,7 +87,7 @@ def compute_vendor_sanctions_screen(
 
     db.commit()
     db.refresh(row)
-    return _result_payload(row)
+    return _result_payload(row, vendor)
 
 
 @router.get("/{vendor_id}/sanctions-screen")
@@ -78,11 +97,11 @@ def get_vendor_sanctions_screen(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("vendors:read")),
 ) -> dict:
-    VendorService(db).require_vendor_in_org(organization.id, vendor_id)
+    vendor = VendorService(db).require_vendor_in_org(organization.id, vendor_id)
     row = SanctionsScreeningService(db).latest_result(organization.id, vendor_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor sanctions screen result not found")
-    return _result_payload(row)
+    return _result_payload(row, vendor)
 
 
 @router.post("/{vendor_id}/sanctions-screen/{result_id}/clear")
@@ -164,4 +183,4 @@ def clear_vendor_sanctions_screen(
         )
     db.commit()
     db.refresh(row)
-    return _result_payload(row)
+    return _result_payload(row, vendor)

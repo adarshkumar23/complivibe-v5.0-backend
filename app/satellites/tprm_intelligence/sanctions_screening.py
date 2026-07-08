@@ -27,6 +27,18 @@ DEFAULT_DATASET_PATH = "data/opensanctions/entities.ftm.json"
 DEFAULT_WATCHMAN_BASE_URL = "http://localhost:8084"
 DEFAULT_THRESHOLD = 0.85
 SANCTIONS_ESCALATED_RISK_TIER = "critical"
+# The daily rescreen sweep (see run_periodic_vendor_sanctions_rescreen_sweep) means any
+# active vendor should have a result no older than ~1 day under normal operation. A
+# result older than a week most likely means the sweep is failing for this vendor (a
+# persistent Watchman/network error, or the vendor was archived and un-archived) rather
+# than that nothing changed - so a human should not treat an old "clean" result as
+# equivalent to a fresh one.
+SANCTIONS_RESULT_STALE_AFTER_DAYS = 7
+# Matches that fall just short of the auto-escalation threshold are exactly the ones a
+# looser fuzzy-name variant, transliteration, or minor OFAC list update could tip over.
+# Surfacing them (without auto-escalating) turns a hard threshold cliff into a reviewable
+# "near miss" instead of a silent false negative.
+NEAR_MISS_MARGIN = 0.10
 
 
 class SanctionsDatasetUnavailable(RuntimeError):
@@ -126,6 +138,13 @@ class SanctionsScreeningService:
         normalized_matches = sorted(normalized_matches, key=lambda item: item["score"], reverse=True)[:10]
         top_score = float(normalized_matches[0]["score"]) if normalized_matches else 0.0
         match_found = bool(normalized_matches and top_score >= threshold)
+        # A "clean" result that only narrowly missed the threshold is materially
+        # different from one with no candidates at all - flag it so a reviewer can
+        # decide whether the near-miss is a real risk without waiting for it to
+        # eventually cross the line on its own.
+        near_miss = bool(
+            not match_found and normalized_matches and top_score >= max(0.0, threshold - NEAR_MISS_MARGIN)
+        )
         row = SanctionsScreenResult(
             organization_id=organization.id,
             vendor_id=vendor.id,
@@ -148,6 +167,8 @@ class SanctionsScreeningService:
                     "error": watchman_result.error,
                 },
                 "top_score": top_score,
+                "near_miss": near_miss,
+                "near_miss_margin": NEAR_MISS_MARGIN,
                 "matches": normalized_matches,
             },
         )
