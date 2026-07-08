@@ -40,6 +40,45 @@ KYB_ESCALATION_METADATA_PREVIOUS_TIER = "_kyb_pre_escalation_risk_tier"
 KYB_ESCALATION_METADATA_ESCALATED_TO = "_kyb_escalated_to_risk_tier"
 RISK_TIER_RANK = {"not_assessed": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
+# The 5 independent signals KYBVerificationService.compute() aggregates. GLEIF
+# succeeding while the other 4 fail/skip silently used to leave an overall
+# "pass" resting on as little as 1 of 5 real signals with zero visibility into
+# that -- see KYBVerificationService.compute for how each is produced.
+KYB_SOURCE_KEYS = ("gleif", "opencorporates", "icij_offshore_leaks", "openownership", "gdelt_adverse_media")
+
+
+def _kyb_sources_checked(signals_used: dict | None) -> list[dict[str, Any]]:
+    """Per-source status so a compliance officer reviewing a KYB result can see
+    exactly which of the 5 signals actually contributed vs. silently failed or
+    were skipped, instead of that detail being buried (or absent) inside the
+    aggregate pass/fail decision.
+    """
+    signals_used = signals_used if isinstance(signals_used, dict) else {}
+    rows = []
+    for source in KYB_SOURCE_KEYS:
+        signal = signals_used.get(source)
+        if not isinstance(signal, dict):
+            rows.append({"source": source, "status": "not_checked", "detail": "No result recorded for this source"})
+            continue
+        status_value = signal.get("status", "unknown")
+        detail = signal.get("message") or signal.get("coverage_limitation") or None
+        rows.append({"source": source, "status": status_value, "detail": detail})
+    return rows
+
+
+def _kyb_evidence_summary(sources_checked: list[dict[str, Any]]) -> dict[str, Any]:
+    available = sum(1 for row in sources_checked if row["status"] == "available")
+    total = len(sources_checked)
+    return {
+        "sources_checked": sources_checked,
+        "sources_available_count": available,
+        "sources_total_count": total,
+        # A result standing on fewer than half its possible signals is thin
+        # evidence, even if the aggregate decision above reads "clean" -- this
+        # never overrides that decision, it just makes the thinness visible.
+        "insufficient_evidence": available < 3,
+    }
+
 
 def _rating_payload(row: VendorExternalRating) -> dict:
     return {
@@ -84,7 +123,8 @@ def _kyb_payload(row: AmlKycCheck, vendor: Vendor | None = None) -> dict:
         is_stale = age_days > KYB_STALE_AFTER_DAYS
     name_changed_since_check = bool(vendor is not None and row.company_name and row.company_name != vendor.name)
     no_verifiable_registration = _no_verifiable_registration(row.signals_used)
-    return {
+    sources_checked = _kyb_sources_checked(row.signals_used)
+    payload = {
         "id": str(row.id),
         "organization_id": str(row.organization_id),
         "vendor_id": str(row.vendor_id),
@@ -100,6 +140,8 @@ def _kyb_payload(row: AmlKycCheck, vendor: Vendor | None = None) -> dict:
         "name_changed_since_check": name_changed_since_check,
         "no_verifiable_registration": no_verifiable_registration,
     }
+    payload.update(_kyb_evidence_summary(sources_checked))
+    return payload
 
 
 def _no_verifiable_registration(signals_used: dict | None) -> bool:
