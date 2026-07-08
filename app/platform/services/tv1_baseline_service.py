@@ -8,6 +8,7 @@ from typing import Any
 import requests
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.ai_governance.services.ai_provider_service import AIProviderService
@@ -589,7 +590,14 @@ class TV1BaselineService:
             created_by=actor_user_id,
         )
         self.db.add(run_row)
-        self.db.flush()
+        try:
+            self.db.flush()
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A baseline run is already in progress for this organization",
+            ) from exc
         self.audit.write_audit_log(
             action="tv1.baseline_started",
             entity_type="compliance_baseline_run",
@@ -690,19 +698,32 @@ class TV1BaselineService:
             )
             return run_row
         except Exception as exc:
-            run_row.status = "failed"
-            run_row.failed_at = self.utcnow()
-            run_row.failure_reason = str(exc)[:500]
-            self.db.flush()
-            self.audit.write_audit_log(
-                action="tv1.baseline_failed",
-                entity_type="compliance_baseline_run",
-                entity_id=run_row.id,
-                organization_id=org_id,
-                actor_user_id=actor_user_id,
-                after_json={"failure_reason": run_row.failure_reason},
-                metadata_json={"source": "onboarding"},
-            )
+            # The get_db dependency closes (and implicitly rolls back) the session on an
+            # unhandled exception, so the failure record must be committed here -- otherwise
+            # the failed run vanishes and callers/the audit trail lose all evidence the
+            # baseline was attempted, which is the opposite of the transparency this endpoint
+            # promises. Only genuine application-raised HTTPExceptions reach this branch
+            # without corrupting the session, so a plain flush+commit is safe here; if the
+            # session itself is unusable (a real DB error), fall back to re-raising untouched.
+            try:
+                run_row.status = "failed"
+                run_row.failed_at = self.utcnow()
+                run_row.failure_reason = (
+                    str(exc.detail)[:500] if isinstance(exc, HTTPException) else str(exc)[:500]
+                )
+                self.db.flush()
+                self.audit.write_audit_log(
+                    action="tv1.baseline_failed",
+                    entity_type="compliance_baseline_run",
+                    entity_id=run_row.id,
+                    organization_id=org_id,
+                    actor_user_id=actor_user_id,
+                    after_json={"failure_reason": run_row.failure_reason},
+                    metadata_json={"source": "onboarding"},
+                )
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
             if isinstance(exc, HTTPException):
                 raise
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="TV1 baseline run failed") from exc
@@ -717,3 +738,74 @@ class TV1BaselineService:
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Baseline run not found")
         return row
+
+    def build_run_freshness_context(self, *, org_id: uuid.UUID, run: ComplianceBaselineRun) -> dict:
+        """Compute read-time freshness signals for a baseline run snapshot.
+
+        The gap report stored on a run is a point-in-time snapshot; this augments it with
+        signals about whether that snapshot is still representative of current org state.
+        """
+        now = self.utcnow()
+        started_at = self._as_aware_utc(run.started_at)
+        run_age_hours = round(max(0.0, (now - started_at).total_seconds() / 3600), 2) if started_at else None
+
+        latest_run = self.db.execute(
+            select(ComplianceBaselineRun)
+            .where(
+                ComplianceBaselineRun.organization_id == org_id,
+                ComplianceBaselineRun.status == "completed",
+            )
+            .order_by(ComplianceBaselineRun.completed_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        is_latest_completed_run = bool(
+            run.status == "completed" and latest_run is not None and latest_run.id == run.id
+        )
+        superseded_by_run_id = (
+            latest_run.id if (run.status == "completed" and latest_run is not None and latest_run.id != run.id) else None
+        )
+
+        context_flags: list[str] = list((run.gap_report_json or {}).get("context_flags") or [])
+        obligations_changed_since_run = False
+
+        if run.status == "completed":
+            framework_ids_raw = run.gap_report_json.get("frameworks_in_scope") if run.gap_report_json else None
+            framework_ids: list[uuid.UUID] = []
+            for value in framework_ids_raw or []:
+                try:
+                    framework_ids.append(uuid.UUID(str(value)))
+                except (ValueError, TypeError):
+                    continue
+            if framework_ids:
+                current_obligations_total = int(
+                    self.db.execute(
+                        select(func.count(Obligation.id)).where(
+                            Obligation.framework_id.in_(framework_ids),
+                            Obligation.status == "active",
+                        )
+                    ).scalar_one()
+                    or 0
+                )
+                snapshot_total = int((run.gap_report_json or {}).get("obligations_total") or 0)
+                if current_obligations_total != snapshot_total:
+                    obligations_changed_since_run = True
+                    context_flags.append("obligations_changed_since_generation")
+
+            completed_at = self._as_aware_utc(run.completed_at)
+            if completed_at is not None and (now - completed_at) > timedelta(hours=24):
+                context_flags.append("run_snapshot_older_than_24h")
+            if superseded_by_run_id is not None:
+                context_flags.append("superseded_by_newer_run")
+
+        if run.status == "failed":
+            context_flags.append("run_failed")
+        if run.status == "running" and run_age_hours is not None and run_age_hours > 2:
+            context_flags.append("run_taking_longer_than_expected")
+
+        return {
+            "run_age_hours": run_age_hours,
+            "is_latest_completed_run": is_latest_completed_run,
+            "superseded_by_run_id": superseded_by_run_id,
+            "obligations_changed_since_generation": obligations_changed_since_run,
+            "context_flags": sorted(set(context_flags)),
+        }

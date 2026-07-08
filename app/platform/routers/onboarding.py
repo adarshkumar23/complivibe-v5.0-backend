@@ -177,15 +177,18 @@ def revoke_team_invitation(
 
 
 @router.post("/baseline/24h/start", response_model=TV1BaselineRunRead, status_code=status.HTTP_201_CREATED)
+@rate_limiter.limiter.limit("5/minute")
 def start_24h_baseline(
     payload: TV1BaselineStartRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
     membership: Membership = Depends(require_permission("onboarding_baseline:start")),
 ) -> TV1BaselineRunRead:
     _require_admin_membership(db, membership)
-    row = TV1BaselineService(db).start_24h_baseline(
+    service = TV1BaselineService(db)
+    row = service.start_24h_baseline(
         org_id=organization.id,
         actor_user_id=current_user.id,
         framework_ids=payload.framework_ids or None,
@@ -193,6 +196,7 @@ def start_24h_baseline(
     )
     db.commit()
     db.refresh(row)
+    freshness = service.build_run_freshness_context(org_id=organization.id, run=row)
     return TV1BaselineRunRead(
         run_id=row.id,
         organization_id=row.organization_id,
@@ -204,7 +208,11 @@ def start_24h_baseline(
         failed_at=row.failed_at,
         failure_reason=row.failure_reason,
         gap_report=row.gap_report_json or {},
-        context_flags=list((row.gap_report_json or {}).get("context_flags") or []),
+        context_flags=freshness["context_flags"],
+        run_age_hours=freshness["run_age_hours"],
+        is_latest_completed_run=freshness["is_latest_completed_run"],
+        superseded_by_run_id=freshness["superseded_by_run_id"],
+        obligations_changed_since_generation=freshness["obligations_changed_since_generation"],
     )
 
 
@@ -215,7 +223,9 @@ def get_24h_baseline_run(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("onboarding_baseline:read")),
 ) -> TV1BaselineRunRead:
-    row = TV1BaselineService(db).get_baseline_run(org_id=organization.id, run_id=run_id)
+    service = TV1BaselineService(db)
+    row = service.get_baseline_run(org_id=organization.id, run_id=run_id)
+    freshness = service.build_run_freshness_context(org_id=organization.id, run=row)
     return TV1BaselineRunRead(
         run_id=row.id,
         organization_id=row.organization_id,
@@ -227,5 +237,9 @@ def get_24h_baseline_run(
         failed_at=row.failed_at,
         failure_reason=row.failure_reason,
         gap_report=row.gap_report_json or {},
-        context_flags=list((row.gap_report_json or {}).get("context_flags") or []),
+        context_flags=freshness["context_flags"],
+        run_age_hours=freshness["run_age_hours"],
+        is_latest_completed_run=freshness["is_latest_completed_run"],
+        superseded_by_run_id=freshness["superseded_by_run_id"],
+        obligations_changed_since_generation=freshness["obligations_changed_since_generation"],
     )

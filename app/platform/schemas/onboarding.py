@@ -67,6 +67,10 @@ class OnboardingChecklistResponse(BaseModel):
     checklist: dict
     checklist_items: list[dict] = Field(default_factory=list)
     completion_percentage: int
+    next_step: dict | None = None
+    stalled: bool = False
+    days_since_created: int = 0
+    context_flags: list[str] = Field(default_factory=list)
 
 
 class TeamInvitationRead(BaseModel):
@@ -119,3 +123,7 @@ class TV1BaselineRunRead(BaseModel):
     failure_reason: str | None = None
     gap_report: dict = Field(default_factory=dict)
     context_flags: list[str] = Field(default_factory=list)
+    run_age_hours: float | None = None
+    is_latest_completed_run: bool = True
+    superseded_by_run_id: uuid.UUID | None = None
+    obligations_changed_since_generation: bool = False
