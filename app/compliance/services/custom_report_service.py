@@ -121,26 +121,27 @@ class CustomReportService:
                         metadata_json={"source": "seed", "standard": payload["standard"]},
                     )
             else:
+                # date_range_days and framework_filter are intentionally excluded
+                # from this refresh: they are the only fields users may customize
+                # on a seeded template (see update_template), and re-seeding must
+                # not clobber that customization on every listing call.
                 before = {
                     "name": row.name,
                     "template_type": row.template_type,
                     "sections": row.sections,
                     "disclosure_structure": row.disclosure_structure,
-                    "date_range_days": row.date_range_days,
                 }
                 after = {
                     "name": payload["name"],
                     "template_type": template_type,
                     "sections": ["esg_disclosure_template"],
                     "disclosure_structure": disclosure_structure,
-                    "date_range_days": 365,
                 }
                 if before != after:
                     row.name = payload["name"]
                     row.template_type = template_type
                     row.sections = ["esg_disclosure_template"]
                     row.disclosure_structure = disclosure_structure
-                    row.date_range_days = 365
                     self.db.flush()
                     AuditService(self.db).write_audit_log(
                         action="custom_report_template.seed_refreshed",
@@ -223,6 +224,18 @@ class CustomReportService:
             "date_range_days": row.date_range_days,
         }
 
+        if row.system_template_key and (
+            data.name is not None or data.sections is not None or data.disclosure_structure is not None
+        ):
+            # Seeded ESG templates (csrd_esrs/gri/tcfd/issb) are re-synced from the
+            # canonical standard definition on every listing call (see
+            # ensure_esg_templates); accepting edits to name/sections/
+            # disclosure_structure here would silently vanish on the next GET,
+            # which is worse than rejecting the edit outright.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Seeded template name, sections, and disclosure_structure cannot be edited directly",
+            )
         if data.name is not None:
             row.name = data.name
         if data.template_type is not None:

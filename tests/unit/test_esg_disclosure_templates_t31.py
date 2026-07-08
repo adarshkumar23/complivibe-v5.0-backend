@@ -224,3 +224,43 @@ def test_t31_esg_report_reflects_actual_evidence_coverage_not_a_static_echo(clie
     )
     assert ghg_point["evidence_status"] == "covered"
     assert ghg_point["matched_evidence_count"] >= 1
+
+
+def test_t31_seeded_template_content_edits_rejected_but_date_range_customization_survives_reseed(client):
+    token = _register(client, "t31-guardrail@example.io", "Pass1234!@", "T31 Guardrail Org")
+    org_id = _org_id(client, token)
+    headers = _headers(token, org_id)
+
+    listing = client.get(
+        "/api/v1/compliance/custom-report-templates?template_type=gri", headers=headers
+    )
+    gri = listing.json()[0]
+
+    for blocked_field, value in (
+        ("name", "My Renamed GRI"),
+        ("sections", ["executive_summary"]),
+        ("disclosure_structure", [{"key": "x", "title": "X", "disclosure_points": []}]),
+    ):
+        response = client.patch(
+            f"/api/v1/compliance/custom-report-templates/{gri['id']}",
+            json={blocked_field: value},
+            headers=headers,
+        )
+        assert response.status_code == 422, response.text
+        assert "cannot be edited directly" in response.json()["detail"]
+
+    # date_range_days is a legitimate per-org customization and must survive a
+    # subsequent listing call, which re-syncs seeded templates against the
+    # canonical standard definition.
+    updated = client.patch(
+        f"/api/v1/compliance/custom-report-templates/{gri['id']}",
+        json={"date_range_days": 180},
+        headers=headers,
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["date_range_days"] == 180
+
+    relisted = client.get(
+        "/api/v1/compliance/custom-report-templates?template_type=gri", headers=headers
+    )
+    assert relisted.json()[0]["date_range_days"] == 180
