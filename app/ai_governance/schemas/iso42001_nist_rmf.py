@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ISO42001TrackerUpdateRequest(BaseModel):
@@ -21,6 +21,9 @@ class ISO42001TrackerRead(BaseModel):
     updated_by: uuid.UUID | None
     updated_at: datetime
     created_at: datetime
+    is_completed: bool = False
+    stale_tracker: bool = False
+    context_flags: list[str] = Field(default_factory=list)
 
 
 class ISO42001SummaryRead(BaseModel):
@@ -28,6 +31,10 @@ class ISO42001SummaryRead(BaseModel):
     by_status: dict[str, int]
     implementation_pct: float
     sections: dict[str, dict[str, int | float]]
+    completed_clauses: int = 0
+    stale_clauses: int = 0
+    latest_updated_at: datetime | None = None
+    context_flags: list[str] = Field(default_factory=list)
 
 
 class NISTRMFSubcategoryUpdateRequest(BaseModel):

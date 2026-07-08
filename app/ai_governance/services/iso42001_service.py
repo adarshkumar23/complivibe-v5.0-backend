@@ -1,6 +1,6 @@
 import uuid
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -16,6 +16,7 @@ from app.services.seed_service import ISO42001_OBLIGATIONS, SeedService
 from app.core.validation import validate_choice
 
 ALLOWED_TRACKER_STATUS = {"not_started", "in_progress", "implemented", "verified"}
+ISO42001_TRACKER_STALE_DAYS = 30
 
 
 class ISO42001Service:
@@ -35,6 +36,47 @@ class ISO42001Service:
             except ValueError:
                 parts.append(0)
         return tuple(parts)
+
+    def _is_stale_tracker(self, *, updated_at: datetime, implementation_status: str) -> bool:
+        now = self.utcnow()
+        reference = updated_at
+        if reference.tzinfo is None:
+            reference = reference.replace(tzinfo=UTC)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+        return implementation_status in {"not_started", "in_progress"} and reference <= (
+            now - timedelta(days=ISO42001_TRACKER_STALE_DAYS)
+        )
+
+    def tracker_payload(self, row: ISO42001ConformityTracker) -> dict:
+        is_completed = row.implementation_status in {"implemented", "verified"}
+        stale_tracker = self._is_stale_tracker(
+            updated_at=row.updated_at,
+            implementation_status=row.implementation_status,
+        )
+        context_flags: list[str] = []
+        if row.implementation_status == "not_started":
+            context_flags.append("not_started")
+        if is_completed:
+            context_flags.append("tracker_completed")
+        if row.evidence_id is None:
+            context_flags.append("missing_evidence")
+        if stale_tracker:
+            context_flags.append("stale_tracker")
+        return {
+            "id": row.id,
+            "organization_id": row.organization_id,
+            "clause_ref": row.clause_ref,
+            "implementation_status": row.implementation_status,
+            "evidence_id": row.evidence_id,
+            "notes": row.notes,
+            "updated_by": row.updated_by,
+            "updated_at": row.updated_at,
+            "created_at": row.created_at,
+            "is_completed": is_completed,
+            "stale_tracker": stale_tracker,
+            "context_flags": context_flags,
+        }
 
     def _iso_framework(self) -> Framework:
         framework = self.db.execute(select(Framework).where(Framework.code == "ISO_42001")).scalar_one_or_none()
@@ -63,10 +105,14 @@ class ISO42001Service:
 
     def get_or_create_trackers(self, org_id: uuid.UUID) -> list[ISO42001ConformityTracker]:
         obligations = self._iso_obligations()
+        clause_refs = {obligation.reference_code for obligation in obligations}
         existing = {
             row.clause_ref: row
             for row in self.db.execute(
-                select(ISO42001ConformityTracker).where(ISO42001ConformityTracker.organization_id == org_id)
+                select(ISO42001ConformityTracker).where(
+                    ISO42001ConformityTracker.organization_id == org_id,
+                    ISO42001ConformityTracker.clause_ref.in_(clause_refs),
+                )
             ).scalars().all()
         }
 
@@ -88,7 +134,12 @@ class ISO42001Service:
                 self.db.flush()
                 existing[obligation.reference_code] = tracker
 
-        return sorted(existing.values(), key=lambda row: self._clause_sort_key(row.clause_ref))
+        ordered_rows: list[ISO42001ConformityTracker] = []
+        for obligation in obligations:
+            row = existing.get(obligation.reference_code)
+            if row is not None:
+                ordered_rows.append(row)
+        return ordered_rows
 
     def _validate_evidence(self, org_id: uuid.UUID, evidence_id: uuid.UUID) -> None:
         evidence = self.db.execute(
@@ -115,17 +166,22 @@ class ISO42001Service:
         # "omitted" from "explicitly null" so a status-only update does not
         # silently wipe existing notes/evidence.
         provided = fields_set if fields_set is not None else {"status", "notes", "evidence_id"}
+        normalized_clause_ref = clause_ref.strip()
+        if not normalized_clause_ref:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="clause_ref is required")
         status_value = validate_choice(status_value, ALLOWED_TRACKER_STATUS, "implementation status")
+        if "notes" in provided and notes is not None and not notes.strip():
+            notes = None
         if "evidence_id" in provided and evidence_id is not None:
             self._validate_evidence(org_id, evidence_id)
         clause_refs = {row.reference_code for row in self._iso_obligations()}
-        if clause_ref not in clause_refs:
+        if normalized_clause_ref not in clause_refs:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ISO 42001 clause not found")
 
         row = self.db.execute(
             select(ISO42001ConformityTracker).where(
                 ISO42001ConformityTracker.organization_id == org_id,
-                ISO42001ConformityTracker.clause_ref == clause_ref,
+                ISO42001ConformityTracker.clause_ref == normalized_clause_ref,
             )
         ).scalar_one_or_none()
 
@@ -133,7 +189,7 @@ class ISO42001Service:
         if row is None:
             row = ISO42001ConformityTracker(
                 organization_id=org_id,
-                clause_ref=clause_ref,
+                clause_ref=normalized_clause_ref,
                 implementation_status=status_value,
                 notes=notes,
                 evidence_id=evidence_id,
@@ -160,9 +216,9 @@ class ISO42001Service:
             actor_id=user_id,
             actor_type="user",
             event_data={
-                "clause_ref": clause_ref,
-                "implementation_status": status_value,
-                "evidence_id": str(evidence_id) if evidence_id else None,
+                "clause_ref": row.clause_ref,
+                "implementation_status": row.implementation_status,
+                "evidence_id": str(row.evidence_id) if row.evidence_id else None,
             },
         )
         AuditService(self.db).write_audit_log(
@@ -185,6 +241,13 @@ class ISO42001Service:
         total = len(rows)
         counts = Counter(row.implementation_status for row in rows)
         completed_count = int(counts.get("implemented", 0) + counts.get("verified", 0))
+        stale_count = int(
+            sum(
+                1
+                for row in rows
+                if self._is_stale_tracker(updated_at=row.updated_at, implementation_status=row.implementation_status)
+            )
+        )
         implementation_pct = round((completed_count / total) * 100, 2) if total else 0.0
 
         section_totals: dict[str, int] = {}
@@ -207,9 +270,19 @@ class ISO42001Service:
         }
 
         by_status = {status_name: int(counts.get(status_name, 0)) for status_name in sorted(ALLOWED_TRACKER_STATUS)}
+        latest_updated_at = max((row.updated_at for row in rows), default=None)
+        context_flags: list[str] = []
+        if total > completed_count:
+            context_flags.append("work_remaining")
+        if stale_count > 0:
+            context_flags.append("stale_trackers_present")
         return {
             "total_clauses": total,
             "by_status": by_status,
             "implementation_pct": implementation_pct,
             "sections": sections,
+            "completed_clauses": completed_count,
+            "stale_clauses": stale_count,
+            "latest_updated_at": latest_updated_at,
+            "context_flags": context_flags,
         }
