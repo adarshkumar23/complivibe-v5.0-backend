@@ -246,6 +246,26 @@ def test_board_scorecard_org_isolation(client, db_session):
     assert "Org A risk only" not in titles
 
 
+def test_board_scorecard_readonly_role_forbidden(client, db_session):
+    """G9 item 5: board-scorecard generation is a write action (persists a new
+    ComplianceReport) and must require reports:generate, not just reports:read --
+    the readonly/exec-viewer role must not be able to trigger it."""
+    owner_token = _register(client, "g9-rbac-owner@example.com", "Pass1234!@", "G9 RBAC Org")
+    org_id = _org_id(client, owner_token)
+
+    readonly_user = _create_active_user_with_role(db_session, org_id, "g9-rbac-readonly@example.com", "readonly", password="Pass1234!@")
+    login = client.post("/api/v1/auth/login", json={"email": readonly_user.email, "password": "Pass1234!@"})
+    assert login.status_code == 200
+    readonly_token = login.json()["access_token"]
+
+    resp = client.post("/api/v1/reports/board-scorecard", headers=_headers(readonly_token, org_id))
+    assert resp.status_code == 403, resp.text
+
+    # Sanity: the owner (who has reports:generate) can still generate it.
+    owner_resp = client.post("/api/v1/reports/board-scorecard", headers=_headers(owner_token, org_id))
+    assert owner_resp.status_code == 200
+
+
 def test_generate_executive_narrative_sections_and_fallbacks(client, db_session):
     token = _register(client, "a74-owner1@example.com", "Pass1234!@", "A74 Org1")
     org = uuid.UUID(_org_id(client, token))

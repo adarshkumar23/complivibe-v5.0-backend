@@ -478,7 +478,7 @@ def generate_board_scorecard(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("reports:read")),
+    _: Membership = Depends(require_permission("reports:generate")),
 ) -> ComplianceReportRead:
     service = ReportService(db)
     report = BoardScorecardService(db).generate_board_scorecard(
