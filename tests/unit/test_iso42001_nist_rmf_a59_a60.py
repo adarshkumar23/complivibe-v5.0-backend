@@ -41,7 +41,7 @@ def test_a59_iso42001_conformity_tracker(client, db_session):
     update_one = client.post(
         f"{ISO42001_BASE}/conformity-tracker/4.1/update",
         headers=org["org_headers"],
-        json={"status": "implemented", "notes": "Implemented Clause 4.1"},
+        json={"implementation_status": "implemented", "notes": "Implemented Clause 4.1"},
     )
     assert update_one.status_code == 200
     assert update_one.json()["implementation_status"] == "implemented"
@@ -49,7 +49,7 @@ def test_a59_iso42001_conformity_tracker(client, db_session):
     update_two = client.post(
         f"{ISO42001_BASE}/conformity-tracker/5.1/update",
         headers=org["org_headers"],
-        json={"status": "verified", "notes": "Verified Clause 5.1"},
+        json={"implementation_status": "verified", "notes": "Verified Clause 5.1"},
     )
     assert update_two.status_code == 200
     assert update_two.json()["implementation_status"] == "verified"
@@ -58,7 +58,7 @@ def test_a59_iso42001_conformity_tracker(client, db_session):
     update_same_clause = client.post(
         f"{ISO42001_BASE}/conformity-tracker/4.1/update",
         headers=org["org_headers"],
-        json={"status": "verified", "notes": "Promoted to verified"},
+        json={"implementation_status": "verified", "notes": "Promoted to verified"},
     )
     assert update_same_clause.status_code == 200
     assert update_same_clause.json()["id"] == clause_41["id"]

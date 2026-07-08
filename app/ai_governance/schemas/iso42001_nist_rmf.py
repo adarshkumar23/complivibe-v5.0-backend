@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ISO42001TrackerUpdateRequest(BaseModel):
-    status: str
+    implementation_status: str
     notes: str | None = None
     evidence_id: uuid.UUID | None = None
 

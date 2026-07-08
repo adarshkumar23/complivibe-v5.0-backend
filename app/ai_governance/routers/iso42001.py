@@ -42,7 +42,7 @@ def update_conformity_tracker(
     row = service.update_tracker(
         organization.id,
         clause_ref,
-        payload.status,
+        payload.implementation_status,
         payload.notes,
         payload.evidence_id,
         current_user.id,
