@@ -109,6 +109,64 @@ class CompliancePolicyVersionRead(BaseModel):
     stale_active_campaign_reference: bool = False
 
 
+class CompliancePolicyVersionDiffSide(BaseModel):
+    """One version's identity/metadata within a diff response."""
+
+    id: UUID
+    version_number: str
+    status: str
+    change_summary: str | None = None
+    created_at: datetime
+    word_count: int
+    line_count: int
+
+
+class CompliancePolicyVersionLineDiffHunk(BaseModel):
+    """One contiguous run of equal/inserted/deleted/replaced lines, from
+    difflib.SequenceMatcher.get_opcodes() over the two versions' text lines.
+    """
+
+    op: str = Field(description="One of: equal, insert, delete, replace")
+    older_lines: list[str] = Field(default_factory=list, description="Lines from the older version in this hunk")
+    newer_lines: list[str] = Field(default_factory=list, description="Lines from the newer version in this hunk")
+
+
+class CompliancePolicyVersionJSONFieldDiff(BaseModel):
+    """A single changed/added/removed top-level field between the two
+    versions' content_snapshot_json, used when the snapshot isn't (only) a
+    plain-text "content" string -- e.g. metadata fields like `source` or
+    `source_draft_id` set by the AI-drafting / template-apply pipelines.
+    """
+
+    field: str
+    change: str = Field(description="One of: added, removed, changed")
+    older_value: object | None = None
+    newer_value: object | None = None
+
+
+class CompliancePolicyVersionDiffRead(BaseModel):
+    policy_id: UUID
+    older: CompliancePolicyVersionDiffSide
+    newer: CompliancePolicyVersionDiffSide
+    word_count_delta: int = Field(description="newer.word_count - older.word_count")
+    line_count_delta: int = Field(description="newer.line_count - older.line_count")
+    identical: bool = Field(description="True when both versions' content_snapshot_json are byte-identical")
+    unified_diff: str = Field(
+        description="Standard unified-diff text (like `diff -u`) over each version's textual content."
+    )
+    line_hunks: list[CompliancePolicyVersionLineDiffHunk] = Field(
+        default_factory=list,
+        description="Structured equal/insert/delete/replace hunks over the same line-level comparison as unified_diff.",
+    )
+    json_field_diffs: list[CompliancePolicyVersionJSONFieldDiff] = Field(
+        default_factory=list,
+        description=(
+            "Top-level content_snapshot_json fields that differ, beyond the text captured in unified_diff/"
+            "line_hunks (e.g. non-text or metadata fields)."
+        ),
+    )
+
+
 class CompliancePolicyApprovalRequestCreate(BaseModel):
     version_id: UUID
     approver_user_id: UUID

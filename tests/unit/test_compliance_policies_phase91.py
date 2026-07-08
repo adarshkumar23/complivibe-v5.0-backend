@@ -516,3 +516,99 @@ def test_g6_assigned_non_owner_approver_can_decide_own_request(client, db_sessio
     )
     assert rejected.status_code == 200, rejected.text
     assert rejected.json()["status"] == "rejected"
+
+
+def test_g6_version_diff_endpoint_real_line_and_field_diff(client, db_session):
+    """G6 item 6: there was no way to diff two policy versions -- a client had
+    to fetch both raw content_snapshot_json blobs and diff them itself. This
+    exercises the new GET .../versions/{a}/diff/{b} endpoint end to end and
+    asserts it returns a REAL diff (unified diff text, structured line hunks,
+    and a field-level diff of non-text metadata), not just both snapshots.
+    """
+    org = bootstrap_org_user(client, email_prefix="p91-g6-diff")
+    headers = org["org_headers"]
+
+    policy = _create_policy(client, headers, owner_user_id=org["user_id"], title="Diff Policy")
+    v1 = _create_version(
+        client,
+        headers,
+        policy["id"],
+        version_number="1.0",
+        content={
+            "content": "Line one.\nLine two.\nLine three unchanged.\nOld line four.\n",
+            "source": "manual",
+        },
+    )
+    v2 = _create_version(
+        client,
+        headers,
+        policy["id"],
+        version_number="2.0",
+        content={
+            "content": "Line one.\nLine two updated.\nLine three unchanged.\nNew line four.\nBrand new line five.\n",
+            "source": "manual_revision",
+        },
+    )
+
+    diff = client.get(f"{BASE}/{policy['id']}/versions/{v1['id']}/diff/{v2['id']}", headers=headers)
+    assert diff.status_code == 200, diff.text
+    body = diff.json()
+
+    assert body["older"]["version_number"] == "1.0"
+    assert body["newer"]["version_number"] == "2.0"
+    assert body["identical"] is False
+    assert body["word_count_delta"] > 0
+    assert body["line_count_delta"] == 1
+
+    # Real unified-diff text, not raw snapshots.
+    assert "-Line two.\n" in body["unified_diff"] or "-Line two." in body["unified_diff"]
+    assert "+Line two updated." in body["unified_diff"]
+
+    # Structured hunks: line 1 and 3 unchanged, line 2 replaced, line 4 replaced
+    # with two new lines.
+    ops = [hunk["op"] for hunk in body["line_hunks"]]
+    assert "equal" in ops
+    assert "replace" in ops
+    replace_hunks = [h for h in body["line_hunks"] if h["op"] == "replace"]
+    assert any(h["older_lines"] == ["Line two."] and h["newer_lines"] == ["Line two updated."] for h in replace_hunks)
+    assert any(
+        h["older_lines"] == ["Old line four."] and h["newer_lines"] == ["New line four.", "Brand new line five."]
+        for h in replace_hunks
+    )
+
+    # Field-level diff of non-text metadata (source changed), content itself is
+    # NOT duplicated here since it's already covered by unified_diff/line_hunks.
+    field_diffs = {d["field"]: d for d in body["json_field_diffs"]}
+    assert "content" not in field_diffs
+    assert field_diffs["source"]["change"] == "changed"
+    assert field_diffs["source"]["older_value"] == "manual"
+    assert field_diffs["source"]["newer_value"] == "manual_revision"
+
+    # Order-independence: requesting the newer version first still labels
+    # older/newer correctly by created_at, not URL order.
+    reversed_diff = client.get(f"{BASE}/{policy['id']}/versions/{v2['id']}/diff/{v1['id']}", headers=headers)
+    assert reversed_diff.status_code == 200
+    assert reversed_diff.json()["older"]["version_number"] == "1.0"
+    assert reversed_diff.json()["newer"]["version_number"] == "2.0"
+
+    # Diffing a version against itself is rejected.
+    same_version = client.get(f"{BASE}/{policy['id']}/versions/{v1['id']}/diff/{v1['id']}", headers=headers)
+    assert same_version.status_code == 400
+
+    # Identical content across two versions is reported as identical=True with
+    # an empty unified diff.
+    v3 = _create_version(
+        client,
+        headers,
+        policy["id"],
+        version_number="3.0",
+        content={"content": v2["content_snapshot_json"]["content"], "source": "manual_revision"},
+    )
+    identical_diff = client.get(f"{BASE}/{policy['id']}/versions/{v2['id']}/diff/{v3['id']}", headers=headers)
+    assert identical_diff.status_code == 200
+    assert identical_diff.json()["identical"] is True
+    assert identical_diff.json()["unified_diff"] == ""
+
+    # Nonexistent version -> 404, not a silent empty diff.
+    missing = client.get(f"{BASE}/{policy['id']}/versions/{v1['id']}/diff/{uuid.uuid4()}", headers=headers)
+    assert missing.status_code == 404

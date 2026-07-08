@@ -1,3 +1,4 @@
+import difflib
 import hashlib
 import json
 import uuid
@@ -140,6 +141,96 @@ class CompliancePolicyService:
     @classmethod
     def content_sha256_hexdigest(cls, payload: dict | list) -> str:
         return hashlib.sha256(cls.canonical_json(payload).encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _diffable_text(payload: dict | list) -> str:
+        """Best-effort plain-text rendering of a version's content_snapshot_json
+        for line-level diffing. Every drafting/apply pipeline in this codebase
+        (AI drafting apply, AI-policy-draft accept, policy-template apply) stores
+        the actual document under a top-level "content" string key, so prefer
+        that verbatim (real markdown/prose, diffed as-written). Snapshots without
+        a string "content" key (e.g. ad-hoc structured JSON bodies) fall back to
+        pretty-printed, key-sorted JSON so the diff is still deterministic and
+        line-addressable rather than one giant opaque blob.
+        """
+        if isinstance(payload, dict):
+            content = payload.get("content")
+            if isinstance(content, str):
+                return content
+        return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False)
+
+    @staticmethod
+    def _word_count(text: str) -> int:
+        return len(text.split())
+
+    @classmethod
+    def diff_versions(
+        cls,
+        older: CompliancePolicyVersion,
+        newer: CompliancePolicyVersion,
+    ) -> dict:
+        """Computes a real structural/line-level diff between two policy
+        versions. `older`/`newer` must already be ordered chronologically by
+        the caller (older.created_at <= newer.created_at).
+        """
+        older_text = cls._diffable_text(older.content_snapshot_json)
+        newer_text = cls._diffable_text(newer.content_snapshot_json)
+
+        older_lines = older_text.splitlines()
+        newer_lines = newer_text.splitlines()
+
+        unified = "\n".join(
+            difflib.unified_diff(
+                older_lines,
+                newer_lines,
+                fromfile=f"version {older.version_number}",
+                tofile=f"version {newer.version_number}",
+                lineterm="",
+            )
+        )
+
+        matcher = difflib.SequenceMatcher(a=older_lines, b=newer_lines, autojunk=False)
+        line_hunks = [
+            {
+                "op": op,
+                "older_lines": older_lines[a1:a2],
+                "newer_lines": newer_lines[b1:b2],
+            }
+            for op, a1, a2, b1, b2 in matcher.get_opcodes()
+            if op != "equal" or (a2 - a1) > 0
+        ]
+
+        json_field_diffs: list[dict] = []
+        older_json = older.content_snapshot_json
+        newer_json = newer.content_snapshot_json
+        if isinstance(older_json, dict) and isinstance(newer_json, dict):
+            all_keys = sorted(set(older_json.keys()) | set(newer_json.keys()))
+            for key in all_keys:
+                # The "content" field is already covered in full detail by
+                # unified_diff/line_hunks above; do not duplicate it here.
+                if key == "content":
+                    continue
+                has_old = key in older_json
+                has_new = key in newer_json
+                old_value = older_json.get(key)
+                new_value = newer_json.get(key)
+                if has_old and not has_new:
+                    json_field_diffs.append({"field": key, "change": "removed", "older_value": old_value, "newer_value": None})
+                elif has_new and not has_old:
+                    json_field_diffs.append({"field": key, "change": "added", "older_value": None, "newer_value": new_value})
+                elif old_value != new_value:
+                    json_field_diffs.append(
+                        {"field": key, "change": "changed", "older_value": old_value, "newer_value": new_value}
+                    )
+
+        return {
+            "older_text": older_text,
+            "newer_text": newer_text,
+            "unified_diff": unified,
+            "line_hunks": line_hunks,
+            "json_field_diffs": json_field_diffs,
+            "identical": older_text == newer_text and older_json == newer_json,
+        }
 
     def summary(self, organization_id: uuid.UUID) -> dict[str, int | dict[str, int]]:
         total_policies = int(

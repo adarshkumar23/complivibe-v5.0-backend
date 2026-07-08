@@ -33,6 +33,8 @@ from app.schemas.compliance_policy import (
     CompliancePolicySummary,
     CompliancePolicyUpdate,
     CompliancePolicyVersionCreate,
+    CompliancePolicyVersionDiffRead,
+    CompliancePolicyVersionDiffSide,
     CompliancePolicyVersionRead,
     CompliancePolicyVersionSubmitRequest,
 )
@@ -501,6 +503,73 @@ def get_policy_version(
     row = service.require_version_in_org(organization.id, policy_id, version_id)
     context = service.version_context(organization.id, policy, [row])
     return _version_read(row, context=context.get(row.id))
+
+
+@router.get(
+    "/{policy_id}/versions/{version_a}/diff/{version_b}",
+    response_model=CompliancePolicyVersionDiffRead,
+    description=(
+        "Real structural/line-level diff between two versions of a policy's content_snapshot_json "
+        "(unified diff + structured equal/insert/delete/replace hunks over the version text, plus a "
+        "field-level diff of any non-text metadata in the snapshot) -- not just both raw snapshots for "
+        "the client to diff itself. version_a/version_b may be given in either order; the response "
+        "always labels them `older`/`newer` by created_at."
+    ),
+)
+def diff_policy_versions(
+    policy_id: uuid.UUID,
+    version_a: uuid.UUID,
+    version_b: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("compliance_policies:read")),
+) -> CompliancePolicyVersionDiffRead:
+    if version_a == version_b:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="version_a and version_b must be different versions")
+
+    service = CompliancePolicyService(db)
+    service.require_policy_in_org(organization.id, policy_id)
+    row_a = service.require_version_in_org(organization.id, policy_id, version_a)
+    row_b = service.require_version_in_org(organization.id, policy_id, version_b)
+
+    if (row_a.created_at, row_a.version_number) <= (row_b.created_at, row_b.version_number):
+        older, newer = row_a, row_b
+    else:
+        older, newer = row_b, row_a
+
+    diff = CompliancePolicyService.diff_versions(older, newer)
+    older_word_count = CompliancePolicyService._word_count(diff["older_text"])
+    newer_word_count = CompliancePolicyService._word_count(diff["newer_text"])
+    older_line_count = len(diff["older_text"].splitlines())
+    newer_line_count = len(diff["newer_text"].splitlines())
+
+    return CompliancePolicyVersionDiffRead(
+        policy_id=policy_id,
+        older=CompliancePolicyVersionDiffSide(
+            id=older.id,
+            version_number=older.version_number,
+            status=older.status,
+            change_summary=older.change_summary,
+            created_at=older.created_at,
+            word_count=older_word_count,
+            line_count=older_line_count,
+        ),
+        newer=CompliancePolicyVersionDiffSide(
+            id=newer.id,
+            version_number=newer.version_number,
+            status=newer.status,
+            change_summary=newer.change_summary,
+            created_at=newer.created_at,
+            word_count=newer_word_count,
+            line_count=newer_line_count,
+        ),
+        word_count_delta=newer_word_count - older_word_count,
+        line_count_delta=newer_line_count - older_line_count,
+        identical=diff["identical"],
+        unified_diff=diff["unified_diff"],
+        line_hunks=diff["line_hunks"],
+        json_field_diffs=diff["json_field_diffs"],
+    )
 
 
 @router.post("/{policy_id}/versions/{version_id}/submit-for-approval", response_model=CompliancePolicyVersionRead)
