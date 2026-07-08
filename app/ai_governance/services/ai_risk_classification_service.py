@@ -4,9 +4,10 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.ai_governance.schemas.ai_classification import AIRiskClassificationRead
+from app.ai_governance.schemas.ai_classification import AIRiskClassificationRead, EUAIActClassifyRequest
 from app.ai_governance.services.ai_classifier import AIRiskClassifier, MANDATORY_CONTROLS
 from app.ai_governance.services.ai_governance_event_service import AIGovernanceEventService
+from app.ai_governance.services.eu_act_classification_service import EUAIActClassificationService
 from app.models.ai_risk_classification import AIRiskClassification
 from app.models.ai_system import AISystem
 from app.services.audit_service import AuditService
@@ -25,11 +26,42 @@ QUESTION_EXPLANATIONS = {
     "transparency_obligation": "it interacts with humans and could be mistaken for a human",
 }
 
+# The guided/manual risk-tier vocabulary ("prohibited", "high", "limited",
+# "minimal") is coarser than the formal EU AI Act classification's
+# article_category vocabulary. "high" is mapped to Annex III (the
+# high-risk use-case categories the guided questionnaire actually probes
+# for -- critical infrastructure, employment, biometric data, essential
+# services, law enforcement) rather than Annex I, since the guided flow
+# never asks about products already regulated under EU harmonization
+# legislation (Annex I's basis).
+RISK_TIER_TO_ARTICLE_CATEGORY = {
+    "prohibited": "prohibited",
+    "high": "high_risk_annex3",
+    "limited": "limited_risk",
+    "minimal": "minimal_risk",
+}
+
 
 class AIRiskClassificationService:
     def __init__(self, db: Session) -> None:
         self.db = db
         self.classifier = AIRiskClassifier()
+
+    def _sync_eu_act_classification(self, org_id: uuid.UUID, system_id: uuid.UUID, risk_tier: str, user_id: uuid.UUID) -> None:
+        """Write the guided/manual risk-tier decision through to the formal
+        EU AI Act classification store, so `/eu-act-obligations` reflects a
+        completed guided or manual classification without requiring a
+        separate, redundant submission through `/eu-act-classification`.
+        """
+        article_category = RISK_TIER_TO_ARTICLE_CATEGORY.get(risk_tier)
+        if article_category is None:
+            return
+        EUAIActClassificationService(self.db).classify_system(
+            org_id,
+            system_id,
+            EUAIActClassifyRequest(article_category=article_category),
+            user_id,
+        )
 
     def _require_system(self, org_id: uuid.UUID, system_id: uuid.UUID) -> AISystem:
         row = self.db.execute(
@@ -57,6 +89,7 @@ class AIRiskClassificationService:
             org_id=org_id,
             db=self.db,
         )
+        self._sync_eu_act_classification(org_id, system_id, row.risk_tier, user_id)
         AIGovernanceEventService.log(
             self.db,
             org_id,
@@ -94,6 +127,7 @@ class AIRiskClassificationService:
             db=self.db,
             basis_notes=notes,
         )
+        self._sync_eu_act_classification(org_id, system_id, row.risk_tier, user_id)
         AIGovernanceEventService.log(
             self.db,
             org_id,
