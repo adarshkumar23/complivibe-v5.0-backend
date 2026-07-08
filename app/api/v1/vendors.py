@@ -238,6 +238,10 @@ def _vendor_criticality_setting_read(row, organization_id: uuid.UUID) -> VendorC
 def _vendor_criticality_profile_read(row, payload: dict | None = None, priority_context: dict | None = None) -> VendorCriticalityProfileRead:
     if payload is not None:
         return VendorCriticalityProfileRead(**payload)
+    staleness = VendorCriticalityService.staleness_context(row.updated_at)
+    context_flags: list[str] = []
+    if staleness["is_stale"]:
+        context_flags.append("profile_stale")
     return VendorCriticalityProfileRead(
         id=row.id,
         organization_id=row.organization_id,
@@ -255,6 +259,10 @@ def _vendor_criticality_profile_read(row, payload: dict | None = None, priority_
         created_at=row.created_at,
         updated_at=row.updated_at,
         is_default=False,
+        profile_age_days=staleness["profile_age_days"],
+        is_stale=staleness["is_stale"],
+        stale_after_days=staleness["stale_after_days"],
+        context_flags=context_flags,
     )
 
 

@@ -12,6 +12,15 @@ from app.models.vendor_criticality import VendorCriticalityProfile, VendorCritic
 from app.schemas.vendor_criticality import VendorCriticalityProfileUpdate, VendorCriticalitySettingUpdate
 from app.services.audit_service import AuditService
 
+# A business-criticality profile is a point-in-time judgment call (revenue share, data
+# volume, operational importance, substitutability). Unlike security-rating or threat-
+# intelligence signals it is never auto-recomputed, so it can silently go stale for far
+# longer - a vendor can go from a pilot to a core revenue dependency over a year without
+# anyone revisiting this profile. Mirrors the is_stale/age_days pattern used across the
+# other TPRM intelligence signals (sanctions, KYB, threat intel) so staleness reads the
+# same way everywhere in this API.
+CRITICALITY_STALE_AFTER_DAYS = 180
+
 DEFAULT_WEIGHTS: dict[str, Decimal] = {
     "revenue_dependency_weight": Decimal("0.2500"),
     "data_volume_weight": Decimal("0.2500"),
@@ -235,6 +244,22 @@ class VendorCriticalityService:
             "created_at": None,
             "updated_at": now,
             "is_default": True,
+            "profile_age_days": None,
+            "is_stale": True,
+            "stale_after_days": CRITICALITY_STALE_AFTER_DAYS,
+            "context_flags": ["no_profile_configured"],
+        }
+
+    @staticmethod
+    def staleness_context(updated_at: datetime | None) -> dict[str, Any]:
+        if updated_at is None:
+            return {"profile_age_days": None, "is_stale": True, "stale_after_days": CRITICALITY_STALE_AFTER_DAYS}
+        aware_updated_at = updated_at if updated_at.tzinfo else updated_at.replace(tzinfo=UTC)
+        age_days = round((datetime.now(UTC) - aware_updated_at).total_seconds() / 86400.0, 2)
+        return {
+            "profile_age_days": age_days,
+            "is_stale": age_days > CRITICALITY_STALE_AFTER_DAYS,
+            "stale_after_days": CRITICALITY_STALE_AFTER_DAYS,
         }
 
     @staticmethod
@@ -295,6 +320,12 @@ class VendorCriticalityService:
         user_agent: str | None = None,
     ) -> VendorCriticalityProfile:
         vendor = self.require_vendor_in_org(organization_id, vendor_id)
+        # Consistent with every other TPRM intelligence signal in this API (sanctions
+        # screening, KYB/AML checks, security rating, threat intelligence, and now
+        # supply-chain linking all reject archived vendors): an offboarded vendor
+        # shouldn't gain a fresh business-criticality judgment call.
+        if vendor.status == "archived":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Archived vendors cannot have their criticality profile updated")
         row = self.get_profile(organization_id, vendor_id)
         before = self.profile_audit_payload(row)
         if row is None:

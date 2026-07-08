@@ -66,6 +66,10 @@ class VendorCriticalityProfileRead(BaseModel):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     is_default: bool = False
+    profile_age_days: float | None = None
+    is_stale: bool = False
+    stale_after_days: int = 180
+    context_flags: list[str] = Field(default_factory=list)
 
 
 class VendorCriticalityPreview(BaseModel):
