@@ -184,7 +184,9 @@ class RiskService:
         inherent_score = RiskScoringService.compute_score(risk, settings)
         risk.severity = self.score_to_severity(inherent_score)
         risk.inherent_score = inherent_score
-        residual_likelihood, residual_impact, residual_score = RiskScoringService.compute_residual(risk, [], inherent_score)
+        residual_likelihood, residual_impact, residual_score = RiskScoringService.compute_residual(
+            risk, [], inherent_score, settings
+        )
         risk.residual_likelihood = residual_likelihood
         risk.residual_impact = residual_impact
         risk.residual_score = residual_score

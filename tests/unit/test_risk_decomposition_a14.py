@@ -53,8 +53,60 @@ def test_a14_factor_based_weighted_sum_and_scaling(client):
         },
     )
     assert patched.status_code == 200
-    assert patched.json()["inherent_score"] == 19
+    # weighted composite = 4*.4 + 3*.3 + 5*.3 = 4.0, then scaled by the likelihood=2
+    # frequency multiplier (2/3 around the midpoint of 3) -> raw 2.667 -> scaled 13.
+    assert patched.json()["inherent_score"] == 13
     assert patched.json()["composite_score_method"] == "factor_based"
+
+
+def test_a14_factor_based_likelihood_changes_move_the_inherent_score(client):
+    """G7 item 2 regression: factor-based scoring must not silently ignore likelihood."""
+    org = bootstrap_org_user(client, email_prefix="a14-factor-likelihood")
+
+    put = client.put(
+        "/api/v1/compliance/risk-settings",
+        headers=org["org_headers"],
+        json={"financial_weight": 0.4, "brand_weight": 0.3, "operational_weight": 0.3},
+    )
+    assert put.status_code == 200
+
+    created = _create_risk(client, org["org_headers"], title="Factor Likelihood", likelihood=2, impact=2)
+    assert created.status_code == 201
+    risk_id = created.json()["id"]
+
+    patched = client.patch(
+        f"/api/v1/risks/{risk_id}",
+        headers=org["org_headers"],
+        json={
+            "composite_score_method": "factor_based",
+            "financial_impact": 4,
+            "brand_impact": 3,
+            "operational_impact": 5,
+        },
+    )
+    assert patched.status_code == 200
+    score_at_likelihood_2 = patched.json()["inherent_score"]
+
+    # Changing ONLY likelihood (factors untouched) must move inherent_score.
+    bumped = client.patch(
+        f"/api/v1/risks/{risk_id}",
+        headers=org["org_headers"],
+        json={"likelihood": 5},
+    )
+    assert bumped.status_code == 200
+    score_at_likelihood_5 = bumped.json()["inherent_score"]
+    assert score_at_likelihood_5 != score_at_likelihood_2, (
+        "BUG: factor-based inherent_score did not change when likelihood changed"
+    )
+    assert score_at_likelihood_5 > score_at_likelihood_2
+
+    lowered = client.patch(
+        f"/api/v1/risks/{risk_id}",
+        headers=org["org_headers"],
+        json={"likelihood": 1},
+    )
+    assert lowered.status_code == 200
+    assert lowered.json()["inherent_score"] < score_at_likelihood_2
 
 
 def test_a14_factor_based_missing_impact_field_returns_422(client):
@@ -164,7 +216,10 @@ def test_a14_score_breakdown_endpoint_factor_based(client):
     assert breakdown.status_code == 200
     body = breakdown.json()
     assert body["method"] == "factor_based"
-    assert body["scaled_score"] == 19
+    # Same weighted composite as test_a14_factor_based_weighted_sum_and_scaling (4.0),
+    # scaled by the default-created risk's likelihood=2 frequency multiplier -> 13.
+    assert body["scaled_score"] == 13
+    assert body["likelihood"] == 2
     assert body["factors"]["financial"]["impact_value"] == 4
     assert body["factors"]["financial"]["weight"] == 0.4
 
@@ -216,7 +271,7 @@ def test_a14_score_auto_recomputes_on_risk_patch_when_factor_changes(client):
         },
     )
     assert first.status_code == 200
-    assert first.json()["inherent_score"] == 19
+    assert first.json()["inherent_score"] == 13
 
     second = client.patch(
         f"/api/v1/risks/{created.json()['id']}",
@@ -224,7 +279,7 @@ def test_a14_score_auto_recomputes_on_risk_patch_when_factor_changes(client):
         json={"operational_impact": 2},
     )
     assert second.status_code == 200
-    assert second.json()["inherent_score"] == 16
+    assert second.json()["inherent_score"] == 10
 
 
 def test_a14_risk_settings_put_creates_new_settings(client):
@@ -356,8 +411,8 @@ def test_a14_tenant_isolation_org_settings_do_not_affect_other_org_scores(client
     assert patch_a.status_code == 200
     assert patch_b.status_code == 200
 
-    assert patch_a.json()["inherent_score"] == 21
-    assert patch_b.json()["inherent_score"] == 13
+    assert patch_a.json()["inherent_score"] == 14
+    assert patch_b.json()["inherent_score"] == 9
 
 
 def test_a14_score_breakdown_404_for_risk_outside_org(client, db_session):
@@ -408,4 +463,8 @@ def test_a14_direct_compute_score_standard_and_factor_based(client, db_session):
     )
 
     assert RiskScoringService.compute_score(standard, settings) == 12
-    assert RiskScoringService.compute_score(factor, settings) == 19
+    # weighted composite 4.0, scaled by this risk's likelihood=1 frequency multiplier
+    # (1/3) -> raw 1.333 -> scaled 7. (Deliberately a *different* likelihood than the
+    # weighted-sum-and-scaling test's likelihood=2 -- same factors, different score --
+    # this is the regression check that factor_based scoring is likelihood-sensitive.)
+    assert RiskScoringService.compute_score(factor, settings) == 7

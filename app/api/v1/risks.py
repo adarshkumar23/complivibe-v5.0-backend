@@ -165,8 +165,9 @@ def _recompute_residual(db: Session, organization_id: uuid.UUID, risk: Risk) -> 
             )
         ).scalars().all()
     )
+    settings = RiskScoringService.get_or_create_org_settings(organization_id, db)
     residual_likelihood, residual_impact, residual_score = RiskScoringService.compute_residual(
-        risk, linked_controls, risk.inherent_score
+        risk, linked_controls, risk.inherent_score, settings
     )
     risk.residual_likelihood = residual_likelihood
     risk.residual_impact = residual_impact
@@ -484,17 +485,23 @@ def update_risk(
     settings = RiskScoringService.get_or_create_org_settings(organization.id, db)
     inherent_score = RiskScoringService.compute_score(risk, settings)
     severity = service.score_to_severity(inherent_score)
-    _, _, residual_score = service.calculate_scores(
+    # Validate bounds the same way calculate_scores always has (defense in depth on top of
+    # the Pydantic ge/le=1/5 field constraints); its plain likelihood*impact residual_score
+    # return value is discarded below in favor of a method-aware computation, since a
+    # factor_based risk needs factor-based residual scoring too, not the standard formula.
+    service.calculate_scores(
         likelihood=risk.likelihood,
         impact=risk.impact,
         residual_likelihood=risk.residual_likelihood,
         residual_impact=risk.residual_impact,
     )
-    # residual_score is derived from likelihood*impact, which is independent of
-    # inherent_score for factor_based risks (a weighted financial/brand/operational
-    # formula) -- residual can never exceed inherent risk by definition, so clamp it.
-    if residual_score is not None:
-        residual_score = min(residual_score, inherent_score)
+    residual_score = RiskScoringService.compute_residual_score(
+        risk,
+        settings,
+        residual_likelihood=risk.residual_likelihood,
+        residual_impact=risk.residual_impact,
+        inherent_score=inherent_score,
+    )
     risk.inherent_score = inherent_score
     risk.severity = severity
     risk.residual_score = residual_score
