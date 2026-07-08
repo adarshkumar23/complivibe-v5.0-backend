@@ -78,9 +78,18 @@ class AIMonitoringService:
 
     @staticmethod
     def check_threshold(config: AIMonitoringConfig, value: Decimal) -> bool:
+        """Return True when `value` is within the healthy band (no breach).
+
+        `comparison_direction` describes the *breach* direction:
+        - "above": a breach occurs when the reading meets/exceeds the threshold
+          (e.g. error_rate climbing too high). Healthy readings stay below it.
+        - "below": a breach occurs when the reading meets/falls below the
+          threshold (e.g. accuracy dropping too low). Healthy readings stay
+          above it.
+        """
         if config.comparison_direction == "above":
-            return value >= config.threshold_value
-        return value <= config.threshold_value
+            return value < config.threshold_value
+        return value > config.threshold_value
 
     @staticmethod
     def _severity_for_metric(metric_type: str) -> str:
