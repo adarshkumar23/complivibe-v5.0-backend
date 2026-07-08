@@ -252,6 +252,22 @@ AUTOPILOT_EXECUTION_INTENT_CAVEAT = (
     "Execution intents are dry-run planning artifacts. Phase 7.1 does not execute actions, create tasks, "
     "create reviews, send notifications, approve, publish, or mutate governance records."
 )
+# SECURITY/DISCLOSURE: a handful of capabilities (see AUTOPILOT_CAPABILITY_MATRIX entries with
+# execution_mode == "real_execution_eligible") do genuinely execute -- with real, reversible,
+# audited side effects -- once an organization opts in via governance settings
+# (autopilot_auto_execute_enabled), a policy allows it, the action is low-risk, and the caller
+# explicitly marks the specific candidate action automation_allowed. The generic
+# AUTOPILOT_EXECUTION_INTENT_CAVEAT text above is therefore false for those capabilities and must
+# never be attached to them; this caveat is used instead so a client can never mistake a real
+# executed action for a dry-run plan.
+AUTOPILOT_REAL_EXECUTION_CAVEAT = (
+    "This capability genuinely executes with a real, reversible, audited side effect when the "
+    "organization has opted into autopilot auto-execution, an applicable policy allows it, the "
+    "action is classified low-risk server-side, and the caller marks the specific candidate action "
+    "automation_allowed. Check the created execution-intent's intent_status and, once executed, the "
+    "linked /autopilot/executions/{execution_id} record (execution_status=\"executed\") -- do not "
+    "assume planning-only behavior for this capability."
+)
 AUTOPILOT_PENDING_INTENT_STALE_HOURS = 24
 AUTOPILOT_EXECUTION_APPROVAL_CAVEAT = (
     "Execution approvals record human authorization metadata only. Phase 7.2 does not execute actions, create "
@@ -393,15 +409,55 @@ AUTOPILOT_CAPABILITY_MATRIX: tuple[dict[str, Any], ...] = (
     {
         "capability_key": "refresh_signal_preview",
         "action_type": "refresh_signals",
-        "description": "Preview signal refresh behavior without persistence.",
+        "description": (
+            "Refreshes a risk assessment's signal metadata (records a real refresh timestamp on the "
+            "assessment). Real execution, low external impact, fully reversible."
+        ),
         "default_allowed": True,
         "requires_policy_allow": False,
         "requires_human_approval": False,
         "external_effects": False,
         "creates_task": False,
         "creates_review": False,
+        "mutates_source_record": True,
+        "allowed_in_phase_7_1": True,
+        "execution_mode": "real_execution_eligible",
+    },
+    {
+        "capability_key": "flag_stale_evidence_execution",
+        "action_type": "attach_evidence",
+        "description": (
+            "Flags stale evidence for manual review directly on the risk assessment's mitigation "
+            "summary. Real execution, low external impact, fully reversible. Only the action_key "
+            "'flag_stale_evidence' is dispatchable to a registered runner; other action_keys of "
+            "action_type attach_evidence remain planning-only."
+        ),
+        "default_allowed": False,
+        "requires_policy_allow": True,
+        "requires_human_approval": False,
+        "external_effects": False,
+        "creates_task": False,
+        "creates_review": False,
+        "mutates_source_record": True,
+        "allowed_in_phase_7_1": True,
+        "execution_mode": "real_execution_eligible",
+    },
+    {
+        "capability_key": "send_reminder_execution",
+        "action_type": "send_reminder",
+        "description": (
+            "Creates a real internal follow-up task linked to the target entity. Real execution, "
+            "low external impact (internal task only, no outbound notification), fully reversible."
+        ),
+        "default_allowed": False,
+        "requires_policy_allow": True,
+        "requires_human_approval": False,
+        "external_effects": False,
+        "creates_task": True,
+        "creates_review": False,
         "mutates_source_record": False,
         "allowed_in_phase_7_1": True,
+        "execution_mode": "real_execution_eligible",
     },
     {
         "capability_key": "create_recommendation_snapshot_intent",
@@ -415,6 +471,7 @@ AUTOPILOT_CAPABILITY_MATRIX: tuple[dict[str, Any], ...] = (
         "creates_review": False,
         "mutates_source_record": False,
         "allowed_in_phase_7_1": False,
+        "execution_mode": "planning_only",
     },
     {
         "capability_key": "create_copilot_draft_snapshot_intent",
@@ -428,6 +485,7 @@ AUTOPILOT_CAPABILITY_MATRIX: tuple[dict[str, Any], ...] = (
         "creates_review": False,
         "mutates_source_record": False,
         "allowed_in_phase_7_1": False,
+        "execution_mode": "planning_only",
     },
     {
         "capability_key": "acknowledge_recommendation_intent",
@@ -441,6 +499,7 @@ AUTOPILOT_CAPABILITY_MATRIX: tuple[dict[str, Any], ...] = (
         "creates_review": False,
         "mutates_source_record": False,
         "allowed_in_phase_7_1": False,
+        "execution_mode": "planning_only",
     },
     {
         "capability_key": "create_task",
@@ -454,6 +513,7 @@ AUTOPILOT_CAPABILITY_MATRIX: tuple[dict[str, Any], ...] = (
         "creates_review": False,
         "mutates_source_record": False,
         "allowed_in_phase_7_1": False,
+        "execution_mode": "planning_only",
     },
     {
         "capability_key": "create_review",
@@ -467,6 +527,7 @@ AUTOPILOT_CAPABILITY_MATRIX: tuple[dict[str, Any], ...] = (
         "creates_review": True,
         "mutates_source_record": False,
         "allowed_in_phase_7_1": False,
+        "execution_mode": "planning_only",
     },
     {
         "capability_key": "mutate_risk_assessment",
@@ -480,6 +541,7 @@ AUTOPILOT_CAPABILITY_MATRIX: tuple[dict[str, Any], ...] = (
         "creates_review": False,
         "mutates_source_record": True,
         "allowed_in_phase_7_1": False,
+        "execution_mode": "planning_only",
     },
     {
         "capability_key": "mutate_classification",
@@ -493,6 +555,7 @@ AUTOPILOT_CAPABILITY_MATRIX: tuple[dict[str, Any], ...] = (
         "creates_review": False,
         "mutates_source_record": True,
         "allowed_in_phase_7_1": False,
+        "execution_mode": "planning_only",
     },
     {
         "capability_key": "external_notification",
@@ -506,6 +569,7 @@ AUTOPILOT_CAPABILITY_MATRIX: tuple[dict[str, Any], ...] = (
         "creates_review": False,
         "mutates_source_record": False,
         "allowed_in_phase_7_1": False,
+        "execution_mode": "planning_only",
     },
 )
 
@@ -6148,6 +6212,14 @@ class AISystemRiskAssessmentService:
                     "approval_required_priority_bands_json": sorted(approval_bands),
                 },
             },
+            # DISCLOSURE: this evaluation itself never executes anything (see caveat below), but
+            # submitting this same candidate_action_json to POST /autopilot/execution-intents can
+            # lead to real execution if execution_mode is "real_execution_eligible" for this
+            # action_type -- surfaced here so a client checking this endpoint first is never misled
+            # into thinking downstream execution is impossible.
+            "execution_mode": self._capability_by_action_type().get(action_type, {}).get(
+                "execution_mode", "planning_only"
+            ),
             "caveat": AUTOPILOT_SAFE_FALLBACK_CAVEAT,
         }
 
@@ -6377,12 +6449,28 @@ class AISystemRiskAssessmentService:
     @classmethod
     def autopilot_capabilities(cls) -> dict[str, Any]:
         capabilities = []
+        any_real_execution = False
         for item in AUTOPILOT_CAPABILITY_MATRIX:
             row = dict(item)
-            row["caveat"] = AUTOPILOT_EXECUTION_INTENT_CAVEAT
+            if row.get("execution_mode") == "real_execution_eligible":
+                row["caveat"] = AUTOPILOT_REAL_EXECUTION_CAVEAT
+                any_real_execution = True
+            else:
+                row["caveat"] = AUTOPILOT_EXECUTION_INTENT_CAVEAT
             capabilities.append(row)
         capabilities.sort(key=lambda x: str(x["capability_key"]))
-        return {"capabilities": capabilities, "caveat": AUTOPILOT_EXECUTION_INTENT_CAVEAT}
+        top_level_caveat = (
+            (
+                "Most execution intent capabilities are dry-run planning artifacts (see per-capability "
+                "execution_mode/caveat below), except those explicitly marked "
+                'execution_mode="real_execution_eligible", which genuinely execute with a real, '
+                "reversible, audited side effect once eligible. Always read the per-capability "
+                "execution_mode field rather than assuming planning-only behavior."
+            )
+            if any_real_execution
+            else AUTOPILOT_EXECUTION_INTENT_CAVEAT
+        )
+        return {"capabilities": capabilities, "caveat": top_level_caveat}
 
     @classmethod
     def _capability_by_action_type(cls) -> dict[str, dict[str, Any]]:
@@ -6426,6 +6514,7 @@ class AISystemRiskAssessmentService:
                 "creates_review": False,
                 "mutates_source_record": False,
                 "allowed_in_phase_7_1": False,
+                "execution_mode": "planning_only",
             },
         )
         blocked_reasons = list(policy_eval["blocked_reasons"])
@@ -6435,6 +6524,11 @@ class AISystemRiskAssessmentService:
         requires_human_approval = bool(policy_eval["requires_human_approval"]) or bool(
             capability.get("requires_human_approval", False)
         )
+        # DISCLOSURE: the generic "dry-run planning artifact" caveat is false for capabilities
+        # marked execution_mode="real_execution_eligible" (they genuinely execute with real,
+        # reversible side effects once eligible) -- never attach it to those.
+        is_real_execution = capability.get("execution_mode") == "real_execution_eligible"
+        decision_caveat = AUTOPILOT_REAL_EXECUTION_CAVEAT if is_real_execution else AUTOPILOT_EXECUTION_INTENT_CAVEAT
         decision = {
             "action_key": action.get("action_key"),
             "target_entity_type": action.get("target_entity_type"),
@@ -6446,14 +6540,15 @@ class AISystemRiskAssessmentService:
             "confidence_score": action.get("confidence_score"),
             "capability_key": capability.get("capability_key"),
             "allowed_in_phase_7_1": bool(capability.get("allowed_in_phase_7_1", False)),
+            "execution_mode": capability.get("execution_mode", "planning_only"),
             "allowed_by_policy": bool(policy_eval["allowed_by_policy"]) and not blocked,
             "approval_required": requires_human_approval,
             "blocked": blocked,
             "blocked_reasons": sorted(set(blocked_reasons)),
             "policy_decision": policy_eval["policy_decision"],
             "policy_explanation_json": dict(policy_eval["policy_explanation_json"]),
-            "capability": {**capability, "caveat": AUTOPILOT_EXECUTION_INTENT_CAVEAT},
-            "caveat": AUTOPILOT_EXECUTION_INTENT_CAVEAT,
+            "capability": {**capability, "caveat": decision_caveat},
+            "caveat": decision_caveat,
         }
         return decision, policy_eval
 
@@ -6498,7 +6593,7 @@ class AISystemRiskAssessmentService:
                 "related_risk_assessment_id": action.get("related_risk_assessment_id"),
             },
             "source_hash": source_hash,
-            "caveat": AUTOPILOT_EXECUTION_INTENT_CAVEAT,
+            "caveat": decision["caveat"],
         }
 
     def preview_execution_intent_recommendation_snapshot(
@@ -6555,7 +6650,11 @@ class AISystemRiskAssessmentService:
                 "scope_id": str(snapshot.scope_id) if snapshot.scope_id else None,
             },
             "source_hash": source_hash,
-            "caveat": AUTOPILOT_EXECUTION_INTENT_CAVEAT,
+            "caveat": (
+                AUTOPILOT_REAL_EXECUTION_CAVEAT
+                if any(d.get("execution_mode") == "real_execution_eligible" for d in decisions)
+                else AUTOPILOT_EXECUTION_INTENT_CAVEAT
+            ),
         }
 
     def preview_execution_intent_copilot_draft_snapshot(
@@ -6820,7 +6919,20 @@ class AISystemRiskAssessmentService:
                 action=action,
             )
         else:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported auto-execution action")
+            # This can only be reached if the capability gate allowed an action_type marked
+            # execution_mode="real_execution_eligible" (e.g. attach_evidence) for an action_key
+            # that has no registered runner (only flag_stale_evidence/send_reminder/refresh_signals
+            # are dispatchable today). Fail clearly rather than silently no-op or corrupt state --
+            # nothing has been mutated yet, so this is safe to reject outright.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"No execution runner is registered for action_key={action_key!r} "
+                    f"action_type={action_type!r}. automation_allowed may only be set for "
+                    "action_key in {'flag_stale_evidence', 'send_reminder'} or "
+                    "action_type == 'refresh_signals'."
+                ),
+            )
 
         row = GovernanceAutopilotExecution(
             organization_id=organization_id,
@@ -7342,6 +7454,15 @@ class AISystemRiskAssessmentService:
             context_flags.append("blocked_intent")
         if stale_intent:
             context_flags.append("stale_pending_intent")
+        decisions_source = row.capability_decisions_json
+        decisions_list: list[Any] = []
+        if isinstance(decisions_source, dict):
+            decisions_list = list(decisions_source.get("decisions") or [])
+        elif isinstance(decisions_source, list):
+            decisions_list = decisions_source
+        intent_has_real_execution = any(
+            isinstance(d, dict) and d.get("execution_mode") == "real_execution_eligible" for d in decisions_list
+        )
         return {
             "id": row.id,
             "intent_id": row.id,
@@ -7366,7 +7487,8 @@ class AISystemRiskAssessmentService:
             "context_flags": context_flags,
             "created_at": row.created_at,
             "updated_at": row.updated_at,
-            "caveat": AUTOPILOT_EXECUTION_INTENT_CAVEAT,
+            "execution_mode": "real_execution_eligible" if intent_has_real_execution else "planning_only",
+            "caveat": AUTOPILOT_REAL_EXECUTION_CAVEAT if intent_has_real_execution else AUTOPILOT_EXECUTION_INTENT_CAVEAT,
         }
 
     def execution_intent_summary(self, *, organization_id: uuid.UUID) -> dict[str, Any]:

@@ -3168,6 +3168,7 @@ def _governance_autopilot_execution_intent_read(payload: dict) -> GovernanceAuto
         context_flags=[str(item) for item in payload.get("context_flags", [])],
         created_at=payload["created_at"],
         updated_at=payload["updated_at"],
+        execution_mode=str(payload.get("execution_mode", "planning_only")),
         caveat=payload.get("caveat", "Autopilot execution intents are dry-run planning records only."),
     )
 

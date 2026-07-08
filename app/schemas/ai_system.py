@@ -1150,6 +1150,7 @@ class GovernanceAutopilotEvaluateCandidateActionResponse(BaseModel):
     policy_explanation_json: dict
     policy_data_age_days: int | None = None
     context_flags: list[str] = Field(default_factory=list)
+    execution_mode: str = "planning_only"
     caveat: str
 
 
@@ -1269,6 +1270,7 @@ class GovernanceAutopilotExecutionIntentRead(UUIDTimestampSchema):
     intent_age_hours: float | None = None
     stale_intent: bool = False
     context_flags: list[str] = Field(default_factory=list)
+    execution_mode: str = "planning_only"
     caveat: str
 
 
