@@ -71,6 +71,7 @@ class SemanticMappingService:
         top_k: int = 10,
         min_score: float = 0.70,
         exclude_same_framework: bool = True,
+        target_framework_id: uuid.UUID | None = None,
     ) -> list[dict[str, object]]:
         source = db.execute(select(Obligation).where(Obligation.id == obligation_id)).scalar_one_or_none()
         if source is None:
@@ -86,6 +87,7 @@ class SemanticMappingService:
                     top_k=top_k,
                     min_score=min_score,
                     exclude_same_framework=exclude_same_framework,
+                    target_framework_id=target_framework_id,
                 )
 
         return self._fallback_search(
@@ -94,6 +96,7 @@ class SemanticMappingService:
             top_k=top_k,
             min_score=min_score,
             exclude_same_framework=exclude_same_framework,
+            target_framework_id=target_framework_id,
         )
 
     def _has_embedding_column(self, db: Session) -> bool:
@@ -126,6 +129,7 @@ class SemanticMappingService:
         top_k: int,
         min_score: float,
         exclude_same_framework: bool,
+        target_framework_id: uuid.UUID | None = None,
     ) -> list[dict[str, object]]:
         query_parts = [
             "SELECT o.id, o.reference_code, o.title, f.name AS framework_name,",
@@ -133,9 +137,18 @@ class SemanticMappingService:
             "FROM obligations o",
             "JOIN frameworks f ON f.id = o.framework_id",
             "WHERE o.id != :source_id",
+            "  AND o.status = 'active'",
             "  AND o.embedding IS NOT NULL",
         ]
-        if exclude_same_framework:
+        if target_framework_id is not None:
+            # Scoping directly to the target framework (rather than searching across every
+            # framework and discarding non-target hits after the fact) matters: a global
+            # top-k search is dominated by whichever frameworks happen to have the most
+            # obligations, so a small target framework's real matches can be crowded out of
+            # the top-k entirely even when they'd clearly win a search scoped to just that
+            # framework. See auto_discover_mappings for where this is exercised.
+            query_parts.append("  AND o.framework_id = :target_framework_id")
+        elif exclude_same_framework:
             query_parts.append("  AND o.framework_id != :framework_id")
         query_parts.extend(
             [
@@ -151,6 +164,7 @@ class SemanticMappingService:
                 "embedding": source_embedding_text,
                 "source_id": str(source.id),
                 "framework_id": str(source.framework_id),
+                "target_framework_id": str(target_framework_id) if target_framework_id is not None else None,
                 "min_score": min_score,
                 "top_k": top_k,
             },
@@ -176,6 +190,7 @@ class SemanticMappingService:
         top_k: int,
         min_score: float,
         exclude_same_framework: bool,
+        target_framework_id: uuid.UUID | None = None,
     ) -> list[dict[str, object]]:
         def normalize(text_value: str) -> set[str]:
             words = re.findall(r"\b\w+\b", (text_value or "").lower())
@@ -214,8 +229,17 @@ class SemanticMappingService:
         if not source_words:
             return []
 
-        stmt = select(Obligation, Framework.name).join(Framework, Framework.id == Obligation.framework_id).where(Obligation.id != source.id)
-        if exclude_same_framework:
+        stmt = (
+            select(Obligation, Framework.name)
+            .join(Framework, Framework.id == Obligation.framework_id)
+            .where(Obligation.id != source.id, Obligation.status == "active")
+        )
+        if target_framework_id is not None:
+            # See _pgvector_search's target_framework_id branch: scope directly to the
+            # target framework instead of relying on it to win a global top-k contest
+            # against every other framework's obligations.
+            stmt = stmt.where(Obligation.framework_id == target_framework_id)
+        elif exclude_same_framework:
             stmt = stmt.where(Obligation.framework_id != source.framework_id)
 
         rows = db.execute(stmt).all()
@@ -225,11 +249,22 @@ class SemanticMappingService:
             if not words:
                 continue
             intersection = source_words & words
-            union = source_words | words
-            if not union:
+            if not intersection:
                 continue
-            jaccard = len(intersection) / len(union)
-            if jaccard < min_score:
+            # Overlap coefficient (intersection / smaller-set size) rather than Jaccard
+            # (intersection / union). Obligation descriptions are frequently auto-generated
+            # at very different lengths (a two-sentence starter-pack blurb vs. a full
+            # multi-clause regulatory description), and pure Jaccard punishes a genuine
+            # topical match between a short and a long text just for the length mismatch --
+            # e.g. a real MFA-to-MFA match across frameworks scored ~0.64 under Jaccard
+            # (below the API's own 0.70 default) but ~0.90 under the overlap coefficient,
+            # while unrelated pairs that only share boilerplate connector words still land
+            # around ~0.45-0.5, so the existing 0.70/0.75 default thresholds keep working as
+            # a meaningful signal/noise cutoff instead of the search silently returning
+            # nothing for real cross-framework matches at their default min_score.
+            smaller_set_size = min(len(source_words), len(words))
+            overlap_coefficient = len(intersection) / smaller_set_size
+            if overlap_coefficient < min_score:
                 continue
             results.append(
                 {
@@ -237,7 +272,7 @@ class SemanticMappingService:
                     "obligation_ref": obligation.reference_code,
                     "obligation_title": obligation.title,
                     "framework_name": framework_name,
-                    "similarity_score": round(float(jaccard), 4),
+                    "similarity_score": round(float(overlap_coefficient), 4),
                     "mapping_type": "fallback_text",
                 }
             )
@@ -253,17 +288,28 @@ class SemanticMappingService:
         min_score: float = 0.75,
         mapping_type_label: str = "semantic",
     ) -> dict[str, object]:
-        source_obligations = db.execute(select(Obligation).where(Obligation.framework_id == source_framework_id)).scalars().all()
+        source_obligations = db.execute(
+            select(Obligation).where(
+                Obligation.framework_id == source_framework_id,
+                Obligation.status == "active",
+            )
+        ).scalars().all()
 
         created = 0
         skipped = 0
         for source in source_obligations:
+            # Scope the similarity search directly to target_framework_id rather than
+            # taking a global top-k across every framework and discarding non-target hits:
+            # a small target framework's genuine matches can otherwise be crowded out of a
+            # global top-k by larger, more numerous frameworks, making discovery silently
+            # return nothing between two real frameworks even when good matches exist.
             matches = self.find_similar_obligations(
                 obligation_id=source.id,
                 db=db,
                 top_k=3,
                 min_score=min_score,
                 exclude_same_framework=True,
+                target_framework_id=target_framework_id,
             )
             for match in matches:
                 target_id = uuid.UUID(str(match["obligation_id"]))
