@@ -56,7 +56,7 @@ _CURVE_POINTS = 20
 # worst case comfortably under 10s so the endpoint never hangs. Callers that
 # need more draws should use methodology="fair" (pure numpy Monte Carlo, no
 # PyMC/compilation overhead), which already supports up to 200,000 iterations.
-_MAX_BAYESIAN_N_ITERATIONS = 20000
+MAX_BAYESIAN_N_ITERATIONS = 20000
 
 
 def _require_numeric(value: Any, field_name: str) -> float:
@@ -422,9 +422,9 @@ class RiskQuantificationService:
         """
         import pymc as pm
 
-        if n_iterations > _MAX_BAYESIAN_N_ITERATIONS:
+        if n_iterations > MAX_BAYESIAN_N_ITERATIONS:
             raise ValueError(
-                f"'n_iterations' must be <= {_MAX_BAYESIAN_N_ITERATIONS} for the "
+                f"'n_iterations' must be <= {MAX_BAYESIAN_N_ITERATIONS} for the "
                 "'fair_bayesian' methodology (PyMC prior-predictive sampling runs "
                 "synchronously within the request; use methodology='fair' for "
                 "higher iteration counts)"

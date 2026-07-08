@@ -66,7 +66,13 @@ def quantify_risk(
         run = service.compute_quantification(
             risk=risk,
             methodology=payload.methodology,
-            input_parameters=payload.input_parameters,
+            # Pydantic has already fully validated the shape (required fields, types,
+            # distribution-specific sub-schemas, min<=most_likely<=max, etc.) per the
+            # discriminated RiskQuantificationRequest union -- the service's own
+            # runtime checks below are now defense in depth, not the primary validation
+            # path. Converted to a plain dict since the simulation code indexes into it
+            # with dict.get(...).
+            input_parameters=payload.input_parameters.model_dump(mode="json"),
             n_iterations=payload.n_iterations,
             computed_by_user_id=current_user.id,
         )

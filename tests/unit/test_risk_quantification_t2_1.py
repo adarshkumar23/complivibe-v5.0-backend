@@ -161,7 +161,7 @@ def test_fair_bayesian_degenerate_input_min_greater_than_max_returns_422(client,
 
     resp = client.post(f"/api/v1/risks/{risk_id}/quantify", headers=headers, json=bad_payload)
     assert resp.status_code == 422, resp.text
-    assert "threat_event_frequency" in resp.json()["detail"]
+    assert any("threat_event_frequency" in str(err) for err in resp.json()["detail"])
 
     count = db_session.execute(
         sa.select(sa.func.count()).select_from(RiskQuantificationRun).where(
@@ -180,7 +180,7 @@ def test_fair_bayesian_n_iterations_over_cap_returns_422(client, db_session):
 
     resp = client.post(f"/api/v1/risks/{risk_id}/quantify", headers=headers, json=bad_payload)
     assert resp.status_code == 422, resp.text
-    assert "n_iterations" in resp.json()["detail"]
+    assert any("n_iterations" in str(err) for err in resp.json()["detail"])
 
 
 def test_fair_bayesian_with_secondary_loss(client, db_session):
@@ -217,7 +217,7 @@ def test_degenerate_input_min_greater_than_max_returns_422(client, db_session):
 
     resp = client.post(f"/api/v1/risks/{risk_id}/quantify", headers=headers, json=bad_payload)
     assert resp.status_code == 422, resp.text
-    assert "threat_event_frequency" in resp.json()["detail"]
+    assert any("threat_event_frequency" in str(err) for err in resp.json()["detail"])
 
     count = db_session.execute(
         sa.select(sa.func.count()).select_from(RiskQuantificationRun).where(

@@ -328,3 +328,92 @@ def test_item3_deleting_dependency_leaves_no_orphaned_edge_when_risk_archived(cl
     graph = client.get(f"/api/v1/risks/{b}/dependency-graph", headers=headers)
     assert graph.status_code == 200, graph.text
     assert len(graph.json()["nodes"]) == 2
+
+
+def test_item4_quantify_openapi_schema_documents_real_shape(client):
+    """G7 item 4 regression: the OpenAPI schema for /quantify must document the real
+    discriminated-union input shape, not an opaque dict[str, Any] blob."""
+    schema = client.get("/openapi.json").json()
+    body_schema = schema["paths"]["/api/v1/risks/{risk_id}/quantify"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert "oneOf" in body_schema
+    assert body_schema["discriminator"]["propertyName"] == "methodology"
+    mapping = body_schema["discriminator"]["mapping"]
+    assert set(mapping.keys()) == {"monte_carlo", "fair", "fair_bayesian"}
+
+    components = schema["components"]["schemas"]
+    for name in (
+        "MonteCarloQuantificationRequest",
+        "FairQuantificationRequest",
+        "FairBayesianQuantificationRequest",
+        "PertTriple",
+        "ProbabilityPertTriple",
+        "PoissonFrequency",
+        "LognormalLossMagnitude",
+    ):
+        assert name in components, f"{name} missing from documented OpenAPI schema"
+
+
+def test_item4_quantify_wrong_payload_reports_all_problems_in_one_response(client):
+    """A single call with multiple distinct problems must report ALL of them at once,
+    not just the first one found (sequential 400-chasing was the confirmed bug)."""
+    org = bootstrap_org_user(client, email_prefix="g7-quantify-multi")
+    headers = org["org_headers"]
+    risk_id = _make_risk(client, headers, "Quantify multi-error risk")
+
+    bad_payload = {
+        "methodology": "fair",
+        "input_parameters": {
+            "threat_event_frequency": {"min": 20, "most_likely": 5, "max": 1},  # min > max
+            "vulnerability": {"min": 0.1, "most_likely": 0.3, "max": 1.5},  # > 1.0
+            # primary_loss_magnitude omitted entirely
+        },
+        "n_iterations": 500,  # below the 1000 floor
+    }
+    resp = client.post(f"/api/v1/risks/{risk_id}/quantify", headers=headers, json=bad_payload)
+    assert resp.status_code == 422, resp.text
+    errors = resp.json()["detail"]
+    assert isinstance(errors, list)
+    assert len(errors) >= 4, "expected all 4 distinct problems reported in a single response"
+
+    joined = " ".join(str(e) for e in errors)
+    assert "threat_event_frequency" in joined
+    assert "vulnerability" in joined
+    assert "primary_loss_magnitude" in joined
+    assert "n_iterations" in joined
+
+
+def test_item4_quantify_empty_body_gives_pydantic_field_errors(client):
+    org = bootstrap_org_user(client, email_prefix="g7-quantify-empty")
+    headers = org["org_headers"]
+    risk_id = _make_risk(client, headers, "Quantify empty body risk")
+
+    resp = client.post(
+        f"/api/v1/risks/{risk_id}/quantify",
+        headers=headers,
+        json={"methodology": "fair", "input_parameters": {}},
+    )
+    assert resp.status_code == 422, resp.text
+    errors = resp.json()["detail"]
+    # Real Pydantic "field required" errors for each missing FAIR input, not a single
+    # opaque runtime string from the first field checked.
+    missing_fields = {tuple(e["loc"]) for e in errors if e.get("type") == "missing"}
+    assert (
+        "body",
+        "fair",
+        "input_parameters",
+        "threat_event_frequency",
+    ) in missing_fields
+    assert (
+        "body",
+        "fair",
+        "input_parameters",
+        "vulnerability",
+    ) in missing_fields
+    assert (
+        "body",
+        "fair",
+        "input_parameters",
+        "primary_loss_magnitude",
+    ) in missing_fields
