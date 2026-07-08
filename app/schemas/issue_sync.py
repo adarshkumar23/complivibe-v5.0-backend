@@ -43,6 +43,7 @@ class IssueSyncConnectionRead(UUIDTimestampSchema):
     webhook_secret: str | None = None
     field_mapping_json: dict
     created_by: UUID | None = None
+    context_flags: list[str] = []
 
 
 class IssueSyncLinkCreate(BaseModel):
@@ -75,6 +76,7 @@ class IssueSyncWebhookResponse(BaseModel):
     event_id: UUID
     status: str
     detail: str
+    duplicate_delivery: bool = False
 
 
 class IssueSyncEventRead(UUIDTimestampSchema):

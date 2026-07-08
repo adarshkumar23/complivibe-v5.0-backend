@@ -27,7 +27,7 @@ from app.services.issue_sync_service import IssueSyncService
 router = APIRouter(prefix="/issue-sync", tags=["issue-sync"])
 
 
-def _connection_read(row) -> IssueSyncConnectionRead:
+def _connection_read(row, service: IssueSyncService) -> IssueSyncConnectionRead:
     return IssueSyncConnectionRead(
         id=row.id,
         created_at=row.created_at,
@@ -44,6 +44,7 @@ def _connection_read(row) -> IssueSyncConnectionRead:
         webhook_secret=row.webhook_secret,
         field_mapping_json=row.field_mapping_json or {},
         created_by=row.created_by,
+        context_flags=service.describe_connection_context(row),
     )
 
 
@@ -106,10 +107,11 @@ def create_connection(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("issue_sync_connection:create")),
 ) -> IssueSyncConnectionRead:
-    row = IssueSyncService(db).create_connection(organization.id, payload, current_user.id)
+    service = IssueSyncService(db)
+    row = service.create_connection(organization.id, payload, current_user.id)
     db.commit()
     db.refresh(row)
-    return _connection_read(row)
+    return _connection_read(row, service)
 
 
 @router.get("/connections", response_model=list[IssueSyncConnectionRead])
@@ -118,8 +120,9 @@ def list_connections(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("issue_sync_connection:list")),
 ) -> list[IssueSyncConnectionRead]:
-    rows = IssueSyncService(db).list_connections(organization.id)
-    return [_connection_read(row) for row in rows]
+    service = IssueSyncService(db)
+    rows = service.list_connections(organization.id)
+    return [_connection_read(row, service) for row in rows]
 
 
 @router.patch("/connections/{connection_id}", response_model=IssueSyncConnectionRead)
@@ -131,10 +134,11 @@ def update_connection(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("issue_sync_connection:update")),
 ) -> IssueSyncConnectionRead:
-    row = IssueSyncService(db).update_connection(organization.id, connection_id, payload, current_user.id)
+    service = IssueSyncService(db)
+    row = service.update_connection(organization.id, connection_id, payload, current_user.id)
     db.commit()
     db.refresh(row)
-    return _connection_read(row)
+    return _connection_read(row, service)
 
 
 @router.post("/connections/{connection_id}/links", response_model=IssueSyncLinkRead, status_code=status.HTTP_201_CREATED)
@@ -196,14 +200,15 @@ async def ingest_jira_webhook(
     secret: str | None = Query(default=None),
 ) -> IssueSyncWebhookResponse:
     _raw_body, payload = await _parse_webhook_body(request)
-    row = IssueSyncService(db).ingest_jira_webhook(
+    row, is_duplicate = IssueSyncService(db).ingest_jira_webhook(
         org_id=organization.id,
         connection_id=connection_id,
         payload=payload,
         provided_secret=x_webhook_secret or secret,
     )
     db.commit()
-    return IssueSyncWebhookResponse(processed=True, event_id=row.id, status=row.status, detail="jira webhook processed")
+    detail = "duplicate jira webhook delivery ignored" if is_duplicate else "jira webhook processed"
+    return IssueSyncWebhookResponse(processed=True, event_id=row.id, status=row.status, detail=detail, duplicate_delivery=is_duplicate)
 
 
 @router.post("/webhooks/linear/{connection_id}", response_model=IssueSyncWebhookResponse)
@@ -216,7 +221,7 @@ async def ingest_linear_webhook(
     linear_signature: str | None = Header(default=None, alias="Linear-Signature"),
 ) -> IssueSyncWebhookResponse:
     raw_body, payload = await _parse_webhook_body(request)
-    row = IssueSyncService(db).ingest_linear_webhook(
+    row, is_duplicate = IssueSyncService(db).ingest_linear_webhook(
         org_id=organization.id,
         connection_id=connection_id,
         payload=payload,
@@ -224,7 +229,8 @@ async def ingest_linear_webhook(
         signature=linear_signature,
     )
     db.commit()
-    return IssueSyncWebhookResponse(processed=True, event_id=row.id, status=row.status, detail="linear webhook processed")
+    detail = "duplicate linear webhook delivery ignored" if is_duplicate else "linear webhook processed"
+    return IssueSyncWebhookResponse(processed=True, event_id=row.id, status=row.status, detail=detail, duplicate_delivery=is_duplicate)
 
 
 @router.get("/connections/{connection_id}/events", response_model=list[IssueSyncEventRead])

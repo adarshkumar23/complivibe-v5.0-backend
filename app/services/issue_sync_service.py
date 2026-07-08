@@ -3,12 +3,13 @@ from __future__ import annotations
 import hashlib
 import hmac
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import requests
 from fastapi import HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.compliance.services.issue_service import IssueService
@@ -19,6 +20,10 @@ from app.models.issue import Issue
 from app.models.issue_sync_comment import IssueSyncComment
 from app.schemas.issue_sync import IssueSyncConnectionCreate, IssueSyncConnectionUpdate, IssueSyncLinkCreate, IssueSyncOutboundRequest
 from app.services.audit_service import AuditService
+
+# A link that hasn't synced in this many days, despite the connection being
+# active, is flagged as possibly-broken/stale.
+LINK_STALE_THRESHOLD_DAYS = 14
 
 # External API reference points (verified July 2026):
 # - Jira Cloud webhooks + REST v3 issues/comments/transitions:
@@ -154,6 +159,40 @@ class IssueSyncService:
             metadata_json={"source": "api"},
         )
         return row
+
+    def describe_connection_context(self, connection: ExternalSyncConnection) -> list[str]:
+        """Flag connections that are configured in a way that silently weakens security or
+        that look like they have gone dark, so admins don't have to dig through settings to
+        notice an unauthenticated webhook or a sync link nobody has touched in weeks."""
+        flags: list[str] = []
+        if not connection.is_active:
+            return flags
+
+        allows_inbound = self._direction_allows(connection.direction_mode, "inbound")
+        if allows_inbound and not connection.webhook_secret:
+            # Without a shared secret (jira) / signing secret (linear), inbound webhook
+            # endpoints accept any payload from any caller with the connection id - the
+            # verification helpers no-op when webhook_secret is empty.
+            flags.append("webhook_unauthenticated")
+
+        now = self.utcnow()
+        links = self.db.execute(
+            select(ExternalSyncLink).where(ExternalSyncLink.connection_id == connection.id)
+        ).scalars().all()
+        if links and all(
+            link.last_synced_at is None or (now - self._as_aware(link.last_synced_at)) > timedelta(days=LINK_STALE_THRESHOLD_DAYS)
+            for link in links
+        ):
+            flags.append("all_links_stale")
+        return flags
+
+    @staticmethod
+    def _as_aware(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
 
     def list_connections(self, org_id: uuid.UUID) -> list[ExternalSyncConnection]:
         return self.db.execute(
@@ -297,14 +336,17 @@ class IssueSyncService:
         api_token = creds.get("api_token")
         if not email or not api_token:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="jira email and api_token are required")
-        response = requests.request(
-            method=method,
-            url=f"{base_url}{path}",
-            json=json_body,
-            auth=(email, api_token),
-            headers={"Accept": "application/json", "Content-Type": "application/json"},
-            timeout=25,
-        )
+        try:
+            response = requests.request(
+                method=method,
+                url=f"{base_url}{path}",
+                json=json_body,
+                auth=(email, api_token),
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                timeout=25,
+            )
+        except requests.exceptions.RequestException as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"jira api unreachable: {exc}") from exc
         if response.status_code >= 400:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -320,12 +362,15 @@ class IssueSyncService:
         api_key = creds.get("api_key")
         if not api_key:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="linear api_key is required")
-        response = requests.post(
-            f"{base_url}/graphql",
-            json={"query": query, "variables": variables},
-            headers={"Authorization": api_key, "Content-Type": "application/json"},
-            timeout=25,
-        )
+        try:
+            response = requests.post(
+                f"{base_url}/graphql",
+                json={"query": query, "variables": variables},
+                headers={"Authorization": api_key, "Content-Type": "application/json"},
+                timeout=25,
+            )
+        except requests.exceptions.RequestException as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"linear api unreachable: {exc}") from exc
         if response.status_code >= 400:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -541,9 +586,23 @@ class IssueSyncService:
         external_comment_id: str | None,
         body: str,
         author_ref: str | None,
-    ) -> None:
+    ) -> bool:
+        """Insert an inbound comment, deduping by (issue_id, provider, external_comment_id)
+        when the provider gave us a comment id, so a retried webhook delivery doesn't
+        create a second identical comment on the issue. Returns True if a new row was
+        inserted, False if it was a no-op (empty body or already-recorded duplicate)."""
         if not body.strip():
-            return
+            return False
+        if external_comment_id:
+            existing = self.db.execute(
+                select(IssueSyncComment).where(
+                    IssueSyncComment.issue_id == issue_id,
+                    IssueSyncComment.provider == provider,
+                    IssueSyncComment.external_comment_id == external_comment_id,
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                return False
         row = IssueSyncComment(
             organization_id=org_id,
             issue_id=issue_id,
@@ -554,7 +613,16 @@ class IssueSyncService:
             author_ref=author_ref,
             created_by_user_id=None,
         )
-        self.db.add(row)
+        try:
+            with self.db.begin_nested():
+                self.db.add(row)
+                self.db.flush()
+        except IntegrityError:
+            # Concurrent retry raced us to the same (issue_id, provider, external_comment_id)
+            # unique index - the comment is already recorded, so treat this as a no-op
+            # without discarding the rest of this webhook's work (status update, etc.).
+            return False
+        return True
 
     def _process_inbound_common(
         self,
@@ -569,7 +637,23 @@ class IssueSyncService:
         author_ref: str | None,
         payload_json: dict[str, Any],
         external_event_id: str | None,
-    ) -> ExternalSyncEvent:
+    ) -> tuple[ExternalSyncEvent, bool]:
+        # Jira/Linear both retry webhook deliveries on timeout or a non-2xx response.
+        # If we've already recorded this exact delivery (same connection + external
+        # event id), replay the stored event instead of reprocessing it - otherwise a
+        # retried delivery would (at minimum) redundantly re-log the event, and could
+        # re-trigger status transitions if the mapping ever became order-sensitive.
+        if external_event_id is not None:
+            existing_event = self.db.execute(
+                select(ExternalSyncEvent).where(
+                    ExternalSyncEvent.connection_id == connection.id,
+                    ExternalSyncEvent.direction == "inbound",
+                    ExternalSyncEvent.external_event_id == external_event_id,
+                )
+            ).scalar_one_or_none()
+            if existing_event is not None:
+                return existing_event, True
+
         link = self._get_link_by_external(org_id, connection.id, external_entity_id, external_key)
         if link is None:
             event = self._log_event(
@@ -582,7 +666,7 @@ class IssueSyncService:
                 error_message="No sync link for external issue",
                 external_event_id=external_event_id,
             )
-            return event
+            return event, False
         issue = self._require_issue(org_id, link.internal_entity_id)
         changed = False
         mapped_status = self._map_external_status(connection, provider_status=external_status or "") if external_status else None
@@ -590,7 +674,7 @@ class IssueSyncService:
             changed = self._apply_inbound_issue_status(org_id, issue, mapped_status, actor_user_id=connection.created_by) or changed
             link.last_status = mapped_status
         if comment_body and comment_body.strip():
-            self._create_inbound_comment(
+            comment_inserted = self._create_inbound_comment(
                 org_id=org_id,
                 issue_id=issue.id,
                 provider=connection.provider,
@@ -598,17 +682,31 @@ class IssueSyncService:
                 body=comment_body,
                 author_ref=author_ref,
             )
-            changed = True
+            changed = changed or comment_inserted
         link.last_synced_at = self.utcnow()
-        event = self._log_event(
-            org_id=org_id,
-            connection=connection,
-            direction="inbound",
-            event_type="issue.webhook",
-            status_value="processed",
-            payload_json=payload_json,
-            external_event_id=external_event_id,
-        )
+        try:
+            with self.db.begin_nested():
+                event = self._log_event(
+                    org_id=org_id,
+                    connection=connection,
+                    direction="inbound",
+                    event_type="issue.webhook",
+                    status_value="processed",
+                    payload_json=payload_json,
+                    external_event_id=external_event_id,
+                )
+        except IntegrityError:
+            # Concurrent retry of the same delivery raced us to the unique
+            # (connection_id, external_event_id) index - fetch and return what the
+            # winning request recorded instead of erroring.
+            existing_event = self.db.execute(
+                select(ExternalSyncEvent).where(
+                    ExternalSyncEvent.connection_id == connection.id,
+                    ExternalSyncEvent.direction == "inbound",
+                    ExternalSyncEvent.external_event_id == external_event_id,
+                )
+            ).scalar_one()
+            return existing_event, True
         self.audit.write_audit_log(
             action="issue_sync.inbound_processed",
             entity_type="external_sync_event",
@@ -618,7 +716,7 @@ class IssueSyncService:
             after_json={"provider": connection.provider, "changed": changed, "issue_id": str(issue.id)},
             metadata_json={"source": "webhook"},
         )
-        return event
+        return event, False
 
     def ingest_jira_webhook(
         self,
@@ -627,7 +725,7 @@ class IssueSyncService:
         connection_id: uuid.UUID,
         payload: dict[str, Any],
         provided_secret: str | None = None,
-    ) -> ExternalSyncEvent:
+    ) -> tuple[ExternalSyncEvent, bool]:
         connection = self._require_connection(org_id, connection_id)
         self._verify_shared_secret(connection, provided_secret)
         if connection.provider != "jira":
@@ -664,7 +762,7 @@ class IssueSyncService:
         payload: dict[str, Any],
         raw_body: bytes = b"",
         signature: str | None = None,
-    ) -> ExternalSyncEvent:
+    ) -> tuple[ExternalSyncEvent, bool]:
         connection = self._require_connection(org_id, connection_id)
         self._verify_hmac_signature(connection, raw_body=raw_body, signature=signature)
         if connection.provider != "linear":

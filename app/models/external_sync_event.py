@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, JSON, String, Text, Uuid
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, JSON, String, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -18,6 +18,13 @@ class ExternalSyncEvent(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMi
         Index("ix_external_sync_events_org_connection", "organization_id", "connection_id"),
         Index("ix_external_sync_events_org_provider", "organization_id", "provider"),
         Index("ix_external_sync_events_processed_at", "processed_at"),
+        Index(
+            "uq_external_sync_events_connection_external_event",
+            "connection_id",
+            "external_event_id",
+            unique=True,
+            postgresql_where=text("external_event_id IS NOT NULL AND direction = 'inbound'"),
+        ),
     )
 
     connection_id: Mapped[uuid.UUID] = mapped_column(
