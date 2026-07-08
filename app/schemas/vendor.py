@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
@@ -25,6 +26,7 @@ class VendorCreate(BaseModel):
     sub_processor: bool = False
     tags_json: dict | list | None = None
     notes: str | None = None
+    annual_spend_amount: Decimal | None = Field(default=None, ge=0)
 
 
 class VendorUpdate(BaseModel):
@@ -42,6 +44,7 @@ class VendorUpdate(BaseModel):
     sub_processor: bool | None = None
     tags_json: dict | list | None = None
     notes: str | None = None
+    annual_spend_amount: Decimal | None = Field(default=None, ge=0)
 
 
 class VendorArchiveRequest(BaseModel):
@@ -73,6 +76,7 @@ class VendorRead(UUIDTimestampSchema):
     archive_reason: str | None = None
     has_overdue_assessment: bool = False
     risk_tier_source: str = "computed"
+    annual_spend_amount: Decimal | None = None
 
 
 class VendorSummary(BaseModel):

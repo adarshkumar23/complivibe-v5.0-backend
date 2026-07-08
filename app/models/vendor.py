@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, JSON, String, Text, Uuid
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, JSON, Numeric, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -58,3 +59,7 @@ class Vendor(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, Base):
         ForeignKey("business_units.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Real dollar spend/contract-value exposure, used to weight vendor concentration
+    # risk (HHI) by actual financial exposure instead of a headcount-style count of
+    # exposure records -- see VendorConcentrationRiskService._calculate.
+    annual_spend_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)

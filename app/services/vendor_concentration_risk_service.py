@@ -140,22 +140,54 @@ class VendorConcentrationRiskService:
 
         exposure_count = len(exposures)
         counts = Counter(exposures)
+
+        # A genuine HHI concentration score is meaningless if every vendor counts
+        # equally regardless of actual dollar exposure -- a vendor with a $10M
+        # contract and one with a $10K contract used to contribute identically as
+        # long as both were "critical" tier or had the same number of dependency
+        # links. Weight by real annual_spend_amount whenever the org has captured
+        # it for at least one vendor in scope; otherwise fall back to the original
+        # equal-weighted-per-occurrence count so orgs that haven't captured spend
+        # data yet see identical results to before this fix.
+        have_spend_data = any(
+            vendors_by_id[vendor_id].annual_spend_amount is not None
+            for vendor_id in counts
+            if vendor_id in vendors_by_id
+        )
+        weighting_method = "spend_weighted" if have_spend_data else "equal_weighted_fallback"
+
+        def _weight(vendor_id: uuid.UUID, count: int) -> float:
+            if not have_spend_data:
+                return float(count)
+            vendor = vendors_by_id.get(vendor_id)
+            amount = vendor.annual_spend_amount if vendor is not None else None
+            # Occurrence count still matters even in spend-weighted mode: a vendor
+            # reached through N critical dependency paths carries N times the
+            # dollar exposure of a vendor reached through just one.
+            return float(amount) * count if amount is not None else 0.0
+
+        weighted: dict[uuid.UUID, float] = {vendor_id: _weight(vendor_id, count) for vendor_id, count in counts.items()}
+        total_weight = sum(weighted.values())
+
         shares = []
         hhi_score = 0
         for vendor_id, count in counts.items():
-            share_basis_points = round((count / exposure_count) * 10000) if exposure_count else 0
+            weight = weighted[vendor_id]
+            share_basis_points = round((weight / total_weight) * 10000) if total_weight else 0
             share_percent = share_basis_points / 100
             hhi_score += round(share_percent * share_percent)
             vendor = vendors_by_id.get(vendor_id)
+            annual_spend = vendor.annual_spend_amount if vendor is not None else None
             shares.append(
                 {
                     "vendor_id": str(vendor_id),
                     "vendor_name": vendor.name if vendor is not None else "Unknown vendor",
                     "exposure_count": count,
+                    "annual_spend_amount": float(annual_spend) if annual_spend is not None else None,
                     "share_basis_points": share_basis_points,
                 }
             )
-        shares.sort(key=lambda row: (-row["exposure_count"], row["vendor_name"]))
+        shares.sort(key=lambda row: (-row["share_basis_points"], row["vendor_name"]))
         top = shares[0] if shares else None
 
         return {
@@ -169,6 +201,7 @@ class VendorConcentrationRiskService:
             "dependency_count": dependency_count,
             "evidence_json": {
                 "metric": "herfindahl_hirschman_index",
+                "weighting_method": weighting_method,
                 "vendor_shares": shares,
                 "critical_vendor_risk_tiers": sorted(CRITICAL_RISK_TIERS),
             },

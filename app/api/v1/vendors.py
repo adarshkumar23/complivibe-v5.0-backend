@@ -119,6 +119,7 @@ def _vendor_read(row: Vendor, *, has_overdue_assessment: bool = False) -> Vendor
         updated_at=row.updated_at,
         has_overdue_assessment=has_overdue_assessment,
         risk_tier_source=row.risk_tier_source,
+        annual_spend_amount=row.annual_spend_amount,
     )
 
 
@@ -299,9 +300,11 @@ def create_vendor(
         primary_contact_name=payload.primary_contact_name,
         primary_contact_email=str(payload.primary_contact_email) if payload.primary_contact_email else None,
         risk_tier=payload.risk_tier,
-        # A caller explicitly picking a non-default tier at creation time is a
-        # manual assertion; leaving it at the "not_assessed" default is not.
-        risk_tier_source="manual" if payload.risk_tier != "not_assessed" else "computed",
+        # A tier supplied at creation time is treated as a starting value, not a
+        # standing manual assertion -- it stays freely computable by automated
+        # scoring paths until a human explicitly overrides it via PATCH (which
+        # marks it "manual"; see update_vendor below).
+        risk_tier_source="computed",
         status=payload.status,
         owner_user_id=payload.owner_user_id,
         data_access=payload.data_access,
@@ -309,6 +312,7 @@ def create_vendor(
         sub_processor=payload.sub_processor,
         tags_json=payload.tags_json,
         notes=payload.notes,
+        annual_spend_amount=payload.annual_spend_amount,
     )
     db.add(row)
     db.flush()
