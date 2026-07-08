@@ -23,8 +23,10 @@ from app.services.resilience_testing_service import ResilienceTestingService
 router = APIRouter(prefix="/resilience-tests", tags=["resilience-testing"])
 
 
-def _test_read(test: ResilienceTest) -> ResilienceTestRead:
-    return ResilienceTestRead.model_validate(test)
+def _test_read(test: ResilienceTest, context_flags: list[str] | None = None) -> ResilienceTestRead:
+    result = ResilienceTestRead.model_validate(test)
+    result.context_flags = context_flags or []
+    return result
 
 
 @router.post("", response_model=ResilienceTestRead, status_code=status.HTTP_201_CREATED)
@@ -56,7 +58,10 @@ def list_resilience_tests(
     _: Membership = Depends(require_permission("resilience_testing:read")),
 ) -> list[ResilienceTestRead]:
     service = ResilienceTestingService(db)
-    return [_test_read(test) for test in service.list_tests(organization.id)]
+    return [
+        _test_read(test, service.build_test_context(organization.id, test))
+        for test in service.list_tests(organization.id)
+    ]
 
 
 @router.get("/overdue", response_model=list[ResilienceTestOverdueStatus])
@@ -78,7 +83,7 @@ def get_resilience_test(
 ) -> ResilienceTestRead:
     service = ResilienceTestingService(db)
     test = service.get_test(organization.id, test_id)
-    return _test_read(test)
+    return _test_read(test, service.build_test_context(organization.id, test))
 
 
 @router.patch("/{test_id}", response_model=ResilienceTestRead)
@@ -129,4 +134,5 @@ def complete_resilience_test(
 
     db.commit()
     db.refresh(test)
-    return ResilienceTestCompleteResponse(test=_test_read(test), issues_created=issues_created)
+    context_flags = service.build_test_context(organization.id, test)
+    return ResilienceTestCompleteResponse(test=_test_read(test, context_flags), issues_created=issues_created)

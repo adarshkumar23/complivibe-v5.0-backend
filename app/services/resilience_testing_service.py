@@ -29,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.compliance.services.issue_service import IssueService
+from app.models.dora_ict_register import DORAICTRegister
 from app.models.issue import Issue
 from app.models.resilience_testing import ResilienceTest
 from app.schemas.issue import IssueCreate
@@ -247,6 +248,52 @@ class ResilienceTestingService:
             },
         )
         return test, issues_created
+
+    # ------------------------------------------------------------------
+    # Context: cross-check against the DORA critical ICT third-party register
+    # ------------------------------------------------------------------
+    def build_test_context(self, organization_id: uuid.UUID, test: ResilienceTest) -> list[str]:
+        """Flag when a test's scope references a critical ICT third party
+        whose register entry has changed materially since the test ran --
+        e.g. the test result predates a critical vendor's contract/exit
+        strategy being updated, so its conclusions may no longer reflect the
+        current third-party risk picture (DORA Art. 28-30 register).
+        """
+        flags: list[str] = []
+        critical_vendors = list(
+            self.db.execute(
+                select(DORAICTRegister).where(
+                    DORAICTRegister.organization_id == organization_id,
+                    DORAICTRegister.is_critical_function.is_(True),
+                    DORAICTRegister.deleted_at.is_(None),
+                )
+            ).scalars()
+        )
+        if not critical_vendors:
+            return flags
+
+        scope_lower = (test.scope or "").lower()
+        referenced = [v for v in critical_vendors if v.counterparty_name.lower() in scope_lower]
+
+        if test.status == "completed" and test.completed_date is not None:
+            for vendor in referenced:
+                if vendor.updated_at is not None and vendor.updated_at.date() > test.completed_date:
+                    flags.append(
+                        f"vendor_register_changed_since_test_completion: '{vendor.counterparty_name}' "
+                        f"was updated {vendor.updated_at.date().isoformat()}, after this test completed "
+                        f"{test.completed_date.isoformat()}"
+                    )
+                if vendor.status != "active":
+                    flags.append(
+                        f"referenced_vendor_register_entry_not_active: '{vendor.counterparty_name}' "
+                        f"is '{vendor.status}'"
+                    )
+                if not vendor.exit_strategy_documented:
+                    flags.append(
+                        f"referenced_vendor_lacks_documented_exit_strategy: '{vendor.counterparty_name}'"
+                    )
+
+        return sorted(set(flags))
 
     # ------------------------------------------------------------------
     # DORA cadence overdue computation
