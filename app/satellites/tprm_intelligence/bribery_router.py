@@ -33,8 +33,8 @@ class BriberyRiskComputeRequest(BaseModel):
     industry_category: str | None = None
 
 
-def _result_payload(row: BriberyRiskAssessment) -> dict[str, Any]:
-    return {
+def _result_payload(row: BriberyRiskAssessment, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = {
         "id": str(row.id),
         "organization_id": str(row.organization_id),
         "vendor_id": str(row.vendor_id),
@@ -48,7 +48,14 @@ def _result_payload(row: BriberyRiskAssessment) -> dict[str, Any]:
         "scoring_breakdown": row.scoring_breakdown_json,
         "computed_at": row.computed_at.isoformat() if row.computed_at else None,
         "computed_by_user_id": str(row.computed_by_user_id) if row.computed_by_user_id else None,
+        "days_since_computed": None,
+        "review_overdue": False,
+        "score_delta_from_previous": None,
+        "context_flags": [],
     }
+    if context is not None:
+        payload.update(context)
+    return payload
 
 
 @router.post("/{vendor_id}/bribery-risk/compute", status_code=status.HTTP_201_CREATED)
@@ -65,8 +72,9 @@ def compute_vendor_bribery_risk(
 
     gift_log = [entry.model_dump() for entry in body.gift_hospitality_log] if body.gift_hospitality_log else None
 
+    service = BriberyRiskScoringService(db)
     try:
-        row = BriberyRiskScoringService(db).compute_risk_assessment(
+        row = service.compute_risk_assessment(
             organization,
             vendor,
             jurisdiction=body.jurisdiction,
@@ -79,6 +87,7 @@ def compute_vendor_bribery_risk(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
+    context = service.build_assessment_context(row, vendor)
     AuditService(db).write_audit_log(
         action="vendor.bribery_risk_assessment.computed",
         entity_type="bribery_risk_assessment",
@@ -90,6 +99,7 @@ def compute_vendor_bribery_risk(
             "jurisdiction": row.jurisdiction,
             "risk_score": row.risk_score,
             "risk_tier": row.risk_tier,
+            "context_flags": context["context_flags"],
         },
         metadata_json={"source": "tprm_intelligence_satellite"},
         ip_address=request.client.host if request.client else None,
@@ -97,7 +107,7 @@ def compute_vendor_bribery_risk(
     )
     db.commit()
     db.refresh(row)
-    return _result_payload(row)
+    return _result_payload(row, context)
 
 
 @router.get("/{vendor_id}/bribery-risk")
@@ -107,11 +117,12 @@ def get_vendor_bribery_risk(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("anti_bribery:read")),
 ) -> dict[str, Any]:
-    VendorService(db).require_vendor_in_org(organization.id, vendor_id)
-    row = BriberyRiskScoringService(db).latest_assessment(organization.id, vendor_id)
+    vendor = VendorService(db).require_vendor_in_org(organization.id, vendor_id)
+    service = BriberyRiskScoringService(db)
+    row = service.latest_assessment(organization.id, vendor_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No anti-bribery risk assessment found for this vendor yet")
-    return _result_payload(row)
+    return _result_payload(row, service.build_assessment_context(row, vendor))
 
 
 @router.get("/{vendor_id}/bribery-risk/history")
@@ -121,6 +132,7 @@ def get_vendor_bribery_risk_history(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("anti_bribery:read")),
 ) -> list[dict[str, Any]]:
-    VendorService(db).require_vendor_in_org(organization.id, vendor_id)
-    rows = BriberyRiskScoringService(db).list_assessments(organization.id, vendor_id)
-    return [_result_payload(row) for row in rows]
+    vendor = VendorService(db).require_vendor_in_org(organization.id, vendor_id)
+    service = BriberyRiskScoringService(db)
+    rows = service.list_assessments(organization.id, vendor_id)
+    return [_result_payload(row, service.build_assessment_context(row, vendor)) for row in rows]

@@ -73,6 +73,17 @@ UNKNOWN_JURISDICTION_RISK_DEFAULT = 0.7
 HIGH_RISK_TIER_THRESHOLD = 0.6
 MEDIUM_RISK_TIER_THRESHOLD = 0.35
 
+# MoJ Principle 6 (Monitoring and Review) calls for review cadence
+# proportionate to risk -- higher-risk relationships are reviewed more
+# frequently. These are advisory cadences (illustrative, as with the scoring
+# weights above), not a regulator-prescribed schedule.
+_REVIEW_CADENCE_DAYS_BY_TIER = {"high": 180, "medium": 365, "low": 545}
+
+# A shift of this many absolute points on the 0-1 risk_score scale between
+# consecutive assessments of the same vendor is treated as material enough
+# to flag for review (new information, not routine noise).
+_MATERIAL_SCORE_SHIFT = 0.2
+
 
 def _industry_risk(industry_category: str | None) -> float:
     if not industry_category:
@@ -235,6 +246,77 @@ class BriberyRiskScoringService:
             .order_by(BriberyRiskAssessment.computed_at.desc(), BriberyRiskAssessment.id.desc())
             .limit(1)
         ).scalar_one_or_none()
+
+    def build_assessment_context(self, row: BriberyRiskAssessment, vendor: Vendor) -> dict[str, Any]:
+        """Escalation-relevant intelligence layered on top of the stored
+        score: review-cadence staleness (MoJ Principle 6), high-risk
+        escalation, trend vs. the prior assessment, and consistency against
+        the vendor's own broader TPRM risk tier / active risk signals.
+        """
+        flags: list[str] = []
+        now = datetime.now(timezone.utc)
+        computed_at = row.computed_at
+        if computed_at.tzinfo is None:
+            computed_at = computed_at.replace(tzinfo=timezone.utc)
+        days_since_computed = (now - computed_at).days
+
+        cadence_days = _REVIEW_CADENCE_DAYS_BY_TIER[row.risk_tier]
+        review_overdue = days_since_computed > cadence_days
+        if review_overdue:
+            flags.append(
+                f"review_overdue: {days_since_computed} days since last computed "
+                f"(cadence for '{row.risk_tier}' tier is {cadence_days} days per MoJ Principle 6)"
+            )
+
+        if row.risk_tier == "high":
+            flags.append(
+                "high_risk_requires_enhanced_due_diligence: UK Bribery Act 2010 s.7 -- consider "
+                "senior management review, enhanced due diligence, and heightened monitoring"
+            )
+
+        previous = self.db.execute(
+            select(BriberyRiskAssessment)
+            .where(
+                BriberyRiskAssessment.organization_id == row.organization_id,
+                BriberyRiskAssessment.vendor_id == row.vendor_id,
+                BriberyRiskAssessment.id != row.id,
+                BriberyRiskAssessment.computed_at < row.computed_at,
+            )
+            .order_by(BriberyRiskAssessment.computed_at.desc())
+        ).scalars().first()
+
+        score_delta: float | None = None
+        if previous is None:
+            flags.append("first_assessment_for_vendor")
+        else:
+            score_delta = row.risk_score - previous.risk_score
+            if abs(score_delta) >= _MATERIAL_SCORE_SHIFT:
+                flags.append(
+                    f"risk_score_shifted_significantly_from_prior_assessment: "
+                    f"{previous.risk_score:.2f} -> {row.risk_score:.2f}"
+                )
+
+        if vendor.status == "archived":
+            flags.append("vendor_archived_assessment_may_be_moot")
+
+        if row.risk_tier == "high" and vendor.risk_tier in ("low", "not_assessed"):
+            flags.append(
+                f"inconsistent_with_vendor_overall_risk_tier: vendor-level risk_tier is "
+                f"'{vendor.risk_tier}' but this bribery assessment is 'high'"
+            )
+
+        if vendor.nth_party_risk_flag:
+            flags.append(
+                "vendor_has_unaddressed_nth_party_risk_signal: an active fourth-party risk "
+                "signal may not be reflected in this assessment's inputs"
+            )
+
+        return {
+            "days_since_computed": days_since_computed,
+            "review_overdue": review_overdue,
+            "score_delta_from_previous": score_delta,
+            "context_flags": sorted(set(flags)),
+        }
 
     def list_assessments(self, organization_id, vendor_id) -> list[BriberyRiskAssessment]:
         return list(
