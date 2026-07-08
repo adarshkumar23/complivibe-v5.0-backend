@@ -725,6 +725,7 @@ class IssueSyncService:
         connection_id: uuid.UUID,
         payload: dict[str, Any],
         provided_secret: str | None = None,
+        webhook_identifier: str | None = None,
     ) -> tuple[ExternalSyncEvent, bool]:
         connection = self._require_connection(org_id, connection_id)
         self._verify_shared_secret(connection, provided_secret)
@@ -740,7 +741,34 @@ class IssueSyncService:
         comment_body = comment_obj.get("body")
         if isinstance(comment_body, dict):
             comment_body = str(comment_body)
-        event_id = payload.get("timestamp")
+        changelog_obj = dict(payload.get("changelog") or {})
+
+        # Jira's native webhook JSON has no single universal delivery ID. `timestamp`
+        # alone is NOT safe to use: two genuinely distinct deliveries can share the
+        # same millisecond timestamp (proven by two different payloads with an
+        # identical timestamp being incorrectly deduped as one). Prefer, in order:
+        #  1. An explicit delivery-identifier header, if the Jira instance sends one
+        #     (e.g. via an Atlassian Connect/Forge app -- X-Atlassian-Webhook-Identifier).
+        #  2. The comment's own ID, which Jira guarantees is unique -- comment
+        #     create/update/delete webhooks always carry this.
+        #  3. The changelog entry's own ID, which Jira also guarantees is unique --
+        #     issue field-change webhooks always carry this.
+        #  4. A composite of event type + issue id + timestamp, so a fallback
+        #     collision requires ALL of those to coincide, not just the timestamp.
+        if webhook_identifier:
+            event_id: str | None = webhook_identifier
+        elif comment_obj.get("id"):
+            event_id = f"comment:{comment_obj['id']}"
+        elif changelog_obj.get("id"):
+            event_id = f"changelog:{changelog_obj['id']}"
+        else:
+            webhook_event = payload.get("webhookEvent")
+            timestamp = payload.get("timestamp")
+            issue_id = issue_obj.get("id")
+            if webhook_event or issue_id or timestamp:
+                event_id = f"{webhook_event}:{issue_id}:{timestamp}"
+            else:
+                event_id = None
         return self._process_inbound_common(
             org_id=org_id,
             connection=connection,
@@ -781,7 +809,14 @@ class IssueSyncService:
         comment_body = str(data.get("body") or comment_data.get("body") or "") or None
         external_comment_id = str(data.get("commentId") or comment_data.get("id") or "") or None
         author_ref = str(((data.get("user") or {}).get("id") or "")) or None if isinstance(data.get("user"), dict) else None
-        event_id = str(payload.get("id") or payload.get("eventId") or "") or None
+        # Linear's real webhook payloads carry their own delivery identifier as a
+        # top-level `webhookId` field (alongside `webhookTimestamp`) -- there is no
+        # top-level `id`/`eventId` field on genuine deliveries (those only exist
+        # nested under `data`, identifying the resource, not the delivery). Falling
+        # back to `id`/`eventId` is kept only for backward compatibility with any
+        # already-configured non-standard senders, but `webhookId` is the real,
+        # immutable, per-delivery key and must be preferred.
+        event_id = str(payload.get("webhookId") or payload.get("id") or payload.get("eventId") or "") or None
         return self._process_inbound_common(
             org_id=org_id,
             connection=connection,

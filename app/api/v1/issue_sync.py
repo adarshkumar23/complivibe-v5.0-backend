@@ -197,12 +197,14 @@ async def ingest_jira_webhook(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("issue_sync_webhook:jira")),
     x_webhook_secret: str | None = Header(default=None, alias="X-Webhook-Secret"),
+    x_atlassian_webhook_identifier: str | None = Header(default=None, alias="X-Atlassian-Webhook-Identifier"),
     secret: str | None = Query(default=None),
 ) -> IssueSyncWebhookResponse:
     _raw_body, payload = await _parse_webhook_body(request)
     row, is_duplicate = IssueSyncService(db).ingest_jira_webhook(
         org_id=organization.id,
         connection_id=connection_id,
+        webhook_identifier=x_atlassian_webhook_identifier,
         payload=payload,
         provided_secret=x_webhook_secret or secret,
     )

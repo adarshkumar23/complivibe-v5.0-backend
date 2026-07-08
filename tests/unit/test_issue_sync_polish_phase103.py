@@ -228,3 +228,125 @@ def test_phase103_connection_flags_unauthenticated_inbound_webhook(client, db_se
     assert outbound_only.status_code == 201
     # No inbound webhook is exposed for outbound_only, so there's nothing to authenticate.
     assert "webhook_unauthenticated" not in outbound_only.json()["context_flags"]
+
+
+def test_g9_linear_webhook_dedups_on_real_webhookid_not_id_or_eventid(client, db_session):
+    """G9 item 7: real Linear webhook deliveries carry their delivery identifier in a
+    top-level `webhookId` field -- not `id`/`eventId` (those don't exist at the top
+    level of a genuine Linear payload). A replayed delivery must be deduped."""
+    token = _register(client, "g9-linear-webhookid@example.com", "G9 Linear WebhookId Org")
+    org_id = _org_id(client, token)
+
+    connection_response = client.post(
+        "/api/v1/issue-sync/connections",
+        headers=_headers(token, org_id),
+        json={
+            "name": "Linear WebhookId Test",
+            "provider": "linear",
+            "entity_type": "issue",
+            "direction_mode": "inbound_only",
+            "credentials_json": {"api_key": "linear-key"},
+        },
+    )
+    assert connection_response.status_code == 201, connection_response.text
+    connection_id = connection_response.json()["id"]
+
+    payload = {
+        "action": "update",
+        "type": "Issue",
+        "createdAt": "2026-07-08T18:00:00.000Z",
+        "data": {"id": "issue-uuid-abc", "identifier": "ENG-42", "state": {"name": "In Progress"}},
+        "url": "https://linear.app/x/issue/ENG-42",
+        "organizationId": "org-abc",
+        "webhookTimestamp": 1783533600000,
+        "webhookId": "webhook-real-delivery-id-999",
+    }
+
+    first = client.post(
+        f"/api/v1/issue-sync/webhooks/linear/{connection_id}",
+        headers=_headers(token, org_id),
+        json=payload,
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["duplicate_delivery"] is False
+
+    replay = client.post(
+        f"/api/v1/issue-sync/webhooks/linear/{connection_id}",
+        headers=_headers(token, org_id),
+        json=payload,
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["duplicate_delivery"] is True
+    assert replay.json()["event_id"] == first.json()["event_id"]
+
+    events = (
+        db_session.query(ExternalSyncEvent)
+        .filter(ExternalSyncEvent.organization_id == uuid.UUID(org_id), ExternalSyncEvent.connection_id == uuid.UUID(connection_id))
+        .all()
+    )
+    assert len(events) == 1
+
+
+def test_g9_jira_same_timestamp_different_deliveries_not_merged(client, db_session):
+    """G9 item 7: two genuinely DIFFERENT Jira deliveries that happen to share a
+    `timestamp` value must NOT be treated as duplicates of each other -- only a
+    true replay (identical comment) should dedup."""
+    token = _register(client, "g9-jira-timestamp@example.com", "G9 Jira Timestamp Org")
+    org_id = _org_id(client, token)
+    user = _user(db_session, "g9-jira-timestamp@example.com")
+    issue_id = _create_issue(client, token, org_id, str(user.id))
+
+    connection_response = client.post(
+        "/api/v1/issue-sync/connections",
+        headers=_headers(token, org_id),
+        json={
+            "name": "Jira Timestamp Collision Test",
+            "provider": "jira",
+            "entity_type": "issue",
+            "direction_mode": "two_way",
+            "api_base_url": "https://example.atlassian.net",
+            "credentials_json": {"email": "bot@example.com", "api_token": "secret"},
+        },
+    )
+    connection_id = connection_response.json()["id"]
+
+    client.post(
+        f"/api/v1/issue-sync/connections/{connection_id}/links",
+        headers=_headers(token, org_id),
+        json={"entity_type": "issue", "internal_entity_id": issue_id, "external_entity_id": "30001", "external_key": "G9-1"},
+    )
+
+    shared_timestamp = "1783533600000"
+    payload_a = {
+        "webhookEvent": "jira:issue_updated",
+        "timestamp": shared_timestamp,
+        "issue": {"id": "30001", "key": "G9-1", "fields": {"status": {"name": "In Progress"}}},
+        "comment": {"id": "9001", "body": "First comment", "author": {"accountId": "jira-user-1"}},
+    }
+    payload_b = {
+        "webhookEvent": "jira:issue_updated",
+        "timestamp": shared_timestamp,
+        "issue": {"id": "30001", "key": "G9-1", "fields": {"status": {"name": "Done"}}},
+        "comment": {"id": "9002", "body": "Second, genuinely different comment", "author": {"accountId": "jira-user-2"}},
+    }
+
+    response_a = client.post(f"/api/v1/issue-sync/webhooks/jira/{connection_id}", headers=_headers(token, org_id), json=payload_a)
+    response_b = client.post(f"/api/v1/issue-sync/webhooks/jira/{connection_id}", headers=_headers(token, org_id), json=payload_b)
+    assert response_a.status_code == 200
+    assert response_b.status_code == 200
+    assert response_a.json()["duplicate_delivery"] is False
+    assert response_b.json()["duplicate_delivery"] is False
+    assert response_a.json()["event_id"] != response_b.json()["event_id"]
+
+    # A true replay of A must still be recognized as a duplicate.
+    replay_a = client.post(f"/api/v1/issue-sync/webhooks/jira/{connection_id}", headers=_headers(token, org_id), json=payload_a)
+    assert replay_a.status_code == 200
+    assert replay_a.json()["duplicate_delivery"] is True
+    assert replay_a.json()["event_id"] == response_a.json()["event_id"]
+
+    events = (
+        db_session.query(ExternalSyncEvent)
+        .filter(ExternalSyncEvent.organization_id == uuid.UUID(org_id), ExternalSyncEvent.connection_id == uuid.UUID(connection_id))
+        .all()
+    )
+    assert len(events) == 2
