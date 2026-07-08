@@ -10,6 +10,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.models.common_control_mapping import CommonControlMapping
+from app.models.control_obligation_mapping import ControlObligationMapping
 from app.models.framework import Framework
 from app.models.framework_content_import import FrameworkContentImport
 from app.models.framework_pack_coverage_report import FrameworkPackCoverageReport
@@ -30,6 +32,14 @@ PACK_CAVEAT = (
 COVERAGE_CAVEAT = (
     "Coverage values reflect CompliVibe content metadata only and do not represent legal completeness or "
     "regulatory approval."
+)
+# Used by global_coverage_summary(), which -- unlike coverage_details()/create_coverage_report() -- is an
+# org-scoped view: it reports how much of a framework's obligations this organization has actually mapped
+# to a control, not how much starter content CompliVibe has authored for the framework.
+CONTROL_MAPPING_COVERAGE_CAVEAT = (
+    "Coverage percent reflects the share of this organization's active obligations for the framework that "
+    "have at least one active mapped control (via either the standard obligation mapping or the "
+    "common-controls mapping); it is not a legal completeness or regulatory approval measure."
 )
 _ALLOWED_COVERAGE_LEVELS = {"metadata_only", "starter", "partial", "reviewed", "full_verified"}
 _ALLOWED_REVIEW_STATUSES = {"unreviewed", "internal_review", "expert_reviewed", "full_verified"}
@@ -534,7 +544,53 @@ class FrameworkContentPackService:
             .order_by(FrameworkPackCoverageReport.generated_at.desc())
         ).scalars().all()
 
-    def global_coverage_summary(self) -> list[dict[str, Any]]:
+    def _org_control_mapping_coverage_pct(self, organization_id: uuid.UUID, framework_id: uuid.UUID) -> float:
+        """% of this organization's active obligations for framework_id that have at least one
+        active mapped control. Mirrors ComplianceDashboardService._framework_counts's
+        control_coverage_pct definition and, like get_coverage_report/get_common_controls_summary
+        in CommonControlsService, unions both the standard ControlObligationMapping table and the
+        curated CommonControlMapping table so a mapping counts regardless of which endpoint created
+        it (see CommonControlsService._unified_control_obligation_pairs for the rationale)."""
+        active_obligation_count = int(
+            self.db.execute(
+                select(func.count(Obligation.id)).where(
+                    Obligation.framework_id == framework_id,
+                    Obligation.status == "active",
+                )
+            ).scalar_one()
+        )
+        if active_obligation_count == 0:
+            return 0.0
+
+        mapped_obligation_ids: set[uuid.UUID] = set()
+        mapped_obligation_ids.update(
+            self.db.execute(
+                select(ControlObligationMapping.obligation_id)
+                .join(Obligation, Obligation.id == ControlObligationMapping.obligation_id)
+                .where(
+                    ControlObligationMapping.organization_id == organization_id,
+                    ControlObligationMapping.status == "active",
+                    Obligation.framework_id == framework_id,
+                    Obligation.status == "active",
+                )
+            ).scalars().all()
+        )
+        mapped_obligation_ids.update(
+            self.db.execute(
+                select(CommonControlMapping.obligation_id)
+                .join(Obligation, Obligation.id == CommonControlMapping.obligation_id)
+                .where(
+                    CommonControlMapping.organization_id == organization_id,
+                    CommonControlMapping.status != "inactive",
+                    Obligation.framework_id == framework_id,
+                    Obligation.status == "active",
+                )
+            ).scalars().all()
+        )
+
+        return round((len(mapped_obligation_ids) / active_obligation_count) * 100, 2)
+
+    def global_coverage_summary(self, organization_id: uuid.UUID) -> list[dict[str, Any]]:
         frameworks = self.db.execute(select(Framework).order_by(Framework.name.asc())).scalars().all()
         results: list[dict[str, Any]] = []
         for framework in frameworks:
@@ -549,8 +605,8 @@ class FrameworkContentPackService:
                     "review_status": details["review_status"],
                     "total_sections": details["total_sections"],
                     "total_obligations": details["total_obligations"],
-                    "coverage_percent_estimate": details["coverage_percent_estimate"],
-                    "caveat": COVERAGE_CAVEAT,
+                    "coverage_percent_estimate": self._org_control_mapping_coverage_pct(organization_id, framework.id),
+                    "caveat": CONTROL_MAPPING_COVERAGE_CAVEAT,
                 }
             )
         return results

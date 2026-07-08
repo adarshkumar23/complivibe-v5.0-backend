@@ -109,12 +109,12 @@ def apply_local_content_pack(
 @router.get("/coverage-summary", response_model=list[GlobalFrameworkCoverageItem])
 def global_framework_coverage_summary(
     db: Session = Depends(get_db),
-    _: Membership = Depends(require_permission("frameworks:read")),
+    membership: Membership = Depends(require_permission("frameworks:read")),
 ) -> list[GlobalFrameworkCoverageItem]:
     SeedService.ensure_starter_obligations(db)
     SeedService.ensure_framework_versions(db)
     db.commit()
-    rows = FrameworkContentPackService(db).global_coverage_summary()
+    rows = FrameworkContentPackService(db).global_coverage_summary(membership.organization_id)
     return [GlobalFrameworkCoverageItem(**item) for item in rows]
 
 
