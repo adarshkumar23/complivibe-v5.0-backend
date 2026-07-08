@@ -1012,3 +1012,122 @@ def test_a41_engagement_scope_impact_reports_stale_findings_and_packages(client)
     assert after_body["current_scope_framework_ids"] == [fw2]
 
     _ = finding_before, finding_after
+
+
+def test_g4_v2_resolve_status_does_not_crash_v1_list_and_is_transitionable(client):
+    """Regression: the v2/pbc surface (POST .../audits/{id}/findings + .../resolve) writes
+    AuditFinding.status="resolved" onto the SAME audit_findings table the v1 surface reads.
+    AuditFindingRead (used only by v1's GET /compliance/audit-findings and GET /{id})
+    validates status against FINDING_STATUS_PATTERN. Before this fix, "resolved" (and
+    "remediation_in_progress") were not in that pattern, so serializing ANY finding in the
+    org -- not just the resolved one -- raised a pydantic ValidationError and 500'd the
+    whole v1 list/detail endpoints for every user in the org. Additionally, the v1
+    /transition endpoint's ALLOWED_TRANSITIONS state machine didn't recognize "resolved"
+    as a source state at all, so a resolved finding was permanently stuck and could only
+    be closed via the side-door /close endpoint (which bypasses this state machine and
+    the status pattern entirely)."""
+    org = bootstrap_org_user(client, email_prefix="g4-cross-surface")
+    fw1, _ = _framework_ids(client, org["headers"])
+    engagement = _create_engagement(client, org["org_headers"], fw1, org["user_id"], title="G4 Cross Surface")
+
+    # Create via the v2/pbc surface and resolve it there.
+    v2_created = client.post(
+        f"/api/v1/compliance/audits/{engagement['id']}/findings",
+        headers=org["org_headers"],
+        json={
+            "title": "V2 finding to resolve",
+            "description": "desc",
+            "severity": "high",
+            "finding_type": "observation",
+            "remediation_plan": "Do X",
+            "remediation_due_date": (date.today() + timedelta(days=10)).isoformat(),
+        },
+    )
+    assert v2_created.status_code == 201
+    finding_id = v2_created.json()["id"]
+
+    resolved = client.post(f"/api/v1/compliance/audit-findings/{finding_id}/resolve", headers=org["org_headers"], json={})
+    assert resolved.status_code == 200
+    assert resolved.json()["status"] == "resolved"
+
+    # The v1 list and detail endpoints must not 500 just because a resolved finding
+    # exists in the org, regardless of which surface wrote it.
+    listed = client.get(FINDINGS_BASE, headers=org["org_headers"])
+    assert listed.status_code == 200
+    listed_row = next(row for row in listed.json() if row["id"] == finding_id)
+    assert listed_row["status"] == "resolved"
+
+    detail = client.get(f"{FINDINGS_BASE}/{finding_id}", headers=org["org_headers"])
+    assert detail.status_code == 200
+    assert detail.json()["status"] == "resolved"
+
+    # A resolved finding must be transitionable through the SAME standard endpoint every
+    # other finding uses -- both onward to closed and back to in_remediation if reopened
+    # -- without needing the side-door /close endpoint.
+    closed = client.post(
+        f"{FINDINGS_BASE}/{finding_id}/transition",
+        headers=org["org_headers"],
+        json={"new_status": "closed"},
+    )
+    assert closed.status_code == 200
+    assert closed.json()["status"] == "closed"
+    assert closed.json()["closed_at"] is not None
+    assert closed.json()["closed_by"] == org["user_id"]
+
+    # Second finding: resolve then reopen to in_remediation instead of closing.
+    v2_created_2 = client.post(
+        f"/api/v1/compliance/audits/{engagement['id']}/findings",
+        headers=org["org_headers"],
+        json={
+            "title": "V2 finding to reopen",
+            "description": "desc",
+            "severity": "medium",
+            "finding_type": "observation",
+            "remediation_plan": "Do Y",
+            "remediation_due_date": (date.today() + timedelta(days=10)).isoformat(),
+        },
+    )
+    finding_id_2 = v2_created_2.json()["id"]
+    client.post(f"/api/v1/compliance/audit-findings/{finding_id_2}/resolve", headers=org["org_headers"], json={})
+
+    reopened = client.post(
+        f"{FINDINGS_BASE}/{finding_id_2}/transition",
+        headers=org["org_headers"],
+        json={"new_status": "in_remediation"},
+    )
+    assert reopened.status_code == 200
+    assert reopened.json()["status"] == "in_remediation"
+
+    # v2's remediation_in_progress status must also not crash the v1 list, and must be
+    # escapable through the standard transition endpoint (same bug class).
+    v2_created_3 = client.post(
+        f"/api/v1/compliance/audits/{engagement['id']}/findings",
+        headers=org["org_headers"],
+        json={
+            "title": "V2 finding remediation in progress",
+            "description": "desc",
+            "severity": "low",
+            "finding_type": "observation",
+            "remediation_plan": "Initial plan",
+            "remediation_due_date": (date.today() + timedelta(days=10)).isoformat(),
+        },
+    )
+    finding_id_3 = v2_created_3.json()["id"]
+    remediation_update = client.patch(
+        f"/api/v1/compliance/audit-findings/{finding_id_3}/remediation",
+        headers=org["org_headers"],
+        json={"remediation_plan": "Updated plan"},
+    )
+    assert remediation_update.status_code == 200
+    assert remediation_update.json()["status"] == "remediation_in_progress"
+
+    listed_after = client.get(FINDINGS_BASE, headers=org["org_headers"])
+    assert listed_after.status_code == 200
+
+    remediated = client.post(
+        f"{FINDINGS_BASE}/{finding_id_3}/transition",
+        headers=org["org_headers"],
+        json={"new_status": "remediated"},
+    )
+    assert remediated.status_code == 200
+    assert remediated.json()["status"] == "remediated"

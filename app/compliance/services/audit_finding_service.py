@@ -14,7 +14,7 @@ from app.models.control import Control
 from app.models.membership import Membership
 from app.models.risk import Risk
 from app.models.user import User
-from app.schemas.audit_finding import AuditFindingCreate, AuditFindingUpdate
+from app.schemas.audit_finding import FINDING_STATUSES, AuditFindingCreate, AuditFindingUpdate
 from app.compliance.services.risk_scoring_service import RiskScoringService
 from app.services.risk_service import RiskService
 from app.services.audit_service import AuditService
@@ -26,13 +26,33 @@ VALID_FINDING_TYPES = ("observation", "minor_nonconformity", "major_nonconformit
 
 
 class AuditFindingService:
+    # State machine for the standard /transition (and /bulk-transition) endpoints. This
+    # covers every status any writer of AuditFinding.status can produce -- including
+    # "resolved" and "remediation_in_progress", which are written directly by the v2/pbc
+    # endpoints (resolve_finding / update_remediation below) rather than through this
+    # transition method. Those statuses used to have NO entry here, so once a finding
+    # reached them, ALLOWED_TRANSITIONS.get(row.status, set()) returned an empty set and
+    # the finding was permanently stuck: it could never move again through the endpoint
+    # every other finding uses, and the only way out was the side-door /close endpoint
+    # (which bypasses this state machine and FINDING_STATUS_PATTERN entirely). Every
+    # status referenced below (as a source or a target) must also be a recognized
+    # FINDING_STATUSES value -- see the assertion just below -- so this table can never
+    # drift out of sync with what pydantic will actually accept again.
     ALLOWED_TRANSITIONS: dict[str, set[str]] = {
         "open": {"in_remediation", "accepted_risk", "closed"},
         "in_remediation": {"remediated", "open"},
+        "remediation_in_progress": {"remediated", "resolved", "open"},
         "remediated": {"closed", "open"},
-        "closed": set(),
+        "resolved": {"closed", "in_remediation"},
         "accepted_risk": set(),
+        "risk_accepted": set(),
+        "closed": set(),
     }
+    _referenced_statuses = set(ALLOWED_TRANSITIONS) | {s for targets in ALLOWED_TRANSITIONS.values() for s in targets}
+    assert _referenced_statuses <= set(FINDING_STATUSES), (
+        f"AuditFindingService.ALLOWED_TRANSITIONS references status(es) not in "
+        f"FINDING_STATUSES: {_referenced_statuses - set(FINDING_STATUSES)}"
+    )
 
     def __init__(self, db: Session) -> None:
         self.db = db
