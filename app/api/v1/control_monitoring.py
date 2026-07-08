@@ -86,6 +86,7 @@ def create_monitoring_definition(
         status="active",
         check_frequency=payload.check_frequency,
         owner_user_id=payload.owner_user_id,
+        next_check_due_at=payload.next_check_due_at,
         tags_json=payload.tags_json,
         notes=payload.notes,
     )

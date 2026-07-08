@@ -16,6 +16,10 @@ class ControlMonitoringDefinitionCreate(BaseModel):
     monitoring_type: str = Field(pattern=MONITORING_TYPE_PATTERN)
     check_frequency: str = Field(pattern=CHECK_FREQUENCY_PATTERN)
     owner_user_id: UUID
+    # Optional explicit due date, mirroring ControlTestDefinitionCreate.next_due_at. Lets callers
+    # backdate a definition (e.g. migrating existing monitoring cadences, or seeding a definition
+    # that is already overdue) instead of always defaulting to "never due until first check".
+    next_check_due_at: datetime | None = None
     tags_json: dict | list | None = None
     notes: str | None = None
 
@@ -26,6 +30,7 @@ class ControlMonitoringDefinitionUpdate(BaseModel):
     monitoring_type: str | None = Field(default=None, pattern=MONITORING_TYPE_PATTERN)
     check_frequency: str | None = Field(default=None, pattern=CHECK_FREQUENCY_PATTERN)
     owner_user_id: UUID | None = None
+    next_check_due_at: datetime | None = None
     tags_json: dict | list | None = None
     notes: str | None = None
 
