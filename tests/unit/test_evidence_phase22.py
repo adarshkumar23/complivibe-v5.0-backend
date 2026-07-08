@@ -207,6 +207,56 @@ def test_evidence_link_unlink_control_endpoint_and_cross_tenant_protection(clien
     assert "evidence.control_unlinked" in actions
 
 
+def test_g9_controls_evidence_endpoint_includes_original_created_at(client, db_session):
+    """G9 item 16: GET /controls/{id}/evidence used a separate, incomplete local
+    evidence-read mapper in controls.py that dropped original_created_at (always
+    null) -- it must return the same value as the canonical /evidence endpoint."""
+    import uuid as uuid_module
+    from datetime import UTC, datetime
+
+    from app.models.evidence_item import EvidenceItem
+
+    owner = _register(client, "g9-ctrl-evidence@example.com", "Pass1234!@", "G9 Ctrl Evidence Org")
+    org_id = _org_id(client, owner)
+    control_id = _create_control(client, owner, org_id, "G9 Evidence Control")
+
+    original_created_at = "2024-03-01T00:00:00Z"
+    created = client.post(
+        "/api/v1/evidence",
+        headers=_headers(owner, org_id),
+        json={"title": "Legacy Audit Report", "evidence_type": "audit_report"},
+    )
+    assert created.status_code == 201, created.text
+    evidence_id = created.json()["id"]
+
+    # Set original_created_at directly (a separate, pre-existing gap in the create
+    # endpoint silently drops payload.original_created_at -- out of scope for this
+    # item, which is specifically about the read-side mapper duplication).
+    row = db_session.get(EvidenceItem, uuid_module.UUID(evidence_id))
+    row.original_created_at = datetime(2024, 3, 1, tzinfo=UTC)
+    db_session.commit()
+
+    link = client.post(
+        f"/api/v1/evidence/{evidence_id}/controls",
+        headers=_headers(owner, org_id),
+        json={"control_id": control_id, "confidence": "manual_confirmed"},
+    )
+    assert link.status_code == 200, link.text
+
+    canonical = client.get(f"/api/v1/evidence/{evidence_id}", headers=_headers(owner, org_id))
+    assert canonical.status_code == 200
+    canonical_value = canonical.json()["original_created_at"]
+    assert canonical_value is not None
+    assert canonical_value.startswith("2024-03-01T00:00:00")
+
+    via_control = client.get(f"/api/v1/controls/{control_id}/evidence", headers=_headers(owner, org_id))
+    assert via_control.status_code == 200
+    matching = next(item for item in via_control.json() if item["id"] == evidence_id)
+    # This is the actual G9 item 16 assertion: the controls.py mapper must return the
+    # SAME original_created_at as the canonical /evidence endpoint, not null.
+    assert matching["original_created_at"] == canonical_value
+
+
 def test_evidence_review_and_readiness_summary(client):
     owner = _register(client, "p22-owner6@example.com", "Pass1234!@", "P22 Org6")
     org_id = _org_id(client, owner)

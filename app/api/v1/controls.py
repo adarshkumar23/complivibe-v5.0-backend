@@ -26,6 +26,7 @@ from app.schemas.control import (
 )
 from app.schemas.common_controls import CommonControlCoverageReport
 from app.schemas.evidence import EvidenceRead
+from app.api.v1.evidence import _evidence_read
 from app.compliance.services.common_controls_service import CommonControlsService
 from app.compliance.services.control_exception_service import ControlExceptionService
 from app.services.audit_service import AuditService
@@ -84,37 +85,6 @@ def _control_read_with_owner_status(db: Session, organization_id: uuid.UUID, con
     if control.owner_user_id is not None:
         owner_membership_active = control.owner_user_id in _active_owner_ids(db, organization_id, {control.owner_user_id})
     return _control_read(control, owner_membership_active=owner_membership_active)
-
-
-def _evidence_read(item: EvidenceItem) -> EvidenceRead:
-    return EvidenceRead(
-        id=item.id,
-        organization_id=item.organization_id,
-        title=item.title,
-        description=item.description,
-        evidence_type=item.evidence_type,
-        source=item.source,
-        status=item.status,
-        review_status=item.review_status,
-        freshness_status=item.freshness_status,
-        file_name=item.file_name,
-        mime_type=item.mime_type,
-        size_bytes=item.size_bytes,
-        checksum_sha256=item.checksum_sha256,
-        storage_provider=item.storage_provider,
-        storage_key=item.storage_key,
-        external_reference_url=item.external_reference_url,
-        valid_from=item.valid_from,
-        valid_until=item.valid_until,
-        collected_at=item.collected_at,
-        uploaded_by_user_id=item.uploaded_by_user_id,
-        reviewed_by_user_id=item.reviewed_by_user_id,
-        reviewed_at=item.reviewed_at,
-        review_notes=item.review_notes,
-        metadata_json=item.metadata_json,
-        created_at=item.created_at,
-        updated_at=item.updated_at,
-    )
 
 
 @router.get("/gaps/summary", response_model=ControlGapSummary)
