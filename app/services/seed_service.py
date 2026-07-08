@@ -3,7 +3,7 @@ import uuid
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.models.email_template import EmailTemplate
@@ -2289,6 +2289,24 @@ PCI_DSS_BASE_OBLIGATIONS: list[tuple[str, str, str]] = [
     ("REQ-12.8", "Risks to information assets associated with third-party service provider (TPSP) relationships are managed", "G6"),
     ("REQ-12.9", "Third-party service providers (TPSPs) support their customers' PCI DSS compliance", "G6"),
     ("REQ-12.10", "Suspected and confirmed security incidents that could impact the CDE are responded to immediately", "G6"),
+    # Third-level PCI DSS v4.0 requirements below. These fill out the remaining obligations for
+    # this framework with real, accurately-sourced sub-requirement text (rather than generic
+    # placeholder rows) -- chosen to not duplicate any of the second-level requirements above.
+    ("REQ-1.2.1", "Configuration standards for NSC rulesets are defined and maintained", "G1"),
+    ("REQ-1.3.1", "Inbound traffic to the CDE is restricted to only necessary traffic", "G1"),
+    ("REQ-1.4.2", "Inbound traffic from untrusted to trusted networks is restricted to authorized components", "G1"),
+    ("REQ-3.2.1", "Account data storage is minimized through documented retention and disposal policies", "G2"),
+    ("REQ-3.3.1", "Sensitive authentication data (SAD) is not retained after authorization", "G2"),
+    ("REQ-3.5.1", "PAN is rendered unreadable wherever it is stored", "G2"),
+    ("REQ-6.3.2", "An inventory of bespoke and custom software components is maintained", "G3"),
+    ("REQ-6.4.2", "Public-facing web applications are protected by an automated technical solution", "G3"),
+    ("REQ-6.5.1", "Bespoke and custom software is reviewed to prevent injection flaws before release", "G3"),
+    ("REQ-8.3.6", "Passwords meet a minimum complexity of 12 characters with alphanumeric content", "G4"),
+    ("REQ-8.3.9", "Passwords are changed at least every 90 days or access is dynamically analyzed", "G4"),
+    ("REQ-10.4.1", "Audit logs are reviewed at least once daily using automated tools", "G5"),
+    ("REQ-11.4.1", "A penetration testing methodology covering application and network layers is defined", "G5"),
+    ("REQ-11.5.1", "Intrusion-detection and prevention techniques monitor the CDE perimeter and critical points", "G5"),
+    ("REQ-12.10.1", "An incident response plan defines roles, communications, and containment procedures", "G6"),
 ]
 
 ISO_27001_SECTIONS: list[dict[str, int | str]] = [
@@ -4225,6 +4243,21 @@ class SeedService:
             jurisdiction="global",
             version="4.0",
         )
+        # Retire legacy REQ-EXT-01..15 placeholder rows now superseded by real PCI DSS v4.0
+        # third-level sub-requirements in PCI_DSS_BASE_OBLIGATIONS above. Environments that
+        # seeded the old placeholder rows before this fix would otherwise keep them around
+        # forever, since _ensure_framework_obligations only upserts rows present in
+        # obligation_rows and never deactivates rows that have been removed from the seed list.
+        db.execute(
+            update(Obligation)
+            .where(
+                Obligation.framework_id == framework.id,
+                Obligation.reference_code.like("REQ-EXT-%"),
+                Obligation.status != "inactive",
+            )
+            .values(status="inactive")
+        )
+        db.flush()
         SeedService._ensure_framework_questions(db, framework=framework, question_rows=PCI_DSS_QUESTIONS)
         return framework
 
