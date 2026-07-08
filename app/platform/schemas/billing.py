@@ -31,8 +31,10 @@ class BillingStatusResponse(BaseModel):
     trial_days_remaining: int | None
     trial_ends_at: str | None
     subscription_ends_at: str | None
+    renewal_days_remaining: int | None = None
     features: dict[str, Any]
     razorpay_subscription_id: str | None
+    context_flags: list[str] = Field(default_factory=list)
 
 
 class BillingInvoiceResponse(BaseModel):
@@ -86,6 +88,10 @@ class UsageBillingDashboardRead(BaseModel):
     spend_cap_alert: str | None = None
     synced_to_processor: bool
     processor_reference: str | None = None
+    is_usage_based_plan: bool = True
+    previous_period_cost_inr: float | None = None
+    cost_trend: str = "no_prior_period_data"
+    context_flags: list[str] = Field(default_factory=list)
 
 
 class UsageBillingSyncResponse(BaseModel):

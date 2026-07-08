@@ -191,6 +191,15 @@ class BillingService:
         if not org:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
 
+        if org.subscription_status == "active" and org.razorpay_subscription_id and org.subscription_plan == plan_code:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Organization already has an active subscription to plan '{plan_code}'. "
+                    "Cancel the existing subscription before starting a new one."
+                ),
+            )
+
         plan = self.db.execute(
             select(SubscriptionPlan).where(
                 SubscriptionPlan.plan_code == plan_code,
@@ -211,19 +220,31 @@ class BillingService:
             admin = self.db.get(User, admin_user_id)
             if admin is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admin user not found")
-            org.razorpay_customer_id = self.rzp.create_customer(
-                org_id=org_id,
-                org_name=org.name,
-                admin_email=admin.email,
-                admin_name=admin.full_name or admin.email,
-            )
+            try:
+                org.razorpay_customer_id = self.rzp.create_customer(
+                    org_id=org_id,
+                    org_name=org.name,
+                    admin_email=admin.email,
+                    admin_name=admin.full_name or admin.email,
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Payment processor error while creating customer profile. Please retry.",
+                ) from exc
             self.db.flush()
 
-        subscription = self.rzp.create_subscription(
-            razorpay_customer_id=org.razorpay_customer_id,
-            razorpay_plan_id=plan_id,
-            org_id=org_id,
-        )
+        try:
+            subscription = self.rzp.create_subscription(
+                razorpay_customer_id=org.razorpay_customer_id,
+                razorpay_plan_id=plan_id,
+                org_id=org_id,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Payment processor error while creating subscription. Please retry.",
+            ) from exc
 
         org.razorpay_subscription_id = subscription["id"]
         self.db.flush()
@@ -253,8 +274,19 @@ class BillingService:
         org = self.db.get(Organization, org_id)
         if not org or not org.razorpay_subscription_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No active subscription found")
+        if org.subscription_status == "cancelled":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Subscription is already cancelled",
+            )
 
-        self.rzp.cancel_subscription(org.razorpay_subscription_id, cancel_at_cycle_end=cancel_at_cycle_end)
+        try:
+            self.rzp.cancel_subscription(org.razorpay_subscription_id, cancel_at_cycle_end=cancel_at_cycle_end)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Payment processor error while cancelling subscription. Please retry.",
+            ) from exc
 
         if not cancel_at_cycle_end:
             org.subscription_status = "cancelled"
@@ -286,9 +318,36 @@ class BillingService:
 
         is_trial = org.subscription_status == "trial"
         trial_days_remaining = None
+        context_flags: list[str] = []
+        now = self.utcnow()
+
         if is_trial and org.trial_ends_at:
-            delta = self._as_utc(org.trial_ends_at) - self.utcnow()
+            delta = self._as_utc(org.trial_ends_at) - now
             trial_days_remaining = max(0, delta.days)
+            if delta.total_seconds() <= 0:
+                context_flags.append("trial_expired_pending_downgrade")
+            elif trial_days_remaining <= 3:
+                context_flags.append("trial_ending_soon")
+
+        if plan is None:
+            context_flags.append("plan_not_found")
+        elif not plan.is_active:
+            context_flags.append("plan_inactive")
+
+        renewal_days_remaining = None
+        if org.subscription_ends_at:
+            renewal_delta = self._as_utc(org.subscription_ends_at) - now
+            renewal_days_remaining = renewal_delta.days
+            if org.subscription_status == "active" and renewal_delta.total_seconds() > 0:
+                context_flags.append("pending_cancellation_at_period_end")
+            elif renewal_delta.total_seconds() <= 0 and org.subscription_status == "active":
+                context_flags.append("subscription_period_ended_unprocessed")
+
+        if org.subscription_status == "active" and not org.razorpay_subscription_id:
+            context_flags.append("missing_payment_provider_link")
+
+        if org.subscription_status not in ("active", "trial"):
+            context_flags.append("no_active_access")
 
         return {
             "subscription_status": org.subscription_status,
@@ -297,8 +356,10 @@ class BillingService:
             "trial_days_remaining": trial_days_remaining,
             "trial_ends_at": org.trial_ends_at.isoformat() if org.trial_ends_at else None,
             "subscription_ends_at": org.subscription_ends_at.isoformat() if org.subscription_ends_at else None,
+            "renewal_days_remaining": renewal_days_remaining,
             "features": features,
             "razorpay_subscription_id": org.razorpay_subscription_id,
+            "context_flags": sorted(set(context_flags)),
         }
 
     def list_plans(self) -> list[SubscriptionPlan]:
