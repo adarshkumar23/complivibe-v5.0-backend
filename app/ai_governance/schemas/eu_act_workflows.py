@@ -38,6 +38,12 @@ class ConformityAssessmentRead(BaseModel):
     human_oversight_measures: str | None
     accuracy_robustness_measures: str | None
     checklist_items: list[dict[str, Any]]
+    checklist_total_items: int = 0
+    checklist_completed_items: int = 0
+    checklist_completion_percent: float = 0
+    missing_checklist_item_keys: list[str] = Field(default_factory=list)
+    stale_workflow: bool = False
+    context_flags: list[str] = Field(default_factory=list)
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
@@ -70,6 +76,10 @@ class FRIARead(BaseModel):
     mitigation_measures: str | None
     consultation_conducted: bool
     status: str
+    rights_affected_count: int = 0
+    completeness_percent: float = 0
+    stale_workflow: bool = False
+    context_flags: list[str] = Field(default_factory=list)
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
@@ -101,6 +111,10 @@ class PostMarketPlanRead(BaseModel):
     incident_reporting_threshold: str | None
     responsible_person_id: uuid.UUID
     status: str
+    monitoring_metrics_count: int = 0
+    completeness_percent: float = 0
+    stale_workflow: bool = False
+    context_flags: list[str] = Field(default_factory=list)
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
