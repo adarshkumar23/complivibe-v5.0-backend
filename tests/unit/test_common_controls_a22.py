@@ -354,9 +354,28 @@ def test_a22_patch_deactivate_coverage_and_reports(client, db_session):
     assert summary_body["top_common_controls"][0]["control_id"] == control["id"]
     assert summary_body["top_common_controls"][0]["framework_count"] == 2
 
+    # G9 item 19: `control` is mapped "partial" for fw1's obligation and "full" for
+    # fw2's obligation -- a real cross-framework strength inconsistency that must
+    # be surfaced with enough detail to act on.
+    conflicts = summary_body["cross_framework_control_inconsistencies"]
+    conflict = next(item for item in conflicts if item["control_id"] == control["id"])
+    assert sorted(conflict["distinct_mapping_strengths"]) == ["full", "partial"]
+    strengths_by_framework = {entry["framework_id"]: entry["mapping_strength"] for entry in conflict["mappings"]}
+    assert strengths_by_framework[str(fw1.id)] == "partial"
+    assert strengths_by_framework[str(fw2.id)] == "full"
+    # control_b's single "compensating" mapping is on only one framework, so it must
+    # not appear as a cross-framework conflict.
+    assert all(item["control_id"] != control_b["id"] for item in conflicts)
+
     deactivate = client.delete(f"{BASE}/mappings/{mapping2['id']}", headers=org["org_headers"])
     assert deactivate.status_code == 200
     assert deactivate.json()["status"] == "inactive"
+
+    # Deactivating the conflicting mapping resolves the inconsistency.
+    resolved_summary = client.get(f"{BASE}/summary", headers=org["org_headers"])
+    assert resolved_summary.status_code == 200
+    resolved_conflicts = resolved_summary.json()["cross_framework_control_inconsistencies"]
+    assert all(item["control_id"] != control["id"] for item in resolved_conflicts)
 
 
 def test_a22_tenant_isolation_and_audit_events(client, db_session):

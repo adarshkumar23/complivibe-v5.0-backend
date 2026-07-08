@@ -124,9 +124,33 @@ class CommonControlsTopItem(BaseModel):
     obligation_count: int
 
 
+class CrossFrameworkControlInconsistencyMapping(BaseModel):
+    framework_id: UUID
+    framework_name: str | None = None
+    obligation_id: UUID
+    obligation_reference_code: str | None = None
+    mapping_strength: str = Field(pattern=MAPPING_STRENGTH_PATTERN)
+
+
+class CrossFrameworkControlInconsistency(BaseModel):
+    control_id: UUID
+    control_name: str | None = None
+    distinct_mapping_strengths: list[str]
+    mappings: list[CrossFrameworkControlInconsistencyMapping]
+
+
 class CommonControlsSummary(BaseModel):
     total_common_controls: int
     total_mappings: int
     by_mapping_strength: dict[str, int]
     frameworks_with_common_controls: int
     top_common_controls: list[CommonControlsTopItem]
+    cross_framework_control_inconsistencies: list[CrossFrameworkControlInconsistency] = Field(
+        default_factory=list,
+        description=(
+            "Controls mapped to obligations in 2+ frameworks with DIFFERENT "
+            "mapping_strength values (e.g. 'full' for one framework's obligation but "
+            "'partial' for another's) -- a real content-consistency defect needing "
+            "reviewer attention."
+        ),
+    )

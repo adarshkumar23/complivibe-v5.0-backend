@@ -638,10 +638,92 @@ class CommonControlsService:
                 }
             )
 
+        cross_framework_control_inconsistencies = self._cross_framework_control_inconsistencies(
+            org_id, [row.control_id for row in common_controls]
+        )
+
         return {
             "total_common_controls": total_common_controls,
             "total_mappings": total_mappings,
             "by_mapping_strength": by_mapping_strength,
             "frameworks_with_common_controls": frameworks_with_common_controls,
             "top_common_controls": top_common_controls,
+            "cross_framework_control_inconsistencies": cross_framework_control_inconsistencies,
         }
+
+    def _cross_framework_control_inconsistencies(self, org_id: uuid.UUID, common_control_ids: list[uuid.UUID]) -> list[dict]:
+        """Detect a control mapped to obligations in 2+ frameworks with DIFFERENT
+        mapping_strength values -- e.g. treated as "full" coverage for one framework's
+        obligation but only "partial"/"compensating" for another's. A control's real
+        effectiveness doesn't change per framework; a strength mismatch across
+        frameworks for the same control is either a real, actionable inconsistency
+        in how the control is being assessed, or a mapping error -- either way, a
+        reviewer needs to see it, and previously nothing ever surfaced it.
+        """
+        if not common_control_ids:
+            return []
+
+        mappings = self.db.execute(
+            select(CommonControlMapping).where(
+                CommonControlMapping.organization_id == org_id,
+                CommonControlMapping.status == "active",
+                CommonControlMapping.control_id.in_(common_control_ids),
+            )
+        ).scalars().all()
+
+        by_control: dict[uuid.UUID, list[CommonControlMapping]] = {}
+        for mapping in mappings:
+            by_control.setdefault(mapping.control_id, []).append(mapping)
+
+        framework_ids = {mapping.framework_id for mapping in mappings}
+        obligation_ids = {mapping.obligation_id for mapping in mappings}
+        control_ids = set(by_control.keys())
+
+        frameworks_by_id = {
+            row.id: row
+            for row in self.db.execute(select(Framework).where(Framework.id.in_(framework_ids))).scalars().all()
+        } if framework_ids else {}
+        obligations_by_id = {
+            row.id: row
+            for row in self.db.execute(select(Obligation).where(Obligation.id.in_(obligation_ids))).scalars().all()
+        } if obligation_ids else {}
+        controls_by_id = {
+            row.id: row
+            for row in self.db.execute(
+                select(Control).where(Control.organization_id == org_id, Control.id.in_(control_ids))
+            ).scalars().all()
+        } if control_ids else {}
+
+        inconsistencies: list[dict] = []
+        for control_id, control_mappings in by_control.items():
+            strengths_by_framework: dict[uuid.UUID, set[str]] = {}
+            for mapping in control_mappings:
+                strengths_by_framework.setdefault(mapping.framework_id, set()).add(mapping.mapping_strength)
+
+            distinct_strengths = {mapping.mapping_strength for mapping in control_mappings}
+            if len(distinct_strengths) <= 1:
+                continue
+
+            control = controls_by_id.get(control_id)
+            entries = [
+                {
+                    "framework_id": mapping.framework_id,
+                    "framework_name": frameworks_by_id[mapping.framework_id].name if mapping.framework_id in frameworks_by_id else None,
+                    "obligation_id": mapping.obligation_id,
+                    "obligation_reference_code": (
+                        obligations_by_id[mapping.obligation_id].reference_code if mapping.obligation_id in obligations_by_id else None
+                    ),
+                    "mapping_strength": mapping.mapping_strength,
+                }
+                for mapping in sorted(control_mappings, key=lambda m: (str(m.framework_id), str(m.obligation_id)))
+            ]
+            inconsistencies.append(
+                {
+                    "control_id": control_id,
+                    "control_name": control.title if control is not None else None,
+                    "distinct_mapping_strengths": sorted(distinct_strengths),
+                    "mappings": entries,
+                }
+            )
+
+        return inconsistencies
