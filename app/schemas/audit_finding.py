@@ -6,7 +6,32 @@ from pydantic import BaseModel, Field
 from app.schemas.common import UUIDTimestampSchema
 
 FINDING_SEVERITY_PATTERN = "^(critical|high|medium|low|informational)$"
-FINDING_STATUS_PATTERN = "^(open|in_remediation|remediated|closed|accepted_risk)$"
+
+# Single source of truth for every status value any writer of AuditFinding.status may
+# persist -- both the v1 surface (app/api/v1/audit_findings.py, whose ALLOWED_TRANSITIONS
+# in AuditFindingService produces open/in_remediation/remediated/closed/accepted_risk) and
+# the v2 "pbc" surface (app/compliance/routers/audit_findings.py, whose service methods
+# produce remediation_in_progress/resolved/accepted_risk/closed) share the SAME
+# audit_findings table and the SAME `status` column. AuditFindingRead (used only by the
+# v1 list/detail endpoints) validates `status` against FINDING_STATUS_PATTERN; if either
+# surface ever writes a value the other doesn't know about, serializing ANY finding in the
+# org through the v1 endpoints raises a pydantic ValidationError and 500s the whole list
+# -- not just the one row. This must stay a superset of BOTH surfaces' vocabularies (and
+# of the DB's ck_audit_findings_status CHECK constraint) so that can never happen again,
+# regardless of which router/service wrote the row. "risk_accepted" is a legacy alias
+# retained only so old rows (written before accepted_risk was standardized) keep
+# deserializing; no code path writes it going forward.
+FINDING_STATUSES: tuple[str, ...] = (
+    "open",
+    "in_remediation",
+    "remediation_in_progress",
+    "remediated",
+    "resolved",
+    "accepted_risk",
+    "risk_accepted",
+    "closed",
+)
+FINDING_STATUS_PATTERN = "^(" + "|".join(FINDING_STATUSES) + ")$"
 
 
 class AuditFindingCreate(BaseModel):
