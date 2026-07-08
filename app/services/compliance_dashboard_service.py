@@ -56,6 +56,12 @@ class ComplianceDashboardService:
         )
         return self.db.execute(stmt).all()
 
+    def framework_control_coverage_pct(self, organization_id: uuid.UUID, framework_id: uuid.UUID) -> float:
+        """Public entry point for other services (e.g. the trust center) that need the
+        same real control-coverage number shown in posture-summary / framework-readiness,
+        rather than reimplementing their own (drifting) coverage query."""
+        return float(self._framework_counts(organization_id, framework_id)["control_coverage_pct"])
+
     def _framework_counts(self, organization_id: uuid.UUID, framework_id: uuid.UUID) -> dict[str, int | float]:
         obligation_count = int(
             self.db.execute(

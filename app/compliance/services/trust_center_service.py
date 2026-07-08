@@ -10,11 +10,9 @@ from sqlalchemy.orm import Session
 
 from app.models.compliance_certification import ComplianceCertification
 from app.models.compliance_policy import CompliancePolicy
-from app.models.control import Control
 from app.models.email_outbox import EmailOutbox
 from app.models.framework import Framework
 from app.models.membership import Membership
-from app.models.obligation import Obligation
 from app.models.organization import Organization
 from app.models.organization_framework import OrganizationFramework
 from app.models.role import Role
@@ -24,6 +22,7 @@ from app.models.trust_center_published_policy import TrustCenterPublishedPolicy
 from app.models.user import User
 from app.platform.services.competitor_pricing_service import CompetitorPricingService
 from app.services.audit_service import AuditService
+from app.services.compliance_dashboard_service import ComplianceDashboardService
 
 SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,98}[a-z0-9]$")
 
@@ -117,29 +116,14 @@ class TrustCenterService:
                 .order_by(Framework.name.asc())
             ).scalars().all()
 
+            dashboard_service = ComplianceDashboardService(self.db)
             for framework in framework_rows:
-                total = int(
-                    self.db.execute(
-                        select(func.count(Control.id))
-                        .join(Obligation, Obligation.id == Control.obligation_id)
-                        .where(
-                            Control.organization_id == org.id,
-                            Obligation.framework_id == framework.id,
-                        )
-                    ).scalar_one()
-                )
-                implemented = int(
-                    self.db.execute(
-                        select(func.count(Control.id))
-                        .join(Obligation, Obligation.id == Control.obligation_id)
-                        .where(
-                            Control.organization_id == org.id,
-                            Obligation.framework_id == framework.id,
-                            Control.status == "implemented",
-                        )
-                    ).scalar_one()
-                )
-                coverage_pct = int((implemented * 100) / total) if total > 0 else 0
+                # Reuse the same real control-coverage calculation as the (working)
+                # admin-side posture-summary/framework-readiness endpoints, which map
+                # controls to obligations via ControlObligationMapping. The previous
+                # query here joined on the legacy, unpopulated Control.obligation_id
+                # column and therefore always returned 0% regardless of real coverage.
+                coverage_pct = int(round(dashboard_service.framework_control_coverage_pct(org.id, framework.id)))
                 framework_coverage.append({"framework_name": framework.name, "coverage_pct": coverage_pct})
 
         policies: list[dict] = []
