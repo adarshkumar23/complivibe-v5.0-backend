@@ -27,3 +27,4 @@ class VendorSupplyChainGraphRead(BaseModel):
     edges: list[dict]
     data_quality_findings: list[dict]
     open_alerts: list[dict]
+    risk_summary: dict = Field(default_factory=dict)

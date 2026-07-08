@@ -18,6 +18,13 @@ from app.services.vendor_service import VendorService
 
 MAX_GRAPH_DEPTH = 10
 
+# An open nth-party alert that hasn't been triaged in over a week is itself a signal:
+# either nobody has looked at it, or the underlying finding may already have moved on
+# (e.g. the source screening was re-run and produced a different result upstream that
+# hasn't propagated). Mirrors THREAT_INTEL_STALE_AFTER_DAYS in the tprm_intelligence
+# satellite so "stale" means the same thing across every T1/T4 TPRM signal in this API.
+ALERT_STALE_AFTER_DAYS = 7
+
 
 class VendorSupplyChainService:
     def __init__(self, db: Session) -> None:
@@ -36,8 +43,14 @@ class VendorSupplyChainService:
     ) -> VendorSupplyChainLink:
         if parent_vendor_id == sub_vendor_id:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="A vendor cannot depend on itself")
-        self.vendor_service.require_vendor_in_org(organization_id, parent_vendor_id)
-        self.vendor_service.require_vendor_in_org(organization_id, sub_vendor_id)
+        parent_vendor = self.vendor_service.require_vendor_in_org(organization_id, parent_vendor_id)
+        sub_vendor = self.vendor_service.require_vendor_in_org(organization_id, sub_vendor_id)
+        # Consistent with every other TPRM intelligence signal in this API (sanctions
+        # screening, KYB/AML checks, security rating, threat intelligence all reject
+        # archived vendors): an archived vendor is offboarded and shouldn't gain new
+        # supply-chain relationships that would surface it as a live risk again.
+        if parent_vendor.status == "archived" or sub_vendor.status == "archived":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Archived vendors cannot be linked in the supply chain")
         normalized_type = (relationship_type or "supplier").strip().lower().replace(" ", "_")
         if len(normalized_type) < 2 or len(normalized_type) > 80:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="relationship_type must be 2-80 characters")
@@ -312,9 +325,26 @@ class VendorSupplyChainService:
         cycles: list[list[uuid.UUID]] = []
         queue: deque[tuple[uuid.UUID, int, list[uuid.UUID]]] = deque([(root.id, 0, [root.id])])
         visited_edges: set[uuid.UUID] = set()
+        # True if the traversal reached vendors it could not expand only because the
+        # requested depth ran out (not because they have no further links). Without this,
+        # a caller who asks for depth=1 on a 5-tier supply chain sees a graph that looks
+        # complete when it is actually a truncated view - "no further risk found" and
+        # "we didn't look further" must never be visually indistinguishable.
+        truncated = False
         while queue:
             current_id, current_depth, path = queue.popleft()
             if current_depth >= depth:
+                has_more = self.db.execute(
+                    select(VendorSupplyChainLink.id)
+                    .where(
+                        VendorSupplyChainLink.organization_id == organization_id,
+                        VendorSupplyChainLink.parent_vendor_id == current_id,
+                        VendorSupplyChainLink.is_active.is_(True),
+                    )
+                    .limit(1)
+                ).scalar_one_or_none()
+                if has_more is not None:
+                    truncated = True
                 continue
             links = self.db.execute(
                 select(VendorSupplyChainLink).where(
@@ -345,13 +375,49 @@ class VendorSupplyChainService:
                 VendorSupplyChainAlert.status == "open",
             )
         ).scalars().all()
+
+        data_quality_findings = [self._cycle_finding(cycle, vendors_by_id) for cycle in cycles]
+        archived_in_chain = [vendor for vendor in vendors_by_id.values() if vendor.id != root.id and vendor.status == "archived"]
+        if archived_in_chain:
+            data_quality_findings.append(
+                {
+                    "type": "archived_vendor_in_chain",
+                    "severity": "medium",
+                    "vendor_ids": [str(vendor.id) for vendor in archived_in_chain],
+                    "vendor_names": [vendor.name for vendor in archived_in_chain],
+                    "message": (
+                        "Supply-chain graph still contains offboarded (archived) vendors; their links "
+                        "should be deactivated so the chain reflects current relationships."
+                    ),
+                }
+            )
+
+        alert_payloads = [self._alert_payload(alert) for alert in alerts]
+        severity_rank = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+        risk_summary = {
+            "node_count": len(vendors_by_id),
+            "edge_count": len(edges),
+            "cycle_count": len(cycles),
+            "open_alert_count": len(alert_payloads),
+            "open_alerts_by_severity": {
+                severity: sum(1 for a in alert_payloads if a["severity"] == severity) for severity in severity_rank
+            },
+            "stale_alert_count": sum(1 for a in alert_payloads if a["is_stale"]),
+            "archived_vendors_in_chain": len(archived_in_chain),
+            "highest_open_alert_severity": (
+                max((a["severity"] for a in alert_payloads), key=lambda s: severity_rank.get(s, 0)) if alert_payloads else None
+            ),
+            "truncated": truncated,
+        }
+
         return {
             "root_vendor_id": str(root.id),
             "depth": depth,
             "nodes": [self._vendor_node(vendor) for vendor in vendors_by_id.values()],
             "edges": [self._link_payload(link) for link in edges],
-            "data_quality_findings": [self._cycle_finding(cycle, vendors_by_id) for cycle in cycles],
-            "open_alerts": [self._alert_payload(alert) for alert in alerts],
+            "data_quality_findings": data_quality_findings,
+            "open_alerts": alert_payloads,
+            "risk_summary": risk_summary,
         }
 
     def propagate_vendor_signal(
@@ -502,6 +568,12 @@ class VendorSupplyChainService:
 
     @staticmethod
     def _alert_payload(alert: VendorSupplyChainAlert) -> dict[str, Any]:
+        age_days: float | None = None
+        is_stale = False
+        if alert.detected_at is not None:
+            detected_at = alert.detected_at if alert.detected_at.tzinfo else alert.detected_at.replace(tzinfo=UTC)
+            age_days = round((datetime.now(UTC) - detected_at).total_seconds() / 86400.0, 2)
+            is_stale = age_days > ALERT_STALE_AFTER_DAYS
         return {
             "id": str(alert.id),
             "parent_vendor_id": str(alert.parent_vendor_id),
@@ -513,6 +585,9 @@ class VendorSupplyChainService:
             "source_entity_type": alert.source_entity_type,
             "source_entity_id": str(alert.source_entity_id) if alert.source_entity_id else None,
             "detected_at": alert.detected_at.isoformat() if alert.detected_at else None,
+            "age_days": age_days,
+            "is_stale": is_stale,
+            "stale_after_days": ALERT_STALE_AFTER_DAYS,
         }
 
     @staticmethod
