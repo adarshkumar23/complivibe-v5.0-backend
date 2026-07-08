@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, JSON, String, Text, Uuid
+from sqlalchemy import Date, DateTime, ForeignKey, Index, JSON, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -29,4 +29,4 @@ class ObligationContentVersion(UUIDPrimaryKeyMixin, Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     superseded_by_version_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("obligation_content_versions.id", ondelete="SET NULL"), nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

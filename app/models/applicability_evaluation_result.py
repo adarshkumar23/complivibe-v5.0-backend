@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, JSON, String, Text, Uuid
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, JSON, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -29,4 +29,4 @@ class ApplicabilityEvaluationResult(UUIDPrimaryKeyMixin, OrganizationOwnedMixin,
     missing_answers_json: Mapped[list | dict | None] = mapped_column(JSON, nullable=True)
     rationale: Mapped[str] = mapped_column(Text, nullable=False)
     provenance_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
