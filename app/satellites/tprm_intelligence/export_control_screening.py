@@ -171,6 +171,19 @@ class ExportControlScreeningService:
                 "and requires human/legal confirmation, not a final legal determination."
             )
 
+        # Auto-derive an initial workflow status from the screening outcome
+        # (staff can still move it through the 'screened'/'license_pending'/
+        # 'cleared'/'blocked' lifecycle manually afterward): a positive
+        # denied-party match is the most severe outcome and blocks the
+        # transaction pending review; a license-required-but-no-match result
+        # is routed to license_pending; a clean screen is cleared outright.
+        if denied_party_result["match_found"]:
+            status_value = "blocked"
+        elif license_required:
+            status_value = "license_pending"
+        else:
+            status_value = "cleared"
+
         row = ExportControlCheck(
             organization_id=organization.id,
             vendor_id=vendor.id,
@@ -181,7 +194,7 @@ class ExportControlScreeningService:
             denied_party_screening_result_json=denied_party_result,
             license_required=license_required,
             license_determination_basis=" ".join(basis_parts),
-            status="screened",
+            status=status_value,
             # Set explicitly (rather than relying solely on the DB
             # server_default) so ordering by computed_at is
             # microsecond-precise even on backends (e.g. SQLite) whose
@@ -192,6 +205,57 @@ class ExportControlScreeningService:
         self.db.add(row)
         self.db.flush()
         return row
+
+    def build_check_context(self, row: ExportControlCheck) -> dict[str, Any]:
+        """Flag staleness against the denied-party dataset and drift against
+        the vendor's prior screening -- a screening result is only as good
+        as the denied-party snapshot it was run against.
+        """
+        flags: list[str] = [
+            "preliminary_screening_requires_legal_confirmation: this is an initial screening "
+            "signal, not a final legal export-control determination"
+        ]
+        computed_at = row.computed_at
+        if computed_at.tzinfo is None:
+            computed_at = computed_at.replace(tzinfo=timezone.utc)
+
+        latest_dataset_activity = self.db.execute(
+            select(SanctionsEntity.last_seen).order_by(SanctionsEntity.last_seen.desc()).limit(1)
+        ).scalar_one_or_none()
+        dataset_stale = False
+        if latest_dataset_activity is not None:
+            if latest_dataset_activity.tzinfo is None:
+                latest_dataset_activity = latest_dataset_activity.replace(tzinfo=timezone.utc)
+            if latest_dataset_activity > computed_at:
+                dataset_stale = True
+                flags.append(
+                    "denied_party_dataset_updated_since_screening: the denied-party dataset has "
+                    "new/updated entries since this check was run -- re-screen before relying on "
+                    "this result"
+                )
+
+        previous = self.db.execute(
+            select(ExportControlCheck)
+            .where(
+                ExportControlCheck.organization_id == row.organization_id,
+                ExportControlCheck.vendor_id == row.vendor_id,
+                ExportControlCheck.id != row.id,
+                ExportControlCheck.computed_at < row.computed_at,
+            )
+            .order_by(ExportControlCheck.computed_at.desc())
+        ).scalars().first()
+        if previous is not None and previous.status != row.status:
+            flags.append(
+                f"status_changed_from_previous_check: '{previous.status}' -> '{row.status}'"
+            )
+
+        if row.status == "blocked":
+            flags.append(
+                "blocked_pending_legal_review: a positive denied-party match was found -- do not "
+                "proceed with this transaction without legal/export-control officer sign-off"
+            )
+
+        return {"denied_party_dataset_stale": dataset_stale, "context_flags": sorted(set(flags))}
 
     def latest_check(self, organization_id, vendor_id) -> ExportControlCheck | None:
         return self.db.execute(
