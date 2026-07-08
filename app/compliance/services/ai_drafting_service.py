@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from fastapi import HTTPException, status
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.ai_governance.services.draft_context_service import (
@@ -290,7 +291,23 @@ class AIDraftingService:
             applied_by=None,
         )
         self.db.add(row)
-        self.db.flush()
+        try:
+            self.db.flush()
+        except IntegrityError as exc:
+            # Defense-in-depth: if a draft_type is ever added to ALLOWED_DRAFT_TYPES
+            # without a matching migration widening the draft_requests.draft_type DB
+            # check constraint (as happened historically for ai_policy_draft and
+            # friends), surface a clear 500 with an actionable message instead of a
+            # bare unhandled IntegrityError.
+            self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=(
+                    f"Draft type '{draft_type}' is not yet supported by storage "
+                    "(missing DB migration for draft_requests.draft_type). "
+                    "Please contact support."
+                ),
+            ) from exc
 
         AuditService(self.db).write_audit_log(
             action="draft.created",

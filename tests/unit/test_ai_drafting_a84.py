@@ -237,3 +237,47 @@ def test_a84_ai_drafting_endpoints_and_service(client, db_session, monkeypatch):
         select(OrgAIConfig).where(OrgAIConfig.organization_id == uuid.UUID(org["organization_id"]))
     ).scalar_one()
     assert cfg.ai_drafting_enabled is False
+
+
+def test_a84_g6_ai_policy_and_eu_act_draft_types_persist(client, db_session, monkeypatch):
+    """Regression test for the G6 bug: draft_requests.draft_type's DB CHECK constraint
+    (created in migration 0121, never widened) only allowed the original 5 draft
+    types, so any of the 4 newer AIDraftingService.ALLOWED_DRAFT_TYPES entries
+    (ai_risk_assessment_narrative, model_card_content, eu_act_conformity_narrative,
+    ai_policy_draft) raised an unhandled IntegrityError -> bare 500 on real Postgres,
+    even though the ORM model and app-layer validation both already accepted them.
+
+    This test exercises /compliance/drafts/ai-policy and /compliance/drafts/eu-act-conformity
+    end to end and asserts a clean 201 with real persisted draft_output.
+    """
+    org = bootstrap_org_user(client, email_prefix="a84-g6-owner")
+    enabled = client.post(f"{DRAFT_BASE}/ai-config/enable", headers=org["org_headers"])
+    assert enabled.status_code == 200
+
+    monkeypatch.setattr(
+        AIDraftingService,
+        "_call_azure_openai",
+        lambda self, system_prompt, user_prompt: MOCK_DRAFT,
+    )
+
+    ai_policy = client.post(
+        f"{DRAFT_BASE}/ai-policy",
+        headers=org["org_headers"],
+        json={"industry": "fintech", "policy_scope": "all AI systems", "key_risks": "bias, privacy"},
+    )
+    assert ai_policy.status_code == 201, ai_policy.text
+    assert ai_policy.json()["draft_output"] == MOCK_DRAFT
+    assert ai_policy.json()["draft_type"] == "ai_policy_draft"
+
+    stored = db_session.execute(
+        select(DraftRequest).where(DraftRequest.id == uuid.UUID(ai_policy.json()["id"]))
+    ).scalar_one()
+    assert stored.draft_type == "ai_policy_draft"
+
+    eu_act = client.post(
+        f"{DRAFT_BASE}/eu-act-conformity",
+        headers=org["org_headers"],
+        json={"system_name": "FraudDetector"},
+    )
+    assert eu_act.status_code == 201, eu_act.text
+    assert eu_act.json()["draft_type"] == "eu_act_conformity_narrative"
