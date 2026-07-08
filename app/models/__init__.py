@@ -227,6 +227,7 @@ from app.models.governance_recommendation_action_disposition import GovernanceRe
 from app.models.governance_copilot_draft_snapshot import GovernanceCopilotDraftSnapshot
 from app.models.risk_control_link import RiskControlLink
 from app.models.risk_evidence_link import RiskEvidenceLink
+from app.models.risk_dependency import RiskDependency
 from app.models.recertification_action_log import RecertificationActionLog
 from app.models.recertification_run import RecertificationRun
 from app.models.recommendation_generation_run import RecommendationGenerationRun
@@ -573,6 +574,7 @@ __all__ = [
     "GovernanceCopilotDraftSnapshot",
     "RiskControlLink",
     "RiskEvidenceLink",
+    "RiskDependency",
     "RecertificationRun",
     "RecertificationActionLog",
     "RecommendationGenerationRun",

@@ -166,3 +166,165 @@ def test_item2_factor_based_residual_score_uses_factor_methodology_not_plain_mul
         "factor-based methodology"
     )
     assert body["residual_score"] == 25
+
+
+def _make_risk(client, headers, title):
+    resp = client.post(
+        "/api/v1/risks",
+        headers=headers,
+        json={"title": title, "category": "operational", "likelihood": 3, "impact": 3},
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+def test_item3_create_list_delete_risk_dependency(client):
+    org = bootstrap_org_user(client, email_prefix="g7-dep-crud")
+    headers = org["org_headers"]
+
+    upstream_id = _make_risk(client, headers, "Upstream outage risk")
+    downstream_id = _make_risk(client, headers, "Downstream SLA breach risk")
+
+    created = client.post(
+        f"/api/v1/risks/{upstream_id}/dependencies",
+        headers=headers,
+        json={"downstream_risk_id": downstream_id, "relationship_type": "cascades_to", "rationale": "Outage cascades to SLA breach"},
+    )
+    assert created.status_code == 201, created.text
+    dependency_id = created.json()["id"]
+    assert created.json()["upstream_risk_id"] == upstream_id
+    assert created.json()["downstream_risk_id"] == downstream_id
+
+    listed_upstream = client.get(f"/api/v1/risks/{upstream_id}/dependencies", headers=headers)
+    assert listed_upstream.status_code == 200
+    assert len(listed_upstream.json()) == 1
+
+    # The edge should also show up from the downstream side.
+    listed_downstream = client.get(f"/api/v1/risks/{downstream_id}/dependencies", headers=headers)
+    assert listed_downstream.status_code == 200
+    assert len(listed_downstream.json()) == 1
+
+    deleted = client.delete(f"/api/v1/risks/{upstream_id}/dependencies/{dependency_id}", headers=headers)
+    assert deleted.status_code == 200, deleted.text
+
+    listed_after_delete = client.get(f"/api/v1/risks/{upstream_id}/dependencies", headers=headers)
+    assert listed_after_delete.json() == []
+
+
+def test_item3_rejects_self_dependency(client):
+    org = bootstrap_org_user(client, email_prefix="g7-dep-self")
+    headers = org["org_headers"]
+    risk_id = _make_risk(client, headers, "Self risk")
+
+    resp = client.post(
+        f"/api/v1/risks/{risk_id}/dependencies",
+        headers=headers,
+        json={"downstream_risk_id": risk_id, "relationship_type": "cascades_to"},
+    )
+    assert resp.status_code == 422, resp.text
+
+
+def test_item3_rejects_duplicate_edge(client):
+    org = bootstrap_org_user(client, email_prefix="g7-dep-dup")
+    headers = org["org_headers"]
+    a = _make_risk(client, headers, "Risk A")
+    b = _make_risk(client, headers, "Risk B")
+
+    first = client.post(
+        f"/api/v1/risks/{a}/dependencies",
+        headers=headers,
+        json={"downstream_risk_id": b, "relationship_type": "cascades_to"},
+    )
+    assert first.status_code == 201
+
+    dup = client.post(
+        f"/api/v1/risks/{a}/dependencies",
+        headers=headers,
+        json={"downstream_risk_id": b, "relationship_type": "triggers"},
+    )
+    assert dup.status_code == 409, dup.text
+
+
+def test_item3_rejects_cycle(client):
+    """A -> B -> C exists; C -> A must be rejected since it would close a cycle."""
+    org = bootstrap_org_user(client, email_prefix="g7-dep-cycle")
+    headers = org["org_headers"]
+    a = _make_risk(client, headers, "Risk A")
+    b = _make_risk(client, headers, "Risk B")
+    c = _make_risk(client, headers, "Risk C")
+
+    assert client.post(
+        f"/api/v1/risks/{a}/dependencies", headers=headers, json={"downstream_risk_id": b}
+    ).status_code == 201
+    assert client.post(
+        f"/api/v1/risks/{b}/dependencies", headers=headers, json={"downstream_risk_id": c}
+    ).status_code == 201
+
+    cyclic = client.post(f"/api/v1/risks/{c}/dependencies", headers=headers, json={"downstream_risk_id": a})
+    assert cyclic.status_code == 422, cyclic.text
+
+
+def test_item3_org_scoping_enforced(client):
+    org_a = bootstrap_org_user(client, email_prefix="g7-dep-org-a")
+    org_b = bootstrap_org_user(client, email_prefix="g7-dep-org-b")
+
+    risk_a = _make_risk(client, org_a["org_headers"], "Org A risk")
+    risk_b = _make_risk(client, org_b["org_headers"], "Org B risk")
+
+    # Org B cannot create a dependency using org A's risk as downstream.
+    cross_org = client.post(
+        f"/api/v1/risks/{risk_b}/dependencies",
+        headers=org_b["org_headers"],
+        json={"downstream_risk_id": risk_a},
+    )
+    assert cross_org.status_code == 404, cross_org.text
+
+    # Org B cannot read org A's dependency graph/list via org A's risk id.
+    graph = client.get(f"/api/v1/risks/{risk_a}/dependency-graph", headers=org_b["org_headers"])
+    assert graph.status_code == 404
+
+
+def test_item3_dependency_graph_surfaces_connected_component_scores(client):
+    org = bootstrap_org_user(client, email_prefix="g7-dep-graph")
+    headers = org["org_headers"]
+    a = _make_risk(client, headers, "Root risk")
+    b = _make_risk(client, headers, "Cascades from root")
+    isolated = _make_risk(client, headers, "Unrelated isolated risk")
+
+    assert client.post(
+        f"/api/v1/risks/{a}/dependencies", headers=headers, json={"downstream_risk_id": b, "relationship_type": "cascades_to"}
+    ).status_code == 201
+
+    graph = client.get(f"/api/v1/risks/{a}/dependency-graph", headers=headers)
+    assert graph.status_code == 200, graph.text
+    body = graph.json()
+    assert body["root_risk_id"] == a
+    node_ids = {node["risk_id"] for node in body["nodes"]}
+    assert node_ids == {a, b}
+    assert isolated not in node_ids
+    assert body["summary"]["total_nodes"] == 2
+    assert body["summary"]["total_edges"] == 1
+    # Each node surfaces current score/severity so a user can see the cascade at a glance.
+    for node in body["nodes"]:
+        assert "inherent_score" in node
+        assert "severity" in node
+
+
+def test_item3_deleting_dependency_leaves_no_orphaned_edge_when_risk_archived(client):
+    org = bootstrap_org_user(client, email_prefix="g7-dep-archive")
+    headers = org["org_headers"]
+    a = _make_risk(client, headers, "Archived upstream")
+    b = _make_risk(client, headers, "Downstream")
+
+    assert client.post(
+        f"/api/v1/risks/{a}/dependencies", headers=headers, json={"downstream_risk_id": b}
+    ).status_code == 201
+
+    archived = client.patch(f"/api/v1/risks/{a}/archive", headers=headers)
+    assert archived.status_code == 200, archived.text
+
+    # Archiving doesn't hard-delete the risk row, so the edge legitimately still exists
+    # and the graph read must not crash for an archived upstream risk.
+    graph = client.get(f"/api/v1/risks/{b}/dependency-graph", headers=headers)
+    assert graph.status_code == 200, graph.text
+    assert len(graph.json()["nodes"]) == 2

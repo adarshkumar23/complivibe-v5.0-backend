@@ -86,6 +86,7 @@ from app.api.v1 import ot_ics
 from app.api.v1 import ai_usage_compliance
 from app.api.v1 import training_analytics
 from app.api.v1 import risk_quantification
+from app.api.v1 import risk_dependencies
 from app.api.v1 import resilience_testing
 from app.api.v1 import whistleblower
 from app.api.v1 import search as search_api
@@ -401,6 +402,7 @@ api_router.include_router(training_analytics.router)
 api_router.include_router(bcm.router)
 api_router.include_router(crisis_management.router)
 api_router.include_router(risk_quantification.router)
+api_router.include_router(risk_dependencies.router)
 api_router.include_router(resilience_testing.router)
 api_router.include_router(whistleblower.router)
 api_router.include_router(search_api.router)
