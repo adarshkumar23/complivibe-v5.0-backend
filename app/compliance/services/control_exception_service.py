@@ -72,23 +72,10 @@ class ControlExceptionService:
             )
         return user
 
-    @staticmethod
-    def _validate_expiry_rules(payload: ControlExceptionCreate) -> None:
-        if payload.exception_type == "permanent" and payload.expiry_date is not None:
-            raise HTTPException(
-                status_code=422,
-                detail="permanent exceptions must not include expiry_date",
-            )
-        if payload.exception_type in {"temporary", "conditional"} and payload.expiry_date is None:
-            raise HTTPException(
-                status_code=422,
-                detail=f"{payload.exception_type} exceptions require expiry_date",
-            )
-        if payload.expiry_date is not None and payload.expiry_date <= payload.effective_date:
-            raise HTTPException(
-                status_code=422,
-                detail="expiry_date must be greater than effective_date",
-            )
+    # NOTE: expiry_date/exception_type/effective_date cross-field validation now
+    # lives entirely on ControlExceptionCreate (see its model_validator) so that
+    # FastAPI's own request validation enforces it -- and so it's visible in the
+    # OpenAPI schema -- rather than being a second, application-only copy here.
 
     @staticmethod
     def _read_exception(row: ControlException) -> dict:
@@ -129,7 +116,6 @@ class ControlExceptionService:
         org_id: uuid.UUID,
         requested_by_user_id: uuid.UUID,
     ) -> ControlException:
-        self._validate_expiry_rules(data)
         self.require_control_in_org(org_id, data.control_id, field_name="control_id")
         self.ensure_active_member(org_id, data.owner_user_id, field_name="owner_user_id")
         self.ensure_active_member(org_id, requested_by_user_id, field_name="requested_by_user_id")
