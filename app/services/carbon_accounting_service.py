@@ -1,4 +1,6 @@
+import hashlib
 import re
+import secrets
 import uuid
 from collections import defaultdict
 from datetime import UTC, date, datetime
@@ -9,8 +11,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.data_observability.services.lineage_service import LineageService
 from app.models.business_unit import BusinessUnit
+from app.models.carbon_accounting_api_key import CarbonAccountingApiKey
 from app.models.carbon_emissions_reading import SCOPE3_CATEGORIES, CarbonEmissionsReading
 from app.schemas.carbon_accounting import CarbonEmissionsReadingIngest
 from app.services.audit_service import AuditService
@@ -40,8 +42,51 @@ class CarbonAccountingService:
     def utcnow() -> datetime:
         return datetime.now(UTC)
 
+    @staticmethod
+    def hash_api_key(raw_key: str) -> str:
+        return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
     def resolve_org_by_api_key(self, raw_key: str) -> uuid.UUID:
-        return LineageService(self.db).resolve_org_by_api_key(raw_key)
+        if not raw_key:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+        key_hash = self.hash_api_key(raw_key)
+        row = self.db.execute(
+            select(CarbonAccountingApiKey.organization_id).where(
+                CarbonAccountingApiKey.api_key_hash == key_hash,
+                CarbonAccountingApiKey.is_active.is_(True),
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+        return row
+
+    def provision_api_key(self, org_id: uuid.UUID, created_by_user_id: uuid.UUID | None) -> str:
+        """Generate (or rotate) this org's carbon-accounting ingest API key.
+
+        The raw key is only ever returned here, at provisioning time -- only its
+        SHA-256 hash is persisted, matching the pattern used for other ingest keys
+        in this codebase (e.g. AIMonitoringConfig.api_key_hash).
+        """
+        raw_key = secrets.token_urlsafe(32)
+        key_hash = self.hash_api_key(raw_key)
+        row = self.db.execute(
+            select(CarbonAccountingApiKey).where(CarbonAccountingApiKey.organization_id == org_id)
+        ).scalar_one_or_none()
+        now = self.utcnow()
+        if row is None:
+            row = CarbonAccountingApiKey(
+                organization_id=org_id,
+                api_key_hash=key_hash,
+                is_active=True,
+                created_by_user_id=created_by_user_id,
+            )
+            self.db.add(row)
+        else:
+            row.api_key_hash = key_hash
+            row.is_active = True
+            row.rotated_at = now
+        self.db.flush()
+        return raw_key
 
     def _require_business_unit(self, org_id: uuid.UUID, business_unit_id: uuid.UUID | None) -> None:
         if business_unit_id is None:

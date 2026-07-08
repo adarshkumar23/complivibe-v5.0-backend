@@ -24,13 +24,15 @@ def _org_id(client, token: str) -> str:
 
 
 def _ingest_key(client, token: str, org_id: str) -> str:
+    # G9 item 12: carbon-accounting ingest has its own dedicated API key, provisioned
+    # via its own endpoint -- it must NOT depend on (or reuse) the unrelated
+    # OpenMetadata lineage integration's ingest key.
     response = client.post(
-        "/api/v1/data-observability/lineage/openmetadata/configure",
+        "/api/v1/carbon-accounting/api-key",
         headers=_headers(token, org_id),
-        json={"base_url": "https://metadata.example.test", "jwt_token": "test-token", "org_api_key": "carbon-ingest-key-12345"},
     )
     assert response.status_code == 200, response.text
-    return response.json()["ingest_api_key"]
+    return response.json()["api_key"]
 
 
 def test_t33_carbon_api_key_ingest_dashboard_and_audit_log(client, db_session):

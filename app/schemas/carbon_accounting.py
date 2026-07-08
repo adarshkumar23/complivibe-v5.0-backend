@@ -71,3 +71,8 @@ class CarbonAccountingDashboard(BaseModel):
     reading_count: int
     canonical_unit: str
     insights: list[str] = Field(default_factory=list)
+
+
+class CarbonAccountingApiKeyProvisionResponse(BaseModel):
+    api_key: str = Field(description="The raw ingest API key -- shown only once, store it securely.")
+    header_name: str = "X-CompliVibe-Key"

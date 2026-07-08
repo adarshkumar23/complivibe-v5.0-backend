@@ -115,6 +115,7 @@ from app.models.compliance_baseline_evidence_sync_run import ComplianceBaselineE
 from app.models.compliance_bot_outbox import ComplianceBotOutbox
 from app.models.compliance_bot_subscription import ComplianceBotSubscription
 from app.models.carbon_emissions_reading import CarbonEmissionsReading
+from app.models.carbon_accounting_api_key import CarbonAccountingApiKey
 from app.models.connector_catalog_entry import ConnectorCatalogEntry, ConnectorOrgEnablement
 from app.models.custom_report_template import CustomReportTemplate
 from app.models.compliance_policy import CompliancePolicy
