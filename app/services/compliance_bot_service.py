@@ -1,8 +1,10 @@
+import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.compliance.services.digest_service import DigestService
@@ -17,6 +19,12 @@ from app.models.task import Task
 from app.models.user import User
 from app.services.audit_service import AuditService
 from app.services.rbac_service import RBACService
+
+logger = logging.getLogger(__name__)
+
+# A subscription that hasn't had any successful digest/SLA-alert dispatch in
+# this long, despite being active and enabled, is flagged as needing a look.
+SUBSCRIPTION_STALE_THRESHOLD_DAYS = 14
 
 
 class ComplianceBotService:
@@ -124,6 +132,39 @@ class ComplianceBotService:
         )
         return row
 
+    @staticmethod
+    def _as_aware(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
+
+    def describe_subscription_context(self, subscription: ComplianceBotSubscription) -> list[str]:
+        """Flag subscriptions that are configured to receive proactive messages but have
+        never (or not recently) actually had one dispatched, so an admin can tell a
+        channel/webhook has gone dark instead of silently assuming delivery is healthy."""
+        flags: list[str] = []
+        if not subscription.is_active:
+            return flags
+        now = self.utcnow()
+        created_at = self._as_aware(subscription.created_at)
+        old_enough = created_at is not None and (now - created_at) > timedelta(days=SUBSCRIPTION_STALE_THRESHOLD_DAYS)
+
+        if subscription.digest_enabled:
+            last_digest = self._as_aware(subscription.last_digest_sent_at)
+            if last_digest is None and old_enough:
+                flags.append("digest_pending_first_send")
+            elif last_digest is not None and (now - last_digest) > timedelta(days=SUBSCRIPTION_STALE_THRESHOLD_DAYS):
+                flags.append("digest_stale")
+
+        if subscription.sla_alerts_enabled:
+            last_sla = self._as_aware(subscription.last_sla_alert_sent_at)
+            if last_sla is None and old_enough:
+                flags.append("sla_alerts_pending_first_check")
+
+        return flags
+
     def list_subscriptions(self, organization_id: uuid.UUID, user_id: uuid.UUID) -> list[ComplianceBotSubscription]:
         return (
             self.db.execute(
@@ -168,6 +209,7 @@ class ComplianceBotService:
         scheduled_for: datetime,
         sent_at: datetime | None = None,
         error_message: str | None = None,
+        idempotency_key: str | None = None,
     ) -> ComplianceBotOutbox:
         row = ComplianceBotOutbox(
             organization_id=organization_id,
@@ -180,6 +222,7 @@ class ComplianceBotService:
             scheduled_for=scheduled_for,
             sent_at=sent_at,
             error_message=error_message,
+            idempotency_key=idempotency_key,
         )
         self.db.add(row)
         self.db.flush()
@@ -342,8 +385,34 @@ class ComplianceBotService:
         platform: str,
         command: str,
         text: str,
+        idempotency_key: str | None = None,
     ) -> dict:
         subscription = self._subscription_or_404(organization_id, actor_user_id, platform)
+
+        # Slack (and, in future, other platforms) retries a slash command delivery with
+        # the same trigger id if our first response didn't come back in time. Replaying
+        # a mutating subcommand (approve/urgent) would double-fire side effects such as
+        # re-sending an attestation reminder email, so short-circuit with the stored
+        # response for an already-processed idempotency key instead of re-executing it.
+        if idempotency_key is not None:
+            existing = self.db.execute(
+                select(ComplianceBotOutbox).where(
+                    ComplianceBotOutbox.subscription_id == subscription.id,
+                    ComplianceBotOutbox.idempotency_key == idempotency_key,
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                details = dict(existing.payload_json or {}).get("details", {})
+                return {
+                    "platform": platform,
+                    "command": (existing.command_text or "").split()[0].lower() if existing.command_text else "",
+                    "handled": True,
+                    "response_text": existing.content_text,
+                    "state_changed": False,
+                    "details": details,
+                    "replayed": True,
+                }
+
         normalized = text.strip()
         if command.strip() == "/complivibe" and normalized:
             command_text = normalized
@@ -400,17 +469,28 @@ class ComplianceBotService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported bot subcommand")
 
         now = self.utcnow()
-        outbox = self._queue_outbox(
-            organization_id=organization_id,
-            subscription=subscription,
-            message_type="command_response",
-            content_text=response_text,
-            payload_json={"platform": platform, "details": details},
-            command_text=command_text,
-            status_value="sent",
-            scheduled_for=now,
-            sent_at=now,
-        )
+        try:
+            outbox = self._queue_outbox(
+                organization_id=organization_id,
+                subscription=subscription,
+                message_type="command_response",
+                content_text=response_text,
+                payload_json={"platform": platform, "details": details},
+                command_text=command_text,
+                status_value="sent",
+                scheduled_for=now,
+                sent_at=now,
+                idempotency_key=idempotency_key,
+            )
+        except IntegrityError:
+            # A concurrent retry with the same idempotency key raced us here; the
+            # mutating work above already happened (or is in flight) - surface it as a
+            # replay instead of raising, since the caller (Slack/Teams) will retry again.
+            self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This command is already being processed; retry shortly.",
+            ) from None
         AuditService(self.db).write_audit_log(
             action="compliance_bot.command_handled",
             entity_type="compliance_bot_outbox",
@@ -427,6 +507,7 @@ class ComplianceBotService:
             "response_text": response_text,
             "state_changed": state_changed,
             "details": details,
+            "replayed": False,
         }
 
     def run_daily_digest_dispatch(self) -> dict:
@@ -446,44 +527,55 @@ class ComplianceBotService:
             .all()
         )
         queued = 0
+        failed = 0
         for row in rows:
             if row.last_digest_sent_at is not None and row.last_digest_sent_at.date() >= now.date():
                 continue
-            payload = DigestService(self.db).build_daily_digest(row.organization_id, row.user_id)
-            content_text = (
-                "Daily digest: "
-                f"overdue_tasks={len(payload['overdue_tasks'])}, "
-                f"expiring_evidence={len(payload['expiring_evidence'])}, "
-                f"open_risks={len(payload['open_risks'])}, "
-                f"upcoming_deadlines={len(payload['upcoming_deadlines'])}."
-            )
-            self._queue_outbox(
-                organization_id=row.organization_id,
-                subscription=row,
-                message_type="daily_digest",
-                content_text=content_text,
-                payload_json=payload,
-                command_text=None,
-                status_value="pending",
-                scheduled_for=now,
-            )
-            row.last_digest_sent_at = now
-            queued += 1
-            AuditService(self.db).write_audit_log(
-                action="compliance_bot.digest_queued",
-                entity_type="compliance_bot_subscription",
-                entity_id=row.id,
-                organization_id=row.organization_id,
-                actor_user_id=None,
-                after_json={"platform": row.platform, "digest_time_utc": row.digest_time_utc},
-                metadata_json={"source": "scheduler"},
-            )
+            try:
+                with self.db.begin_nested():
+                    payload = DigestService(self.db).build_daily_digest(row.organization_id, row.user_id)
+                    content_text = (
+                        "Daily digest: "
+                        f"overdue_tasks={len(payload['overdue_tasks'])}, "
+                        f"expiring_evidence={len(payload['expiring_evidence'])}, "
+                        f"open_risks={len(payload['open_risks'])}, "
+                        f"upcoming_deadlines={len(payload['upcoming_deadlines'])}."
+                    )
+                    self._queue_outbox(
+                        organization_id=row.organization_id,
+                        subscription=row,
+                        message_type="daily_digest",
+                        content_text=content_text,
+                        payload_json=payload,
+                        command_text=None,
+                        status_value="pending",
+                        scheduled_for=now,
+                    )
+                    row.last_digest_sent_at = now
+                    AuditService(self.db).write_audit_log(
+                        action="compliance_bot.digest_queued",
+                        entity_type="compliance_bot_subscription",
+                        entity_id=row.id,
+                        organization_id=row.organization_id,
+                        actor_user_id=None,
+                        after_json={"platform": row.platform, "digest_time_utc": row.digest_time_utc},
+                        metadata_json={"source": "scheduler"},
+                    )
+                queued += 1
+            except Exception:  # noqa: BLE001 - one broken org/subscription must not block the whole sweep
+                failed += 1
+                logger.exception(
+                    "compliance_bot daily digest dispatch failed for subscription %s (org %s)",
+                    row.id,
+                    row.organization_id,
+                )
         self.db.flush()
         return {
             "processed_subscriptions": len(rows),
             "queued_messages": queued,
             "organizations_checked": len({str(r.organization_id) for r in rows}),
             "state_changes": queued,
+            "failed_subscriptions": failed,
         }
 
     def run_sla_alert_dispatch(self) -> dict:
@@ -501,45 +593,55 @@ class ComplianceBotService:
             .all()
         )
         queued = 0
+        failed = 0
         org_results: dict[uuid.UUID, dict[str, int]] = {}
         for row in rows:
             last_sent = row.last_sla_alert_sent_at
             if last_sent is not None and (now - last_sent).total_seconds() < 3600:
                 continue
-            if row.organization_id not in org_results:
-                org_results[row.organization_id] = SLAService(self.db).check_sla_breaches(row.organization_id)
-            result = org_results[row.organization_id]
-            if int(result.get("response_breached", 0)) + int(result.get("resolution_breached", 0)) <= 0:
-                continue
-            content_text = (
-                "SLA alert: "
-                f"response_breached={int(result.get('response_breached', 0))}, "
-                f"resolution_breached={int(result.get('resolution_breached', 0))}."
-            )
-            self._queue_outbox(
-                organization_id=row.organization_id,
-                subscription=row,
-                message_type="sla_alert",
-                content_text=content_text,
-                payload_json=result,
-                command_text=None,
-                status_value="pending",
-                scheduled_for=now,
-            )
-            row.last_sla_alert_sent_at = now
-            queued += 1
-            AuditService(self.db).write_audit_log(
-                action="compliance_bot.sla_alert_queued",
-                entity_type="compliance_bot_subscription",
-                entity_id=row.id,
-                organization_id=row.organization_id,
-                actor_user_id=None,
-                after_json={
-                    "response_breached": int(result.get("response_breached", 0)),
-                    "resolution_breached": int(result.get("resolution_breached", 0)),
-                },
-                metadata_json={"source": "scheduler"},
-            )
+            try:
+                with self.db.begin_nested():
+                    if row.organization_id not in org_results:
+                        org_results[row.organization_id] = SLAService(self.db).check_sla_breaches(row.organization_id)
+                    result = org_results[row.organization_id]
+                    if int(result.get("response_breached", 0)) + int(result.get("resolution_breached", 0)) <= 0:
+                        continue
+                    content_text = (
+                        "SLA alert: "
+                        f"response_breached={int(result.get('response_breached', 0))}, "
+                        f"resolution_breached={int(result.get('resolution_breached', 0))}."
+                    )
+                    self._queue_outbox(
+                        organization_id=row.organization_id,
+                        subscription=row,
+                        message_type="sla_alert",
+                        content_text=content_text,
+                        payload_json=result,
+                        command_text=None,
+                        status_value="pending",
+                        scheduled_for=now,
+                    )
+                    row.last_sla_alert_sent_at = now
+                    AuditService(self.db).write_audit_log(
+                        action="compliance_bot.sla_alert_queued",
+                        entity_type="compliance_bot_subscription",
+                        entity_id=row.id,
+                        organization_id=row.organization_id,
+                        actor_user_id=None,
+                        after_json={
+                            "response_breached": int(result.get("response_breached", 0)),
+                            "resolution_breached": int(result.get("resolution_breached", 0)),
+                        },
+                        metadata_json={"source": "scheduler"},
+                    )
+                queued += 1
+            except Exception:  # noqa: BLE001 - one broken org/subscription must not block the whole sweep
+                failed += 1
+                logger.exception(
+                    "compliance_bot sla alert dispatch failed for subscription %s (org %s)",
+                    row.id,
+                    row.organization_id,
+                )
         self.db.flush()
         return {
             "processed_subscriptions": len(rows),
@@ -548,6 +650,7 @@ class ComplianceBotService:
             "state_changes": queued + sum(
                 int(v.get("response_breached", 0)) + int(v.get("resolution_breached", 0)) for v in org_results.values()
             ),
+            "failed_subscriptions": failed,
         }
 
     def list_outbox(self, organization_id: uuid.UUID, user_id: uuid.UUID, platform: str, limit: int) -> list[ComplianceBotOutbox]:

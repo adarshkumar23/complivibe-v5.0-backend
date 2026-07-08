@@ -27,6 +27,7 @@ class ComplianceBotSubscriptionRead(UUIDTimestampSchema):
     last_digest_sent_at: datetime | None = None
     last_sla_alert_sent_at: datetime | None = None
     created_by_user_id: UUID | None = None
+    context_flags: list[str] = []
 
 
 class SlackSlashCommandPayload(BaseModel):
@@ -53,6 +54,7 @@ class ComplianceBotCommandResponse(BaseModel):
     response_text: str
     state_changed: bool
     details: dict
+    replayed: bool = False
 
 
 class ComplianceBotOutboxRead(UUIDTimestampSchema):
@@ -67,6 +69,7 @@ class ComplianceBotOutboxRead(UUIDTimestampSchema):
     sent_at: datetime | None = None
     failed_at: datetime | None = None
     error_message: str | None = None
+    idempotency_key: str | None = None
 
 
 class ComplianceBotSweepResult(BaseModel):
@@ -74,3 +77,4 @@ class ComplianceBotSweepResult(BaseModel):
     queued_messages: int
     organizations_checked: int
     state_changes: int
+    failed_subscriptions: int = 0

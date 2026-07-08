@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, JSON, String, Text, Uuid
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, JSON, String, Text, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -22,6 +22,13 @@ class ComplianceBotOutbox(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwned
         Index("ix_compliance_bot_outbox_org_status", "organization_id", "status"),
         Index("ix_compliance_bot_outbox_org_type", "organization_id", "message_type"),
         Index("ix_compliance_bot_outbox_subscription", "subscription_id", "scheduled_for"),
+        Index(
+            "uq_compliance_bot_outbox_subscription_idem_key",
+            "subscription_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
     subscription_id: Mapped[uuid.UUID] = mapped_column(
@@ -38,3 +45,4 @@ class ComplianceBotOutbox(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwned
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)

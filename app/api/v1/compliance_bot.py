@@ -19,7 +19,7 @@ from app.services.compliance_bot_service import ComplianceBotService
 router = APIRouter(prefix="/compliance-bot", tags=["compliance-bot"])
 
 
-def _subscription_read(row) -> ComplianceBotSubscriptionRead:
+def _subscription_read(row, service: ComplianceBotService) -> ComplianceBotSubscriptionRead:
     return ComplianceBotSubscriptionRead(
         id=row.id,
         created_at=row.created_at,
@@ -35,6 +35,7 @@ def _subscription_read(row) -> ComplianceBotSubscriptionRead:
         last_digest_sent_at=row.last_digest_sent_at,
         last_sla_alert_sent_at=row.last_sla_alert_sent_at,
         created_by_user_id=row.created_by_user_id,
+        context_flags=service.describe_subscription_context(row),
     )
 
 
@@ -54,6 +55,7 @@ def _outbox_read(row) -> ComplianceBotOutboxRead:
         sent_at=row.sent_at,
         failed_at=row.failed_at,
         error_message=row.error_message,
+        idempotency_key=row.idempotency_key,
     )
 
 
@@ -65,7 +67,8 @@ def upsert_subscription(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("compliance_bot:configure_subscription")),
 ) -> ComplianceBotSubscriptionRead:
-    row = ComplianceBotService(db).upsert_subscription(
+    service = ComplianceBotService(db)
+    row = service.upsert_subscription(
         organization_id=organization.id,
         user_id=current_user.id,
         platform=payload.platform,
@@ -78,7 +81,7 @@ def upsert_subscription(
     )
     db.commit()
     db.refresh(row)
-    return _subscription_read(row)
+    return _subscription_read(row, service)
 
 
 @router.get("/subscriptions", response_model=list[ComplianceBotSubscriptionRead])
@@ -88,8 +91,9 @@ def list_subscriptions(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("compliance_bot:list_subscriptions")),
 ) -> list[ComplianceBotSubscriptionRead]:
-    rows = ComplianceBotService(db).list_subscriptions(organization.id, current_user.id)
-    return [_subscription_read(row) for row in rows]
+    service = ComplianceBotService(db)
+    rows = service.list_subscriptions(organization.id, current_user.id)
+    return [_subscription_read(row, service) for row in rows]
 
 
 @router.post("/slack/commands", response_model=ComplianceBotCommandResponse)
@@ -106,6 +110,7 @@ def handle_slack_command(
         platform="slack",
         command=payload.command,
         text=payload.text,
+        idempotency_key=payload.trigger_id,
     )
     db.commit()
     return ComplianceBotCommandResponse(**result)
