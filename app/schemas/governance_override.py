@@ -83,10 +83,15 @@ class GovernanceOverrideRequestRead(BaseModel):
     approver_role_names_json: list[str] | None = None
     metadata_json: dict | None = None
     approvals_remaining: int = 0
+    decision_count: int = 0
+    approval_progress_pct: float = 0
     request_age_hours: float = 0
     expires_in_hours: float | None = None
+    is_expired: bool = False
     stale_pending: bool = False
     last_event_at: datetime | None = None
+    target_state_changed_since_request: bool = False
+    target_entity_missing: bool = False
     context_flags: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

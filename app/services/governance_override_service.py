@@ -42,6 +42,15 @@ ALLOWED_REQUESTED_ACTIONS = {
     "revoke_attestation_after_lock",
 }
 
+ALLOWED_OVERRIDE_REQUEST_STATUS = {
+    "pending",
+    "approved",
+    "rejected",
+    "executed",
+    "cancelled",
+    "expired",
+}
+
 ACTION_TARGET_MAP: dict[str, set[str]] = {
     "archive_locked_export": {"export_job"},
     "remove_legal_hold": {"export_job"},
@@ -181,6 +190,25 @@ class GovernanceOverrideService:
         if expires_at is not None:
             expires_in_hours = round((expires_at - now).total_seconds() / 3600.0, 3)
         approvals_remaining = max(int(row.required_approvals) - int(row.approval_count), 0)
+        decision_count = int(row.approval_count or 0) + int(row.rejection_count or 0)
+        approval_progress_pct = round((int(row.approval_count or 0) / int(row.required_approvals)) * 100.0, 2) if int(row.required_approvals) > 0 else 0.0
+        is_expired = bool(expires_at is not None and expires_at < now)
+        target_facts_snapshot = ((row.routing_context_json or {}).get("target_facts") if isinstance(row.routing_context_json, dict) else None)
+        target_facts_current: dict[str, Any] | None = None
+        target_entity_missing = False
+        target_state_changed_since_request = False
+        if row.status in {"pending", "approved"}:
+            try:
+                target_facts_current = self.collect_target_facts(
+                    organization_id=row.organization_id,
+                    target_entity_type=row.target_entity_type,
+                    target_entity_id=row.target_entity_id,
+                )
+            except HTTPException:
+                target_entity_missing = True
+            else:
+                if isinstance(target_facts_snapshot, dict):
+                    target_state_changed_since_request = bool(target_facts_current != target_facts_snapshot)
         stale_pending = bool(row.status == "pending" and request_age_hours >= OVERRIDE_PENDING_STALE_HOURS)
         context_flags: list[str] = []
         if row.status == "pending":
@@ -195,6 +223,10 @@ class GovernanceOverrideService:
             context_flags.append("awaiting_execution")
         if row.status == "expired":
             context_flags.append("expired_unexecuted")
+        if target_entity_missing:
+            context_flags.append("target_entity_missing")
+        if target_state_changed_since_request:
+            context_flags.append("target_state_changed")
         if row.status == "executed" and not bool(row.execution_result_json):
             context_flags.append("execution_result_missing")
         if row.template_id is None:
@@ -227,14 +259,56 @@ class GovernanceOverrideService:
             "approver_role_names_json": row.approver_role_names_json,
             "metadata_json": row.metadata_json,
             "approvals_remaining": approvals_remaining,
+            "decision_count": decision_count,
+            "approval_progress_pct": approval_progress_pct,
             "request_age_hours": request_age_hours,
             "expires_in_hours": expires_in_hours,
+            "is_expired": is_expired,
             "stale_pending": stale_pending,
             "last_event_at": latest_event_at,
+            "target_state_changed_since_request": target_state_changed_since_request,
+            "target_entity_missing": target_entity_missing,
             "context_flags": context_flags,
             "created_at": row.created_at,
             "updated_at": row.updated_at,
         }
+
+    @staticmethod
+    def validate_request_filters(
+        *,
+        status_filter: str | None,
+        override_type: str | None,
+        target_entity_type: str | None,
+        requested_action: str | None,
+    ) -> None:
+        if status_filter is not None:
+            validate_choice(
+                status_filter,
+                ALLOWED_OVERRIDE_REQUEST_STATUS,
+                "status",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        if override_type is not None:
+            validate_choice(
+                override_type,
+                ALLOWED_OVERRIDE_TYPES,
+                "override_type",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        if target_entity_type is not None:
+            validate_choice(
+                target_entity_type,
+                ALLOWED_TARGET_ENTITY_TYPES,
+                "target_entity_type",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        if requested_action is not None:
+            validate_choice(
+                requested_action,
+                ALLOWED_REQUESTED_ACTIONS,
+                "requested_action",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
 
     def override_request_payloads(self, *, rows: list[GovernanceOverrideRequest]) -> list[dict[str, Any]]:
         if not rows:
@@ -795,6 +869,8 @@ class GovernanceOverrideService:
         reason: str,
     ) -> GovernanceOverrideRequest:
         self._ensure_pending_and_not_expired(row)
+        if row.requested_by_user_id == approver_user_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Requester cannot reject their own override request")
         reason = str(reason).strip()
         if not reason:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="reason is required")
@@ -805,6 +881,11 @@ class GovernanceOverrideService:
         )
         if existing is not None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Approver has already reviewed this override request")
+
+        if row.approver_role_names_json:
+            approver_role_name = self._approver_role_name(organization_id=row.organization_id, approver_user_id=approver_user_id)
+            if approver_role_name not in set(row.approver_role_names_json):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Approver role is not allowed for this override request")
 
         rejection = GovernanceOverrideApproval(
             organization_id=row.organization_id,

@@ -59,10 +59,15 @@ def _request_read(payload: dict) -> GovernanceOverrideRequestRead:
         approver_role_names_json=payload.get("approver_role_names_json"),
         metadata_json=payload.get("metadata_json"),
         approvals_remaining=int(payload.get("approvals_remaining", 0)),
+        decision_count=int(payload.get("decision_count", 0)),
+        approval_progress_pct=float(payload.get("approval_progress_pct", 0)),
         request_age_hours=float(payload.get("request_age_hours", 0)),
         expires_in_hours=float(payload["expires_in_hours"]) if payload.get("expires_in_hours") is not None else None,
+        is_expired=bool(payload.get("is_expired", False)),
         stale_pending=bool(payload.get("stale_pending", False)),
         last_event_at=payload.get("last_event_at"),
+        target_state_changed_since_request=bool(payload.get("target_state_changed_since_request", False)),
+        target_entity_missing=bool(payload.get("target_entity_missing", False)),
         context_flags=[str(item) for item in payload.get("context_flags", [])],
         created_at=payload["created_at"],
         updated_at=payload["updated_at"],
@@ -190,6 +195,12 @@ def list_override_requests(
     organization: Organization = Depends(get_current_organization),
     _=Depends(require_permission("governance_override:read")),
 ) -> GovernanceOverrideListResponse:
+    GovernanceOverrideService.validate_request_filters(
+        status_filter=status_filter,
+        override_type=override_type,
+        target_entity_type=target_entity_type,
+        requested_action=requested_action,
+    )
     repo = GovernanceOverrideRepository(db)
     rows = repo.list_requests(
         organization_id=organization.id,
