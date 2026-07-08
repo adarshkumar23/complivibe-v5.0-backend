@@ -428,3 +428,91 @@ def test_phase91_audit_coverage_and_cancel_requires_reason(client, db_session):
     assert "compliance_policy_approval.approved" in actions
     assert "compliance_policy_approval.rejected" in actions
     assert "compliance_policy_approval.cancelled" in actions
+
+
+def test_g6_assigned_non_owner_approver_can_decide_own_request(client, db_session):
+    """Regression test for the G6 bug: approve/reject required the blanket
+    compliance_policies:approve permission via require_permission(), which only
+    "owner" (and "admin") roles carry. A "reviewer" or "auditor" explicitly
+    assigned as approver_user_id on a specific request got a bare 403
+    ("Missing required permission: compliance_policies:approve") even though
+    they were the named, correct decision-maker for that exact request.
+
+    Being the assigned approver on a request must be sufficient authorization
+    for THAT request regardless of the assignee's role's blanket grant. A
+    different user who is neither the assignee nor an owner/admin must still
+    be rejected.
+    """
+    org = bootstrap_org_user(client, email_prefix="p91-g6-assignee")
+    owner_headers = org["org_headers"]
+
+    reviewer = _create_user_with_role(
+        db_session,
+        org_id=org["organization_id"],
+        email="p91-g6-reviewer@example.com",
+        role_name="reviewer",
+    )
+    other_reviewer = _create_user_with_role(
+        db_session,
+        org_id=org["organization_id"],
+        email="p91-g6-other-reviewer@example.com",
+        role_name="reviewer",
+    )
+    reviewer_token = login_user(client, reviewer.email)
+    reviewer_headers = org_headers(reviewer_token, org["organization_id"])
+    other_reviewer_token = login_user(client, other_reviewer.email)
+    other_reviewer_headers = org_headers(other_reviewer_token, org["organization_id"])
+
+    policy = _create_policy(client, owner_headers, owner_user_id=org["user_id"], title="G6 Assignee Policy")
+    version = _create_version(
+        client, owner_headers, policy["id"], version_number="2.0", content={"body": "needs reviewer sign-off"}
+    )
+    _submit_version(client, owner_headers, policy["id"], version["id"])
+
+    approval_request = _create_approval_request(
+        client, owner_headers, policy["id"], version["id"], approver_user_id=str(reviewer.id)
+    )
+
+    # A different reviewer-role user, not assigned to this request and without
+    # the blanket compliance_policies:approve permission, must still be blocked.
+    wrong_person = client.post(
+        f"{BASE}/{policy['id']}/approval-requests/{approval_request['id']}/approve",
+        headers=other_reviewer_headers,
+        json={"notes": "not my request"},
+    )
+    assert wrong_person.status_code == 403
+
+    # The assigned reviewer -- whose ROLE lacks compliance_policies:approve -- can
+    # act on THIS request because they are the named approver.
+    approved = client.post(
+        f"{BASE}/{policy['id']}/approval-requests/{approval_request['id']}/approve",
+        headers=reviewer_headers,
+        json={"notes": "reviewer sign-off as assignee"},
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "approved"
+
+    # Same story for reject: assign a second request to the reviewer and confirm
+    # they can reject it, while the wrong person still cannot.
+    version2 = _create_version(
+        client, owner_headers, policy["id"], version_number="3.0", content={"body": "needs rejection"}
+    )
+    _submit_version(client, owner_headers, policy["id"], version2["id"])
+    approval_request2 = _create_approval_request(
+        client, owner_headers, policy["id"], version2["id"], approver_user_id=str(reviewer.id)
+    )
+
+    wrong_person_reject = client.post(
+        f"{BASE}/{policy['id']}/approval-requests/{approval_request2['id']}/reject",
+        headers=other_reviewer_headers,
+        json={"notes": "not my request"},
+    )
+    assert wrong_person_reject.status_code == 403
+
+    rejected = client.post(
+        f"{BASE}/{policy['id']}/approval-requests/{approval_request2['id']}/reject",
+        headers=reviewer_headers,
+        json={"notes": "reviewer rejecting as assignee"},
+    )
+    assert rejected.status_code == 200, rejected.text
+    assert rejected.json()["status"] == "rejected"

@@ -4,7 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
+from app.core.deps import (
+    get_current_active_user,
+    get_current_organization,
+    get_db,
+    require_org_membership,
+    require_permission,
+)
 from app.models.compliance_policy import CompliancePolicy
 from app.models.compliance_policy_approval_request import CompliancePolicyApprovalRequest
 from app.models.compliance_policy_control_link import CompliancePolicyControlLink
@@ -101,6 +107,40 @@ def _approval_request_read(row: CompliancePolicyApprovalRequest) -> CompliancePo
         decided_at=row.decided_at,
         created_at=row.created_at,
     )
+
+
+def _require_can_decide_approval_request(
+    db: Session,
+    current_user: User,
+    organization: Organization,
+    approval_request: CompliancePolicyApprovalRequest,
+) -> None:
+    """Authorizes approve/reject on a specific approval request.
+
+    Two independent, either-or paths grant authority to act on THIS request:
+      1. Instance-level assignment: the caller IS approval_request.approver_user_id.
+         Being named as the approver on a request is itself sufficient
+         authorization for that request, regardless of the caller's role's
+         blanket permission grant (e.g. a "reviewer" or "auditor" explicitly
+         assigned as approver can act, even though their role does not carry
+         the general compliance_policies:approve permission).
+      2. Role-level override: the caller's role carries the blanket
+         compliance_policies:approve permission (e.g. owner/admin), letting
+         them act on any request in the org regardless of who was assigned --
+         an override path, not the normal case.
+
+    A user who is neither the assigned approver nor a blanket-permission
+    holder is rejected, whether or not they are otherwise a member of the org.
+    """
+    is_assigned_approver = approval_request.approver_user_id == current_user.id
+    has_blanket_override = RBACService.user_has_permission(
+        db, current_user.id, organization.id, "compliance_policies:approve"
+    )
+    if not (is_assigned_approver or has_blanket_override):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the assigned approver (or an org admin/owner) can act on this approval request",
+        )
 
 
 def _control_link_read(row: CompliancePolicyControlLink) -> CompliancePolicyControlLinkRead:
@@ -589,15 +629,14 @@ def approve_policy_approval_request(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("compliance_policies:approve")),
+    _: Membership = Depends(require_org_membership),
 ) -> CompliancePolicyApprovalRequestRead:
     service = CompliancePolicyService(db)
     approval_request = service.require_approval_request_in_org(organization.id, policy_id, request_id)
     if approval_request.status != "pending":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only pending requests can be approved")
 
-    if approval_request.approver_user_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only assigned approver can approve this request")
+    _require_can_decide_approval_request(db, current_user, organization, approval_request)
     if approval_request.requested_by_user_id == current_user.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Requester cannot approve their own request")
 
@@ -665,15 +704,14 @@ def reject_policy_approval_request(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("compliance_policies:approve")),
+    _: Membership = Depends(require_org_membership),
 ) -> CompliancePolicyApprovalRequestRead:
     service = CompliancePolicyService(db)
     approval_request = service.require_approval_request_in_org(organization.id, policy_id, request_id)
     if approval_request.status != "pending":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only pending requests can be rejected")
 
-    if approval_request.approver_user_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only assigned approver can reject this request")
+    _require_can_decide_approval_request(db, current_user, organization, approval_request)
 
     version = service.require_version_in_org(organization.id, policy_id, approval_request.version_id)
     now = service.utcnow()
