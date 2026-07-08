@@ -8,6 +8,7 @@ from app.models.membership import Membership
 from app.models.organization import Organization
 from app.models.user import User
 from app.schemas.evidence_automation import (
+    EvidenceAutomationIngestDuplicate,
     EvidenceAutomationIngestError,
     EvidenceAutomationIngestPayload,
     EvidenceAutomationIngestResponse,
@@ -21,7 +22,8 @@ from app.services.evidence_automation_service import EvidenceAutomationService
 router = APIRouter(prefix="/evidence-automation", tags=["evidence-automation"])
 
 
-def _rule_read(row) -> EvidenceAutomationRuleRead:
+def _rule_read(row, service: EvidenceAutomationService) -> EvidenceAutomationRuleRead:
+    health = service.describe_rule_health(row)
     return EvidenceAutomationRuleRead(
         id=row.id,
         created_at=row.created_at,
@@ -34,6 +36,16 @@ def _rule_read(row) -> EvidenceAutomationRuleRead:
         transform_template=row.transform_template,
         is_active=row.is_active,
         created_by_user_id=row.created_by_user_id,
+        last_triggered_at=row.last_triggered_at,
+        last_matched_at=row.last_matched_at,
+        trigger_count=row.trigger_count,
+        consecutive_error_count=row.consecutive_error_count,
+        last_error_at=row.last_error_at,
+        last_error_message=row.last_error_message,
+        is_stale=health["is_stale"],
+        needs_attention=health["needs_attention"],
+        target_control_archived=health["target_control_archived"],
+        context_flags=health["context_flags"],
     )
 
 
@@ -43,8 +55,9 @@ def list_rules(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("evidence_automation_rules:read")),
 ) -> list[EvidenceAutomationRuleRead]:
-    rows = EvidenceAutomationService(db).list_rules(organization.id)
-    return [_rule_read(row) for row in rows]
+    service = EvidenceAutomationService(db)
+    rows = service.list_rules(organization.id)
+    return [_rule_read(row, service) for row in rows]
 
 
 @router.post("/rules", response_model=EvidenceAutomationRuleRead, status_code=status.HTTP_201_CREATED)
@@ -56,7 +69,8 @@ def create_rule(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("evidence_automation_rules:write")),
 ) -> EvidenceAutomationRuleRead:
-    row = EvidenceAutomationService(db).create_rule(
+    service = EvidenceAutomationService(db)
+    row = service.create_rule(
         organization_id=organization.id,
         created_by_user_id=current_user.id,
         trigger_source=payload.trigger_source,
@@ -79,7 +93,7 @@ def create_rule(
     )
     db.commit()
     db.refresh(row)
-    return _rule_read(row)
+    return _rule_read(row, service)
 
 
 @router.patch("/rules/{rule_id}", response_model=EvidenceAutomationRuleRead)
@@ -143,7 +157,7 @@ def update_rule(
     )
     db.commit()
     db.refresh(row)
-    return _rule_read(row)
+    return _rule_read(row, service)
 
 
 def _ingest_response(
@@ -153,14 +167,19 @@ def _ingest_response(
     matched_rule_count: int,
     skipped_rule_count: int,
     errors: list[tuple[uuid.UUID, str]],
+    duplicates: list[tuple[uuid.UUID, str]],
 ) -> EvidenceAutomationIngestResponse:
     return EvidenceAutomationIngestResponse(
         source=source,
         matched_rule_count=matched_rule_count,
         skipped_rule_count=skipped_rule_count,
         created_count=len(evidence_item_ids),
+        duplicate_count=len(duplicates),
         evidence_item_ids=evidence_item_ids,
         errors=[EvidenceAutomationIngestError(rule_id=rule_id, reason=reason) for rule_id, reason in errors],
+        duplicates=[
+            EvidenceAutomationIngestDuplicate(rule_id=rule_id, idempotency_key=key) for rule_id, key in duplicates
+        ],
     )
 
 
@@ -174,7 +193,7 @@ def _ingest_source(
     organization: Organization,
 ) -> EvidenceAutomationIngestResponse:
     service = EvidenceAutomationService(db)
-    created, errors, skipped = service.ingest(
+    created, errors, skipped, duplicates = service.ingest(
         organization_id=organization.id,
         actor_user_id=current_user.id,
         source=source,
@@ -193,6 +212,7 @@ def _ingest_source(
             "created_count": len(created),
             "error_count": len(errors),
             "skipped_rule_count": skipped,
+            "duplicate_count": len(duplicates),
         },
         metadata_json={"source": "api"},
         ip_address=request.client.host if request.client else None,
@@ -202,9 +222,10 @@ def _ingest_source(
     return _ingest_response(
         source=source,
         evidence_item_ids=[row.id for row in created],
-        matched_rule_count=len(created) + len(errors),
+        matched_rule_count=len(created) + len(errors) + len(duplicates),
         skipped_rule_count=skipped,
         errors=errors,
+        duplicates=duplicates,
     )
 
 

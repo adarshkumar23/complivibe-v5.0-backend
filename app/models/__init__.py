@@ -143,7 +143,7 @@ from app.models.ai_governance_diagnostic_snapshot import AIGovernanceDiagnosticS
 from app.models.auditor import Auditor
 from app.models.auditor_engagement import AuditorEngagement
 from app.models.evidence_item import EvidenceItem
-from app.models.evidence_automation_rule import EvidenceAutomationRule
+from app.models.evidence_automation_rule import EvidenceAutomationIngestEvent, EvidenceAutomationRule
 from app.models.external_sync_connection import ExternalSyncConnection
 from app.models.external_sync_event import ExternalSyncEvent
 from app.models.external_sync_link import ExternalSyncLink
@@ -553,6 +553,7 @@ __all__ = [
     "ControlObligationMapping",
     "EvidenceItem",
     "EvidenceAutomationRule",
+    "EvidenceAutomationIngestEvent",
     "Risk",
     "OrgRiskSettings",
     "GovernanceSignal",

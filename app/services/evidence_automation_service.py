@@ -6,13 +6,21 @@ from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.evidence_automation_rule import EvidenceAutomationRule
+from app.models.control import Control
+from app.models.evidence_automation_rule import EvidenceAutomationIngestEvent, EvidenceAutomationRule
 from app.models.evidence_item import EvidenceItem
 from app.services.evidence_service import EvidenceService
 
 PLACEHOLDER_PATTERN = re.compile(r"\{\{([^{}]+)\}\}")
+
+# A rule that hasn't successfully fired in this many days (while active) is
+# considered stale/possibly-broken and is flagged in rule reads.
+STALE_RULE_THRESHOLD_DAYS = 14
+# Consecutive ingest errors at/above this count flag a rule as needing attention.
+NEEDS_ATTENTION_ERROR_THRESHOLD = 3
 
 
 class EvidenceAutomationService:
@@ -57,6 +65,19 @@ class EvidenceAutomationService:
             if cls._resolve_path(payload, str(key)) != expected:
                 return False
         return True
+
+    @classmethod
+    def _resolve_idempotency_key(cls, *, payload: dict[str, Any], trigger_config: dict[str, Any]) -> str | None:
+        """Resolve a dedupe key for this ingest event from trigger_config.idempotency_key_path,
+        if configured. Returns None when no path is configured or the path resolves to nothing,
+        in which case no dedupe is attempted (matches prior behavior)."""
+        key_path = trigger_config.get("idempotency_key_path")
+        if not key_path or not isinstance(key_path, str):
+            return None
+        value = cls._resolve_path(payload, key_path)
+        if value is None:
+            return None
+        return str(value)
 
     @classmethod
     def _parse_transform_template(cls, template: str | None) -> dict[str, Any]:
@@ -164,6 +185,57 @@ class EvidenceAutomationService:
         self.db.flush()
         return row
 
+    @staticmethod
+    def _as_aware(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
+
+    def describe_rule_health(self, rule: EvidenceAutomationRule) -> dict[str, Any]:
+        """Compute context flags for a rule so admins can see, at a glance, whether an
+        evidence connector has gone dark (stale), is repeatedly failing (needs_attention),
+        or points at a control that no longer exists / has been archived."""
+        flags: list[str] = []
+        now = self._utc_now()
+
+        is_stale = False
+        if rule.is_active:
+            reference = self._as_aware(rule.last_triggered_at)
+            created_at = self._as_aware(rule.created_at)
+            if reference is None:
+                # never fired: only stale once the rule has existed long enough that a
+                # freshly-created rule with a delayed first delivery isn't immediately flagged.
+                if created_at is not None and (now - created_at) > timedelta(days=STALE_RULE_THRESHOLD_DAYS):
+                    is_stale = True
+            elif (now - reference) > timedelta(days=STALE_RULE_THRESHOLD_DAYS):
+                is_stale = True
+        if is_stale:
+            flags.append("stale_connector")
+
+        needs_attention = (rule.consecutive_error_count or 0) >= NEEDS_ATTENTION_ERROR_THRESHOLD
+        if needs_attention:
+            flags.append("repeated_ingest_failures")
+
+        target_control_archived = False
+        if rule.target_control_id is not None:
+            control = self.db.execute(
+                select(Control).where(Control.id == rule.target_control_id)
+            ).scalar_one_or_none()
+            if control is None:
+                flags.append("target_control_missing")
+            elif control.status == "archived":
+                target_control_archived = True
+                flags.append("target_control_archived")
+
+        return {
+            "is_stale": is_stale,
+            "needs_attention": needs_attention,
+            "target_control_archived": target_control_archived,
+            "context_flags": flags,
+        }
+
     def list_rules(self, organization_id: uuid.UUID) -> list[EvidenceAutomationRule]:
         return (
             self.db.execute(
@@ -200,7 +272,7 @@ class EvidenceAutomationService:
         received_at: datetime | None = None,
         request_ip: str | None = None,
         request_user_agent: str | None = None,
-    ) -> tuple[list[EvidenceItem], list[tuple[uuid.UUID, str]], int]:
+    ) -> tuple[list[EvidenceItem], list[tuple[uuid.UUID, str]], int, list[tuple[uuid.UUID, str]]]:
         rules = (
             self.db.execute(
                 select(EvidenceAutomationRule).where(
@@ -215,35 +287,88 @@ class EvidenceAutomationService:
 
         created: list[EvidenceItem] = []
         errors: list[tuple[uuid.UUID, str]] = []
+        duplicates: list[tuple[uuid.UUID, str]] = []
         skipped = 0
+        now = self._utc_now()
         for rule in rules:
-            try:
-                if not self._matches_rule(payload=payload, trigger_config=rule.trigger_config or {}):
-                    skipped += 1
+            trigger_config = rule.trigger_config or {}
+            if not self._matches_rule(payload=payload, trigger_config=trigger_config):
+                skipped += 1
+                continue
+
+            idempotency_key = self._resolve_idempotency_key(payload=payload, trigger_config=trigger_config)
+            rule.last_matched_at = now
+
+            if idempotency_key is not None:
+                existing = self.db.execute(
+                    select(EvidenceAutomationIngestEvent).where(
+                        EvidenceAutomationIngestEvent.automation_rule_id == rule.id,
+                        EvidenceAutomationIngestEvent.idempotency_key == idempotency_key,
+                    )
+                ).scalar_one_or_none()
+                if existing is not None:
+                    duplicates.append((rule.id, idempotency_key))
                     continue
-                transformed = self._apply_transform(rule=rule, payload=payload, received_at=received_at)
-                evidence, _ = self.evidence_service.create_evidence_item(
-                    organization_id=organization_id,
-                    actor_user_id=actor_user_id,
-                    title=transformed["title"],
-                    description=transformed["description"],
-                    evidence_type=rule.evidence_type,
-                    source=f"automation_{source}",
-                    external_reference_url=transformed["external_reference_url"],
-                    collected_at=transformed["collected_at"],
-                    valid_until=transformed["valid_until"],
-                    metadata_json=transformed["metadata_json"],
-                    target_control_id=rule.target_control_id,
-                    link_confidence="imported",
-                    link_rationale="Linked by evidence automation rule",
-                    request_ip=request_ip,
-                    request_user_agent=request_user_agent,
-                    audit_metadata={"source": f"automation_{source}", "automation_rule_id": str(rule.id)},
-                )
+
+            try:
+                with self.db.begin_nested():
+                    transformed = self._apply_transform(rule=rule, payload=payload, received_at=received_at)
+                    evidence, _ = self.evidence_service.create_evidence_item(
+                        organization_id=organization_id,
+                        actor_user_id=actor_user_id,
+                        title=transformed["title"],
+                        description=transformed["description"],
+                        evidence_type=rule.evidence_type,
+                        source=f"automation_{source}",
+                        external_reference_url=transformed["external_reference_url"],
+                        collected_at=transformed["collected_at"],
+                        valid_until=transformed["valid_until"],
+                        metadata_json=transformed["metadata_json"],
+                        target_control_id=rule.target_control_id,
+                        link_confidence="imported",
+                        link_rationale="Linked by evidence automation rule",
+                        request_ip=request_ip,
+                        request_user_agent=request_user_agent,
+                        audit_metadata={"source": f"automation_{source}", "automation_rule_id": str(rule.id)},
+                    )
+                    self.db.add(
+                        EvidenceAutomationIngestEvent(
+                            organization_id=organization_id,
+                            automation_rule_id=rule.id,
+                            source=source,
+                            idempotency_key=idempotency_key,
+                            status="created",
+                            evidence_item_id=evidence.id,
+                        )
+                    )
+                    self.db.flush()
                 created.append(evidence)
+                rule.last_triggered_at = now
+                rule.trigger_count = (rule.trigger_count or 0) + 1
+                rule.consecutive_error_count = 0
+            except IntegrityError:
+                # Concurrent retry of the same event raced us to the unique
+                # (rule_id, idempotency_key) index - treat as a duplicate, not an error.
+                if idempotency_key is not None:
+                    duplicates.append((rule.id, idempotency_key))
             except Exception as exc:  # noqa: BLE001 - collect per-rule errors without failing other rules
                 errors.append((rule.id, str(exc)))
-        return created, errors, skipped
+                rule.consecutive_error_count = (rule.consecutive_error_count or 0) + 1
+                rule.last_error_at = now
+                rule.last_error_message = str(exc)[:2000]
+                self.db.add(
+                    EvidenceAutomationIngestEvent(
+                        organization_id=organization_id,
+                        automation_rule_id=rule.id,
+                        source=source,
+                        idempotency_key=idempotency_key,
+                        status="error",
+                        error_message=str(exc)[:2000],
+                    )
+                )
+                self.db.flush()
+        self.db.flush()
+        return created, errors, skipped, duplicates
     @classmethod
     def validate_trigger_config(cls, trigger_config: dict[str, Any]) -> None:
         if not isinstance(trigger_config, dict):
@@ -257,3 +382,6 @@ class EvidenceAutomationService:
         match_cfg = trigger_config.get("match") or {}
         if not isinstance(match_cfg, dict):
             raise ValueError("trigger_config.match must be an object when provided")
+        idempotency_key_path = trigger_config.get("idempotency_key_path")
+        if idempotency_key_path is not None and not isinstance(idempotency_key_path, str):
+            raise ValueError("trigger_config.idempotency_key_path must be a string when provided")

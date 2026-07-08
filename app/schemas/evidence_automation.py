@@ -32,6 +32,16 @@ class EvidenceAutomationRuleRead(UUIDTimestampSchema):
     transform_template: str | None = None
     is_active: bool
     created_by_user_id: UUID | None = None
+    last_triggered_at: datetime | None = None
+    last_matched_at: datetime | None = None
+    trigger_count: int = 0
+    consecutive_error_count: int = 0
+    last_error_at: datetime | None = None
+    last_error_message: str | None = None
+    is_stale: bool = False
+    needs_attention: bool = False
+    target_control_archived: bool = False
+    context_flags: list[str] = []
 
 
 class EvidenceAutomationIngestPayload(BaseModel):
@@ -44,10 +54,17 @@ class EvidenceAutomationIngestError(BaseModel):
     reason: str
 
 
+class EvidenceAutomationIngestDuplicate(BaseModel):
+    rule_id: UUID
+    idempotency_key: str
+
+
 class EvidenceAutomationIngestResponse(BaseModel):
     source: str
     matched_rule_count: int
     skipped_rule_count: int
     created_count: int
+    duplicate_count: int = 0
     evidence_item_ids: list[UUID]
     errors: list[EvidenceAutomationIngestError]
+    duplicates: list[EvidenceAutomationIngestDuplicate] = []
