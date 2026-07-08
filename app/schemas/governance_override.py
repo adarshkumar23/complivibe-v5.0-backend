@@ -82,6 +82,12 @@ class GovernanceOverrideRequestRead(BaseModel):
     routing_context_json: dict | None = None
     approver_role_names_json: list[str] | None = None
     metadata_json: dict | None = None
+    approvals_remaining: int = 0
+    request_age_hours: float = 0
+    expires_in_hours: float | None = None
+    stale_pending: bool = False
+    last_event_at: datetime | None = None
+    context_flags: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -125,6 +131,11 @@ class GovernanceOverrideSummary(BaseModel):
     expired_requests: int
     pending_approval_over_24h: int
     overrides_executed_last_30d: int
+    pending_expiring_within_24h: int = 0
+    approved_awaiting_execution: int = 0
+    execution_failed_last_30d: int = 0
+    oldest_pending_request_age_hours: float | None = None
+    context_flags: list[str] = Field(default_factory=list)
 
 
 class GovernanceOverrideTemplateBase(BaseModel):

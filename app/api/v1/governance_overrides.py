@@ -32,34 +32,40 @@ from app.services.governance_override_service import GovernanceOverrideService
 router = APIRouter(prefix="/governance/overrides", tags=["governance-overrides"])
 
 
-def _request_read(row: GovernanceOverrideRequest) -> GovernanceOverrideRequestRead:
+def _request_read(payload: dict) -> GovernanceOverrideRequestRead:
     return GovernanceOverrideRequestRead(
-        id=row.id,
-        organization_id=row.organization_id,
-        override_type=row.override_type,
-        target_entity_type=row.target_entity_type,
-        target_entity_id=row.target_entity_id,
-        requested_action=row.requested_action,
-        reason=row.reason,
-        status=row.status,
-        requested_by_user_id=row.requested_by_user_id,
-        template_id=row.template_id,
-        template_version=row.template_version,
-        required_approvals=row.required_approvals,
-        approval_count=row.approval_count,
-        rejection_count=row.rejection_count,
-        expires_at=row.expires_at,
-        executed_by_user_id=row.executed_by_user_id,
-        executed_at=row.executed_at,
-        cancelled_by_user_id=row.cancelled_by_user_id,
-        cancelled_at=row.cancelled_at,
-        cancellation_reason=row.cancellation_reason,
-        execution_result_json=row.execution_result_json,
-        routing_context_json=row.routing_context_json,
-        approver_role_names_json=row.approver_role_names_json,
-        metadata_json=row.metadata_json,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
+        id=payload["id"],
+        organization_id=payload["organization_id"],
+        override_type=payload["override_type"],
+        target_entity_type=payload["target_entity_type"],
+        target_entity_id=payload["target_entity_id"],
+        requested_action=payload["requested_action"],
+        reason=payload["reason"],
+        status=payload["status"],
+        requested_by_user_id=payload["requested_by_user_id"],
+        template_id=payload.get("template_id"),
+        template_version=payload.get("template_version"),
+        required_approvals=int(payload["required_approvals"]),
+        approval_count=int(payload["approval_count"]),
+        rejection_count=int(payload["rejection_count"]),
+        expires_at=payload.get("expires_at"),
+        executed_by_user_id=payload.get("executed_by_user_id"),
+        executed_at=payload.get("executed_at"),
+        cancelled_by_user_id=payload.get("cancelled_by_user_id"),
+        cancelled_at=payload.get("cancelled_at"),
+        cancellation_reason=payload.get("cancellation_reason"),
+        execution_result_json=payload.get("execution_result_json"),
+        routing_context_json=payload.get("routing_context_json"),
+        approver_role_names_json=payload.get("approver_role_names_json"),
+        metadata_json=payload.get("metadata_json"),
+        approvals_remaining=int(payload.get("approvals_remaining", 0)),
+        request_age_hours=float(payload.get("request_age_hours", 0)),
+        expires_in_hours=float(payload["expires_in_hours"]) if payload.get("expires_in_hours") is not None else None,
+        stale_pending=bool(payload.get("stale_pending", False)),
+        last_event_at=payload.get("last_event_at"),
+        context_flags=[str(item) for item in payload.get("context_flags", [])],
+        created_at=payload["created_at"],
+        updated_at=payload["updated_at"],
     )
 
 
@@ -129,7 +135,7 @@ def create_override_request(
     )
     db.commit()
     db.refresh(row)
-    return _request_read(row)
+    return _request_read(service.override_request_payload(row=row))
 
 
 @router.post("/from-template", response_model=GovernanceOverrideRequestRead, status_code=status.HTTP_201_CREATED)
@@ -169,7 +175,7 @@ def create_override_request_from_template(
     )
     db.commit()
     db.refresh(row)
-    return _request_read(row)
+    return _request_read(service.override_request_payload(row=row))
 
 
 @router.get("", response_model=GovernanceOverrideListResponse)
@@ -184,7 +190,8 @@ def list_override_requests(
     organization: Organization = Depends(get_current_organization),
     _=Depends(require_permission("governance_override:read")),
 ) -> GovernanceOverrideListResponse:
-    rows = GovernanceOverrideRepository(db).list_requests(
+    repo = GovernanceOverrideRepository(db)
+    rows = repo.list_requests(
         organization_id=organization.id,
         status=status_filter,
         override_type=override_type,
@@ -193,7 +200,8 @@ def list_override_requests(
         limit=limit,
         offset=offset,
     )
-    return GovernanceOverrideListResponse(requests=[_request_read(row) for row in rows])
+    payloads = GovernanceOverrideService(db).override_request_payloads(rows=rows)
+    return GovernanceOverrideListResponse(requests=[_request_read(item) for item in payloads])
 
 
 @router.post("/expire", response_model=GovernanceOverrideExpireResponse)
@@ -241,7 +249,7 @@ def get_override_detail(
     events = GovernanceOverrideRepository(db).list_events(organization_id=organization.id, override_request_id=row.id)
     eligible_approvers = service.eligible_approvers(row=row)
     return GovernanceOverrideDetail(
-        request=_request_read(row),
+        request=_request_read(service.override_request_payload(row=row)),
         approvals=[_approval_read(item) for item in approvals],
         events=[_event_read(item) for item in events],
         eligible_approvers=[
@@ -295,7 +303,7 @@ def approve_override(
     )
     db.commit()
     db.refresh(row)
-    return _request_read(row)
+    return _request_read(service.override_request_payload(row=row))
 
 
 @router.post("/{override_id}/reject", response_model=GovernanceOverrideRequestRead)
@@ -317,14 +325,14 @@ def reject_override(
         entity_id=row.id,
         organization_id=organization.id,
         actor_user_id=current_user.id,
-        after_json={"status": row.status, "rejection_count": row.rejection_count, "reason": payload.reason},
+        after_json={"status": row.status, "rejection_count": row.rejection_count, "reason": payload.reason.strip()},
         metadata_json={"source": "api"},
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
     db.commit()
     db.refresh(row)
-    return _request_read(row)
+    return _request_read(service.override_request_payload(row=row))
 
 
 @router.post("/{override_id}/cancel", response_model=GovernanceOverrideRequestRead)
@@ -346,14 +354,14 @@ def cancel_override(
         entity_id=row.id,
         organization_id=organization.id,
         actor_user_id=current_user.id,
-        after_json={"status": row.status, "reason": payload.reason},
+        after_json={"status": row.status, "reason": row.cancellation_reason},
         metadata_json={"source": "api"},
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
     db.commit()
     db.refresh(row)
-    return _request_read(row)
+    return _request_read(service.override_request_payload(row=row))
 
 
 @router.post("/{override_id}/execute", response_model=GovernanceOverrideRequestRead)
@@ -397,4 +405,4 @@ def execute_override(
         db.commit()
         raise
     db.refresh(row)
-    return _request_read(row)
+    return _request_read(service.override_request_payload(row=row))

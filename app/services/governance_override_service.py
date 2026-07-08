@@ -77,6 +77,8 @@ ALLOWED_CONDITION_KEYS: dict[str, set[str]] = {
 
 ALLOWED_CONDITION_OPERATORS = {"equals", "not_equals", "is_true", "is_false", "in", "not_in"}
 ALLOWED_RULE_EFFECTS = {"set_required_approvals", "add_required_approvals", "restrict_approver_roles"}
+OVERRIDE_PENDING_STALE_HOURS = 24
+OVERRIDE_EXPIRY_WARNING_HOURS = 24
 
 
 class GovernanceOverrideService:
@@ -144,6 +146,110 @@ class GovernanceOverrideService:
         self.db.add(row)
         self.db.flush()
         return row
+
+    def _event_latest_timestamp_map(self, *, organization_id: uuid.UUID, request_ids: list[uuid.UUID]) -> dict[uuid.UUID, datetime]:
+        if not request_ids:
+            return {}
+        rows = self.db.execute(
+            select(
+                GovernanceOverrideEvent.override_request_id,
+                func.max(GovernanceOverrideEvent.created_at),
+            )
+            .where(
+                GovernanceOverrideEvent.organization_id == organization_id,
+                GovernanceOverrideEvent.override_request_id.in_(request_ids),
+            )
+            .group_by(GovernanceOverrideEvent.override_request_id)
+        ).all()
+        return {
+            request_id: latest_ts
+            for request_id, latest_ts in rows
+            if request_id is not None and latest_ts is not None
+        }
+
+    def override_request_payload(
+        self,
+        *,
+        row: GovernanceOverrideRequest,
+        latest_event_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        now = self.now()
+        created_at = self.as_utc(row.created_at) or now
+        expires_at = self.as_utc(row.expires_at)
+        request_age_hours = round(max(0.0, (now - created_at).total_seconds() / 3600.0), 3)
+        expires_in_hours = None
+        if expires_at is not None:
+            expires_in_hours = round((expires_at - now).total_seconds() / 3600.0, 3)
+        approvals_remaining = max(int(row.required_approvals) - int(row.approval_count), 0)
+        stale_pending = bool(row.status == "pending" and request_age_hours >= OVERRIDE_PENDING_STALE_HOURS)
+        context_flags: list[str] = []
+        if row.status == "pending":
+            context_flags.append("pending_request")
+            if approvals_remaining > 0:
+                context_flags.append("approvals_outstanding")
+        if stale_pending:
+            context_flags.append("pending_over_24h")
+        if row.status in {"pending", "approved"} and expires_in_hours is not None and expires_in_hours <= OVERRIDE_EXPIRY_WARNING_HOURS:
+            context_flags.append("expires_within_24h")
+        if row.status == "approved" and row.executed_at is None:
+            context_flags.append("awaiting_execution")
+        if row.status == "expired":
+            context_flags.append("expired_unexecuted")
+        if row.status == "executed" and not bool(row.execution_result_json):
+            context_flags.append("execution_result_missing")
+        if row.template_id is None:
+            context_flags.append("ad_hoc_override")
+        if int(row.rejection_count or 0) > 0:
+            context_flags.append("contains_rejections")
+        return {
+            "id": row.id,
+            "organization_id": row.organization_id,
+            "override_type": row.override_type,
+            "target_entity_type": row.target_entity_type,
+            "target_entity_id": row.target_entity_id,
+            "requested_action": row.requested_action,
+            "reason": row.reason,
+            "status": row.status,
+            "requested_by_user_id": row.requested_by_user_id,
+            "template_id": row.template_id,
+            "template_version": row.template_version,
+            "required_approvals": int(row.required_approvals),
+            "approval_count": int(row.approval_count),
+            "rejection_count": int(row.rejection_count),
+            "expires_at": row.expires_at,
+            "executed_by_user_id": row.executed_by_user_id,
+            "executed_at": row.executed_at,
+            "cancelled_by_user_id": row.cancelled_by_user_id,
+            "cancelled_at": row.cancelled_at,
+            "cancellation_reason": row.cancellation_reason,
+            "execution_result_json": row.execution_result_json,
+            "routing_context_json": row.routing_context_json,
+            "approver_role_names_json": row.approver_role_names_json,
+            "metadata_json": row.metadata_json,
+            "approvals_remaining": approvals_remaining,
+            "request_age_hours": request_age_hours,
+            "expires_in_hours": expires_in_hours,
+            "stale_pending": stale_pending,
+            "last_event_at": latest_event_at,
+            "context_flags": context_flags,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+
+    def override_request_payloads(self, *, rows: list[GovernanceOverrideRequest]) -> list[dict[str, Any]]:
+        if not rows:
+            return []
+        latest_map = self._event_latest_timestamp_map(
+            organization_id=rows[0].organization_id,
+            request_ids=[row.id for row in rows],
+        )
+        return [
+            self.override_request_payload(
+                row=row,
+                latest_event_at=latest_map.get(row.id),
+            )
+            for row in rows
+        ]
 
     def require_request(self, *, organization_id: uuid.UUID, override_id: uuid.UUID) -> GovernanceOverrideRequest:
         row = self.repo.get_request(override_id)
@@ -526,7 +632,8 @@ class GovernanceOverrideService:
         routing_context_json: dict | None = None,
         approver_role_names_json: list[str] | None = None,
     ) -> GovernanceOverrideRequest:
-        if not reason.strip():
+        reason = str(reason).strip()
+        if not reason:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="reason is required")
         if required_approvals < 2:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="required_approvals must be at least 2")
@@ -631,6 +738,9 @@ class GovernanceOverrideService:
         self._ensure_pending_and_not_expired(row)
         if row.requested_by_user_id == approver_user_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Requester cannot approve their own override request")
+        reason = reason.strip() if isinstance(reason, str) else None
+        if reason == "":
+            reason = None
         existing = self.repo.get_approval_by_user(
             organization_id=row.organization_id,
             override_request_id=row.id,
@@ -685,7 +795,8 @@ class GovernanceOverrideService:
         reason: str,
     ) -> GovernanceOverrideRequest:
         self._ensure_pending_and_not_expired(row)
-        if not reason.strip():
+        reason = str(reason).strip()
+        if not reason:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="reason is required")
         existing = self.repo.get_approval_by_user(
             organization_id=row.organization_id,
@@ -725,7 +836,8 @@ class GovernanceOverrideService:
         actor_user_id: uuid.UUID,
         reason: str,
     ) -> GovernanceOverrideRequest:
-        if not reason.strip():
+        reason = str(reason).strip()
+        if not reason:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="reason is required")
         if row.status not in {"pending", "approved"}:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Override request cannot be cancelled")
@@ -927,7 +1039,7 @@ class GovernanceOverrideService:
         self.db.flush()
         return len(rows)
 
-    def summary(self, *, organization_id: uuid.UUID) -> dict[str, int]:
+    def summary(self, *, organization_id: uuid.UUID) -> dict[str, Any]:
         now = self.now()
         since_30d = now - timedelta(days=30)
         older_24h = now - timedelta(hours=24)
@@ -972,6 +1084,58 @@ class GovernanceOverrideService:
                 )
             ).scalar_one()
         )
+        pending_expiring_within_24h = int(
+            self.db.execute(
+                select(func.count(GovernanceOverrideRequest.id)).where(
+                    GovernanceOverrideRequest.organization_id == organization_id,
+                    GovernanceOverrideRequest.status == "pending",
+                    GovernanceOverrideRequest.expires_at.is_not(None),
+                    GovernanceOverrideRequest.expires_at >= now,
+                    GovernanceOverrideRequest.expires_at <= now + timedelta(hours=OVERRIDE_EXPIRY_WARNING_HOURS),
+                )
+            ).scalar_one()
+        )
+        approved_awaiting_execution = int(
+            self.db.execute(
+                select(func.count(GovernanceOverrideRequest.id)).where(
+                    GovernanceOverrideRequest.organization_id == organization_id,
+                    GovernanceOverrideRequest.status == "approved",
+                    GovernanceOverrideRequest.executed_at.is_(None),
+                )
+            ).scalar_one()
+        )
+        execution_failed_last_30d = int(
+            self.db.execute(
+                select(func.count(GovernanceOverrideEvent.id)).where(
+                    GovernanceOverrideEvent.organization_id == organization_id,
+                    GovernanceOverrideEvent.event_type == "override.execution_failed",
+                    GovernanceOverrideEvent.created_at >= since_30d,
+                )
+            ).scalar_one()
+        )
+        oldest_pending_created_at = self.db.execute(
+            select(func.min(GovernanceOverrideRequest.created_at)).where(
+                GovernanceOverrideRequest.organization_id == organization_id,
+                GovernanceOverrideRequest.status == "pending",
+            )
+        ).scalar_one_or_none()
+        oldest_pending_request_age_hours = None
+        if oldest_pending_created_at is not None:
+            oldest_pending_request_age_hours = round(
+                max(0.0, (now - (self.as_utc(oldest_pending_created_at) or now)).total_seconds() / 3600.0),
+                3,
+            )
+        context_flags: list[str] = []
+        if pending_requests == 0:
+            context_flags.append("no_pending_requests")
+        if pending_approval_over_24h > 0:
+            context_flags.append("stale_pending_requests")
+        if pending_expiring_within_24h > 0:
+            context_flags.append("pending_expiring_within_24h")
+        if approved_awaiting_execution > 0:
+            context_flags.append("approved_waiting_execution")
+        if execution_failed_last_30d > 0:
+            context_flags.append("recent_execution_failures")
 
         return {
             "total_requests": total_requests,
@@ -983,6 +1147,11 @@ class GovernanceOverrideService:
             "expired_requests": expired_requests,
             "pending_approval_over_24h": pending_approval_over_24h,
             "overrides_executed_last_30d": overrides_executed_last_30d,
+            "pending_expiring_within_24h": pending_expiring_within_24h,
+            "approved_awaiting_execution": approved_awaiting_execution,
+            "execution_failed_last_30d": execution_failed_last_30d,
+            "oldest_pending_request_age_hours": oldest_pending_request_age_hours,
+            "context_flags": context_flags,
         }
 
     def eligible_approvers(self, *, row: GovernanceOverrideRequest) -> list[dict[str, Any]]:
