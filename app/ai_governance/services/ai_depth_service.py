@@ -103,6 +103,22 @@ class AIDepthService:
                 created_by=assessed_by,
             )
 
+            from app.ai_governance.services.signal_service import SignalService
+
+            SignalService(self.db).emit_signal(
+                org_id,
+                system_id,
+                signal_type="bias_signal",
+                description=(
+                    f"Bias assessment failed for protected attribute '{data.protected_attribute}': "
+                    f"{data.metric_name} = {data.metric_value:.4f} "
+                    f"({'above' if data.lower_is_better else 'below'} "
+                    f"required threshold {data.threshold_value}). "
+                    f"Method: {data.assessment_method}."
+                ),
+                actor_id=assessed_by,
+            )
+
         AuditService(self.db).write_audit_log(
             action="ai.bias_assessment_submitted",
             entity_type="ai_bias_assessments",
@@ -226,13 +242,13 @@ class AIDepthService:
             else 0.3 if system.human_oversight_level else 0.0
         )
 
-        bias_done = self.db.execute(
-            select(AIBiasAssessment.id).where(
-                AIBiasAssessment.organization_id == org_id,
-                AIBiasAssessment.system_id == system_id,
-            )
-        ).all()
-        score_components["bias_assessment"] = 1.0 if len(bias_done) > 0 else 0.0
+        # A completed-and-passing bias assessment earns full credit; a
+        # completed-but-failing assessment (e.g. a four-fifths-rule ratio
+        # below 0.8) must measurably degrade this component rather than
+        # scoring the same as a passing one just because a record exists.
+        score_components["bias_assessment"] = (
+            1.0 if system.bias_assessment_status == "completed" else 0.0
+        )
 
         score_components["threat_assessment"] = 1.0 if system.atlas_risk_score is not None else 0.0
 
