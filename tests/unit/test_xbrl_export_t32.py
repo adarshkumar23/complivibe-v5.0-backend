@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime
 
 from app.models.audit_log import AuditLog
 from app.models.export_job import ExportJob
@@ -115,6 +116,93 @@ def test_t32_xbrl_export_reports_exact_invalid_data_points_without_brand_leak(cl
         "validation_errors"
     ]
     assert "arelle" not in str(response.json()).lower()
+
+
+def test_t32_xbrl_export_renders_dimensions_as_explicit_members():
+    # Exercises XML generation directly rather than through the HTTP endpoint:
+    # the full export path validates against the real, network-fetched IFRS
+    # taxonomy schema via arelle, which only recognizes concepts/dimensions
+    # that actually exist in that schema. Dimension rendering itself is pure
+    # XML construction and doesn't need that round trip.
+    from app.compliance.services.xbrl_export_service import XBRLExportService
+    from app.schemas.reports import XBRLDataPoint, XBRLExportRequest
+
+    payload = XBRLExportRequest(
+        entity_identifier="T32-XBRL-DIMS",
+        data_points=[
+            XBRLDataPoint(
+                name="Scope 1 emissions - EU segment",
+                taxonomy_concept="ghg:Scope1Emissions",
+                value=100,
+                unit="tCO2e",
+                period_start=datetime(2026, 1, 1, tzinfo=UTC),
+                period_end=datetime(2026, 12, 31, tzinfo=UTC),
+                dimensions={"ghg:RegionAxis": "ghg:EuropeMember"},
+            ),
+            XBRLDataPoint(
+                name="Scope 1 emissions - APAC segment",
+                taxonomy_concept="ghg:Scope1Emissions",
+                value=50,
+                unit="tCO2e",
+                period_start=datetime(2026, 1, 1, tzinfo=UTC),
+                period_end=datetime(2026, 12, 31, tzinfo=UTC),
+                dimensions={"ghg:RegionAxis": "ghg:ApacMember"},
+            ),
+        ],
+    )
+    content = XBRLExportService(db=None)._build_xbrl(report=None, payload=payload)
+    # Dimension QNames are rewritten onto the single bound taxonomy prefix
+    # (ifrs-sds, the request default), same as taxonomy_concept's own prefix,
+    # since that's the only namespace ever declared on the document.
+    assert 'dimension="ifrs-sds:RegionAxis"' in content
+    assert "ifrs-sds:EuropeMember" in content
+    assert "ifrs-sds:ApacMember" in content
+
+
+def test_t32_xbrl_export_rejects_conflicting_and_duplicate_facts(client):
+    token = _register(client, "t32-owner-dupe@example.com", "Pass1234!@", "T32 XBRL Dupe Org")
+    org_id = _org_id(client, token)
+    report_id = _create_report(client, token, org_id)
+
+    response = client.post(
+        f"/api/v1/reports/{report_id}/xbrl-export",
+        headers=_headers(token, org_id),
+        json={
+            "entity_identifier": "T32-XBRL-DUPE",
+            "data_points": [
+                {
+                    "name": "Scope 1 emissions",
+                    "taxonomy_concept": "ghg:Scope1Emissions",
+                    "value": 100,
+                    "unit": "tCO2e",
+                    "period_start": "2026-01-01T00:00:00Z",
+                    "period_end": "2026-12-31T00:00:00Z",
+                },
+                {
+                    "name": "Scope 1 emissions restated",
+                    "taxonomy_concept": "ghg:Scope1Emissions",
+                    "value": 250,
+                    "unit": "tCO2e",
+                    "period_start": "2026-01-01T00:00:00Z",
+                    "period_end": "2026-12-31T00:00:00Z",
+                },
+                {
+                    "name": "Scope 1 emissions exact repeat",
+                    "taxonomy_concept": "ghg:Scope1Emissions",
+                    "value": 100,
+                    "unit": "tCO2e",
+                    "period_start": "2026-01-01T00:00:00Z",
+                    "period_end": "2026-12-31T00:00:00Z",
+                },
+            ],
+        },
+    )
+    assert response.status_code == 422, response.text
+    errors = response.json()["detail"]["validation_errors"]
+    conflict = next(e for e in errors if e["data_point_index"] == 1)
+    assert "Conflicts with data point 0" in conflict["message"]
+    duplicate = next(e for e in errors if e["data_point_index"] == 2)
+    assert "Duplicate of data point 0" in duplicate["message"]
 
 
 def test_t32_xbrl_export_returns_service_error_when_taxonomy_source_unreachable(client):

@@ -59,11 +59,22 @@ class XBRLExportService:
         return report
 
     @staticmethod
+    def _fact_identity(point) -> tuple:
+        period = (
+            ("instant", point.instant)
+            if point.instant is not None
+            else ("duration", point.period_start, point.period_end)
+        )
+        dims = tuple(sorted((point.dimensions or {}).items()))
+        return (point.taxonomy_concept, period, dims)
+
+    @staticmethod
     def _validation_errors(payload: XBRLExportRequest) -> list[dict]:
         errors: list[dict] = []
         if not PREFIX_RE.match(payload.taxonomy_prefix):
             errors.append({"data_point_index": None, "field": "taxonomy_prefix", "message": "Taxonomy prefix must be an XML-safe prefix."})
 
+        seen_facts: dict[tuple, int] = {}
         for index, point in enumerate(payload.data_points):
             if not CONCEPT_RE.match(point.taxonomy_concept):
                 errors.append(
@@ -101,6 +112,50 @@ class XBRLExportService:
                         "message": "Unit must be a recognized ESG unit or a prefix-qualified unit.",
                     }
                 )
+            if point.dimensions:
+                for dim_name, dim_member in point.dimensions.items():
+                    if not CONCEPT_RE.match(dim_name) or not CONCEPT_RE.match(dim_member):
+                        errors.append(
+                            {
+                                "data_point_index": index,
+                                "field": "dimensions",
+                                "message": (
+                                    "Dimension axis and member must use prefix-qualified names, "
+                                    f"e.g. ghg:GasTypeAxis: ghg:CO2Member (got {dim_name}: {dim_member})."
+                                ),
+                            }
+                        )
+
+            # Two facts with the same concept, period, and dimensions represent the
+            # same reported figure -- if either the value or the unit disagrees,
+            # this is very likely a mis-tagged or duplicated data point rather than
+            # a legitimate second fact, since XBRL contexts would otherwise dedupe
+            # by (concept, period, dimensions).
+            fact_key = XBRLExportService._fact_identity(point)
+            first_index = seen_facts.get(fact_key)
+            if first_index is None:
+                seen_facts[fact_key] = index
+            else:
+                first_point = payload.data_points[first_index]
+                if first_point.value != point.value or first_point.unit != point.unit:
+                    errors.append(
+                        {
+                            "data_point_index": index,
+                            "field": "taxonomy_concept",
+                            "message": (
+                                f"Conflicts with data point {first_index}: same concept, period, and "
+                                "dimensions but a different value/unit."
+                            ),
+                        }
+                    )
+                else:
+                    errors.append(
+                        {
+                            "data_point_index": index,
+                            "field": "taxonomy_concept",
+                            "message": f"Duplicate of data point {first_index}: identical concept, period, dimensions, and value.",
+                        }
+                    )
         return errors
 
     @staticmethod
@@ -113,6 +168,7 @@ class XBRLExportService:
         ET.register_namespace("xbrli", "http://www.xbrl.org/2003/instance")
         ET.register_namespace("link", "http://www.xbrl.org/2003/linkbase")
         ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
+        ET.register_namespace("xbrldi", "http://xbrl.org/2006/xbrldi")
         ET.register_namespace(payload.taxonomy_prefix, payload.taxonomy_namespace)
 
         root = ET.Element("{http://www.xbrl.org/2003/instance}xbrl")
@@ -139,6 +195,24 @@ class XBRLExportService:
             else:
                 ET.SubElement(period, "{http://www.xbrl.org/2003/instance}startDate").text = self._date(point.period_start)  # type: ignore[arg-type]
                 ET.SubElement(period, "{http://www.xbrl.org/2003/instance}endDate").text = self._date(point.period_end)  # type: ignore[arg-type]
+
+            if point.dimensions:
+                # Only one taxonomy namespace/prefix is ever bound on the document
+                # (payload.taxonomy_prefix), the same way taxonomy_concept's own
+                # prefix is discarded below in favor of taxonomy_namespace -- so
+                # dimension axis/member QNames are rewritten onto that bound
+                # prefix rather than trusting the caller-supplied prefix, which
+                # would otherwise resolve to an undeclared namespace.
+                scenario = ET.SubElement(context, "{http://www.xbrl.org/2003/instance}scenario")
+                for dim_name, dim_member in sorted(point.dimensions.items()):
+                    _, dim_local_name = dim_name.split(":", 1)
+                    _, member_local_name = dim_member.split(":", 1)
+                    member_elem = ET.SubElement(
+                        scenario,
+                        "{http://xbrl.org/2006/xbrldi}explicitMember",
+                        {"dimension": f"{payload.taxonomy_prefix}:{dim_local_name}"},
+                    )
+                    member_elem.text = f"{payload.taxonomy_prefix}:{member_local_name}"
 
             _, local_name = point.taxonomy_concept.split(":", 1)
             attrs = {"contextRef": context_id}
