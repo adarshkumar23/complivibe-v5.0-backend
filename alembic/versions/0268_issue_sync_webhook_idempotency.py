@@ -1,7 +1,7 @@
 """add webhook delivery idempotency for jira/linear issue sync
 
-Revision ID: 0267_issue_sync_webhook_idempotency
-Revises: 0266_compliance_bot_command_idempotency
+Revision ID: 0268_issue_sync_webhook_idempotency
+Revises: 0267_compliance_bot_command_idempotency
 Create Date: 2026-07-08
 
 Jira and Linear both retry webhook deliveries on timeout/5xx. Without dedupe,
@@ -17,8 +17,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0267_issue_sync_webhook_idempotency"
-down_revision: str | None = "0266_compliance_bot_command_idempotency"
+revision: str = "0268_issue_sync_webhook_idempotency"
+down_revision: str | None = "0267_compliance_bot_command_idempotency"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

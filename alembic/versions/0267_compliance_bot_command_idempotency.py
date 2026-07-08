@@ -1,7 +1,7 @@
 """add idempotency key to compliance bot outbox for slash command retries
 
-Revision ID: 0266_compliance_bot_command_idempotency
-Revises: 0265_evidence_automation_health_idempotency
+Revision ID: 0267_compliance_bot_command_idempotency
+Revises: 0266_evidence_automation_health_idempotency
 Create Date: 2026-07-08
 
 Slack retries a slash command delivery (same trigger_id) when our endpoint
@@ -19,8 +19,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0266_compliance_bot_command_idempotency"
-down_revision: str | None = "0265_evidence_automation_health_idempotency"
+revision: str = "0267_compliance_bot_command_idempotency"
+down_revision: str | None = "0266_evidence_automation_health_idempotency"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -1,7 +1,7 @@
 """add evidence automation rule health tracking and ingest idempotency
 
-Revision ID: 0265_evidence_automation_health_idempotency
-Revises: 0264_ai_monitoring_config_baseline_model_version
+Revision ID: 0266_evidence_automation_health_idempotency
+Revises: 0265_baseline_run_single_running_guard
 Create Date: 2026-07-08
 
 Adds rule-health tracking columns (last_triggered_at, last_matched_at,
@@ -19,8 +19,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0265_evidence_automation_health_idempotency"
-down_revision: str | None = "0264_ai_monitoring_config_baseline_model_version"
+revision: str = "0266_evidence_automation_health_idempotency"
+down_revision: str | None = "0265_baseline_run_single_running_guard"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
