@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 CRITICALITY_TIERS = ("tier_1_critical", "tier_2_high", "tier_3_standard")
 PROCESS_STATUSES = ("active", "archived")
@@ -120,8 +120,19 @@ class BiaAssessmentCreateRequest(BaseModel):
     impact_analysis_json: dict
     financial_impact_tier: str | None = None
     review_frequency_months: int = 12
-    last_reviewed_at: datetime | None = None
-    reviewed_by_user_id: uuid.UUID | None = None
+    last_reviewed_at: datetime | None = Field(
+        default=None,
+        description=(
+            "Only set this when recording a review that has genuinely already been "
+            "completed (e.g. backfilling a historical review) -- it must be provided "
+            "together with reviewed_by_user_id, never alone. Omit both to create a "
+            "fresh, not-yet-reviewed BIA (last_reviewed_at will be null)."
+        ),
+    )
+    reviewed_by_user_id: uuid.UUID | None = Field(
+        default=None,
+        description="Required together with last_reviewed_at -- the org member who performed the review being recorded.",
+    )
     notes: str | None = None
 
     @field_validator("financial_impact_tier")
@@ -138,6 +149,17 @@ class BiaAssessmentCreateRequest(BaseModel):
             raise ValueError("review_frequency_months must be a positive number of months")
         return value
 
+    @model_validator(mode="after")
+    def _validate_review_pair(self) -> "BiaAssessmentCreateRequest":
+        # last_reviewed_at asserts a review genuinely happened, so it must always be
+        # accompanied by who performed it -- otherwise it's the same phantom
+        # "reviewed by no one" state this item exists to fix (see G9 item 21).
+        # reviewed_by_user_id may still be set alone (e.g. assigning ownership of a
+        # not-yet-completed review) without implying a review timestamp.
+        if self.last_reviewed_at is not None and self.reviewed_by_user_id is None:
+            raise ValueError("reviewed_by_user_id is required when last_reviewed_at is provided")
+        return self
+
 
 class BiaAssessmentRead(BaseModel):
     id: uuid.UUID
@@ -146,7 +168,7 @@ class BiaAssessmentRead(BaseModel):
     impact_analysis_json: dict
     financial_impact_tier: str | None
     review_frequency_months: int
-    last_reviewed_at: datetime
+    last_reviewed_at: datetime | None = None
     reviewed_by_user_id: uuid.UUID | None
     notes: str | None
     created_at: datetime

@@ -111,24 +111,29 @@ class BcmService:
         if data.get("reviewed_by_user_id") is not None:
             self._validate_org_user(data["reviewed_by_user_id"], organization_id, field_name="reviewed_by_user_id")
 
-        kwargs = dict(data)
-        if kwargs.get("last_reviewed_at") is None:
-            kwargs.pop("last_reviewed_at", None)
-
+        # last_reviewed_at/reviewed_by_user_id are only ever set here when the caller
+        # explicitly provides both (enforced together by BiaAssessmentCreateRequest's
+        # model_validator) -- a freshly-created BIA with neither provided genuinely
+        # has last_reviewed_at = None ("never reviewed"), not an auto-stamped "now".
         bia = BiaAssessment(
             organization_id=organization_id,
             process_id=process_id,
-            **kwargs,
+            **data,
         )
         self.db.add(bia)
         self.db.flush()
         return bia
 
     def get_latest_bia(self, organization_id: uuid.UUID, process_id: uuid.UUID) -> BiaAssessment | None:
+        # Ordered by created_at (always populated) rather than last_reviewed_at (which
+        # can now be null for a never-reviewed BIA, and doesn't necessarily track
+        # record recency anyway -- e.g. backfilling a years-old review date on a
+        # record created today). created_at reflects which BIA document is actually
+        # the current one for this process.
         return self.db.execute(
             select(BiaAssessment)
             .where(BiaAssessment.organization_id == organization_id, BiaAssessment.process_id == process_id)
-            .order_by(BiaAssessment.last_reviewed_at.desc(), BiaAssessment.created_at.desc())
+            .order_by(BiaAssessment.created_at.desc())
         ).scalars().first()
 
     def list_bia_history(self, organization_id: uuid.UUID, process_id: uuid.UUID) -> list[BiaAssessment]:
@@ -136,7 +141,7 @@ class BcmService:
             self.db.execute(
                 select(BiaAssessment)
                 .where(BiaAssessment.organization_id == organization_id, BiaAssessment.process_id == process_id)
-                .order_by(BiaAssessment.last_reviewed_at.desc(), BiaAssessment.created_at.desc())
+                .order_by(BiaAssessment.created_at.desc())
             ).scalars()
         )
 
@@ -153,6 +158,12 @@ class BcmService:
 
         if bia is None:
             reasons.append("No BIA assessment has ever been completed for this process")
+        elif bia.last_reviewed_at is None:
+            # A BIA record exists but has never actually been reviewed (last_reviewed_at
+            # is only ever set by a genuine review action -- see G9 item 21). This must
+            # be flagged at least as urgently as "no BIA exists", not silently treated
+            # as fresh just because a record is present.
+            reasons.append("BIA assessment exists but has never been reviewed")
         else:
             last_reviewed_at = bia.last_reviewed_at
             if last_reviewed_at.tzinfo is None:

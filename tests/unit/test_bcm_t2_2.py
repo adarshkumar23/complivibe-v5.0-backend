@@ -71,7 +71,36 @@ def test_create_process_and_bia_happy_path(client, db_session):
 
 
 def test_overdue_reviews_empty_for_freshly_reviewed_process(client, db_session):
+    """A BIA with an explicit, genuine review (last_reviewed_at + reviewed_by_user_id
+    both provided, dated just now) must not show up as overdue."""
     org_user = bootstrap_org_user(client, email_prefix="bcm-fresh")
+    headers = org_user["org_headers"]
+
+    resp = _create_process(client, headers)
+    assert resp.status_code == 201, resp.text
+    process_id = resp.json()["id"]
+
+    bia_payload = {
+        "impact_analysis_json": {"financial": "low"},
+        "review_frequency_months": 12,
+        "last_reviewed_at": datetime.now(timezone.utc).isoformat(),
+        "reviewed_by_user_id": org_user["user_id"],
+    }
+    bia_resp = client.post(f"/api/v1/bcm/processes/{process_id}/bia", headers=headers, json=bia_payload)
+    assert bia_resp.status_code == 201, bia_resp.text
+    assert bia_resp.json()["last_reviewed_at"] is not None
+
+    overdue_resp = client.get("/api/v1/bcm/overdue-reviews", headers=headers)
+    assert overdue_resp.status_code == 200, overdue_resp.text
+    items = overdue_resp.json()["items"]
+    assert all(item["process_id"] != process_id for item in items)
+
+
+def test_g9_bia_not_auto_reviewed_at_creation_and_flagged_as_overdue(client, db_session):
+    """G9 item 21: a freshly-created BIA with no explicit review must show
+    last_reviewed_at: null (never auto-stamped with "now" at creation), and must be
+    surfaced by the overdue-review report since it's genuinely never been reviewed."""
+    org_user = bootstrap_org_user(client, email_prefix="bcm-never-reviewed")
     headers = org_user["org_headers"]
 
     resp = _create_process(client, headers)
@@ -84,11 +113,37 @@ def test_overdue_reviews_empty_for_freshly_reviewed_process(client, db_session):
     }
     bia_resp = client.post(f"/api/v1/bcm/processes/{process_id}/bia", headers=headers, json=bia_payload)
     assert bia_resp.status_code == 201, bia_resp.text
+    assert bia_resp.json()["last_reviewed_at"] is None
+    assert bia_resp.json()["reviewed_by_user_id"] is None
 
     overdue_resp = client.get("/api/v1/bcm/overdue-reviews", headers=headers)
     assert overdue_resp.status_code == 200, overdue_resp.text
     items = overdue_resp.json()["items"]
-    assert all(item["process_id"] != process_id for item in items)
+    matching = next(item for item in items if item["process_id"] == process_id)
+    assert any("never been reviewed" in reason for reason in matching["stale_reasons"])
+
+
+def test_g9_bia_last_reviewed_at_requires_reviewed_by_user_id(client, db_session):
+    """G9 item 21: last_reviewed_at must never be set without an accompanying
+    reviewed_by_user_id -- that pairing is what makes it a genuine review record
+    rather than a phantom, unattributed timestamp."""
+    org_user = bootstrap_org_user(client, email_prefix="bcm-review-pair")
+    headers = org_user["org_headers"]
+
+    resp = _create_process(client, headers)
+    assert resp.status_code == 201, resp.text
+    process_id = resp.json()["id"]
+
+    bia_resp = client.post(
+        f"/api/v1/bcm/processes/{process_id}/bia",
+        headers=headers,
+        json={
+            "impact_analysis_json": {"financial": "low"},
+            "review_frequency_months": 12,
+            "last_reviewed_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    assert bia_resp.status_code == 422, bia_resp.text
 
 
 def test_overdue_reviews_flags_stale_review_window(client, db_session):

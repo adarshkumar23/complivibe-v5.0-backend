@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, Text, Uuid, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -53,9 +53,11 @@ class BiaAssessment(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin,
     impact_analysis_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     financial_impact_tier: Mapped[str | None] = mapped_column(String(32), nullable=True)
     review_frequency_months: Mapped[int] = mapped_column(Integer, nullable=False, default=12)
-    last_reviewed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
+    # Only ever set by a genuine review action (together with reviewed_by_user_id) --
+    # NOT auto-populated at creation time. A freshly-created, never-reviewed BIA must
+    # show last_reviewed_at: None so overdue-review reports correctly flag it instead
+    # of a phantom "just reviewed" timestamp with no reviewer (see G9 item 21).
+    last_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
