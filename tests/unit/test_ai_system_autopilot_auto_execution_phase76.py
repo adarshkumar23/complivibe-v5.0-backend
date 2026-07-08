@@ -157,6 +157,33 @@ def test_phase76_low_risk_high_confidence_auto_executes_and_reverses_with_notifi
     restored = db_session.get(AISystemRiskAssessment, uuid.UUID(assessment["id"]))
     assert (restored.risk_factors_json or {}) == before_factors
 
+    # A second reversal attempt for the same execution -- whether truly
+    # concurrent or just a retried/duplicated request -- must never be allowed
+    # to apply the before_snapshot a second time.
+    second_reverse = client.post(
+        f"{EXECUTIONS_BASE}/{execution['execution_id']}/reverse",
+        headers=headers,
+        json={"reason": "duplicate reverse attempt"},
+    )
+    assert second_reverse.status_code == 400
+    assert "already been reversed" in second_reverse.json()["detail"]
+
+
+def test_phase76_reverse_lookup_takes_a_row_lock_to_serialize_concurrent_reversals():
+    # Static/structural guard: the reverse path must use the locked lookup
+    # (with_for_update), not the plain require_autopilot_execution used by the
+    # read-only GET endpoints, so two concurrent reversal requests serialize at
+    # the DB instead of both reading reversed_at=None and both applying the
+    # before_snapshot.
+    import inspect
+
+    from app.services.ai_system_risk_assessment_service import AISystemRiskAssessmentService
+
+    source = inspect.getsource(AISystemRiskAssessmentService.reverse_autopilot_execution)
+    assert "_require_autopilot_execution_for_update" in source
+    lock_source = inspect.getsource(AISystemRiskAssessmentService._require_autopilot_execution_for_update)
+    assert "with_for_update" in lock_source
+
 
 def test_phase76_high_risk_never_auto_executes_even_at_full_confidence(client, db_session):
     org = bootstrap_org_user(client, email_prefix="p76-high")

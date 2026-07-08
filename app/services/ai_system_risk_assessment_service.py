@@ -7005,6 +7005,28 @@ class AISystemRiskAssessmentService:
         ).offset(offset).limit(limit)
         return list(self.db.execute(query).scalars().all())
 
+    def _require_autopilot_execution_for_update(
+        self, *, organization_id: uuid.UUID, execution_id: uuid.UUID
+    ) -> GovernanceAutopilotExecution:
+        """Same lookup as require_autopilot_execution, but takes a row lock so two
+        concurrent reversal requests for the same execution serialize instead of
+        racing -- without this, both requests could pass the reversed_at is None
+        check before either commits, double-reversing the underlying operation
+        (e.g. deleting the same reminder Task twice, or tripping the circuit
+        breaker's reversal-rate accounting twice for one execution). Mirrors the
+        with_for_update() pattern used by IssueService for the same reason."""
+        row = self.db.execute(
+            select(GovernanceAutopilotExecution)
+            .where(
+                GovernanceAutopilotExecution.organization_id == organization_id,
+                GovernanceAutopilotExecution.id == execution_id,
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Autopilot execution not found")
+        return row
+
     def reverse_autopilot_execution(
         self,
         *,
@@ -7013,7 +7035,7 @@ class AISystemRiskAssessmentService:
         reason: str | None,
         actor_user_id: uuid.UUID | None,
     ) -> GovernanceAutopilotExecution:
-        row = self.require_autopilot_execution(organization_id=organization_id, execution_id=execution_id)
+        row = self._require_autopilot_execution_for_update(organization_id=organization_id, execution_id=execution_id)
         now = self.now()
         if row.reversed_at is not None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Execution has already been reversed")
