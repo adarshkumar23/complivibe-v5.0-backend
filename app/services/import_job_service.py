@@ -34,6 +34,21 @@ _EVIDENCE_HINTS = {"evidence", "artifact", "artifacts", "integration", "integrat
 _POLICY_HINTS = {"policy", "policies", "document", "documents"}
 _BUSINESS_UNIT_HINTS = {"entity", "entities", "business_unit", "business_units", "department", "departments"}
 
+# Every CSV header alias that _map_csv_row() knows how to recognize (directly, or via
+# an explicit column_map entry). Any CSV column present in the source file that isn't
+# in this set -- and isn't explicitly mapped by the caller -- is silently dropped
+# during import unless surfaced as a warning (see _parse_csv_rows' unmapped_columns).
+_RECOGNIZED_CSV_COLUMN_ALIASES = {
+    "entity_type", "module", "object_type", "section", "type",
+    "title", "name", "control_name", "policy_name", "artifact_name", "entity_name",
+    "description", "details", "summary", "notes",
+    "code", "control_code", "reference", "id",
+    "policy_type", "policy_category", "category",
+    "evidence_type", "artifact_type", "kind",
+    "collected_at", "captured_at", "observed_at", "updated_at",
+    "original_created_at", "created_at", "uploaded_at",
+}
+
 
 def run_import_job_validation(job_id: str) -> None:
     from app.db.session import get_session_maker
@@ -61,6 +76,10 @@ def run_import_job_validation(job_id: str) -> None:
 class ImportJobService:
     def __init__(self, db: Session) -> None:
         self.db = db
+        # Populated by _parse_csv_rows() (via _parse_records()) each time a CSV source
+        # is parsed -- the set of source-file column headers that weren't recognized
+        # or explicitly mapped, and were therefore not imported into any field.
+        self._last_unmapped_columns: list[str] = []
 
     @staticmethod
     def _utcnow() -> datetime:
@@ -146,6 +165,7 @@ class ImportJobService:
         job.status = "processing"
         parsed, row_errors = self._parse_records(job.source_tool, job.raw_payload_json)
         preview = self._build_preview(job.organization_id, parsed, row_errors, job.conflict_strategy)
+        preview["unmapped_columns"] = list(self._last_unmapped_columns)
         job.progress_total = len(parsed)
         job.progress_current = len(parsed)
         job.result_json = preview
@@ -168,11 +188,13 @@ class ImportJobService:
             "would_skip": preview["would_skip"],
             "context_flags": preview.get("context_flags", []),
             "insights": preview.get("insights", {}),
+            "unmapped_columns": preview.get("unmapped_columns", []),
         }
 
     def commit(self, organization_id: uuid.UUID, job_id: uuid.UUID, actor_user_id: uuid.UUID | None) -> dict[str, Any]:
         job = self.require_job(organization_id, job_id)
         parsed, row_errors = self._parse_records(job.source_tool, job.raw_payload_json)
+        unmapped_columns = list(self._last_unmapped_columns)
         preview = self._build_preview(job.organization_id, parsed, row_errors, job.conflict_strategy)
         job.status = "processing"
         job.progress_total = len(parsed)
@@ -240,6 +262,7 @@ class ImportJobService:
             "created": dict(created),
             "updated": dict(updated),
             "skipped": dict(skipped),
+            "unmapped_columns": unmapped_columns,
         }
         job.updated_at = self._utcnow()
         self.db.flush()
@@ -260,6 +283,7 @@ class ImportJobService:
             "row_errors": row_errors,
             "context_flags": execution_insights["context_flags"],
             "insights": execution_insights["insights"],
+            "unmapped_columns": unmapped_columns,
         }
 
     def _build_preview(
@@ -403,6 +427,7 @@ class ImportJobService:
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         parsed_rows: list[dict[str, Any]] = []
         row_errors: list[dict[str, Any]] = []
+        self._last_unmapped_columns = []
         if raw_payload is None:
             return parsed_rows, [{"row": 0, "error": "Missing payload"}]
 
@@ -491,6 +516,22 @@ class ImportJobService:
             reader = csv.DictReader(io.StringIO(csv_content))
             if not reader.fieldnames:
                 return parsed_rows, [{"row": 0, "error": "CSV is missing header row"}]
+
+            recognized = set(_RECOGNIZED_CSV_COLUMN_ALIASES)
+            if column_map:
+                # Columns explicitly mapped by the caller (either as a key the caller
+                # is targeting, or as a source header they've pointed at a known field)
+                # are, by definition, not "unrecognized".
+                recognized.update(str(k).strip().lower() for k in column_map.keys())
+                recognized.update(str(v).strip().lower() for v in column_map.values())
+            self._last_unmapped_columns = sorted(
+                {
+                    field.strip()
+                    for field in reader.fieldnames
+                    if field and field.strip().lower() not in recognized
+                }
+            )
+
             for idx, raw in enumerate(reader, start=2):
                 mapped = self._map_csv_row(raw, source_tool=source_tool, column_map=column_map, row_number=idx, row_errors=row_errors)
                 if mapped is None:

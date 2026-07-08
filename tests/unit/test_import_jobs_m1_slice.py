@@ -57,6 +57,55 @@ def test_import_job_create_preview_and_row_level_parse_errors(client, db_session
     assert "Missing title/name" in body["row_errors"][0]["error"]
 
 
+def test_import_csv_surfaces_unmapped_columns_in_preview_and_commit(client, db_session):
+    """G9 item 6: unrecognized CSV columns (status/owner/last_reviewed) must be
+    surfaced as a warning, not silently dropped without the user knowing."""
+    org = bootstrap_org_user(client, email_prefix="import-job-unmapped")
+
+    create = client.post(
+        f"{BASE}/generic",
+        headers=org["org_headers"],
+        json={
+            "dry_run": True,
+            "conflict_strategy": "skip",
+            "csv_content": (
+                "entity_type,title,description,status,owner,last_reviewed\n"
+                "control,Access Control Policy,desc here,active,Jane Doe,2026-01-01\n"
+            ),
+        },
+    )
+    assert create.status_code == 201
+    job_id = create.json()["id"]
+
+    preview = client.post(f"{BASE}/{job_id}/dry-run-preview", headers=org["org_headers"])
+    assert preview.status_code == 200
+    assert sorted(preview.json()["unmapped_columns"]) == ["last_reviewed", "owner", "status"]
+
+    commit = client.post(f"{BASE}/{job_id}/commit", headers=org["org_headers"])
+    assert commit.status_code == 200
+    assert sorted(commit.json()["unmapped_columns"]) == ["last_reviewed", "owner", "status"]
+
+
+def test_import_csv_no_unmapped_columns_when_all_recognized(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="import-job-all-mapped")
+
+    create = client.post(
+        f"{BASE}/generic",
+        headers=org["org_headers"],
+        json={
+            "dry_run": True,
+            "conflict_strategy": "skip",
+            "csv_content": "entity_type,title,description\ncontrol,Fully Recognized Control,ok\n",
+        },
+    )
+    assert create.status_code == 201
+    job_id = create.json()["id"]
+
+    preview = client.post(f"{BASE}/{job_id}/dry-run-preview", headers=org["org_headers"])
+    assert preview.status_code == 200
+    assert preview.json()["unmapped_columns"] == []
+
+
 def test_import_job_commit_conflict_resolution_update(client, db_session):
     org = bootstrap_org_user(client, email_prefix="import-job-conflict")
 

@@ -49,6 +49,14 @@ class ImportDryRunPreviewRead(BaseModel):
     would_skip: dict[str, int]
     context_flags: list[str] = Field(default_factory=list)
     insights: dict[str, Any] = Field(default_factory=dict)
+    unmapped_columns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "CSV source columns present in the uploaded file that were not recognized "
+            "or explicitly mapped, and were therefore NOT imported into any field. "
+            "Review these before committing to confirm nothing important is being lost."
+        ),
+    )
 
 
 class ImportCommitRead(BaseModel):
@@ -60,6 +68,13 @@ class ImportCommitRead(BaseModel):
     row_errors: list[dict[str, Any]]
     context_flags: list[str] = Field(default_factory=list)
     insights: dict[str, Any] = Field(default_factory=dict)
+    unmapped_columns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "CSV source columns present in the uploaded file that were not recognized "
+            "or explicitly mapped, and were therefore NOT imported into any field."
+        ),
+    )
 
 
 class ImportParityModuleRead(BaseModel):
