@@ -131,6 +131,11 @@ class ObligationRead(BaseModel):
     evidence_requirements: list[ObligationEvidenceRequirementRead] = []
     control_suggestions: list[ObligationControlSuggestionRead] = []
     applicability_questions: list[ApplicabilityQuestionRead] = []
+    latest_suggested_applicability: str | None = None
+    latest_suggestion_stale_inputs: int = 0
+    suggestion_conflicts_with_org_state: bool = False
+    linked_controls_count: int = 0
+    context_flags: list[str] = []
 
 
 class ObligationStateUpdateRequest(BaseModel):

@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
@@ -172,6 +172,7 @@ def _build_obligation_read(
     db: Session,
     obligation: Obligation,
     state: OrganizationObligationState | None,
+    organization_id: uuid.UUID | None = None,
     include_extended: bool = False,
 ) -> ObligationRead:
     state_schema = None
@@ -196,6 +197,33 @@ def _build_obligation_read(
     evidence_requirements: list[ObligationEvidenceRequirementRead] = []
     control_suggestions: list[ObligationControlSuggestionRead] = []
     applicability_questions: list[ApplicabilityQuestionRead] = []
+    latest_suggested_applicability: str | None = None
+    latest_suggestion_stale_inputs = 0
+    suggestion_conflicts_with_org_state = False
+    linked_controls_count = 0
+    context_flags: list[str] = []
+
+    if organization_id is not None:
+        latest_suggestion = ApplicabilityRepository(db).latest_result_for_obligation(
+            organization_id=organization_id,
+            framework_id=obligation.framework_id,
+            obligation_id=obligation.id,
+        )
+        latest_suggested_applicability = latest_suggestion.suggested_applicability if latest_suggestion else None
+        latest_suggestion_stale_inputs = (
+            int((latest_suggestion.provenance_json or {}).get("stale_input_count", 0))
+            if latest_suggestion and isinstance(latest_suggestion.provenance_json, dict)
+            else 0
+        )
+        if latest_suggestion_stale_inputs > 0:
+            context_flags.append("latest_suggestion_inputs_stale")
+        if state is None:
+            context_flags.append("organization_state_missing")
+        elif latest_suggested_applicability and state.applicability_status != latest_suggested_applicability:
+            suggestion_conflicts_with_org_state = True
+            context_flags.append("org_state_overrides_suggestion")
+        if latest_suggested_applicability is None:
+            context_flags.append("latest_suggestion_missing")
 
     if include_extended:
         framework_row = db.execute(select(Framework).where(Framework.id == obligation.framework_id)).scalar_one_or_none()
@@ -242,6 +270,17 @@ def _build_obligation_read(
                 .order_by(ObligationControlSuggestion.created_at.asc())
             ).scalars().all()
         ]
+        if organization_id is not None:
+            linked_controls_count = int(
+                db.execute(
+                    select(func.count(ControlObligationMapping.id)).where(
+                        ControlObligationMapping.organization_id == organization_id,
+                        ControlObligationMapping.obligation_id == obligation.id,
+                    )
+                ).scalar_one()
+            )
+            if linked_controls_count == 0:
+                context_flags.append("no_linked_controls")
         applicability_questions = [
             _question_read(item)
             for item in db.execute(
@@ -281,6 +320,11 @@ def _build_obligation_read(
         evidence_requirements=evidence_requirements,
         control_suggestions=control_suggestions,
         applicability_questions=applicability_questions,
+        latest_suggested_applicability=latest_suggested_applicability,
+        latest_suggestion_stale_inputs=latest_suggestion_stale_inputs,
+        suggestion_conflicts_with_org_state=suggestion_conflicts_with_org_state,
+        linked_controls_count=linked_controls_count,
+        context_flags=sorted(set(context_flags)),
     )
 
 
@@ -404,7 +448,7 @@ def get_obligation_detail(
             )
         ).scalar_one_or_none()
 
-    return _build_obligation_read(db, obligation, state, include_extended=True)
+    return _build_obligation_read(db, obligation, state, organization_id=organization.id, include_extended=True)
 
 
 @router.post("/{obligation_id}/content-versions", response_model=ObligationContentVersionRead, status_code=status.HTTP_201_CREATED)
@@ -851,6 +895,11 @@ def update_obligation_state(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Justification is required when applicability_status is not_applicable",
         )
+    if payload.implementation_status == "implemented" and payload.applicability_status != "applicable":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="implementation_status implemented requires applicability_status applicable",
+        )
     latest_suggestion = ApplicabilityRepository(db).latest_result_for_obligation(
         organization_id=organization.id,
         framework_id=obligation.framework_id,
@@ -871,6 +920,11 @@ def update_obligation_state(
                 "Justification is required when overriding latest suggested applicability "
                 f"({latest_suggested_applicability})"
             ),
+        )
+    if payload.implementation_status == "blocked" and not (payload.justification and payload.justification.strip()):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Justification is required when implementation_status is blocked",
         )
     _ensure_active_org_user(db, organization.id, payload.owner_user_id, "owner_user_id")
 
@@ -928,7 +982,7 @@ def update_obligation_state(
     )
 
     db.commit()
-    return _build_obligation_read(db, obligation, state, include_extended=True)
+    return _build_obligation_read(db, obligation, state, organization_id=organization.id, include_extended=True)
 
 
 @router.get("/{obligation_id}/controls", response_model=list[ControlRead])
