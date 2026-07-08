@@ -1,7 +1,7 @@
 """add revocation bookkeeping columns to attestation_tokens
 
-Revision ID: 0265_attestation_token_revocation
-Revises: 0264_ai_monitoring_config_baseline_model_version
+Revision ID: 0269_attestation_token_revocation
+Revises: 0268_issue_sync_webhook_idempotency
 Create Date: 2026-07-08 00:00:00.000000
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0265_attestation_token_revocation"
-down_revision: str | None = "0264_ai_monitoring_config_baseline_model_version"
+revision: str = "0269_attestation_token_revocation"
+down_revision: str | None = "0268_issue_sync_webhook_idempotency"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
