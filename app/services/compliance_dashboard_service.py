@@ -10,6 +10,7 @@ from app.models.compliance_deadline import ComplianceDeadline
 from app.models.compliance_policy import CompliancePolicy
 from app.models.control import Control
 from app.models.control_monitoring_alert import ControlMonitoringAlert
+from app.models.common_control_mapping import CommonControlMapping
 from app.models.control_monitoring_definition import ControlMonitoringDefinition
 from app.models.control_obligation_mapping import ControlObligationMapping
 from app.models.control_test_definition import ControlTestDefinition
@@ -62,6 +63,42 @@ class ComplianceDashboardService:
         rather than reimplementing their own (drifting) coverage query."""
         return float(self._framework_counts(organization_id, framework_id)["control_coverage_pct"])
 
+    def _mapped_control_obligation_pairs(self, organization_id: uuid.UUID, framework_id: uuid.UUID) -> set[tuple[uuid.UUID, uuid.UUID]]:
+        """Real (control_id, obligation_id) pairs mapped for this framework, unioned
+        across BOTH control-linking mechanisms in this codebase: the direct
+        ControlObligationMapping (used by most of the app) and CommonControlMapping
+        (the "common controls" reuse-across-frameworks feature). These are two
+        historically disconnected data models for the same underlying concept -- a
+        control mapped to an obligation ONLY via CommonControlMapping was previously
+        invisible here, silently under-counting real coverage (see G9 item 18).
+        Mirrors the union pattern already used correctly in oscal_export_service.py.
+        """
+        direct_pairs = set(
+            self.db.execute(
+                select(ControlObligationMapping.control_id, ControlObligationMapping.obligation_id)
+                .join(Obligation, Obligation.id == ControlObligationMapping.obligation_id)
+                .where(
+                    ControlObligationMapping.organization_id == organization_id,
+                    ControlObligationMapping.status == "active",
+                    Obligation.framework_id == framework_id,
+                    Obligation.status == "active",
+                )
+            ).all()
+        )
+        common_pairs = set(
+            self.db.execute(
+                select(CommonControlMapping.control_id, CommonControlMapping.obligation_id)
+                .join(Obligation, Obligation.id == CommonControlMapping.obligation_id)
+                .where(
+                    CommonControlMapping.organization_id == organization_id,
+                    CommonControlMapping.status == "active",
+                    CommonControlMapping.framework_id == framework_id,
+                    Obligation.status == "active",
+                )
+            ).all()
+        )
+        return direct_pairs | common_pairs
+
     def _framework_counts(self, organization_id: uuid.UUID, framework_id: uuid.UUID) -> dict[str, int | float]:
         obligation_count = int(
             self.db.execute(
@@ -72,51 +109,28 @@ class ComplianceDashboardService:
             ).scalar_one()
         )
 
-        mapped_control_count = int(
-            self.db.execute(
-                select(func.count(func.distinct(ControlObligationMapping.control_id)))
-                .join(Obligation, Obligation.id == ControlObligationMapping.obligation_id)
-                .where(
-                    ControlObligationMapping.organization_id == organization_id,
-                    ControlObligationMapping.status == "active",
-                    Obligation.framework_id == framework_id,
-                    Obligation.status == "active",
-                )
-            ).scalar_one()
-        )
-
-        mapped_obligation_count = int(
-            self.db.execute(
-                select(func.count(func.distinct(ControlObligationMapping.obligation_id)))
-                .join(Obligation, Obligation.id == ControlObligationMapping.obligation_id)
-                .where(
-                    ControlObligationMapping.organization_id == organization_id,
-                    ControlObligationMapping.status == "active",
-                    Obligation.framework_id == framework_id,
-                    Obligation.status == "active",
-                )
-            ).scalar_one()
-        )
+        mapped_pairs = self._mapped_control_obligation_pairs(organization_id, framework_id)
+        mapped_control_ids = {control_id for control_id, _ in mapped_pairs}
+        mapped_obligation_ids = {obligation_id for _, obligation_id in mapped_pairs}
+        mapped_control_count = len(mapped_control_ids)
+        mapped_obligation_count = len(mapped_obligation_ids)
 
         verified_mapped_controls = int(
             self.db.execute(
-                select(func.count(func.distinct(EvidenceControlLink.control_id)))
-                .join(EvidenceItem, EvidenceItem.id == EvidenceControlLink.evidence_item_id)
-                .join(ControlObligationMapping, ControlObligationMapping.control_id == EvidenceControlLink.control_id)
-                .join(Obligation, Obligation.id == ControlObligationMapping.obligation_id)
-                .where(
+                select(func.count(func.distinct(EvidenceControlLink.control_id))).where(
                     EvidenceControlLink.organization_id == organization_id,
                     EvidenceControlLink.link_status == "active",
-                    EvidenceItem.organization_id == organization_id,
-                    EvidenceItem.status != "archived",
-                    EvidenceItem.review_status == "verified",
-                    ControlObligationMapping.organization_id == organization_id,
-                    ControlObligationMapping.status == "active",
-                    Obligation.framework_id == framework_id,
-                    Obligation.status == "active",
+                    EvidenceControlLink.control_id.in_(mapped_control_ids),
+                    EvidenceControlLink.evidence_item_id.in_(
+                        select(EvidenceItem.id).where(
+                            EvidenceItem.organization_id == organization_id,
+                            EvidenceItem.status != "archived",
+                            EvidenceItem.review_status == "verified",
+                        )
+                    ),
                 )
             ).scalar_one()
-        )
+        ) if mapped_control_ids else 0
 
         control_coverage_pct = round((mapped_obligation_count / obligation_count) * 100, 2) if obligation_count else 0.0
         evidence_verified_pct = round((verified_mapped_controls / mapped_control_count) * 100, 2) if mapped_control_count else 0.0
