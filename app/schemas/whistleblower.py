@@ -71,6 +71,8 @@ class WhistleblowerReportRead(BaseModel):
     resolution_summary: str | None = None
     created_at: datetime
     updated_at: datetime
+    days_open: int = 0
+    context_flags: list[str] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 

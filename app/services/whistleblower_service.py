@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.user import User
 from app.models.whistleblower import WhistleblowerMessage, WhistleblowerReport
 from app.services.audit_service import AuditService
 
@@ -22,6 +24,18 @@ _VALID_STATUS_TRANSITIONS: dict[str, set[str]] = {
     "closed": set(),
     "dismissed": set(),
 }
+
+_OPEN_STATUSES = {"submitted", "under_review", "investigating"}
+
+# EU Whistleblower Directive (Directive (EU) 2019/1937), Art. 9: an
+# acknowledgment of receipt is due within 7 days, and feedback to the
+# reporter is due within a reasonable time not exceeding 3 months (taken
+# here as 90 days). These are advisory SLA flags, not hard enforcement.
+_ACKNOWLEDGMENT_SLA_DAYS = 7
+_FEEDBACK_SLA_DAYS = 90
+# Once an investigator has been engaged, a reporter's follow-up message
+# going unanswered this long is itself a process-health signal.
+_INVESTIGATOR_RESPONSE_SLA_DAYS = 5
 
 
 class WhistleblowerService:
@@ -216,6 +230,67 @@ class WhistleblowerService:
             user_agent=user_agent,
         )
         return report
+
+    # ------------------------------------------------------------------
+    # Intelligence / SLA context -- investigator-facing ONLY. Never call
+    # this for the reporter-visible status endpoint: it may reference
+    # internal staff state (assigned investigator's account status) which
+    # must never be surfaced to an anonymous reporter.
+    # ------------------------------------------------------------------
+    def build_report_context(
+        self,
+        report: WhistleblowerReport,
+        messages: list[WhistleblowerMessage] | None = None,
+    ) -> dict:
+        now = datetime.now(timezone.utc)
+        created_at = report.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        days_open = (now - created_at).days
+
+        flags: list[str] = []
+
+        if report.category == "retaliation":
+            flags.append(
+                "retaliation_category_requires_priority_handling: reports alleging retaliation "
+                "for prior whistleblowing warrant expedited, senior-level review"
+            )
+
+        if report.status == "submitted" and days_open > _ACKNOWLEDGMENT_SLA_DAYS:
+            flags.append(
+                f"acknowledgment_overdue: report has been unacknowledged for {days_open} days "
+                f"(target: {_ACKNOWLEDGMENT_SLA_DAYS} days)"
+            )
+        if report.status in _OPEN_STATUSES and days_open > _FEEDBACK_SLA_DAYS:
+            flags.append(
+                f"feedback_overdue: report has been open {days_open} days without resolution "
+                f"(target: {_FEEDBACK_SLA_DAYS} days)"
+            )
+
+        if report.assigned_investigator_user_id is not None:
+            investigator = self.db.get(User, report.assigned_investigator_user_id)
+            if investigator is None or not investigator.is_active or investigator.status != "active":
+                flags.append(
+                    "assigned_investigator_inactive: the assigned investigator's account is no longer "
+                    "active -- reassign to avoid a stalled investigation"
+                )
+
+        if messages is None:
+            messages = self.get_messages(report.id)
+        if messages and report.status in _OPEN_STATUSES:
+            last_message = messages[-1]
+            if last_message.sender_type == "reporter":
+                last_created_at = last_message.created_at
+                if last_created_at.tzinfo is None:
+                    last_created_at = last_created_at.replace(tzinfo=timezone.utc)
+                days_since_reporter_message = (now - last_created_at).days
+                if days_since_reporter_message > _INVESTIGATOR_RESPONSE_SLA_DAYS:
+                    flags.append(
+                        "awaiting_investigator_response: the reporter's latest message has gone "
+                        f"unanswered for {days_since_reporter_message} days"
+                    )
+
+        return {"days_open": days_open, "context_flags": flags}
 
     def _get_report_for_org(self, organization_id: uuid.UUID, report_id: uuid.UUID) -> WhistleblowerReport:
         report = self.db.execute(

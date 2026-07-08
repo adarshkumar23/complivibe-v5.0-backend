@@ -89,10 +89,18 @@ def list_reports(
     db: Session = Depends(get_db),
     membership: Membership = Depends(require_permission("whistleblower:investigate")),
 ) -> list[WhistleblowerReportRead]:
-    reports = WhistleblowerService(db).list_for_investigator(
+    service = WhistleblowerService(db)
+    reports = service.list_for_investigator(
         organization_id=membership.organization_id, status_filter=status_filter
     )
-    return [WhistleblowerReportRead.model_validate(r) for r in reports]
+    result = []
+    for r in reports:
+        context = service.build_report_context(r)
+        item = WhistleblowerReportRead.model_validate(r)
+        item.days_open = context["days_open"]
+        item.context_flags = context["context_flags"]
+        result.append(item)
+    return result
 
 
 @router.get("/reports/{report_id}", response_model=WhistleblowerReportDetailRead)
@@ -104,6 +112,7 @@ def get_report(
     service = WhistleblowerService(db)
     report = service.get_report_for_investigator(organization_id=membership.organization_id, report_id=report_id)
     messages = service.get_messages(report.id)
+    context = service.build_report_context(report, messages)
     return WhistleblowerReportDetailRead(
         id=report.id,
         organization_id=report.organization_id,
@@ -115,6 +124,8 @@ def get_report(
         resolution_summary=report.resolution_summary,
         created_at=report.created_at,
         updated_at=report.updated_at,
+        days_open=context["days_open"],
+        context_flags=context["context_flags"],
         messages=[WhistleblowerMessageRead.model_validate(m) for m in messages],
     )
 
@@ -149,7 +160,8 @@ def update_report_status(
     current_user: User = Depends(get_current_active_user),
     membership: Membership = Depends(require_permission("whistleblower:investigate")),
 ) -> WhistleblowerReportRead:
-    report = WhistleblowerService(db).update_status(
+    service = WhistleblowerService(db)
+    report = service.update_status(
         organization_id=membership.organization_id,
         report_id=report_id,
         investigator_user_id=current_user.id,
@@ -159,4 +171,8 @@ def update_report_status(
         user_agent=request.headers.get("User-Agent"),
     )
     db.commit()
-    return WhistleblowerReportRead.model_validate(report)
+    context = service.build_report_context(report)
+    result = WhistleblowerReportRead.model_validate(report)
+    result.days_open = context["days_open"]
+    result.context_flags = context["context_flags"]
+    return result
