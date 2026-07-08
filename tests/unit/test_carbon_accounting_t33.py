@@ -274,3 +274,67 @@ def test_t33_carbon_dashboard_flags_missing_scope3_and_stale_emission_factor(cli
     insights = dashboard.json()["insights"]
     assert any("Scope 3" in i for i in insights)
     assert any("eGRID2019" in i for i in insights)
+
+
+def test_t33_carbon_dashboard_flags_overlapping_periods_from_different_sources(client):
+    token = _register(client, "t33-owner6@example.com", "Pass1234!@", "T33 Carbon Org6")
+    org_id = _org_id(client, token)
+    ingest_key = _ingest_key(client, token, org_id)
+
+    # Two different source systems both report scope1 fuel combustion for an
+    # overlapping period -- a classic double-counting risk (e.g. the same
+    # facility's data landing through both a manual spreadsheet upload and an
+    # automated ERP feed).
+    for source, period_start, period_end, value in (
+        ("fleet-fuel-cards", "2026-02-01", "2026-02-28", "40"),
+        ("erp-fuel-ledger", "2026-02-15", "2026-03-15", "35"),
+    ):
+        response = client.post(
+            "/api/v1/carbon-accounting/readings",
+            headers={"X-CompliVibe-Key": ingest_key},
+            json={
+                "scope": "scope1",
+                "source": source,
+                "period_start": period_start,
+                "period_end": period_end,
+                "value": value,
+                "unit": "tCO2e",
+            },
+        )
+        assert response.status_code == 201, response.text
+
+    dashboard = client.get("/api/v1/carbon-accounting/dashboard", headers=_headers(token, org_id))
+    assert dashboard.status_code == 200
+    insights = dashboard.json()["insights"]
+    assert any(
+        "fleet-fuel-cards" in i and "erp-fuel-ledger" in i and "double-counted" in i for i in insights
+    )
+
+
+def test_t33_carbon_dashboard_does_not_flag_non_overlapping_periods_or_single_source(client):
+    token = _register(client, "t33-owner7@example.com", "Pass1234!@", "T33 Carbon Org7")
+    org_id = _org_id(client, token)
+    ingest_key = _ingest_key(client, token, org_id)
+
+    for source, period_start, period_end in (
+        ("fleet-fuel-cards", "2026-01-01", "2026-01-31"),
+        ("fleet-fuel-cards", "2026-02-01", "2026-02-28"),
+    ):
+        response = client.post(
+            "/api/v1/carbon-accounting/readings",
+            headers={"X-CompliVibe-Key": ingest_key},
+            json={
+                "scope": "scope1",
+                "source": source,
+                "period_start": period_start,
+                "period_end": period_end,
+                "value": "10",
+                "unit": "tCO2e",
+            },
+        )
+        assert response.status_code == 201, response.text
+
+    dashboard = client.get("/api/v1/carbon-accounting/dashboard", headers=_headers(token, org_id))
+    assert dashboard.status_code == 200
+    insights = dashboard.json()["insights"]
+    assert not any("double-counted" in i for i in insights)

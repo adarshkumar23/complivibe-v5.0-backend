@@ -178,6 +178,10 @@ class CarbonAccountingService:
         by_period: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
         by_bu: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
         stale_factors: set[tuple[str, str]] = set()
+        # Same (scope, scope3_category, business_unit) bucket, grouped by source: if two
+        # different source systems both report overlapping periods for that bucket, the
+        # totals above are very likely double-counting the same underlying activity.
+        by_bucket_source: dict[tuple, list[CarbonEmissionsReading]] = defaultdict(list)
         current_year = self.utcnow().year
         for row in rows:
             value = self._to_tco2e(row.value, row.unit)
@@ -187,11 +191,35 @@ class CarbonAccountingService:
             period_key = row.period_start.strftime("%Y-%m")
             by_period[period_key] += value
             by_bu[str(row.business_unit_id) if row.business_unit_id else "unassigned"] += value
+            by_bucket_source[(row.scope, row.scope3_category, row.business_unit_id)].append(row)
 
             if row.emission_factor_version:
                 match = _YEAR_RE.search(row.emission_factor_version)
                 if match and (current_year - int(match.group(1))) > STALE_FACTOR_VERSION_AGE_YEARS:
                     stale_factors.add((row.emission_factor_source or "unknown_source", row.emission_factor_version))
+
+        overlap_warnings: list[str] = []
+        for (scope, scope3_category, business_unit_id), bucket_rows in by_bucket_source.items():
+            by_source = defaultdict(list)
+            for row in bucket_rows:
+                by_source[row.source].append(row)
+            if len(by_source) < 2:
+                continue
+            sources = sorted(by_source)
+            for i, source_a in enumerate(sources):
+                for source_b in sources[i + 1 :]:
+                    overlap = any(
+                        a.period_start <= b.period_end and b.period_start <= a.period_end
+                        for a in by_source[source_a]
+                        for b in by_source[source_b]
+                    )
+                    if overlap:
+                        bucket_label = scope3_category or scope
+                        bu_label = f" (business unit {business_unit_id})" if business_unit_id else ""
+                        overlap_warnings.append(
+                            f"Sources '{source_a}' and '{source_b}' both report overlapping periods for "
+                            f"{bucket_label}{bu_label} -- verify this isn't double-counted activity data."
+                        )
 
         insights: list[str] = []
         scope1_scope2_present = bool(by_scope.get("scope1") or by_scope.get("scope2"))
@@ -212,6 +240,7 @@ class CarbonAccountingService:
                 f"Emission factor '{version}' from '{source}' is more than {STALE_FACTOR_VERSION_AGE_YEARS} "
                 "years old and may no longer reflect current grid/fuel intensities -- consider refreshing it."
             )
+        insights.extend(sorted(overlap_warnings))
 
         return {
             "totals_by_scope": {key: str(round(value, 4)) for key, value in sorted(by_scope.items())},
