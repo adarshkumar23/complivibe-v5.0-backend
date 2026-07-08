@@ -10,6 +10,7 @@ from app.models.email_outbox import EmailOutbox
 from app.models.evidence_item import EvidenceItem
 from app.models.issue import Issue
 from app.models.org_email_config import OrgEmailConfig
+from app.models.organization import Organization
 from app.models.task import Task
 from app.models.user_notification_preference import UserNotificationPreference
 from tests.helpers.auth_org import bootstrap_org_user
@@ -20,6 +21,13 @@ def test_tv3_weekly_progress_computes_delta_wins_priorities(client, db_session, 
     org_id = uuid.UUID(ctx["organization_id"])
     user_id = uuid.UUID(ctx["user_id"])
     now = datetime.now(UTC)
+
+    # The org must predate the 14-day comparison window, otherwise the previous week is
+    # fabricated (the org didn't exist yet) and week-over-week wins/priorities are suppressed
+    # as not-meaningful by design -- see insufficient_history_for_comparison.
+    org_row = db_session.get(Organization, org_id)
+    org_row.created_at = now - timedelta(days=20)
+    db_session.commit()
 
     def _fake_provider_chain(self, *, org_id, messages, failure_context):  # noqa: ANN001
         return ("Weekly progress improved through higher completion velocity while controlling net issue intake.", "groq", False)

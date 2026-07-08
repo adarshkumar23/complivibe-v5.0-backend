@@ -92,3 +92,31 @@ def send_digest_now(
     queued = DigestService(db).send_digest(organization.id, current_user.id, digest_type, db)
     db.commit()
     return {"queued": bool(queued), "digest_type": digest_type}
+
+
+@router.get("/preview/{digest_type}")
+def preview_digest(
+    digest_type: str = Path(..., pattern="^(daily|weekly)$"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("org:read")),
+) -> dict:
+    """Return the digest content that would be sent, without queuing an email.
+
+    Lets the UI show "here's what your next digest looks like" without side effects,
+    matching the read-only preview pattern used elsewhere in the platform.
+    """
+    if digest_type not in {"daily", "weekly"}:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid digest type")
+    service = DigestService(db)
+    if digest_type == "daily":
+        content = service._with_digest_narrative(
+            org_id=organization.id,
+            user_id=current_user.id,
+            payload=service.build_daily_digest(organization.id, current_user.id, db),
+        )
+    else:
+        content = service.build_weekly_digest(organization.id, current_user.id, db)
+    db.rollback()
+    return content

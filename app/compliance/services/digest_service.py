@@ -30,6 +30,14 @@ class DigestService:
         return datetime.now(UTC)
 
     @staticmethod
+    def _as_utc_safe(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    @staticmethod
     def _parse_send_time(value: str) -> str:
         try:
             parts = value.split(":")
@@ -568,13 +576,25 @@ class DigestService:
             start_at=previous_week_start,
             end_at=week_ago,
         )
+
+        # An org younger than the 14-day comparison window has a fabricated all-zero
+        # "previous week" -- any wins/priorities/score_delta computed against it are noise
+        # (e.g. "reduced new issues" when there was no prior week to have issues in), not signal.
+        org = _db.get(Organization, org_id)
+        org_created_at = self._as_utc_safe(org.created_at) if org is not None else None
+        insufficient_history = org_created_at is not None and org_created_at > previous_week_start
+
         current_score = self._weekly_compliance_score(current_metrics)
         previous_score = self._weekly_compliance_score(previous_metrics)
         score_delta = current_score - previous_score
-        top_wins, top_priorities = self._weekly_wins_and_priorities(
-            current_metrics=current_metrics,
-            previous_metrics=previous_metrics,
-        )
+        if insufficient_history:
+            top_wins = ["Not enough account history yet for a week-over-week comparison."]
+            top_priorities = ["Keep building activity this week; trend comparisons begin after two full weeks."]
+        else:
+            top_wins, top_priorities = self._weekly_wins_and_priorities(
+                current_metrics=current_metrics,
+                previous_metrics=previous_metrics,
+            )
         weekly_narrative, weekly_narrative_source, weekly_staleness_flags = self._generate_weekly_progress_narrative(
             org_id=org_id,
             user_id=user_id,
@@ -583,6 +603,8 @@ class DigestService:
             top_wins=top_wins,
             top_priorities=top_priorities,
         )
+        if insufficient_history:
+            weekly_staleness_flags.append("insufficient_history_for_comparison")
 
         return {
             **daily,
@@ -592,6 +614,7 @@ class DigestService:
             "score_current": current_score,
             "score_previous": previous_score,
             "score_delta": score_delta,
+            "score_delta_meaningful": not insufficient_history,
             "top_3_wins": top_wins,
             "top_3_priorities": top_priorities,
             "weekly_metrics_current": current_metrics,
