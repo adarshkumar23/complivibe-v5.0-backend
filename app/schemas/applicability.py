@@ -78,6 +78,7 @@ class ApplicabilityEvaluationResultRead(BaseModel):
     matched_rules_json: list | dict | None = None
     missing_answers_json: list | dict | None = None
     rationale: str
+    context_flags: list[str] = Field(default_factory=list)
     provenance_json: dict | None = None
     created_at: datetime | None = None
 
@@ -129,10 +130,18 @@ class ApplicabilitySummaryResponse(BaseModel):
     total_questions: int
     answered_questions: int
     unanswered_questions: int
+    required_questions_count: int = 0
+    answered_required_questions: int = 0
+    unanswered_required_questions: int = 0
+    answer_completion_pct: float = 0
     total_obligations: int
     applicable_obligations: int
     not_applicable_obligations: int
     needs_review_obligations: int
     unknown_obligations: int
     latest_evaluation_at: datetime | None = None
+    latest_answer_at: datetime | None = None
+    latest_rule_or_question_change_at: datetime | None = None
+    stale_answers_count: int = 0
+    answers_stale_since_latest_change: bool = False
     caveat: str = APPLICABILITY_CAVEAT

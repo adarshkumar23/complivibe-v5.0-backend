@@ -32,6 +32,7 @@ ALLOWED_RULE_OPERATORS = {
 }
 ALLOWED_RESULT_APPLICABILITY = {"applicable", "not_applicable", "needs_review", "unknown"}
 ALLOWED_RULE_STATUS = {"active", "inactive", "archived"}
+ALLOWED_QUESTION_STATUS = {"active"}
 
 
 class ApplicabilityService:
@@ -110,6 +111,8 @@ class ApplicabilityService:
         q = self.db.execute(select(ObligationApplicabilityQuestion).where(ObligationApplicabilityQuestion.id == question_id)).scalar_one_or_none()
         if q is None or q.framework_id != framework_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid question_id for framework")
+        if q.status not in ALLOWED_QUESTION_STATUS:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Question is not active")
         return q
 
     def submit_answers(
@@ -125,9 +128,15 @@ class ApplicabilityService:
 
         rows: list[OrganizationApplicabilityAnswer] = []
         now = self.now()
+        submitted_question_ids: set[uuid.UUID] = set()
         for answer in answers:
             question_id = answer["question_id"]
+            if question_id in submitted_question_ids:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Duplicate question_id in submission payload")
+            submitted_question_ids.add(question_id)
             self._question_or_400(framework_id=framework_id, question_id=question_id)
+            if answer.get("answer_value_json") is None and not str(answer.get("answer_text") or "").strip():
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="answer_value_json or answer_text is required")
 
             existing = self.repo.active_answer_for_question(
                 organization_id=organization_id,
@@ -273,10 +282,12 @@ class ApplicabilityService:
             stale_inputs: list[dict] = []
             outcomes: list[str] = []
             rationale = ""
+            context_flags: list[str] = []
 
             if not obligation_rules:
                 suggested = "unknown"
                 rationale = "No active applicability rule configured."
+                context_flags.append("no_rules_configured")
             else:
                 for rule in obligation_rules:
                     answer_value = None
@@ -293,6 +304,7 @@ class ApplicabilityService:
                                 "question_id": str(rule.question_id),
                                 "question_key": question_row.question_key,
                             })
+                            context_flags.append("missing_answers")
                             continue
                         answer_value = answer.answer_value_json
                         answer_timestamp = self._as_utc(answer.answered_at) or now
@@ -331,20 +343,24 @@ class ApplicabilityService:
                 elif not outcomes:
                     suggested = "unknown"
                     rationale = "No rule matched with current answers."
+                    context_flags.append("no_rule_match")
                 else:
                     unique = set(outcomes)
                     if "needs_review" in unique:
                         suggested = "needs_review"
                         rationale = "At least one matched rule requires review."
+                        context_flags.append("rule_requires_review")
                     elif len(unique) > 1:
                         suggested = "needs_review"
                         rationale = "Conflicting matched rule outcomes require review."
+                        context_flags.append("conflicting_rule_outcomes")
                     else:
                         suggested = outcomes[0]
                         rationale = "All matched rules agree on suggested applicability."
                     if stale_inputs and suggested in {"applicable", "not_applicable"}:
                         suggested = "needs_review"
                         rationale = "Matched inputs are stale due to post-answer rule/question changes; review required."
+                        context_flags.append("stale_inputs")
 
             prev_state = self.db.execute(
                 select(OrganizationObligationState).where(
@@ -386,6 +402,7 @@ class ApplicabilityService:
                 "matched_rules_json": matched_rules,
                 "missing_answers_json": missing_answers,
                 "rationale": rationale,
+                "context_flags": sorted(set(context_flags)),
                 "provenance_json": {
                     "rule_count": len(obligation_rules),
                     "matched_rule_count": len(matched_rules),
@@ -442,23 +459,23 @@ class ApplicabilityService:
         return run_row, results_payload, summary
 
     def evaluation_summary(self, *, organization_id: uuid.UUID, framework_id: uuid.UUID) -> dict:
-        total_questions = int(
-            self.db.execute(
-                select(func.count(ObligationApplicabilityQuestion.id)).where(
-                    ObligationApplicabilityQuestion.framework_id == framework_id,
-                    ObligationApplicabilityQuestion.status == "active",
-                )
-            ).scalar_one()
+        active_question_stmt = select(ObligationApplicabilityQuestion).where(
+            ObligationApplicabilityQuestion.framework_id == framework_id,
+            ObligationApplicabilityQuestion.status == "active",
         )
-        answered_questions = int(
-            self.db.execute(
-                select(func.count(func.distinct(OrganizationApplicabilityAnswer.question_id))).where(
-                    OrganizationApplicabilityAnswer.organization_id == organization_id,
-                    OrganizationApplicabilityAnswer.framework_id == framework_id,
-                    OrganizationApplicabilityAnswer.status == "active",
-                )
-            ).scalar_one()
-        )
+        active_questions = self.db.execute(active_question_stmt).scalars().all()
+        total_questions = len(active_questions)
+        required_question_ids = {row.id for row in active_questions if bool(row.required)}
+
+        answered_rows = self.db.execute(
+            select(OrganizationApplicabilityAnswer).where(
+                OrganizationApplicabilityAnswer.organization_id == organization_id,
+                OrganizationApplicabilityAnswer.framework_id == framework_id,
+                OrganizationApplicabilityAnswer.status == "active",
+            )
+        ).scalars().all()
+        answered_question_ids = {row.question_id for row in answered_rows}
+        answered_questions = len(answered_question_ids)
 
         total_obligations = int(
             self.db.execute(
@@ -483,14 +500,50 @@ class ApplicabilityService:
         needs_review_obligations = latest_run.needs_review_count if latest_run else 0
         unknown_obligations = latest_run.unknown_count if latest_run else total_obligations
 
+        latest_answer_at = max((self._as_utc(row.answered_at) for row in answered_rows), default=None)
+        latest_question_updated_at = max(
+            (self._as_utc(row.updated_at) or self._as_utc(row.created_at) for row in active_questions),
+            default=None,
+        )
+        active_rules = self.repo.list_rules_for_framework(framework_id=framework_id, active_only=True)
+        latest_rule_updated_at = max(
+            (self._as_utc(row.updated_at) or self._as_utc(row.created_at) for row in active_rules),
+            default=None,
+        )
+        latest_rule_or_question_change_at = max(
+            [ts for ts in [latest_question_updated_at, latest_rule_updated_at] if ts is not None],
+            default=None,
+        )
+        stale_answers_count = 0
+        if latest_rule_or_question_change_at is not None:
+            stale_answers_count = sum(
+                1
+                for row in answered_rows
+                if (self._as_utc(row.answered_at) or self.now()) < latest_rule_or_question_change_at
+            )
+        required_answers_present_count = sum(1 for qid in required_question_ids if qid in answered_question_ids)
+        answer_completion_pct = round((answered_questions / total_questions) * 100.0, 2) if total_questions > 0 else 0.0
+
         return {
             "total_questions": total_questions,
             "answered_questions": answered_questions,
             "unanswered_questions": max(0, total_questions - answered_questions),
+            "required_questions_count": len(required_question_ids),
+            "answered_required_questions": required_answers_present_count,
+            "unanswered_required_questions": max(0, len(required_question_ids) - required_answers_present_count),
+            "answer_completion_pct": answer_completion_pct,
             "total_obligations": total_obligations,
             "applicable_obligations": applicable_obligations,
             "not_applicable_obligations": not_applicable_obligations,
             "needs_review_obligations": needs_review_obligations,
             "unknown_obligations": unknown_obligations,
             "latest_evaluation_at": latest_run.finished_at if latest_run else None,
+            "latest_answer_at": latest_answer_at,
+            "latest_rule_or_question_change_at": latest_rule_or_question_change_at,
+            "stale_answers_count": stale_answers_count,
+            "answers_stale_since_latest_change": bool(
+                latest_rule_or_question_change_at is not None
+                and latest_answer_at is not None
+                and latest_answer_at < latest_rule_or_question_change_at
+            ),
         }

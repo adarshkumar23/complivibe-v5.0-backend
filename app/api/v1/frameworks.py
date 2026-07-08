@@ -208,6 +208,17 @@ def _run_read(row: ApplicabilityEvaluationRun) -> ApplicabilityEvaluationRunRead
 
 
 def _result_read(row: ApplicabilityEvaluationResult) -> ApplicabilityEvaluationResultRead:
+    context_flags: list[str] = []
+    if isinstance(row.missing_answers_json, list) and row.missing_answers_json:
+        context_flags.append("missing_answers")
+    if isinstance(row.provenance_json, dict):
+        if int(row.provenance_json.get("stale_input_count", 0) or 0) > 0:
+            context_flags.append("stale_inputs")
+        if int(row.provenance_json.get("matched_rule_count", 0) or 0) == 0:
+            context_flags.append("no_rule_match")
+        if int(row.provenance_json.get("rule_count", 0) or 0) == 0:
+            context_flags.append("no_rules_configured")
+
     return ApplicabilityEvaluationResultRead(
         id=row.id,
         organization_id=row.organization_id,
@@ -220,6 +231,7 @@ def _result_read(row: ApplicabilityEvaluationResult) -> ApplicabilityEvaluationR
         matched_rules_json=row.matched_rules_json,
         missing_answers_json=row.missing_answers_json,
         rationale=row.rationale,
+        context_flags=sorted(set(context_flags)),
         provenance_json=row.provenance_json,
         created_at=row.created_at,
     )
@@ -936,6 +948,7 @@ def list_applicability_evaluation_runs(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("frameworks:read")),
 ) -> list[ApplicabilityEvaluationRunRead]:
+    ApplicabilityService(db).ensure_framework_active_for_org(organization_id=organization.id, framework_id=framework_id)
     rows = ApplicabilityRepository(db).list_runs(organization_id=organization.id, framework_id=framework_id)
     return [_run_read(row) for row in rows]
 
@@ -948,6 +961,7 @@ def get_applicability_evaluation_run_detail(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("frameworks:read")),
 ) -> ApplicabilityEvaluationRunDetail:
+    ApplicabilityService(db).ensure_framework_active_for_org(organization_id=organization.id, framework_id=framework_id)
     repo = ApplicabilityRepository(db)
     run = repo.get_run(run_id)
     if run is None or run.organization_id != organization.id or run.framework_id != framework_id:
@@ -963,6 +977,7 @@ def applicability_summary(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("frameworks:read")),
 ) -> ApplicabilitySummaryResponse:
+    ApplicabilityService(db).ensure_framework_active_for_org(organization_id=organization.id, framework_id=framework_id)
     summary = ApplicabilityService(db).evaluation_summary(organization_id=organization.id, framework_id=framework_id)
     return ApplicabilitySummaryResponse(**summary)
 
