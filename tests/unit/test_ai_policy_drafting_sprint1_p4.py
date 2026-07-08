@@ -18,6 +18,15 @@ from app.platform.services.billing_service import BillingService
 from tests.helpers.auth_org import bootstrap_org_user
 
 
+def _enable_ai_drafting(client, org_headers: dict) -> None:
+    # The free-form prompt-based drafting family (/compliance/policies/draft,
+    # /compliance/draft/{id}/refine, /compliance/suggest*) requires the same
+    # org-level AI drafting toggle as the structured /compliance/drafts/*
+    # family, in addition to the "ai_policy_drafting" billing plan feature.
+    resp = client.post("/api/v1/compliance/drafts/ai-config/enable", headers=org_headers)
+    assert resp.status_code == 200, resp.text
+
+
 def _set_org_plan(db_session, org_id: UUID, plan_code: str) -> None:
     BillingService(db_session).ensure_default_plans()
     plan = db_session.execute(select(SubscriptionPlan).where(SubscriptionPlan.plan_code == plan_code)).scalar_one()
@@ -40,6 +49,7 @@ def test_policy_drafting_flow_with_plan_gating_and_audit(client, db_session, mon
     growth_org_id = UUID(growth["organization_id"])
     growth_user_id = UUID(growth["user_id"])
     _set_org_plan(db_session, growth_org_id, "growth")
+    _enable_ai_drafting(client, growth["org_headers"])
 
     starter = bootstrap_org_user(client, email_prefix="draft-starter")
     starter_org_id = UUID(starter["organization_id"])
@@ -334,6 +344,7 @@ def test_real_endpoint_groq_draft_persists_generated_text(client, db_session):
     owner = bootstrap_org_user(client, email_prefix="draft-real-endpoint")
     org_id = UUID(owner["organization_id"])
     _set_org_plan(db_session, org_id, "growth")
+    _enable_ai_drafting(client, owner["org_headers"])
 
     get_settings.cache_clear()
     settings = get_settings()

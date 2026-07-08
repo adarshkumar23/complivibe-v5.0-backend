@@ -15,6 +15,7 @@ from app.compliance.schemas.policy_drafting import (
     PolicyDraftListResponse,
     PolicyDraftRead,
 )
+from app.compliance.services.ai_drafting_service import AIDraftingService
 from app.compliance.services.policy_drafting_service import PolicyDraftingService
 from app.core.billing_deps import require_feature
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
@@ -25,6 +26,30 @@ from app.models.user import User
 from app.services.audit_service import AuditService
 
 router = APIRouter(tags=["policy-drafting"])
+
+# --- AI-drafting gating story (see also app/api/v1/ai_drafting.py and
+# app/compliance/routers/copilot_draft.py) ---------------------------------
+#
+# CompliVibe has two AI-drafting families sharing ONE baseline on/off switch:
+#
+# 1. Structured drafting (/compliance/drafts/*, AIDraftingService): field-level
+#    assist for specific compliance objects (policy content, risk/control/
+#    evidence descriptions, RCA summaries, AI-governance narratives). Free on
+#    every billing plan; gated only by the org-level
+#    org_ai_config.ai_drafting_enabled toggle (POST /compliance/drafts/ai-config/enable).
+#
+# 2. Free-form prompt-based drafting (this router's /compliance/policies/draft
+#    family, plus /compliance/draft/{id}/refine and /compliance/suggest* in
+#    copilot_draft.py): open-ended natural-language policy drafting with an
+#    accept/discard review lifecycle and BYO-AI-credential support. This is a
+#    premium capability gated by the "ai_policy_drafting" billing plan feature
+#    -- but it ALSO requires the same org-level toggle as family 1 before any
+#    new AI generation runs, so there is a single coherent "is AI drafting on
+#    for this org at all" answer regardless of which endpoint is called.
+#
+# Reading, accepting, or discarding an already-generated draft never re-checks
+# the org toggle (mirrors AIDraftingService.get_draft/apply_draft) -- only the
+# endpoints that trigger a *new* AI call enforce it.
 
 
 def _require_org_admin(db: Session, membership: Membership) -> None:
@@ -53,7 +78,18 @@ def _draft_read(row) -> PolicyDraftRead:
     )
 
 
-@router.post("/compliance/policies/draft", response_model=PolicyDraftCreateResponse)
+@router.post(
+    "/compliance/policies/draft",
+    response_model=PolicyDraftCreateResponse,
+    description=(
+        "Free-form, prompt-driven policy drafting (accept/discard review lifecycle, "
+        "supports BYO AI credentials). Requires BOTH the org-level AI drafting toggle "
+        "(org_ai_config.ai_drafting_enabled, enabled by an org admin via "
+        "POST /compliance/drafts/ai-config/enable) AND the 'ai_policy_drafting' billing "
+        "plan feature. For structured, field-level AI assist on a specific policy_type "
+        "(no billing gate, only the org toggle), see POST /compliance/drafts/policy-content."
+    ),
+)
 def create_policy_draft(
     payload: PolicyDraftCreateRequest,
     request: Request,
@@ -63,6 +99,7 @@ def create_policy_draft(
     _: Membership = Depends(require_permission("compliance_policies:write")),
     __: Organization = require_feature("ai_policy_drafting"),
 ) -> PolicyDraftCreateResponse:
+    AIDraftingService(db).ensure_ai_drafting_enabled(organization.id)
     row = PolicyDraftingService(db).create_policy_draft(
         org_id=organization.id,
         prompt_input=payload.prompt,

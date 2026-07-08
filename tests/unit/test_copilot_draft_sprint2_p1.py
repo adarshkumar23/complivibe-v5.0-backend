@@ -30,6 +30,15 @@ def _set_org_plan(db_session, org_id: UUID, plan_code: str) -> None:
     db_session.commit()
 
 
+def _enable_ai_drafting(client, org_headers: dict) -> None:
+    # The free-form prompt-based drafting family (/compliance/draft/{id}/refine,
+    # /compliance/suggest*) requires the same org-level AI drafting toggle as the
+    # structured /compliance/drafts/* family, in addition to the "ai_policy_drafting"
+    # billing plan feature.
+    resp = client.post("/api/v1/compliance/drafts/ai-config/enable", headers=org_headers)
+    assert resp.status_code == 200, resp.text
+
+
 def test_refine_draft_real_calls_revision_history_and_org_scoping(client, db_session):
     settings = get_settings()
     assert settings.GROQ_API_KEY, "GROQ_API_KEY must be set for real integration tests"
@@ -38,6 +47,7 @@ def test_refine_draft_real_calls_revision_history_and_org_scoping(client, db_ses
     org_a = UUID(owner_a["organization_id"])
     user_a = UUID(owner_a["user_id"])
     _set_org_plan(db_session, org_a, "growth")
+    _enable_ai_drafting(client, owner_a["org_headers"])
 
     now = datetime.now(UTC)
     draft = AIContentDraft(
@@ -101,6 +111,7 @@ def test_refine_draft_real_calls_revision_history_and_org_scoping(client, db_ses
 
     owner_b = bootstrap_org_user(client, email_prefix="copilot-refine-b")
     _set_org_plan(db_session, UUID(owner_b["organization_id"]), "growth")
+    _enable_ai_drafting(client, owner_b["org_headers"])
     cross_refine = client.post(
         f"/api/v1/compliance/draft/{draft.id}/refine",
         headers=owner_b["org_headers"],
@@ -160,6 +171,7 @@ def test_inline_suggestions_real_calls_for_policy_control_risk_and_status_update
     owner = bootstrap_org_user(client, email_prefix="copilot-suggest")
     org_id = UUID(owner["organization_id"])
     _set_org_plan(db_session, org_id, "growth")
+    _enable_ai_drafting(client, owner["org_headers"])
 
     policy_resp = client.post(
         "/api/v1/compliance/suggest",

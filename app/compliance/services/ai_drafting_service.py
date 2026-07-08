@@ -94,15 +94,44 @@ class AIDraftingService:
         )
         return row
 
-    def _check_enabled(self, org_id: uuid.UUID) -> None:
+    def ensure_ai_drafting_enabled(self, org_id: uuid.UUID) -> None:
+        """Org-level baseline gate for ALL AI-drafting surfaces in the product.
+
+        This is the single on/off switch (org_ai_config.ai_drafting_enabled,
+        toggled by an org admin via POST /compliance/drafts/ai-config/enable)
+        that governs whether an organization may use AI-assisted drafting at
+        all. It applies uniformly to:
+          - the structured drafting family under /compliance/drafts/* (this
+            service), free on every billing plan once an admin opts in; and
+          - the free-form prompt-based drafting family under
+            /compliance/policies/draft, /compliance/draft/{id}/refine, and
+            /compliance/suggest* (PolicyDraftingService / CopilotDraftService),
+            which is additionally gated by the "ai_policy_drafting" billing
+            plan feature on top of this same org toggle.
+
+        Only the endpoints that trigger a *new* AI generation call this check
+        (mirroring create_draft below); reading, applying, or discarding an
+        already-generated draft does not require AI drafting to still be
+        enabled.
+        """
         row = self.db.execute(
             select(OrgAIConfig).where(OrgAIConfig.organization_id == org_id)
         ).scalar_one_or_none()
         if row is None or not row.ai_drafting_enabled:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="AI drafting is not enabled for this organization. Enable via /ai-config.",
+                detail={
+                    "error": "ai_drafting_not_enabled",
+                    "message": (
+                        "AI drafting is not enabled for this organization. "
+                        "An org admin must enable it via POST /compliance/drafts/ai-config/enable "
+                        "before any AI-assisted drafting endpoint can be used."
+                    ),
+                },
             )
+
+    # Backwards-compatible alias for the previous private name.
+    _check_enabled = ensure_ai_drafting_enabled
 
     @staticmethod
     def _require_context_key(context: dict, key: str) -> str:
@@ -260,7 +289,7 @@ class AIDraftingService:
         context_json: dict,
         created_by: uuid.UUID,
     ) -> DraftRequest:
-        self._check_enabled(org_id)
+        self.ensure_ai_drafting_enabled(org_id)
         if draft_type not in self.ALLOWED_DRAFT_TYPES:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unknown draft_type")
 

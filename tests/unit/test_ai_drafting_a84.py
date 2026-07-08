@@ -64,7 +64,8 @@ def test_a84_ai_drafting_endpoints_and_service(client, db_session, monkeypatch):
         },
     )
     assert blocked.status_code == 403
-    assert "AI drafting is not enabled" in blocked.json()["detail"]
+    assert "AI drafting is not enabled" in blocked.json()["detail"]["message"]
+    assert blocked.json()["detail"]["error"] == "ai_drafting_not_enabled"
 
     # Admin required for enable/disable; compliance_manager is not admin.
     manager = _create_active_user_with_role(

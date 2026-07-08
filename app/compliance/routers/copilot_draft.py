@@ -13,6 +13,7 @@ from app.compliance.schemas.copilot_draft import (
     InlineSuggestResponse,
     SuggestionStatusResponse,
 )
+from app.compliance.services.ai_drafting_service import AIDraftingService
 from app.compliance.services.copilot_draft_service import CopilotDraftService
 from app.core.billing_deps import require_feature
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
@@ -21,6 +22,14 @@ from app.models.organization import Organization
 from app.models.user import User
 
 router = APIRouter(tags=["copilot-draft"])
+
+# See the gating story documented at the top of
+# app/compliance/routers/policy_drafting.py: this router is part of the
+# free-form/prompt-based drafting family, gated by BOTH the org-level AI
+# drafting toggle and the "ai_policy_drafting" billing plan feature. Only the
+# endpoints that trigger a *new* AI generation (refine_draft,
+# generate_inline_suggestions) enforce the org toggle; reviewing revisions or
+# applying/dismissing an already-generated suggestion does not.
 
 
 def _revision_read(row) -> DraftRevisionRead:
@@ -38,7 +47,15 @@ def _revision_read(row) -> DraftRevisionRead:
     )
 
 
-@router.post("/compliance/draft/{draft_id}/refine", response_model=DraftRefineResponse)
+@router.post(
+    "/compliance/draft/{draft_id}/refine",
+    response_model=DraftRefineResponse,
+    description=(
+        "Generates a new AI revision of an existing free-form draft. Requires BOTH the "
+        "org-level AI drafting toggle and the 'ai_policy_drafting' billing plan feature "
+        "(see gating story in app/compliance/routers/policy_drafting.py)."
+    ),
+)
 def refine_draft(
     draft_id: uuid.UUID,
     payload: DraftRefineRequest,
@@ -48,6 +65,7 @@ def refine_draft(
     _: Membership = Depends(require_permission("compliance:write")),
     __: Organization = require_feature("ai_policy_drafting"),
 ) -> DraftRefineResponse:
+    AIDraftingService(db).ensure_ai_drafting_enabled(organization.id)
     row = CopilotDraftService(db).refine_draft(
         org_id=organization.id,
         draft_id=draft_id,
@@ -78,7 +96,15 @@ def list_draft_revisions(
     return [_revision_read(row) for row in rows]
 
 
-@router.post("/compliance/suggest", response_model=InlineSuggestResponse)
+@router.post(
+    "/compliance/suggest",
+    response_model=InlineSuggestResponse,
+    description=(
+        "Generates new AI inline suggestions for a piece of content. Requires BOTH the "
+        "org-level AI drafting toggle and the 'ai_policy_drafting' billing plan feature "
+        "(see gating story in app/compliance/routers/policy_drafting.py)."
+    ),
+)
 def generate_inline_suggestions(
     payload: InlineSuggestRequest,
     db: Session = Depends(get_db),
@@ -87,6 +113,7 @@ def generate_inline_suggestions(
     _: Membership = Depends(require_permission("compliance:write")),
     __: Organization = require_feature("ai_policy_drafting"),
 ) -> InlineSuggestResponse:
+    AIDraftingService(db).ensure_ai_drafting_enabled(organization.id)
     row = CopilotDraftService(db).generate_suggestions(
         org_id=organization.id,
         content_type=payload.content_type,

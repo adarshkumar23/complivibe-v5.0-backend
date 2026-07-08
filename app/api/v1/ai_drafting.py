@@ -29,6 +29,25 @@ from app.schemas.ai_drafting import (
 
 router = APIRouter(prefix="/compliance/drafts", tags=["ai-drafting"])
 
+# --- AI-drafting gating story ---------------------------------------------
+#
+# This router is the "structured drafting" family: field-level AI assist for
+# a fixed set of compliance-object content types (policy content, risk/
+# control/evidence descriptions, RCA summaries, AI-governance narratives).
+# It is free on every billing plan; the ONLY gate is the org-level toggle
+# below (org_ai_config.ai_drafting_enabled), flipped by an org admin via
+# POST /ai-config/enable. There is no billing-plan gate here.
+#
+# A second, free-form/prompt-based drafting family exists at
+# POST /compliance/policies/draft (see app/compliance/routers/policy_drafting.py)
+# plus /compliance/draft/{id}/refine and /compliance/suggest*
+# (app/compliance/routers/copilot_draft.py). That family supports open-ended
+# natural-language prompts, an accept/discard review lifecycle, and BYO AI
+# credentials -- it is gated by BOTH this same org-level toggle AND the
+# "ai_policy_drafting" billing plan feature, since it is the premium
+# capability. Both families share one org-level on/off switch so there is a
+# single, consistent answer to "is AI drafting enabled for this org."
+
 
 def _require_org_admin(db: Session, membership: Membership) -> None:
     role = db.execute(select(Role).where(Role.id == membership.role_id)).scalar_one_or_none()
@@ -106,7 +125,18 @@ def disable_ai_drafting(
     return _config_read(row)
 
 
-@router.post("/policy-content", response_model=DraftRequestRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/policy-content",
+    response_model=DraftRequestRead,
+    status_code=status.HTTP_201_CREATED,
+    description=(
+        "Structured AI assist: drafts full content for one policy given a policy_type, "
+        "scope, and framework context. Gated only by the org-level AI drafting toggle "
+        "(no billing-plan gate). Produces a DraftRequest you must POST /{draft_id}/apply "
+        "to persist as a policy version. For open-ended, prompt-driven policy drafting "
+        "with its own accept/discard review lifecycle, see POST /compliance/policies/draft."
+    ),
+)
 def draft_policy_content(
     payload: PolicyContentDraftRequest,
     db: Session = Depends(get_db),
@@ -258,7 +288,16 @@ def draft_eu_act_conformity_narrative(
     return _draft_read(row)
 
 
-@router.post("/ai-policy", response_model=DraftRequestRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/ai-policy",
+    response_model=DraftRequestRead,
+    status_code=status.HTTP_201_CREATED,
+    description=(
+        "Structured AI assist: drafts an AI-governance policy narrative for the "
+        "org's industry/scope/key-risks. Gated only by the org-level AI drafting "
+        "toggle (no billing-plan gate) -- same family and gating as /policy-content."
+    ),
+)
 def draft_ai_policy(
     payload: AIPolicyDraftRequest,
     db: Session = Depends(get_db),
