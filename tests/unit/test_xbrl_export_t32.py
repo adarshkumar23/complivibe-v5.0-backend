@@ -271,3 +271,73 @@ def test_t32_xbrl_export_rejects_internal_taxonomy_schema_url_ssrf(client):
         detail = response.json()["detail"]
         assert detail["message"] == "XBRL validation failed"
         assert any(err["field"] == "taxonomy_schema_url" for err in detail["validation_errors"]), (bad_url, detail)
+
+
+def test_g9_xbrl_export_succeeds_with_default_taxonomy_and_currency_unit(client):
+    """G9 item 13: the default IFRS-SDS taxonomy path must actually succeed for a
+    real numeric concept with a "valid" (schema-accepted) unit like iso4217:USD --
+    previously this always failed because the iso4217 namespace prefix used in
+    <measure>iso4217:USD</measure> was never declared anywhere in the document."""
+    token = _register(client, "g9-xbrl-currency@example.com", "Pass1234!@", "G9 XBRL Currency Org")
+    org_id = _org_id(client, token)
+    report_id = _create_report(client, token, org_id)
+
+    response = client.post(
+        f"/api/v1/reports/{report_id}/xbrl-export",
+        headers=_headers(token, org_id),
+        json={
+            "entity_identifier": "G9-XBRL-CURRENCY",
+            "data_points": [
+                {
+                    "name": "Absolute gross financed emissions - scope 1",
+                    "taxonomy_concept": "ifrs-sds:AbsoluteGrossFinancedEmissionsScope1",
+                    "value": 1234.5,
+                    "unit": "iso4217:USD",
+                    "period_start": "2026-01-01T00:00:00Z",
+                    "period_end": "2026-12-31T00:00:00Z",
+                },
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["validation_status"] == "valid"
+    assert payload["validation_errors"] == []
+    assert 'xmlns:iso4217="http://www.xbrl.org/2003/iso4217"' in payload["xbrl_content"]
+    assert "<xbrli:measure>iso4217:USD</xbrli:measure>" in payload["xbrl_content"]
+
+
+def test_g9_xbrl_export_surfaces_specific_taxonomy_validation_error(client):
+    """G9 item 13: when taxonomy validation genuinely fails, the error must include
+    the specific rule/code that failed -- never just the bare, undiagnosable
+    "failed taxonomy validation" message with zero detail."""
+    token = _register(client, "g9-xbrl-detail@example.com", "Pass1234!@", "G9 XBRL Detail Org")
+    org_id = _org_id(client, token)
+    report_id = _create_report(client, token, org_id)
+
+    response = client.post(
+        f"/api/v1/reports/{report_id}/xbrl-export",
+        headers=_headers(token, org_id),
+        json={
+            "entity_identifier": "G9-XBRL-DETAIL",
+            "data_points": [
+                {
+                    "name": "A concept that is not in the real IFRS-SDS taxonomy",
+                    "taxonomy_concept": "ifrs-sds:TotallyMadeUpConceptThatDoesNotExistXYZ",
+                    "value": 5,
+                    "unit": "pure",
+                    "period_start": "2026-01-01T00:00:00Z",
+                    "period_end": "2026-12-31T00:00:00Z",
+                },
+            ],
+        },
+    )
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["message"] == "XBRL validation failed"
+    messages = [err["message"] for err in detail["validation_errors"]]
+    assert messages, "expected at least one validation error"
+    for message in messages:
+        assert message != "Generated XBRL failed taxonomy validation."
+        assert "Generated XBRL failed taxonomy validation:" in message
+        assert "arelle" not in message.lower()

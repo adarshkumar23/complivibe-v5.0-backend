@@ -24,6 +24,19 @@ PREFIX_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 NUMERIC_UNITS = {"iso4217:USD", "iso4217:EUR", "iso4217:GBP", "shares", "pure", "tCO2e", "MWh", "GJ"}
 TAXONOMY_SOURCE_ERROR_CODES = {"FileNotLoadable", "IOError", "webCache:retrievalError"}
 
+# Real XBRL namespace used for ISO 4217 currency codes referenced in <measure> content
+# (e.g. "iso4217:USD"). <measure> text is a QName, and QName resolution requires an
+# in-scope namespace declaration for its prefix -- previously this prefix was accepted
+# by input validation (it's in NUMERIC_UNITS) but never actually declared anywhere in
+# the generated document, so any export using a currency unit failed arelle's schema
+# validation with an unresolvable-QName error (xmlSchema:valueError), surfaced to
+# callers as an opaque "Generated XBRL failed taxonomy validation" with zero detail.
+ISO4217_NAMESPACE = "http://www.xbrl.org/2003/iso4217"
+# "pure" and "shares" are XBRL-spec built-in measures that belong to the xbrli
+# namespace (xbrli:pure / xbrli:shares) -- accepting them unqualified relies on
+# undefined default-namespace QName resolution rather than an explicit binding.
+XBRLI_QUALIFIED_MEASURES = {"pure": "xbrli:pure", "shares": "xbrli:shares"}
+
 
 class TaxonomySourceUnavailableError(RuntimeError):
     pass
@@ -169,9 +182,18 @@ class XBRLExportService:
         ET.register_namespace("link", "http://www.xbrl.org/2003/linkbase")
         ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
         ET.register_namespace("xbrldi", "http://xbrl.org/2006/xbrldi")
+        ET.register_namespace("iso4217", ISO4217_NAMESPACE)
         ET.register_namespace(payload.taxonomy_prefix, payload.taxonomy_namespace)
 
         root = ET.Element("{http://www.xbrl.org/2003/instance}xbrl")
+        # <measure> content (below) is a QName -- any prefix it uses (iso4217:USD,
+        # xbrli:pure, xbrli:shares, or the bound taxonomy prefix) must be declared as
+        # an in-scope xmlns binding on the document, or a conformant XBRL processor
+        # cannot resolve it and rejects the whole document. ET.register_namespace()
+        # only affects prefixes ElementTree itself assigns to *elements* it
+        # serializes -- it does not declare bindings used purely in text content, so
+        # iso4217 must be declared explicitly here.
+        root.set("xmlns:iso4217", ISO4217_NAMESPACE)
         ET.SubElement(
             root,
             "{http://www.xbrl.org/2003/linkbase}schemaRef",
@@ -224,7 +246,8 @@ class XBRLExportService:
 
         for unit_name, unit_id in unit_ids.items():
             unit = ET.SubElement(root, "{http://www.xbrl.org/2003/instance}unit", {"id": unit_id})
-            ET.SubElement(unit, "{http://www.xbrl.org/2003/instance}measure").text = unit_name
+            measure_text = XBRLI_QUALIFIED_MEASURES.get(unit_name, unit_name)
+            ET.SubElement(unit, "{http://www.xbrl.org/2003/instance}measure").text = measure_text
 
         return ET.tostring(root, encoding="unicode", xml_declaration=True)
 
@@ -324,11 +347,22 @@ class XBRLExportService:
                 },
             ) from exc
         except XBRLValidationFailedError as exc:
+            # Surface the actual taxonomy-validation rule(s) that failed (e.g.
+            # "xmlSchema:valueError", "xbrl:schemaImportMissing") instead of a
+            # generic, undiagnosable message -- these are standard XBRL/XML-Schema
+            # error codes, not vendor-specific, so they're safe to return directly.
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
                     "message": "XBRL validation failed",
-                    "validation_errors": [{"data_point_index": None, "field": "document", "message": "Generated XBRL failed taxonomy validation."}],
+                    "validation_errors": [
+                        {
+                            "data_point_index": None,
+                            "field": "document",
+                            "message": f"Generated XBRL failed taxonomy validation: {error}",
+                        }
+                        for error in exc.errors
+                    ],
                 },
             ) from exc
         except Exception as exc:
