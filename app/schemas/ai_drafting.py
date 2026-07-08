@@ -37,6 +37,14 @@ class DraftRequestRead(BaseModel):
     applied: bool
     applied_at: datetime | None = None
     applied_by: UUID | None = None
+    truncated: bool = Field(
+        default=False,
+        description=(
+            "True when the AI completion was cut off by the token budget before "
+            "finishing (finish_reason == 'length'). draft_output will end mid-sentence "
+            "in that case; treat it as incomplete rather than a finished document."
+        ),
+    )
     created_at: datetime
     updated_at: datetime
 

@@ -223,7 +223,18 @@ class AIDraftingService:
             )
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unknown draft_type")
 
-    def _call_azure_openai(self, system_prompt: str, user_prompt: str) -> str:
+    # A full policy/narrative section can reasonably run 800-1500+ words (roughly
+    # 1100-2100 tokens of English prose); 800 max_tokens truncated real documents
+    # mid-sentence with no signal to the caller. 4096 gives real drafts enough
+    # headroom while still being a bounded, predictable cost per call.
+    MAX_COMPLETION_TOKENS = 4096
+
+    def _call_azure_openai(self, system_prompt: str, user_prompt: str) -> tuple[str, bool]:
+        """Returns (draft_text, truncated). truncated is True when the model's
+        response was cut off by the token budget (finish_reason == "length"),
+        so callers can surface that fact instead of silently returning a
+        document that stops mid-sentence.
+        """
         settings = get_settings()
         endpoint = settings.AZURE_OPENAI_ENDPOINT
         api_key = settings.AZURE_OPENAI_API_KEY
@@ -261,7 +272,7 @@ class AIDraftingService:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                max_tokens=800,
+                max_tokens=self.MAX_COMPLETION_TOKENS,
                 temperature=0.3,
             )
         except Exception as exc:
@@ -271,16 +282,18 @@ class AIDraftingService:
             ) from exc
 
         content = None
+        finish_reason = None
         if getattr(response, "choices", None):
             choice = response.choices[0]
             if choice is not None and getattr(choice, "message", None) is not None:
                 content = choice.message.content
+            finish_reason = getattr(choice, "finish_reason", None) if choice is not None else None
         if content is None or str(content).strip() == "":
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="AI service temporarily unavailable. Please try again.",
             )
-        return str(content)
+        return str(content), finish_reason == "length"
 
     def create_draft(
         self,
@@ -296,7 +309,7 @@ class AIDraftingService:
         user_prompt = self._build_user_prompt(draft_type, context_json, org_id)
         system_prompt = SYSTEM_PROMPT_MAP[draft_type]
         try:
-            draft_text = self._call_azure_openai(system_prompt=system_prompt, user_prompt=user_prompt)
+            draft_text, truncated = self._call_azure_openai(system_prompt=system_prompt, user_prompt=user_prompt)
         except HTTPException:
             raise
         except Exception as exc:
@@ -318,6 +331,7 @@ class AIDraftingService:
             applied=False,
             applied_at=None,
             applied_by=None,
+            truncated=truncated,
         )
         self.db.add(row)
         try:
@@ -344,7 +358,12 @@ class AIDraftingService:
             entity_id=row.id,
             organization_id=org_id,
             actor_user_id=created_by,
-            after_json={"draft_type": draft_type, "model_used": row.model_used, "applied": row.applied},
+            after_json={
+                "draft_type": draft_type,
+                "model_used": row.model_used,
+                "applied": row.applied,
+                "truncated": row.truncated,
+            },
             metadata_json={"source": "api", "drafted_by_ai": True},
         )
         return row

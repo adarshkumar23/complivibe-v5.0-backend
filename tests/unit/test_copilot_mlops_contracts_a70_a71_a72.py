@@ -90,7 +90,7 @@ def test_a70_ai_copilot_draft_mode(client, db_session, monkeypatch):
     monkeypatch.setattr(
         AIDraftingService,
         "_call_azure_openai",
-        lambda self, system_prompt, user_prompt: "mocked draft",
+        lambda self, system_prompt, user_prompt: ("mocked draft", False),
     )
 
     blocked = client.post(

@@ -86,7 +86,7 @@ def test_a84_ai_drafting_endpoints_and_service(client, db_session, monkeypatch):
     monkeypatch.setattr(
         AIDraftingService,
         "_call_azure_openai",
-        lambda self, system_prompt, user_prompt: MOCK_DRAFT,
+        lambda self, system_prompt, user_prompt: (MOCK_DRAFT, False),
     )
 
     created = client.post(
@@ -258,7 +258,7 @@ def test_a84_g6_ai_policy_and_eu_act_draft_types_persist(client, db_session, mon
     monkeypatch.setattr(
         AIDraftingService,
         "_call_azure_openai",
-        lambda self, system_prompt, user_prompt: MOCK_DRAFT,
+        lambda self, system_prompt, user_prompt: (MOCK_DRAFT, False),
     )
 
     ai_policy = client.post(
@@ -282,3 +282,51 @@ def test_a84_g6_ai_policy_and_eu_act_draft_types_persist(client, db_session, mon
     )
     assert eu_act.status_code == 201, eu_act.text
     assert eu_act.json()["draft_type"] == "eu_act_conformity_narrative"
+
+
+def test_a84_g6_truncated_completion_is_flagged_not_silently_returned(client, db_session, monkeypatch):
+    """Regression test for the G6 bug: /compliance/drafts/policy-content (and every
+    other structured drafting endpoint) called Azure OpenAI with max_tokens=800,
+    which silently cut real policy content off mid-sentence with no signal to the
+    caller. AIDraftingService._call_azure_openai now returns (text, truncated) based
+    on finish_reason == "length", create_draft persists it on DraftRequest.truncated,
+    and the API surfaces it in the response so a client never mistakes a cut-off
+    draft for a finished one.
+    """
+    org = bootstrap_org_user(client, email_prefix="a84-g6-truncated")
+    enabled = client.post(f"{DRAFT_BASE}/ai-config/enable", headers=org["org_headers"])
+    assert enabled.status_code == 200
+
+    monkeypatch.setattr(
+        AIDraftingService,
+        "_call_azure_openai",
+        lambda self, system_prompt, user_prompt: ("This draft stops abruptly mid-sen", True),
+    )
+
+    resp = client.post(
+        f"{DRAFT_BASE}/policy-content",
+        headers=org["org_headers"],
+        json={"policy_type": "Information Security", "scope_description": "All systems"},
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["truncated"] is True
+
+    stored = db_session.execute(
+        select(DraftRequest).where(DraftRequest.id == uuid.UUID(body["id"]))
+    ).scalar_one()
+    assert stored.truncated is True
+
+    # Sanity: a normal, complete draft is NOT flagged.
+    monkeypatch.setattr(
+        AIDraftingService,
+        "_call_azure_openai",
+        lambda self, system_prompt, user_prompt: (MOCK_DRAFT, False),
+    )
+    complete_resp = client.post(
+        f"{DRAFT_BASE}/policy-content",
+        headers=org["org_headers"],
+        json={"policy_type": "Information Security", "scope_description": "All systems"},
+    )
+    assert complete_resp.status_code == 201
+    assert complete_resp.json()["truncated"] is False

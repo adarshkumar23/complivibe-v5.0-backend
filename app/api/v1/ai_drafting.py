@@ -80,6 +80,7 @@ def _draft_read(row: DraftRequest) -> DraftRequestRead:
         applied=row.applied,
         applied_at=row.applied_at,
         applied_by=row.applied_by,
+        truncated=row.truncated,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

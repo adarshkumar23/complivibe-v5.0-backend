@@ -29,3 +29,7 @@ class DraftRequest(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, 
     applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     applied_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # True when the underlying AI completion was cut off by the token budget
+    # (finish_reason == "length") -- surfaced to callers instead of silently
+    # returning a document that stops mid-sentence.
+    truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
