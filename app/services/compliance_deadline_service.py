@@ -215,6 +215,11 @@ class ComplianceDeadlineService:
                 ComplianceDeadlineEvent.event_type == event_type,
                 ComplianceDeadlineEvent.created_at >= day_start,
                 ComplianceDeadlineEvent.created_at < day_end,
+                # A dry-run pass must have zero persistent side effects -- it must
+                # never be able to make a later REAL pass believe a deadline was
+                # already handled today. Only real (non-dry-run) events count toward
+                # same-day dedup.
+                ComplianceDeadlineEvent.dry_run.is_(False),
             )
         ).scalar_one_or_none()
         return existing is not None

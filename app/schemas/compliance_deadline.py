@@ -53,7 +53,10 @@ class ComplianceDeadlineCancelRequest(BaseModel):
 
 
 class ComplianceDeadlineEvaluateRequest(BaseModel):
-    dry_run: bool = True
+    # "evaluate-due" is an action verb -- calling it should actually evaluate deadlines
+    # for real by default. A no-op preview is an opt-in, not a silent default that
+    # makes an unsuspecting caller believe overdue deadlines were processed.
+    dry_run: bool = False
 
 
 class ComplianceDeadlineRead(UUIDTimestampSchema):

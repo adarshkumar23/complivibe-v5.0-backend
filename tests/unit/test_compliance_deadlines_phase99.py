@@ -359,3 +359,68 @@ def test_phase99_overdue_only_includes_stale_upcoming_and_emits_context_flags(cl
     assert stale_row["is_status_stale"] is True
     assert stale_row["recommended_status"] == "overdue"
     assert "past_due_not_marked_overdue" in stale_row["context_flags"]
+
+
+def test_g9_evaluate_due_defaults_to_real_run_not_dry_run(client, db_session):
+    """G9 item 8a: evaluate-due is an action-verb endpoint -- omitting dry_run must
+    actually evaluate for real (mark overdue, queue reminders), not silently preview."""
+    org = bootstrap_org_user(client, email_prefix="p99-default-live")
+    owner = _create_active_user_with_role(db_session, org["organization_id"], "p99-default-owner@example.com", "admin")
+
+    deadline = _create_deadline(
+        client,
+        org["org_headers"],
+        owner_user_id=str(owner.id),
+        title="Default Call Deadline",
+        due_date_value=date.today() - timedelta(days=1),
+    )
+
+    response = client.post(f"{BASE}/evaluate-due", headers=org["org_headers"], json={})
+    assert response.status_code == 200
+
+    refreshed = client.get(f"{BASE}/{deadline['id']}", headers=org["org_headers"])
+    assert refreshed.status_code == 200
+    assert refreshed.json()["status"] == "overdue"
+
+    events = client.get(f"{BASE}/events?deadline_id={deadline['id']}", headers=org["org_headers"])
+    assert events.status_code == 200
+    assert any(evt["dry_run"] is False for evt in events.json())
+
+
+def test_g9_dry_run_never_poisons_a_subsequent_real_evaluate_due(client, db_session):
+    """G9 item 8b: a dry-run pass must have zero persistent side effects -- it must
+    never make a later real pass on the same day believe the deadline was already
+    handled."""
+    org = bootstrap_org_user(client, email_prefix="p99-dry-poison")
+    owner = _create_active_user_with_role(db_session, org["organization_id"], "p99-dry-poison-owner@example.com", "admin")
+
+    deadline = _create_deadline(
+        client,
+        org["org_headers"],
+        owner_user_id=str(owner.id),
+        title="Poison Test Deadline",
+        due_date_value=date.today() - timedelta(days=1),
+    )
+
+    dry = client.post(f"{BASE}/evaluate-due", headers=org["org_headers"], json={"dry_run": True})
+    assert dry.status_code == 200
+    assert dry.json()["overdue_marked"] >= 1
+
+    # Deadline must still be "upcoming" in the DB -- dry run must not mutate state.
+    still_upcoming = client.get(f"{BASE}/{deadline['id']}", headers=org["org_headers"])
+    assert still_upcoming.json()["status"] == "upcoming"
+
+    # A REAL pass later the same day must still mark it overdue -- the dry run's
+    # event record must not be mistaken for "already handled today".
+    real = client.post(f"{BASE}/evaluate-due", headers=org["org_headers"], json={"dry_run": False})
+    assert real.status_code == 200
+    assert real.json()["overdue_marked"] >= 1
+    assert real.json()["events_skipped_duplicates"] == 0
+
+    now_overdue = client.get(f"{BASE}/{deadline['id']}", headers=org["org_headers"])
+    assert now_overdue.json()["status"] == "overdue"
+
+    events = client.get(f"{BASE}/events?deadline_id={deadline['id']}&event_type=overdue_detected", headers=org["org_headers"])
+    assert events.status_code == 200
+    real_events = [evt for evt in events.json() if evt["dry_run"] is False]
+    assert len(real_events) == 1
