@@ -162,6 +162,50 @@ def test_dashboard_policy_violations_from_guardrail_events(client, db_session):
     assert body["policy_violations_count"] == 2
 
 
+def test_dashboard_tier_counts_include_unassessed_and_non_internal_tiers(client, db_session):
+    """G9 item 3: systems with no risk_tier, or a tier outside the internal
+    critical/high/medium/low set (e.g. an EU AI Act tier like "minimal"), must
+    still be counted -- not silently dropped from ai_systems_by_tier."""
+    org = bootstrap_org_user(client, email_prefix="dash-tier-unassessed")
+    org_id = uuid.UUID(org["organization_id"])
+    owner_id = uuid.UUID(org["user_id"])
+
+    unassessed_1 = AISystem(
+        organization_id=org_id,
+        name="No Tier System A",
+        system_type="model",
+        risk_tier=None,
+        created_by=owner_id,
+        created_by_user_id=owner_id,
+    )
+    unassessed_2 = AISystem(
+        organization_id=org_id,
+        name="No Tier System B",
+        system_type="model",
+        risk_tier=None,
+        created_by=owner_id,
+        created_by_user_id=owner_id,
+    )
+    eu_act_tier = AISystem(
+        organization_id=org_id,
+        name="Minimal Risk System",
+        system_type="model",
+        risk_tier="minimal",
+        created_by=owner_id,
+        created_by_user_id=owner_id,
+    )
+    db_session.add_all([unassessed_1, unassessed_2, eu_act_tier])
+    db_session.commit()
+
+    response = client.get(DASHBOARD_URL, headers=org["org_headers"])
+    assert response.status_code == 200
+    body = response.json()
+    by_tier = body["ai_systems_by_tier"]
+    assert by_tier["unassessed"] == 2
+    assert by_tier["minimal"] == 1
+    assert sum(by_tier.values()) == 3
+
+
 def test_dashboard_policy_violations_proxy_from_monitoring_readings(client, db_session):
     from app.models.ai_monitoring_config import AIMonitoringConfig
     from app.models.ai_monitoring_reading import AIMonitoringReading
