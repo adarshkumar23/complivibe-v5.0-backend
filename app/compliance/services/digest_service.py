@@ -53,6 +53,30 @@ class DigestService:
         mapping = {"critical": 0, "high": 1, "medium": 2, "low": 3}
         return mapping.get(str(priority).lower(), 4)
 
+    @staticmethod
+    def _escalate_task_overdue(days_overdue: int) -> str:
+        # A task overdue by a couple of days is annoying; one overdue for weeks is a real
+        # control failure risk. Escalate the notification priority, don't leave it flat.
+        if days_overdue >= 14:
+            return "critical"
+        if days_overdue >= 3:
+            return "high"
+        return "medium"
+
+    @staticmethod
+    def _escalate_deadline_upcoming(days_remaining: int) -> str:
+        if days_remaining <= 2:
+            return "critical"
+        if days_remaining <= 7:
+            return "high"
+        return "medium"
+
+    @staticmethod
+    def _escalate_evidence_expiring(days_remaining: int) -> str:
+        if days_remaining <= 3:
+            return "high"
+        return "medium"
+
     def _ranked_event_items(
         self,
         *,
@@ -63,12 +87,14 @@ class DigestService:
     ) -> list[dict]:
         rows: list[dict] = []
         for task in overdue_tasks:
+            days_overdue = int(task.get("days_overdue") or 0)
             rows.append(
                 {
                     "event_type": "task_overdue",
-                    "priority_rank": self._priority_rank("high"),
+                    "priority_rank": self._priority_rank(self._escalate_task_overdue(days_overdue)),
+                    "urgency_score": days_overdue,
                     "title": str(task.get("title") or "Overdue task"),
-                    "detail": f"{task.get('days_overdue', 0)} day(s) overdue",
+                    "detail": f"{days_overdue} day(s) overdue",
                 }
             )
         for risk in open_risks:
@@ -76,30 +102,37 @@ class DigestService:
                 {
                     "event_type": "risk_open",
                     "priority_rank": self._priority_rank(str(risk.get("severity") or "high")),
+                    "urgency_score": 0,
                     "title": str(risk.get("title") or "Open risk"),
                     "detail": f"severity={risk.get('severity', 'high')}",
                 }
             )
         for deadline in upcoming_deadlines:
+            days_remaining = int(deadline.get("days_remaining") or 0)
             rows.append(
                 {
                     "event_type": "deadline_upcoming",
-                    "priority_rank": self._priority_rank("medium"),
+                    "priority_rank": self._priority_rank(self._escalate_deadline_upcoming(days_remaining)),
+                    "urgency_score": max(0, 30 - days_remaining),
                     "title": str(deadline.get("title") or "Upcoming deadline"),
-                    "detail": f"due in {deadline.get('days_remaining', 0)} day(s)",
+                    "detail": f"due in {days_remaining} day(s)",
                 }
             )
         for evidence in expiring_evidence:
+            days_remaining = int(evidence.get("days_remaining") or 0)
             rows.append(
                 {
                     "event_type": "evidence_expiring",
-                    "priority_rank": self._priority_rank("medium"),
+                    "priority_rank": self._priority_rank(self._escalate_evidence_expiring(days_remaining)),
+                    "urgency_score": max(0, 30 - days_remaining),
                     "title": str(evidence.get("title") or "Expiring evidence"),
-                    "detail": f"{evidence.get('days_remaining', 0)} day(s) remaining",
+                    "detail": f"{days_remaining} day(s) remaining",
                 }
             )
-        rows.sort(key=lambda item: (int(item.get("priority_rank", 9)), str(item.get("title") or "")))
-        return rows[:10]
+        # Within the same priority tier, surface the most urgent (highest urgency_score) first;
+        # title is only a final tiebreaker for deterministic ordering.
+        rows.sort(key=lambda item: (int(item.get("priority_rank", 9)), -int(item.get("urgency_score", 0)), str(item.get("title") or "")))
+        return rows
 
     def _generate_digest_narrative(
         self,
@@ -510,12 +543,15 @@ class DigestService:
         }
 
     def _with_digest_narrative(self, *, org_id: uuid.UUID, user_id: uuid.UUID, payload: dict) -> dict:
-        ranked_events = self._ranked_event_items(
+        all_ranked_events = self._ranked_event_items(
             overdue_tasks=list(payload.get("overdue_tasks") or []),
             open_risks=list(payload.get("open_risks") or []),
             upcoming_deadlines=list(payload.get("upcoming_deadlines") or []),
             expiring_evidence=list(payload.get("expiring_evidence") or []),
         )
+        total_signal_count = len(all_ranked_events)
+        critical_items_count = sum(1 for item in all_ranked_events if int(item.get("priority_rank", 9)) == 0)
+        ranked_events = all_ranked_events[:10]
         narrative, narrative_source, staleness_flags = self._generate_digest_narrative(
             org_id=org_id,
             user_id=user_id,
@@ -524,6 +560,9 @@ class DigestService:
         return {
             **payload,
             "prioritized_events": ranked_events,
+            "total_signal_count": total_signal_count,
+            "critical_items_count": critical_items_count,
+            "items_truncated": total_signal_count > len(ranked_events),
             "narrative_paragraph": narrative,
             "narrative_source": narrative_source,
             "narrative_generated_at": self.utcnow().isoformat(),
