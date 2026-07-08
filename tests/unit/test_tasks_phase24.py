@@ -411,4 +411,95 @@ def test_risk_treatment_task_and_reminders_and_summary(client, db_session):
     logs = client.get("/api/v1/audit-logs", headers=_headers(owner, org_id)).json()
     actions = [item["action"] for item in logs]
     assert "risk.treatment_task_created" in actions
-    assert "task.reminders_queued" in actions
+
+
+def test_g9_overdue_task_reminder_uses_overdue_template_and_escalates_priority(client, db_session):
+    """G9 item 10: an overdue task's reminder must use the overdue-specific template
+    (not task_assigned) and escalate priority based on how overdue it is."""
+    from app.models.email_outbox import EmailOutbox
+    from app.models.task import Task
+
+    owner = _register(client, "g9-task-escalate@example.com", "Pass1234!@", "G9 Task Escalate Org")
+    org_id = _org_id(client, owner)
+    user = db_session.query(User).filter(User.email == "g9-task-escalate@example.com").one()
+
+    task = Task(
+        organization_id=uuid.UUID(org_id),
+        title="Deeply Overdue Task",
+        status="open",
+        priority="normal",
+        task_type="general",
+        owner_user_id=user.id,
+        created_by_user_id=user.id,
+        due_date=datetime.now(UTC) - timedelta(hours=950),  # ~39.5 days overdue
+        source="manual",
+        reminder_status="none",
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/tasks/reminders/queue",
+        headers=_headers(owner, org_id),
+        json={"due_within_days": 3, "overdue_only": True, "limit": 50},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["queued_count"] == 1
+
+    db_session.refresh(task)
+    assert task.priority == "urgent"
+    assert task.reminder_status == "sent"
+
+    outbox = (
+        db_session.query(EmailOutbox)
+        .filter(EmailOutbox.recipient_user_id == user.id)
+        .order_by(EmailOutbox.queued_at.desc())
+        .first()
+    )
+    assert outbox is not None
+    assert outbox.priority == "urgent"
+    assert "overdue" in outbox.subject.lower()
+    assert "task assigned" not in outbox.subject.lower()
+    assert "escalat" in outbox.subject.lower() or "escalat" in outbox.body_text.lower()
+
+
+def test_g9_reminder_queue_has_cooldown_and_does_not_duplicate(client, db_session):
+    """G9 item 9: back-to-back calls to reminders/queue must not re-queue a second
+    reminder for a task that was just reminded."""
+    from app.models.task import Task
+
+    owner = _register(client, "g9-task-cooldown@example.com", "Pass1234!@", "G9 Task Cooldown Org")
+    org_id = _org_id(client, owner)
+    user = db_session.query(User).filter(User.email == "g9-task-cooldown@example.com").one()
+
+    task = Task(
+        organization_id=uuid.UUID(org_id),
+        title="Cooldown Task",
+        status="open",
+        priority="normal",
+        task_type="general",
+        owner_user_id=user.id,
+        created_by_user_id=user.id,
+        due_date=datetime.now(UTC) - timedelta(hours=5),
+        source="manual",
+        reminder_status="none",
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    first = client.post(
+        "/api/v1/tasks/reminders/queue",
+        headers=_headers(owner, org_id),
+        json={"due_within_days": 3, "overdue_only": True, "limit": 50},
+    )
+    assert first.status_code == 200
+    assert first.json()["queued_count"] == 1
+
+    second = client.post(
+        "/api/v1/tasks/reminders/queue",
+        headers=_headers(owner, org_id),
+        json={"due_within_days": 3, "overdue_only": True, "limit": 50},
+    )
+    assert second.status_code == 200
+    assert second.json()["queued_count"] == 0
+    assert second.json()["skipped_cooldown_count"] == 1

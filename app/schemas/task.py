@@ -109,6 +109,7 @@ class TaskReminderQueueRequest(BaseModel):
 class TaskReminderQueueResponse(BaseModel):
     queued_count: int
     outbox_email_ids: list[UUID]
+    skipped_cooldown_count: int = 0
 
 
 class TaskSummary(BaseModel):

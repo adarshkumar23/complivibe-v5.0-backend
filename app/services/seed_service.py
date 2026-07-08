@@ -1026,6 +1026,21 @@ EMAIL_TEMPLATE_SEEDS: list[dict] = [
         "version": 1,
     },
     {
+        "template_key": "task_overdue_reminder",
+        "name": "Task Overdue Reminder",
+        "description": "Escalating reminder for a task that is past its due date.",
+        "subject_template": "{{ escalation_label }}: {{ task_title }} is {{ days_overdue }} day(s) overdue",
+        "body_text_template": (
+            "Hello {{ user_name }},\n\n"
+            "The task \"{{ task_title }}\" is now {{ days_overdue }} day(s) past its due date.\n\n"
+            "{{ escalation_message }}"
+        ),
+        "body_html_template": None,
+        "allowed_variables_json": ["user_name", "task_title", "days_overdue", "escalation_label", "escalation_message"],
+        "status": "active",
+        "version": 1,
+    },
+    {
         "template_key": "evidence_requested",
         "name": "Evidence Requested",
         "description": "Request for evidence submission.",

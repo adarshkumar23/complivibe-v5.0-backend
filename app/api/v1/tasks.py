@@ -29,6 +29,11 @@ from app.services.task_service import TaskService
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
+# Minimum time that must elapse after a reminder is sent for a task before another
+# reminder for the SAME task can be queued. Prevents back-to-back calls to
+# /reminders/queue (e.g. a retried scheduler tick) from queuing duplicate emails.
+REMINDER_COOLDOWN = timedelta(hours=24)
+
 
 _OPEN_TASK_STATUSES = ("open", "in_progress", "blocked")
 
@@ -130,22 +135,63 @@ def queue_task_reminders(
     tasks = db.execute(stmt).scalars().all()
     SeedService.ensure_global_email_templates(db)
 
+    def _aware(value: datetime | None) -> datetime | None:
+        # Some backends (notably SQLite, used in tests) don't round-trip tzinfo on a
+        # DateTime(timezone=True) column -- treat a naive value as UTC rather than
+        # letting the naive/aware comparison below raise.
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
+
     service = TaskService(db)
     outbox_ids: list[uuid.UUID] = []
+    skipped_cooldown_count = 0
     for task in tasks:
         if task.owner_user_id is None:
             continue
+
+        last_reminder_at = _aware(task.last_reminder_at)
+        # Cooldown: don't re-queue a reminder for a task that was already reminded
+        # within the last REMINDER_COOLDOWN window -- otherwise back-to-back calls to
+        # this endpoint (e.g. a retried scheduler tick) queue duplicate reminder
+        # emails for the same task every time it's called.
+        if last_reminder_at is not None and (now - last_reminder_at) < REMINDER_COOLDOWN:
+            skipped_cooldown_count += 1
+            continue
+
         owner = db.execute(select(User).where(User.id == task.owner_user_id)).scalar_one_or_none()
         if owner is None or not owner.email:
             continue
-        outbox_id = service.queue_task_notification(
-            organization_id=organization.id,
-            created_by_user_id=current_user.id,
-            owner_user=owner,
-            task_title=task.title,
-            template_key="task_assigned",
-            event_type="task.reminder",
-        )
+
+        due_date = _aware(task.due_date)
+        is_overdue = due_date is not None and due_date < now
+        if is_overdue:
+            days_overdue = max(0, (now - due_date).days)
+            escalation = TaskService.escalation_for_overdue_days(days_overdue)
+            outbox_id = service.queue_task_notification(
+                organization_id=organization.id,
+                created_by_user_id=current_user.id,
+                owner_user=owner,
+                task_title=task.title,
+                template_key="task_overdue_reminder",
+                event_type="task.overdue_reminder",
+                priority=escalation["priority"],
+                extra_variables={
+                    "days_overdue": days_overdue,
+                    "escalation_label": escalation["escalation_label"],
+                    "escalation_message": escalation["escalation_message"],
+                },
+            )
+            task.priority = escalation["priority"]
+        else:
+            outbox_id = service.queue_task_notification(
+                organization_id=organization.id,
+                created_by_user_id=current_user.id,
+                owner_user=owner,
+                task_title=task.title,
+                template_key="task_assigned",
+                event_type="task.reminder",
+            )
         task.last_reminder_at = now
         task.reminder_status = "sent"
         outbox_ids.append(outbox_id)
@@ -155,14 +201,18 @@ def queue_task_reminders(
         entity_type="task",
         organization_id=organization.id,
         actor_user_id=current_user.id,
-        after_json={"queued_count": len(outbox_ids)},
+        after_json={"queued_count": len(outbox_ids), "skipped_cooldown_count": skipped_cooldown_count},
         metadata_json={"source": "api", "overdue_only": payload.overdue_only, "due_within_days": payload.due_within_days},
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
 
     db.commit()
-    return TaskReminderQueueResponse(queued_count=len(outbox_ids), outbox_email_ids=outbox_ids)
+    return TaskReminderQueueResponse(
+        queued_count=len(outbox_ids),
+        outbox_email_ids=outbox_ids,
+        skipped_cooldown_count=skipped_cooldown_count,
+    )
 
 
 @router.get("", response_model=list[TaskRead])

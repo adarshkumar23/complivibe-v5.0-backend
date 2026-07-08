@@ -129,6 +129,8 @@ class TaskService:
         task_title: str,
         template_key: str = "task_assigned",
         event_type: str = "task.assigned",
+        priority: str = "normal",
+        extra_variables: dict[str, str | int] | None = None,
     ) -> uuid.UUID:
         email = owner_user.email
         if not email:
@@ -140,23 +142,56 @@ class TaskService:
             template_id=None,
             template_key=template_key,
         )
+        variables: dict[str, str | int] = {
+            "user_name": owner_user.full_name or owner_user.email,
+            "task_title": task_title,
+        }
+        if extra_variables:
+            variables.update(extra_variables)
         outbox = email_service.queue_email(
             organization_id=organization_id,
             template=template,
             event_type=event_type,
             recipient_email=email,
             recipient_user_id=owner_user.id,
-            priority="normal",
+            priority=priority,
             scheduled_at=None,
             metadata_json={"source": "task_workflow"},
             created_by_user_id=created_by_user_id,
-            variables_json={
-                "user_name": owner_user.full_name or owner_user.email,
-                "task_title": task_title,
-            },
+            variables_json=variables,
             initial_status="pending",
         )
         return outbox.id
+
+    @staticmethod
+    def escalation_for_overdue_days(days_overdue: int) -> dict[str, str]:
+        """Real escalation tiers for an overdue task reminder, keyed by how many whole
+        days past due_date the task is. Used both for the email's priority/subject and
+        for the task's own `priority` field, so an old, deeply overdue task actually
+        looks urgent everywhere -- not stuck at "normal" forever."""
+        if days_overdue >= 14:
+            return {
+                "escalation_level": "critical",
+                "escalation_label": "URGENT: Manager Escalation",
+                "escalation_message": (
+                    "This task is critically overdue and has been escalated. Please resolve immediately "
+                    "or contact your manager if you are blocked."
+                ),
+                "priority": "urgent",
+            }
+        if days_overdue >= 3:
+            return {
+                "escalation_level": "firm",
+                "escalation_label": "Second Reminder",
+                "escalation_message": "This task is significantly overdue. Please complete it as soon as possible.",
+                "priority": "high",
+            }
+        return {
+            "escalation_level": "gentle",
+            "escalation_label": "Reminder",
+            "escalation_message": "This task is now overdue. Please complete it when you can.",
+            "priority": "normal",
+        }
 
     def summary(self, organization_id: uuid.UUID) -> dict[str, int]:
         now = self.now()
