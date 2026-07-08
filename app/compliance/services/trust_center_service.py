@@ -80,6 +80,7 @@ class TrustCenterService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trust center not found")
 
         certifications: list[dict] = []
+        expired_certifications_excluded = 0
         if config.show_certifications:
             cert_rows = self.db.execute(
                 select(ComplianceCertification).where(
@@ -88,14 +89,21 @@ class TrustCenterService:
                     ComplianceCertification.deleted_at.is_(None),
                 )
             ).scalars().all()
-            certifications = [
-                {
-                    "name": row.name,
-                    "issued_by": row.issuer,
-                    "valid_until": row.valid_until,
-                }
-                for row in cert_rows
-            ]
+            today = self.utcnow().date()
+            for row in cert_rows:
+                if row.valid_until is not None and row.valid_until < today:
+                    # A certification marked "active" in the source system but past its
+                    # valid_until date is stale data — do not surface it publicly as a
+                    # currently-valid credential.
+                    expired_certifications_excluded += 1
+                    continue
+                certifications.append(
+                    {
+                        "name": row.name,
+                        "issued_by": row.issuer,
+                        "valid_until": row.valid_until,
+                    }
+                )
 
         framework_coverage: list[dict] = []
         if config.show_framework_coverage:
@@ -181,6 +189,8 @@ class TrustCenterService:
             "competitor_pricing": competitor_pricing,
             "competitor_pricing_last_updated": pricing_snapshot["last_updated"],
             "uptime": uptime,
+            "data_generated_at": self.utcnow(),
+            "expired_certifications_excluded": expired_certifications_excluded,
         }
 
     def get_configuration(self, org_id: uuid.UUID) -> TrustCenterConfiguration:
@@ -303,6 +313,36 @@ class TrustCenterService:
         )
         return row
 
+    def list_published_policies(self, org_id: uuid.UUID, include_inactive: bool = False) -> list[dict]:
+        stmt = (
+            select(TrustCenterPublishedPolicy, CompliancePolicy)
+            .join(CompliancePolicy, CompliancePolicy.id == TrustCenterPublishedPolicy.policy_id)
+            .where(TrustCenterPublishedPolicy.organization_id == org_id)
+        )
+        if not include_inactive:
+            stmt = stmt.where(TrustCenterPublishedPolicy.is_active.is_(True))
+        rows = self.db.execute(stmt.order_by(TrustCenterPublishedPolicy.published_at.desc())).all()
+
+        results: list[dict] = []
+        for published, policy in rows:
+            policy_updated_since_published = policy.updated_at > published.published_at
+            results.append(
+                {
+                    "id": published.id,
+                    "organization_id": published.organization_id,
+                    "policy_id": published.policy_id,
+                    "policy_title": policy.title,
+                    "policy_archived": policy.archived_at is not None or policy.status == "archived",
+                    "summary": published.summary,
+                    "published_at": published.published_at,
+                    "published_by": published.published_by,
+                    "is_active": published.is_active,
+                    "policy_updated_since_published": policy_updated_since_published,
+                    "policy_last_updated_at": policy.updated_at,
+                }
+            )
+        return results
+
     def unpublish_policy(self, org_id: uuid.UUID, policy_id: uuid.UUID, user_id: uuid.UUID) -> TrustCenterPublishedPolicy:
         row = self.db.execute(
             select(TrustCenterPublishedPolicy).where(
@@ -377,6 +417,20 @@ class TrustCenterService:
         if not config.is_enabled or not config.request_access_enabled:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trust center not found")
 
+        existing_pending = self.db.execute(
+            select(TrustCenterAccessRequest).where(
+                TrustCenterAccessRequest.organization_id == org_id,
+                TrustCenterAccessRequest.requester_email == data.requester_email,
+                TrustCenterAccessRequest.status == "pending",
+            )
+        ).scalar_one_or_none()
+        if existing_pending is not None:
+            return {
+                "request_id": existing_pending.id,
+                "message": "A pending request already exists for this email; it has not been duplicated.",
+                "duplicate": True,
+            }
+
         row = TrustCenterAccessRequest(
             organization_id=org_id,
             requester_name=data.requester_name,
@@ -400,9 +454,35 @@ class TrustCenterService:
             metadata_json={"source": "public"},
         )
 
-        return {"request_id": row.id, "message": "Request submitted"}
+        return {"request_id": row.id, "message": "Request submitted", "duplicate": False}
+
+    def _expire_stale_approved_requests(self, org_id: uuid.UUID) -> None:
+        now = self.utcnow()
+        stale_rows = self.db.execute(
+            select(TrustCenterAccessRequest).where(
+                TrustCenterAccessRequest.organization_id == org_id,
+                TrustCenterAccessRequest.status == "approved",
+                TrustCenterAccessRequest.access_expires_at.is_not(None),
+                TrustCenterAccessRequest.access_expires_at < now,
+            )
+        ).scalars().all()
+        for row in stale_rows:
+            row.status = "expired"
+            row.access_token_hash = None
+            AuditService(self.db).write_audit_log(
+                action="trust_center.access_request_expired",
+                entity_type="trust_center_access_request",
+                entity_id=row.id,
+                organization_id=org_id,
+                actor_user_id=None,
+                after_json={"status": row.status},
+                metadata_json={"source": "lazy_expiry"},
+            )
+        if stale_rows:
+            self.db.flush()
 
     def list_access_requests(self, org_id: uuid.UUID, status_value: str | None = None) -> list[TrustCenterAccessRequest]:
+        self._expire_stale_approved_requests(org_id)
         stmt = select(TrustCenterAccessRequest).where(TrustCenterAccessRequest.organization_id == org_id)
         if status_value is not None:
             stmt = stmt.where(TrustCenterAccessRequest.status == status_value)

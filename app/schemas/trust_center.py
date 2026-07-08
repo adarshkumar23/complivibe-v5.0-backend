@@ -65,6 +65,9 @@ class TrustCenterPublishedPolicyRead(BaseModel):
     published_at: datetime
     published_by: UUID
     is_active: bool
+    policy_archived: bool = False
+    policy_updated_since_published: bool = False
+    policy_last_updated_at: datetime | None = None
 
 
 class TrustCenterAccessRequestCreate(BaseModel):
@@ -99,6 +102,7 @@ class TrustCenterAccessRequestRead(BaseModel):
 class TrustCenterAccessRequestSubmitResponse(BaseModel):
     request_id: UUID
     message: str
+    duplicate: bool = False
 
 
 class TrustCenterCertificationPublicRead(BaseModel):
@@ -135,6 +139,8 @@ class TrustCenterPublicRead(BaseModel):
     competitor_pricing: list[dict] = Field(default_factory=list)
     competitor_pricing_last_updated: datetime | None = None
     uptime: TrustCenterPublicUptimeRead | None = None
+    data_generated_at: datetime
+    expired_certifications_excluded: int = 0
 
 
 class TrustCenterUptimeUpdateRequest(BaseModel):

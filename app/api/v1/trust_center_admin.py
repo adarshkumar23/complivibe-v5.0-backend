@@ -53,6 +53,8 @@ def _config_read(row: TrustCenterConfiguration) -> TrustCenterConfigurationRead:
 def _published_policy_read(db: Session, row: TrustCenterPublishedPolicy) -> TrustCenterPublishedPolicyRead:
     policy = db.execute(select(CompliancePolicy).where(CompliancePolicy.id == row.policy_id)).scalar_one_or_none()
     policy_title = policy.title if policy is not None else "Unknown policy"
+    policy_archived = policy is None or policy.archived_at is not None or policy.status == "archived"
+    policy_updated_since_published = policy is not None and policy.updated_at > row.published_at
     return TrustCenterPublishedPolicyRead(
         id=row.id,
         organization_id=row.organization_id,
@@ -62,6 +64,9 @@ def _published_policy_read(db: Session, row: TrustCenterPublishedPolicy) -> Trus
         published_at=row.published_at,
         published_by=row.published_by,
         is_active=row.is_active,
+        policy_archived=policy_archived,
+        policy_updated_since_published=policy_updated_since_published,
+        policy_last_updated_at=policy.updated_at if policy is not None else None,
     )
 
 
@@ -136,6 +141,17 @@ def publish_policy(
     return _published_policy_read(db, row)
 
 
+@router.get("/policies", response_model=list[TrustCenterPublishedPolicyRead])
+def list_published_policies(
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("vendor:read")),
+) -> list[TrustCenterPublishedPolicyRead]:
+    rows = TrustCenterService(db).list_published_policies(organization.id, include_inactive=include_inactive)
+    return [TrustCenterPublishedPolicyRead(**row) for row in rows]
+
+
 @router.delete("/policies/{policy_id}/unpublish", response_model=TrustCenterPublishedPolicyRead)
 def unpublish_policy(
     policy_id: uuid.UUID,
@@ -158,6 +174,7 @@ def list_access_requests(
     _: Membership = Depends(require_permission("vendor:read")),
 ) -> list[TrustCenterAccessRequestRead]:
     rows = TrustCenterService(db).list_access_requests(organization.id, status_value)
+    db.commit()
     return [_access_request_read(row) for row in rows]
 
 
