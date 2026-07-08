@@ -255,3 +255,23 @@ class ContentProvenanceService:
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content provenance record not found")
         return row
+
+    def get_history(self, org_id: uuid.UUID, content_identifier: str) -> tuple[list[ContentProvenanceRecord], bool]:
+        rows = self.db.execute(
+            select(ContentProvenanceRecord)
+            .where(
+                ContentProvenanceRecord.organization_id == org_id,
+                ContentProvenanceRecord.content_identifier == content_identifier,
+                ContentProvenanceRecord.deleted_at.is_(None),
+            )
+            .order_by(ContentProvenanceRecord.verified_at.desc(), ContentProvenanceRecord.created_at.desc())
+        ).scalars().all()
+        if not rows:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No verification history for this content_identifier")
+
+        latest = rows[0]
+        drift = any(
+            row.claim_generator != latest.claim_generator or row.spec_version_detected != latest.spec_version_detected
+            for row in rows[1:]
+        )
+        return rows, drift

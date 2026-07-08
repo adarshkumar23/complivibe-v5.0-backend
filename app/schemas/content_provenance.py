@@ -40,3 +40,14 @@ class ContentProvenanceResponse(BaseModel):
     created_by: UUID | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class ContentProvenanceHistoryResponse(BaseModel):
+    content_identifier: str
+    records: list[ContentProvenanceResponse]
+    # True when the most recent verification's claim_generator or
+    # spec_version_detected differs from an earlier verification for the same
+    # content_identifier -- the same logical content now carries a different
+    # provenance claim, which is worth flagging even when both verifications
+    # independently passed structural/signature validation.
+    provenance_drift_detected: bool = False

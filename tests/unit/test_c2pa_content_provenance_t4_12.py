@@ -300,6 +300,90 @@ def test_t4_12_get_record_and_cross_org_404(client, db_session):
     assert cross_org.status_code == 404
 
 
+def test_t4_12_history_lists_all_verifications_newest_first(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="c2pa-history")
+
+    first = client.post(
+        VERIFY_URL,
+        headers=org["org_headers"],
+        json={"content_identifier": "asset-history-1", "manifest": _valid_manifest()},
+    )
+    assert first.status_code == 200
+    second = client.post(
+        VERIFY_URL,
+        headers=org["org_headers"],
+        json={"content_identifier": "asset-history-1", "manifest": _valid_manifest()},
+    )
+    assert second.status_code == 200
+
+    history = client.get(
+        "/api/v1/content-provenance/history/asset-history-1", headers=org["org_headers"]
+    )
+    assert history.status_code == 200
+    body = history.json()
+    assert body["content_identifier"] == "asset-history-1"
+    assert [r["id"] for r in body["records"]] == [second.json()["id"], first.json()["id"]]
+    # Same claim_generator/spec_version both times -- no drift.
+    assert body["provenance_drift_detected"] is False
+
+
+def test_t4_12_history_flags_provenance_drift_across_verifications(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="c2pa-drift")
+
+    first_manifest = _sign_manifest({
+        "claim_generator": "AcmeCam/1.0",
+        "spec_version": "c2pa-1.2",
+        "assertions": [{"label": "c2pa.actions", "data": {"actions": [{"action": "c2pa.created"}]}}],
+    })
+    second_manifest = _sign_manifest({
+        "claim_generator": "DifferentEditor/2.0",
+        "spec_version": "c2pa-1.3",
+        "assertions": [{"label": "c2pa.actions", "data": {"actions": [{"action": "c2pa.edited"}]}}],
+    })
+
+    client.post(
+        VERIFY_URL,
+        headers=org["org_headers"],
+        json={"content_identifier": "asset-drift-1", "manifest": first_manifest},
+    )
+    client.post(
+        VERIFY_URL,
+        headers=org["org_headers"],
+        json={"content_identifier": "asset-drift-1", "manifest": second_manifest},
+    )
+
+    history = client.get(
+        "/api/v1/content-provenance/history/asset-drift-1", headers=org["org_headers"]
+    )
+    assert history.status_code == 200
+    assert history.json()["provenance_drift_detected"] is True
+
+
+def test_t4_12_history_unknown_identifier_returns_404(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="c2pa-history-404")
+
+    response = client.get(
+        "/api/v1/content-provenance/history/never-verified", headers=org["org_headers"]
+    )
+    assert response.status_code == 404
+
+
+def test_t4_12_history_is_scoped_to_organization(client, db_session):
+    org1 = bootstrap_org_user(client, email_prefix="c2pa-history-org-a")
+    org2 = bootstrap_org_user(client, email_prefix="c2pa-history-org-b")
+
+    client.post(
+        VERIFY_URL,
+        headers=org1["org_headers"],
+        json={"content_identifier": "asset-shared-id", "manifest": _valid_manifest()},
+    )
+
+    cross_org = client.get(
+        "/api/v1/content-provenance/history/asset-shared-id", headers=org2["org_headers"]
+    )
+    assert cross_org.status_code == 404
+
+
 def test_t4_12_audit_log_recorded_for_verification(client, db_session):
     org = bootstrap_org_user(client, email_prefix="c2pa-audit")
 
