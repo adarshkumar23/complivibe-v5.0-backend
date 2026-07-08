@@ -178,10 +178,19 @@ class LegalMatterService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Risk not found")
         return risk
 
+    @staticmethod
+    def _reject_if_closed(row: LegalMatter, action: str) -> None:
+        if row.status == "closed":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot {action} on a closed legal matter; reopen it first via /status",
+            )
+
     def link_risk(self, org_id: uuid.UUID, matter_id: uuid.UUID, risk_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> LegalMatter:
         row = self.get_matter(org_id, matter_id)
         if row.related_risk_id == risk_id:
             return row
+        self._reject_if_closed(row, "link a risk")
 
         risk = self._get_org_risk(org_id, risk_id)
 
@@ -225,6 +234,7 @@ class LegalMatterService:
         row = self.get_matter(org_id, matter_id)
         if row.related_issue_id == issue_id:
             return row
+        self._reject_if_closed(row, "link an issue")
 
         issue = IssueService(self.db).get_issue(org_id, issue_id)
 

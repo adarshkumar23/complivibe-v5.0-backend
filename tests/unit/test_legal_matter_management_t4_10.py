@@ -260,6 +260,43 @@ def test_close_with_no_linked_issue_succeeds_without_confirm(client, db_session)
     assert closed.json()["status"] == "closed"
 
 
+def test_link_risk_or_issue_to_closed_matter_is_rejected_until_reopened(client, db_session):
+    org = _bootstrap(client, db_session, "lm-closed-link")
+    risk = _create_risk(db_session, org["organization_id"])
+    issue = _create_issue(db_session, org["organization_id"], org["user_id"], org["user_id"])
+
+    created = client.post(BASE, headers=org["org_headers"], json={"title": "Soon closed matter"})
+    matter_id = created.json()["id"]
+    closed = client.post(f"{BASE}/{matter_id}/close", headers=org["org_headers"], json={"confirm": False})
+    assert closed.status_code == 200
+
+    risk_link_attempt = client.post(
+        f"{BASE}/{matter_id}/link-risk", headers=org["org_headers"], json={"risk_id": str(risk.id)}
+    )
+    assert risk_link_attempt.status_code == 409
+    assert "closed legal matter" in risk_link_attempt.json()["detail"]
+
+    issue_link_attempt = client.post(
+        f"{BASE}/{matter_id}/link-issue", headers=org["org_headers"], json={"issue_id": str(issue.id)}
+    )
+    assert issue_link_attempt.status_code == 409
+
+    row = db_session.get(LegalMatter, uuid.UUID(matter_id))
+    assert row.related_risk_id is None
+    assert row.related_issue_id is None
+
+    # Reopening clears the guard.
+    reopened = client.post(
+        f"{BASE}/{matter_id}/status", headers=org["org_headers"], json={"new_status": "open"}
+    )
+    assert reopened.status_code == 200
+    retried = client.post(
+        f"{BASE}/{matter_id}/link-risk", headers=org["org_headers"], json={"risk_id": str(risk.id)}
+    )
+    assert retried.status_code == 200
+    assert retried.json()["related_risk_id"] == str(risk.id)
+
+
 def test_link_risk_from_different_org_returns_404(client, db_session):
     org1 = _bootstrap(client, db_session, "lm-cross-a")
     org2 = _bootstrap(client, db_session, "lm-cross-b")
