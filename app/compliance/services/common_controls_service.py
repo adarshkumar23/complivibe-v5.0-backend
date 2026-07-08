@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.models.common_control_evidence_coverage import CommonControlEvidenceCoverage
 from app.models.common_control_mapping import CommonControlMapping
 from app.models.control import Control
+from app.models.control_obligation_mapping import ControlObligationMapping
 from app.models.evidence_item import EvidenceItem
 from app.models.framework import Framework
 from app.models.membership import Membership
@@ -16,6 +17,17 @@ from app.models.organization_framework import OrganizationFramework
 from app.models.user import User
 from app.schemas.common_controls import CommonControlMappingCreate, CommonControlMappingUpdate
 from app.services.audit_service import AuditService
+
+# ControlObligationMapping.mapping_type -> CommonControlMapping-style mapping_strength.
+# Used only when a control<->obligation link exists solely via the standard mapping
+# endpoint (POST /controls/{id}/obligations) and has no corresponding CommonControlMapping
+# row to source a curated mapping_strength from.
+_STANDARD_MAPPING_TYPE_TO_STRENGTH = {
+    "satisfies": "full",
+    "partially_satisfies": "partial",
+    "supports": "partial",
+    "related": "compensating",
+}
 
 
 class CommonControlsService:
@@ -326,25 +338,113 @@ class CommonControlsService:
             stmt = stmt.where(CommonControlMapping.status == status_value)
         return self.db.execute(stmt.order_by(CommonControlMapping.created_at.desc())).scalars().all()
 
+    def _unified_control_obligation_pairs(
+        self, org_id: uuid.UUID, *, control_id: uuid.UUID | None = None
+    ) -> dict[tuple[uuid.UUID, uuid.UUID], dict]:
+        """Single source of truth for "which obligations/frameworks does a control cover".
+
+        Coverage in this product can be recorded through two entry points that both
+        represent the same underlying control<->obligation relationship:
+          * the standard mapping endpoint (POST /controls/{id}/obligations), backed by
+            ControlObligationMapping -- the primary, lightweight way to record a mapping.
+          * the common-controls mapping endpoint (POST /compliance/common-controls/mappings),
+            backed by CommonControlMapping -- a richer record used when the mapping also
+            needs curated fields (section_reference, mapping_strength, verification,
+            evidence-coverage linkage).
+
+        Historically only CommonControlMapping fed framework-coverage/common-controls
+        reporting, which meant mapping a control the standard way was invisible to those
+        reports. This method unions both tables keyed by (control_id, obligation_id) so
+        every real mapping -- regardless of which endpoint created it -- counts exactly
+        once. When a pair exists in both tables, the CommonControlMapping record wins
+        because it carries the curated fields and is the only one evidence-coverage rows
+        can attach to; when a pair only exists via the standard mapping, its strength is
+        derived from ControlObligationMapping.mapping_type.
+        """
+        pairs: dict[tuple[uuid.UUID, uuid.UUID], dict] = {}
+
+        standard_stmt = select(ControlObligationMapping, Obligation).join(
+            Obligation, Obligation.id == ControlObligationMapping.obligation_id
+        ).where(
+            ControlObligationMapping.organization_id == org_id,
+            ControlObligationMapping.status == "active",
+        )
+        if control_id is not None:
+            standard_stmt = standard_stmt.where(ControlObligationMapping.control_id == control_id)
+
+        for mapping, obligation in self.db.execute(standard_stmt).all():
+            key = (mapping.control_id, mapping.obligation_id)
+            pairs[key] = {
+                "control_id": mapping.control_id,
+                "obligation_id": mapping.obligation_id,
+                "framework_id": obligation.framework_id,
+                "mapping_strength": _STANDARD_MAPPING_TYPE_TO_STRENGTH.get(mapping.mapping_type, "partial"),
+                "section_reference": None,
+                "common_control_mapping_id": None,
+            }
+
+        common_stmt = select(CommonControlMapping).where(
+            CommonControlMapping.organization_id == org_id,
+            CommonControlMapping.status != "inactive",
+        )
+        if control_id is not None:
+            common_stmt = common_stmt.where(CommonControlMapping.control_id == control_id)
+
+        for mapping in self.db.execute(common_stmt).scalars().all():
+            key = (mapping.control_id, mapping.obligation_id)
+            # A CommonControlMapping record always wins: it is the curated record and the
+            # only one evidence-coverage rows key off of.
+            pairs[key] = {
+                "control_id": mapping.control_id,
+                "obligation_id": mapping.obligation_id,
+                "framework_id": mapping.framework_id,
+                "mapping_strength": mapping.mapping_strength,
+                "section_reference": mapping.section_reference,
+                "common_control_mapping_id": mapping.id,
+            }
+
+        return pairs
+
     def get_coverage_report(self, control_id: uuid.UUID, org_id: uuid.UUID) -> dict:
         control = self.require_control_in_org(org_id, control_id)
 
-        mappings = self.db.execute(
-            select(CommonControlMapping, Framework, Obligation)
-            .join(Framework, Framework.id == CommonControlMapping.framework_id)
-            .join(Obligation, Obligation.id == CommonControlMapping.obligation_id)
-            .where(
-                CommonControlMapping.organization_id == org_id,
-                CommonControlMapping.control_id == control_id,
-                CommonControlMapping.status != "inactive",
-            )
-            .order_by(Framework.name.asc(), Obligation.reference_code.asc())
-        ).all()
+        pairs = self._unified_control_obligation_pairs(org_id, control_id=control_id)
+
+        framework_ids = {row["framework_id"] for row in pairs.values()}
+        frameworks_by_id: dict[uuid.UUID, Framework] = {}
+        if framework_ids:
+            frameworks_by_id = {
+                fw.id: fw
+                for fw in self.db.execute(select(Framework).where(Framework.id.in_(framework_ids))).scalars().all()
+            }
+
+        obligation_ids = {row["obligation_id"] for row in pairs.values()}
+        obligations_by_id: dict[uuid.UUID, Obligation] = {}
+        if obligation_ids:
+            obligations_by_id = {
+                ob.id: ob
+                for ob in self.db.execute(select(Obligation).where(Obligation.id.in_(obligation_ids))).scalars().all()
+            }
 
         framework_map: dict[uuid.UUID, dict] = {}
         obligation_coverages: list[float] = []
 
-        for mapping, framework, obligation in mappings:
+        sorted_pairs = sorted(
+            pairs.values(),
+            key=lambda row: (
+                frameworks_by_id[row["framework_id"]].name if row["framework_id"] in frameworks_by_id else "",
+                obligations_by_id[row["obligation_id"]].reference_code
+                if row["obligation_id"] in obligations_by_id
+                else "",
+            ),
+        )
+
+        for row in sorted_pairs:
+            framework = frameworks_by_id.get(row["framework_id"])
+            obligation = obligations_by_id.get(row["obligation_id"])
+            if framework is None or obligation is None:
+                continue
+
             fw_entry = framework_map.setdefault(
                 framework.id,
                 {
@@ -354,26 +454,28 @@ class CommonControlsService:
                 },
             )
 
-            coverage_rows = self.db.execute(
-                select(CommonControlEvidenceCoverage, EvidenceItem)
-                .join(EvidenceItem, EvidenceItem.id == CommonControlEvidenceCoverage.evidence_id)
-                .where(
-                    CommonControlEvidenceCoverage.organization_id == org_id,
-                    CommonControlEvidenceCoverage.mapping_id == mapping.id,
-                    CommonControlEvidenceCoverage.control_id == control_id,
-                )
-                .order_by(EvidenceItem.created_at.desc())
-            ).all()
+            evidence_coverage: list[dict] = []
+            if row["common_control_mapping_id"] is not None:
+                coverage_rows = self.db.execute(
+                    select(CommonControlEvidenceCoverage, EvidenceItem)
+                    .join(EvidenceItem, EvidenceItem.id == CommonControlEvidenceCoverage.evidence_id)
+                    .where(
+                        CommonControlEvidenceCoverage.organization_id == org_id,
+                        CommonControlEvidenceCoverage.mapping_id == row["common_control_mapping_id"],
+                        CommonControlEvidenceCoverage.control_id == control_id,
+                    )
+                    .order_by(EvidenceItem.created_at.desc())
+                ).all()
 
-            evidence_coverage = [
-                {
-                    "evidence_id": evidence.id,
-                    "evidence_title": evidence.title,
-                    "coverage_status": coverage.coverage_status,
-                    "expiry_date": evidence.valid_until.date() if evidence.valid_until else None,
-                }
-                for coverage, evidence in coverage_rows
-            ]
+                evidence_coverage = [
+                    {
+                        "evidence_id": evidence.id,
+                        "evidence_title": evidence.title,
+                        "coverage_status": coverage.coverage_status,
+                        "expiry_date": evidence.valid_until.date() if evidence.valid_until else None,
+                    }
+                    for coverage, evidence in coverage_rows
+                ]
 
             total_evidence = len(evidence_coverage)
             covering = sum(1 for item in evidence_coverage if item["coverage_status"] == "covers")
@@ -385,8 +487,8 @@ class CommonControlsService:
             fw_entry["obligations"].append(
                 {
                     "obligation_id": obligation.id,
-                    "section_reference": mapping.section_reference,
-                    "mapping_strength": mapping.mapping_strength,
+                    "section_reference": row["section_reference"],
+                    "mapping_strength": row["mapping_strength"],
                     "evidence_coverage": evidence_coverage,
                     "coverage_summary": {
                         "total_evidence": total_evidence,
@@ -482,65 +584,57 @@ class CommonControlsService:
         }
 
     def get_common_controls_summary(self, org_id: uuid.UUID) -> dict:
-        active_mappings = self.db.execute(
-            select(CommonControlMapping).where(
-                CommonControlMapping.organization_id == org_id,
-                CommonControlMapping.status == "active",
-            )
-        ).scalars().all()
+        # Unified across both the standard control<->obligation mapping table and the
+        # curated CommonControlMapping table -- see _unified_control_obligation_pairs for
+        # why these two must be treated as one source of truth.
+        pairs = self._unified_control_obligation_pairs(org_id)
 
-        total_mappings = len(active_mappings)
+        total_mappings = len(pairs)
         by_mapping_strength = {"full": 0, "partial": 0, "compensating": 0}
-        for row in active_mappings:
-            by_mapping_strength[row.mapping_strength] = by_mapping_strength.get(row.mapping_strength, 0) + 1
+        for row in pairs.values():
+            by_mapping_strength[row["mapping_strength"]] = by_mapping_strength.get(row["mapping_strength"], 0) + 1
 
-        per_control = self.db.execute(
-            select(
-                CommonControlMapping.control_id,
-                func.count(distinct(CommonControlMapping.framework_id)).label("framework_count"),
-                func.count(distinct(CommonControlMapping.obligation_id)).label("obligation_count"),
-            )
-            .where(
-                CommonControlMapping.organization_id == org_id,
-                CommonControlMapping.status == "active",
-            )
-            .group_by(CommonControlMapping.control_id)
-            .order_by(func.count(distinct(CommonControlMapping.framework_id)).desc())
-        ).all()
+        per_control: dict[uuid.UUID, dict[str, set]] = {}
+        for row in pairs.values():
+            entry = per_control.setdefault(row["control_id"], {"frameworks": set(), "obligations": set()})
+            entry["frameworks"].add(row["framework_id"])
+            entry["obligations"].add(row["obligation_id"])
 
-        common_controls = [row for row in per_control if int(row.framework_count) >= 2]
-        total_common_controls = len(common_controls)
+        common_control_ids = [
+            control_id for control_id, entry in per_control.items() if len(entry["frameworks"]) >= 2
+        ]
+        total_common_controls = len(common_control_ids)
 
-        if common_controls:
-            control_ids = [row.control_id for row in common_controls]
-            frameworks_with_common_controls = int(
-                self.db.execute(
-                    select(func.count(distinct(CommonControlMapping.framework_id))).where(
-                        CommonControlMapping.organization_id == org_id,
-                        CommonControlMapping.status == "active",
-                        CommonControlMapping.control_id.in_(control_ids),
-                    )
-                ).scalar_one()
+        if common_control_ids:
+            frameworks_with_common_controls = len(
+                {
+                    fw_id
+                    for control_id in common_control_ids
+                    for fw_id in per_control[control_id]["frameworks"]
+                }
             )
         else:
             frameworks_with_common_controls = 0
 
+        common_control_ids.sort(key=lambda cid: len(per_control[cid]["frameworks"]), reverse=True)
+
         top_common_controls: list[dict] = []
-        for row in common_controls[:5]:
+        for control_id in common_control_ids[:5]:
             control = self.db.execute(
                 select(Control).where(
                     Control.organization_id == org_id,
-                    Control.id == row.control_id,
+                    Control.id == control_id,
                 )
             ).scalar_one_or_none()
             if control is None:
                 continue
+            entry = per_control[control_id]
             top_common_controls.append(
                 {
                     "control_id": control.id,
                     "control_name": control.title,
-                    "framework_count": int(row.framework_count),
-                    "obligation_count": int(row.obligation_count),
+                    "framework_count": len(entry["frameworks"]),
+                    "obligation_count": len(entry["obligations"]),
                 }
             )
 
