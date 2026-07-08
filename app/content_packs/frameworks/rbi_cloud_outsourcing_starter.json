@@ -1,0 +1,30 @@
+{
+  "pack_key": "rbi_cloud_outsourcing_starter",
+  "framework_code": "RBI_CLOUD_OUTSOURCING",
+  "framework_name": "RBI IT Outsourcing and Cloud Controls",
+  "version_label": "2023",
+  "version": "1.0",
+  "coverage_level": "starter",
+  "review_status": "unreviewed",
+  "import_type": "starter_pack",
+  "source_name": "local_starter_pack",
+  "source_reference": "rbi_cloud_outsourcing_starter",
+  "caveat": "This framework content pack is a structured starter representation and does not constitute legal advice or complete regulatory coverage. This is a starter content pack for scoping purposes only. It does not constitute legal advice or a complete compliance determination.",
+  "sections": [
+    {"section_code": "RBI-OUTSCOPE", "title": "Outsourcing Scope and Risk", "description": "Due diligence and risk assessment before outsourcing", "status": "active"},
+    {"section_code": "RBI-OUTMON", "title": "Monitoring and Exit", "description": "Ongoing monitoring and exit readiness for outsourced IT services", "status": "active"}
+  ],
+  "obligations": [
+    {"stable_key": "RBI_CLOUD_OUTSOURCING.RBI-OUT-01", "reference_code": "RBI-OUT-01", "obligation_code": "RBI-OUT-01", "title": "Risk-based due diligence before outsourcing critical IT services", "description": "Perform documented due diligence, contract controls, and risk assessment before onboarding outsourced IT or cloud service providers.", "obligation_type": "process", "applicability_notes": "Applies before onboarding any outsourced IT, cloud, or critical third-party service provider.", "section_code": "RBI-OUTSCOPE", "jurisdiction": "India", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"stable_key": "RBI_CLOUD_OUTSOURCING.RBI-OUT-02", "reference_code": "RBI-OUT-02", "obligation_code": "RBI-OUT-02", "title": "Ongoing monitoring and exit readiness", "description": "Maintain continuous monitoring, concentration risk oversight, and tested exit strategy for critical outsourced services.", "obligation_type": "control", "applicability_notes": "Exit strategy should be tested periodically to confirm continuity of critical functions.", "section_code": "RBI-OUTMON", "jurisdiction": "India", "status": "active", "criticality": "high", "coverage_level": "starter", "review_status": "unreviewed"}
+  ],
+  "content_versions": [
+    {"reference_code": "RBI-OUT-01", "version_label": "1.0", "obligation_text": "Perform documented risk-based due diligence and contractual control review before onboarding outsourced IT/cloud service providers.", "coverage_level": "starter", "review_status": "unreviewed"},
+    {"reference_code": "RBI-OUT-02", "version_label": "1.0", "obligation_text": "Maintain continuous vendor monitoring, concentration-risk oversight, and a tested exit strategy for critical outsourced services.", "coverage_level": "starter", "review_status": "unreviewed"}
+  ],
+  "applicability_questions": [],
+  "evidence_requirements": [],
+  "control_suggestions": [
+    {"reference_code": "RBI-OUT-01", "control_title": "IT outsourcing vendor due diligence", "control_description": "Perform documented due diligence and contractual control review, including data-localization and exit-clause checks, before onboarding outsourced IT or cloud service providers.", "priority": "high", "status": "active"}
+  ]
+}
