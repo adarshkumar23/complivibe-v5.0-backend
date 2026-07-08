@@ -162,7 +162,65 @@ class UsageBillingService:
             "processor is paused until the cap is raised or usage drops."
         )
 
-    def _snapshot_payload(self, snapshot: UsageBillingSnapshot, organization: Organization) -> dict:
+    def _previous_period_snapshot(self, organization_id: UUID, period_start: date) -> UsageBillingSnapshot | None:
+        if period_start.month == 1:
+            prev_period_start = date(period_start.year - 1, 12, 1)
+        else:
+            prev_period_start = date(period_start.year, period_start.month - 1, 1)
+        return self.db.execute(
+            select(UsageBillingSnapshot)
+            .where(
+                UsageBillingSnapshot.organization_id == organization_id,
+                UsageBillingSnapshot.period_start == prev_period_start,
+            )
+            .order_by(UsageBillingSnapshot.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+
+    @staticmethod
+    def _cost_trend(current_cost: Decimal, previous_cost: Decimal | None) -> str:
+        if previous_cost is None:
+            return "no_prior_period_data"
+        if previous_cost == 0:
+            return "increasing" if current_cost > 0 else "flat"
+        change_ratio = (current_cost - previous_cost) / previous_cost
+        if change_ratio > Decimal("0.05"):
+            return "increasing"
+        if change_ratio < Decimal("-0.05"):
+            return "decreasing"
+        return "flat"
+
+    def _snapshot_payload(self, snapshot: UsageBillingSnapshot, organization: Organization, plan: SubscriptionPlan | None) -> dict:
+        context_flags: list[str] = []
+        is_usage_based_plan = plan is not None and plan.plan_type == "usage_based"
+        if plan is None:
+            context_flags.append("subscription_plan_missing")
+        elif not is_usage_based_plan:
+            context_flags.append("estimated_cost_not_billable_fixed_plan")
+
+        previous_snapshot = self._previous_period_snapshot(organization.id, snapshot.period_start)
+        previous_period_cost = (
+            Decimal(str(previous_snapshot.projected_month_end_cost_inr)) if previous_snapshot is not None else None
+        )
+        cost_trend = self._cost_trend(Decimal(str(snapshot.projected_month_end_cost_inr)), previous_period_cost)
+        if cost_trend == "no_prior_period_data":
+            context_flags.append("no_prior_period_comparison")
+
+        if (
+            snapshot.active_frameworks_count == 0
+            and snapshot.active_users_count == 0
+            and snapshot.api_calls_count == 0
+        ):
+            context_flags.append("zero_usage_period")
+
+        if (
+            snapshot.synced_to_processor
+            and previous_snapshot is not None
+            and previous_snapshot.synced_to_processor
+            and float(previous_snapshot.billable_units) != float(snapshot.billable_units)
+        ):
+            context_flags.append("usage_changed_since_last_sync")
+
         return {
             "period_start": snapshot.period_start.isoformat(),
             "period_end": snapshot.period_end.isoformat(),
@@ -179,6 +237,10 @@ class UsageBillingService:
             "spend_cap_alert": self._spend_cap_alert(snapshot),
             "synced_to_processor": snapshot.synced_to_processor,
             "processor_reference": snapshot.processor_reference,
+            "is_usage_based_plan": is_usage_based_plan,
+            "previous_period_cost_inr": float(previous_period_cost) if previous_period_cost is not None else None,
+            "cost_trend": cost_trend,
+            "context_flags": sorted(set(context_flags)),
         }
 
     def usage_dashboard(self, organization_id: UUID, actor_user_id: UUID | None) -> dict:
@@ -198,7 +260,8 @@ class UsageBillingService:
             },
             metadata_json={"source": "billing.usage.dashboard"},
         )
-        return self._snapshot_payload(snapshot, organization)
+        plan = self.db.get(SubscriptionPlan, snapshot.subscription_plan_id)
+        return self._snapshot_payload(snapshot, organization, plan)
 
     def update_spend_cap(
         self,
