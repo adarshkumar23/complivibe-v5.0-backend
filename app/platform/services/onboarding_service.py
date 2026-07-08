@@ -562,6 +562,26 @@ class OnboardingService:
             },
         ]
 
+        next_step = next((item for item in checklist_items if not item["completed"]), None)
+
+        now = self.utcnow()
+        days_since_created = (now - self._as_utc(org.created_at)).days if org.created_at else 0
+        stalled = bool(
+            not org.onboarding_completed
+            and completion_percentage < 100
+            and days_since_created >= 7
+        )
+
+        context_flags: list[str] = []
+        if stalled:
+            context_flags.append("onboarding_stalled")
+        if not org.onboarding_completed and completion_percentage == 100:
+            context_flags.append("ready_to_complete")
+        if org.onboarding_completed and completion_percentage < 100:
+            # Completed before every core checklist signal was true (e.g. a control/risk was
+            # later deleted) -- surface this so admins know the "completed" badge may be stale.
+            context_flags.append("completed_with_incomplete_checklist")
+
         return {
             "org_id": str(org_id),
             "onboarding_step": org.onboarding_step or "not_started",
@@ -569,12 +589,33 @@ class OnboardingService:
             "checklist": checks,
             "checklist_items": checklist_items,
             "completion_percentage": completion_percentage,
+            "next_step": next_step,
+            "stalled": stalled,
+            "days_since_created": days_since_created,
+            "context_flags": context_flags,
         }
 
     def complete_onboarding(self, org_id: uuid.UUID, user_id: uuid.UUID, db: Session) -> dict:
         org = db.get(Organization, org_id)
         if not org:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
+
+        # Idempotent: re-completing an already-completed org must not clobber the original
+        # completion timestamp, which is meaningful audit/analytics data.
+        if org.onboarding_completed:
+            return {
+                "org_id": str(org_id),
+                "onboarding_completed": True,
+                "completed_at": org.onboarding_completed_at.isoformat() if org.onboarding_completed_at else None,
+                "already_completed": True,
+            }
+
+        checklist = self.get_checklist(org_id=org_id, db=db)
+        if not checklist["checklist"].get("frameworks_selected"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one framework must be selected before completing onboarding",
+            )
 
         org.onboarding_completed = True
         org.onboarding_completed_at = self.utcnow()
@@ -587,12 +628,14 @@ class OnboardingService:
             organization_id=org_id,
             actor_user_id=user_id,
             entity_id=org_id,
+            metadata_json={"completion_percentage": checklist["completion_percentage"]},
         )
 
         return {
             "org_id": str(org_id),
             "onboarding_completed": True,
             "completed_at": org.onboarding_completed_at.isoformat() if org.onboarding_completed_at else None,
+            "already_completed": False,
         }
 
     def _queue_welcome_email(self, org: Organization, user: User, db: Session) -> None:
