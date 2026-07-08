@@ -151,6 +151,106 @@ def test_import_job_commit_conflict_resolution_update(client, db_session):
     assert row.source_import_tool == "generic"
 
 
+def test_g9_import_does_not_overwrite_manually_verified_evidence_provenance(client, db_session):
+    """G9 item 17: an import match against a manually-entered, checksummed evidence
+    item must not silently overwrite its source/description/checksum -- a
+    manually-verified record's provenance must be protected."""
+    org = bootstrap_org_user(client, email_prefix="import-job-provenance-manual")
+    org_id = UUID(org["organization_id"])
+
+    manual_evidence = EvidenceItem(
+        organization_id=org_id,
+        title="Manually Verified SOC2 Report",
+        description="Original hand-entered description",
+        evidence_type="document",
+        source="manual",
+        status="active",
+        review_status="verified",
+        freshness_status="current",
+        checksum_sha256="real-checksum-abc123",
+        metadata_json={},
+    )
+    db_session.add(manual_evidence)
+    db_session.commit()
+    db_session.refresh(manual_evidence)
+
+    create = client.post(
+        f"{BASE}/generic",
+        headers=org["org_headers"],
+        json={
+            "dry_run": False,
+            "conflict_strategy": "update",
+            "records": [
+                {
+                    "entity_type": "evidence",
+                    "title": "Manually Verified SOC2 Report",
+                    "description": "OVERWRITTEN BY AUTOMATED IMPORT",
+                    "evidence_type": "document",
+                }
+            ],
+        },
+    )
+    assert create.status_code == 201
+    job_id = create.json()["id"]
+
+    commit = client.post(f"{BASE}/{job_id}/commit", headers=org["org_headers"])
+    assert commit.status_code == 200, commit.text
+    body = commit.json()
+    assert body["updated"] == {}
+    assert body["skipped"].get("evidence") == 1
+    assert body["provenance_protected_count"] == 1
+    assert "provenance_protected_skip" in body["context_flags"]
+
+    db_session.refresh(manual_evidence)
+    assert manual_evidence.source == "manual"
+    assert manual_evidence.description == "Original hand-entered description"
+    assert manual_evidence.checksum_sha256 == "real-checksum-abc123"
+
+
+def test_g9_import_still_updates_evidence_without_protected_provenance(client, db_session):
+    """Sanity check: the provenance protection must not block genuinely-imported
+    records (source != manual, no checksum) from updating normally."""
+    org = bootstrap_org_user(client, email_prefix="import-job-provenance-normal")
+
+    first = client.post(
+        f"{BASE}/generic",
+        headers=org["org_headers"],
+        json={
+            "dry_run": False,
+            "conflict_strategy": "skip",
+            "records": [{"entity_type": "evidence", "title": "Vendor SOC2 Report", "description": "v1", "evidence_type": "document"}],
+        },
+    )
+    assert first.status_code == 201
+    first_commit = client.post(f"{BASE}/{first.json()['id']}/commit", headers=org["org_headers"])
+    assert first_commit.status_code == 200
+    assert first_commit.json()["created"]["evidence"] == 1
+
+    second = client.post(
+        f"{BASE}/generic",
+        headers=org["org_headers"],
+        json={
+            "dry_run": False,
+            "conflict_strategy": "update",
+            "records": [{"entity_type": "evidence", "title": "Vendor SOC2 Report", "description": "v2", "evidence_type": "document"}],
+        },
+    )
+    assert second.status_code == 201
+    second_commit = client.post(f"{BASE}/{second.json()['id']}/commit", headers=org["org_headers"])
+    assert second_commit.status_code == 200, second_commit.text
+    assert second_commit.json()["updated"].get("evidence") == 1
+    assert second_commit.json()["provenance_protected_count"] == 0
+
+    row = db_session.execute(
+        select(EvidenceItem).where(
+            EvidenceItem.organization_id == UUID(org["organization_id"]),
+            EvidenceItem.title == "Vendor SOC2 Report",
+        )
+    ).scalar_one()
+    assert row.description == "v2"
+    assert row.source == "imported"
+
+
 def test_import_job_commit_evidence_uses_existing_evidence_table_and_audit(client, db_session):
     org = bootstrap_org_user(client, email_prefix="import-job-evidence")
     create = client.post(

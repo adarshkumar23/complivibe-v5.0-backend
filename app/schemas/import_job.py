@@ -75,6 +75,14 @@ class ImportCommitRead(BaseModel):
             "or explicitly mapped, and were therefore NOT imported into any field."
         ),
     )
+    provenance_protected_count: int = Field(
+        default=0,
+        description=(
+            "Number of import rows that matched an existing evidence item with "
+            "protected provenance (source=='manual' or a real checksum/file attached) "
+            "and were therefore left untouched instead of being silently overwritten."
+        ),
+    )
 
 
 class ImportParityModuleRead(BaseModel):

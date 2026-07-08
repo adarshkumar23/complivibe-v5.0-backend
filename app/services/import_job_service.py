@@ -80,6 +80,10 @@ class ImportJobService:
         # is parsed -- the set of source-file column headers that weren't recognized
         # or explicitly mapped, and were therefore not imported into any field.
         self._last_unmapped_columns: list[str] = []
+        # Incremented by _upsert_evidence() each time an incoming import row matches
+        # an existing evidence item whose provenance is protected (manual source or a
+        # real checksum/file attached) -- the match was found but NOT overwritten.
+        self._last_provenance_protected_count: int = 0
 
     @staticmethod
     def _utcnow() -> datetime:
@@ -193,6 +197,7 @@ class ImportJobService:
 
     def commit(self, organization_id: uuid.UUID, job_id: uuid.UUID, actor_user_id: uuid.UUID | None) -> dict[str, Any]:
         job = self.require_job(organization_id, job_id)
+        self._last_provenance_protected_count = 0
         parsed, row_errors = self._parse_records(job.source_tool, job.raw_payload_json)
         unmapped_columns = list(self._last_unmapped_columns)
         preview = self._build_preview(job.organization_id, parsed, row_errors, job.conflict_strategy)
@@ -263,6 +268,7 @@ class ImportJobService:
             "updated": dict(updated),
             "skipped": dict(skipped),
             "unmapped_columns": unmapped_columns,
+            "provenance_protected_count": self._last_provenance_protected_count,
         }
         job.updated_at = self._utcnow()
         self.db.flush()
@@ -274,6 +280,10 @@ class ImportJobService:
             skipped=dict(skipped),
             preview_payload=preview,
         )
+        if self._last_provenance_protected_count > 0:
+            execution_insights["context_flags"] = sorted(
+                set(execution_insights["context_flags"]) | {"provenance_protected_skip"}
+            )
         return {
             "job_id": job.id,
             "status": job.status,
@@ -284,6 +294,7 @@ class ImportJobService:
             "context_flags": execution_insights["context_flags"],
             "insights": execution_insights["insights"],
             "unmapped_columns": unmapped_columns,
+            "provenance_protected_count": self._last_provenance_protected_count,
         }
 
     def _build_preview(
@@ -945,6 +956,16 @@ class ImportJobService:
         self.db.flush()
         return existing, "updated"
 
+    @staticmethod
+    def _evidence_provenance_is_protected(existing: EvidenceItem) -> bool:
+        """A manually-verified evidence item -- one entered by hand (source=="manual")
+        or one with a real checksum/file already attached -- has provenance that must
+        not be silently rewritten by an automated import match. Matching on
+        title+evidence_type is a fuzzy heuristic; when it lands on a record like
+        this, treat it as a conflict to protect rather than an automatic overwrite.
+        """
+        return existing.source == "manual" or bool(existing.checksum_sha256) or bool(existing.storage_key)
+
     def _upsert_evidence(self, job: ImportJob, row: dict[str, Any], actor_user_id: uuid.UUID | None) -> tuple[EvidenceItem | None, str]:
         existing = self._find_existing(job.organization_id, row)
         collected_at = self._parse_optional_datetime(row.get("collected_at"))
@@ -964,11 +985,29 @@ class ImportJobService:
             return item, "created"
         if job.conflict_strategy != "update":
             return existing, "skipped"
+        if self._evidence_provenance_is_protected(existing):
+            # Do NOT silently overwrite source/description/collected_at/
+            # source_import_tool on a manually-verified or checksummed record.
+            # original_created_at is the one exception: it's only ever tightened
+            # to an earlier, more-accurate date below and never invented from
+            # scratch on a record that already has provenance, so backfilling it
+            # is genuinely supplementary rather than destructive.
+            if existing.original_created_at is None and import_fallback_created_at is not None:
+                existing.original_created_at = import_fallback_created_at
+                self.db.flush()
+            self._last_provenance_protected_count += 1
+            return existing, "skipped"
         existing.description = row["description"]
         existing.collected_at = collected_at
+        existing_original_created_at = existing.original_created_at
+        if existing_original_created_at is not None and existing_original_created_at.tzinfo is None:
+            # Some backends (notably SQLite, used in tests) don't round-trip tzinfo
+            # on this column -- treat a naive value as UTC rather than letting the
+            # naive/aware comparison below raise.
+            existing_original_created_at = existing_original_created_at.replace(tzinfo=UTC)
         existing.original_created_at = (
-            min(existing.original_created_at, import_fallback_created_at)
-            if existing.original_created_at
+            min(existing_original_created_at, import_fallback_created_at)
+            if existing_original_created_at
             else import_fallback_created_at
         )
         existing.source_import_tool = job.source_tool
