@@ -22,7 +22,30 @@ from app.models.sanctions_screen_result import SanctionsScreenResult
 from app.models.vendor import Vendor
 from app.services.audit_service import AuditService
 
-OPEN_SANCTIONS_DEFAULT_URL = "https://data.opensanctions.org/datasets/latest/default/entities.ftm.json"
+# DATASET SIZE FIX: this used to default to the OpenSanctions "default" dataset
+# (https://data.opensanctions.org/datasets/latest/default/entities.ftm.json), which
+# aggregates *every* sanctions/watchlist source OpenSanctions tracks -- as of writing that
+# file is ~2.7GB. download_dataset()'s urllib request has a 120s timeout, which a file that
+# size cannot reliably complete within (even on a fast connection, let alone constrained
+# production egress), so the download would fail/time out on every scheduled run, the local
+# `sanctions_entities` table would stay permanently empty, and screen_vendor() would raise
+# SanctionsDatasetUnavailable (-> HTTP 503) for every vendor, every attempt -- exactly the
+# reported bug. This platform only needs actual US sanctions data (Watchman itself only ever
+# indexes OFAC/BIS/State lists), so default to the two purpose-built, reasonably-sized
+# OpenSanctions datasets that directly correspond to "OFAC SDN" + "OFAC consolidated
+# non-SDN" (~52MB and ~1.5MB respectively as of writing) instead of the 2.7GB firehose.
+# Both are downloaded and merged into `sanctions_entities` so a positive match against
+# either list surfaces. Override with OPEN_SANCTIONS_DATASET_URLS (comma-separated) or the
+# legacy singular OPEN_SANCTIONS_DATASET_URL (still honored, e.g. to point at a self-hosted
+# mirror or a different OpenSanctions dataset) if a deployment needs different sourcing.
+OPEN_SANCTIONS_DEFAULT_DATASET_URLS: tuple[str, ...] = (
+    "https://data.opensanctions.org/datasets/latest/us_ofac_sdn/entities.ftm.json",
+    "https://data.opensanctions.org/datasets/latest/us_ofac_cons/entities.ftm.json",
+)
+# Kept for backwards compatibility with any code/tests referencing the old singular
+# constant; points at the OFAC SDN list specifically (the primary/most critical of the two).
+OPEN_SANCTIONS_DEFAULT_URL = OPEN_SANCTIONS_DEFAULT_DATASET_URLS[0]
+DEFAULT_DATASET_DIR = "data/opensanctions"
 DEFAULT_DATASET_PATH = "data/opensanctions/entities.ftm.json"
 DEFAULT_WATCHMAN_BASE_URL = "http://localhost:8084"
 DEFAULT_THRESHOLD = 0.85
@@ -239,13 +262,23 @@ class SanctionsScreeningService:
         return {"records_processed": processed, "entities_imported": imported, "records_skipped": skipped}
 
     def download_dataset(self, *, url: str | None = None, destination: str | Path | None = None) -> Path:
+        """Download a single dataset file. Kept for explicit single-URL/destination use
+        (tests, custom mirrors); the daily refresh job uses download_datasets() below so
+        both the OFAC SDN and consolidated lists get pulled by default."""
         dataset_url = url or os.getenv("OPEN_SANCTIONS_DATASET_URL") or OPEN_SANCTIONS_DEFAULT_URL
         destination_path = Path(destination or os.getenv("OPEN_SANCTIONS_DATASET_PATH") or DEFAULT_DATASET_PATH)
+        return self._download_one(dataset_url, destination_path)
+
+    def _download_one(self, dataset_url: str, destination_path: Path) -> Path:
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(delete=False, dir=str(destination_path.parent), prefix="entities.", suffix=".tmp") as tmp:
             tmp_path = Path(tmp.name)
         try:
-            with urllib.request.urlopen(dataset_url, timeout=120) as response, tmp_path.open("wb") as handle:
+            # 600s: generous enough for the ~50MB OFAC SDN file even on slow/constrained
+            # egress, while the switch away from the 2.7GB "default" aggregate (see the
+            # comment on OPEN_SANCTIONS_DEFAULT_DATASET_URLS above) is what actually makes
+            # this reliably complete rather than the timeout value itself.
+            with urllib.request.urlopen(dataset_url, timeout=600) as response, tmp_path.open("wb") as handle:
                 while True:
                     chunk = response.read(1024 * 1024)
                     if not chunk:
@@ -257,12 +290,47 @@ class SanctionsScreeningService:
             tmp_path.unlink(missing_ok=True)
             raise
 
+    def download_datasets(self) -> list[Path]:
+        """Download every configured OpenSanctions dataset (OFAC SDN + consolidated by
+        default; override via OPEN_SANCTIONS_DATASET_URLS, comma-separated) into distinct
+        files under OPEN_SANCTIONS_DATASET_DIR / DEFAULT_DATASET_DIR."""
+        explicit_single = os.getenv("OPEN_SANCTIONS_DATASET_URL")
+        urls_env = os.getenv("OPEN_SANCTIONS_DATASET_URLS")
+        if explicit_single:
+            # A caller/deployment explicitly pinned one dataset URL -- honor it alone
+            # rather than also pulling the OFAC defaults, so single-file overrides used by
+            # download_dataset()/refresh_from_file() callers keep working as expected.
+            urls = [explicit_single]
+        elif urls_env:
+            urls = [u.strip() for u in urls_env.split(",") if u.strip()]
+        else:
+            urls = list(OPEN_SANCTIONS_DEFAULT_DATASET_URLS)
+        dataset_dir = Path(os.getenv("OPEN_SANCTIONS_DATASET_DIR") or DEFAULT_DATASET_DIR)
+        paths: list[Path] = []
+        for url in urls:
+            slug = url.rstrip("/").split("/")[-2] if "/" in url else "dataset"
+            destination_path = dataset_dir / f"{slug}.entities.ftm.json"
+            paths.append(self._download_one(url, destination_path))
+        return paths
+
     def refresh_downloaded_dataset(self) -> dict[str, int | str]:
-        dataset_path = self.download_dataset()
         max_records_value = os.getenv("OPEN_SANCTIONS_REFRESH_MAX_RECORDS")
         max_records = int(max_records_value) if max_records_value and max_records_value.isdigit() else None
-        result = self.refresh_from_file(dataset_path, target_only=True, max_records=max_records)
-        return {**result, "dataset_path": str(dataset_path)}
+        dataset_paths = self.download_datasets()
+        total_processed = 0
+        total_imported = 0
+        total_skipped = 0
+        for dataset_path in dataset_paths:
+            result = self.refresh_from_file(dataset_path, target_only=True, max_records=max_records)
+            total_processed += result["records_processed"]
+            total_imported += result["entities_imported"]
+            total_skipped += result["records_skipped"]
+        return {
+            "records_processed": total_processed,
+            "entities_imported": total_imported,
+            "records_skipped": total_skipped,
+            "dataset_paths": ", ".join(str(p) for p in dataset_paths),
+        }
 
     def _watchman_search(self, name: str, *, limit: int = 10) -> WatchmanSearchResult:
         try:

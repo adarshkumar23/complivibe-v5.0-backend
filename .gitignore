@@ -16,3 +16,7 @@ venv/
 .DS_Store
 alembic/versions/*.pyc
 .dev_vault/
+
+# Downloaded OpenSanctions/OFAC dataset snapshots (runtime-refreshed, not committed --
+# see app/satellites/tprm_intelligence/sanctions_screening.py)
+/data/opensanctions/
