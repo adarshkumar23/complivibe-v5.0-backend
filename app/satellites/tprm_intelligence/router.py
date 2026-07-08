@@ -32,6 +32,10 @@ router = APIRouter(prefix="/vendors", tags=["tprm-intelligence"])
 # Surface that staleness to the caller instead of presenting every finding as
 # equally current.
 THREAT_INTEL_STALE_AFTER_DAYS = 7
+# Matches the daily vendor_kyb_rescreen_sweep cadence: a KYB/AML check older than a week
+# most likely means the sweep isn't reaching this vendor rather than that nothing changed
+# in beneficial-ownership or adverse-media coverage since.
+KYB_STALE_AFTER_DAYS = 7
 KYB_ESCALATION_METADATA_PREVIOUS_TIER = "_kyb_pre_escalation_risk_tier"
 KYB_ESCALATION_METADATA_ESCALATED_TO = "_kyb_escalated_to_risk_tier"
 RISK_TIER_RANK = {"not_assessed": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -71,7 +75,15 @@ def _threat_payload(row: VendorThreatIntelligence) -> dict:
     }
 
 
-def _kyb_payload(row: AmlKycCheck) -> dict:
+def _kyb_payload(row: AmlKycCheck, vendor: Vendor | None = None) -> dict:
+    age_days: float | None = None
+    is_stale = True
+    if row.checked_at is not None:
+        checked_at = row.checked_at if row.checked_at.tzinfo else row.checked_at.replace(tzinfo=UTC)
+        age_days = round((datetime.now(UTC) - checked_at).total_seconds() / 86400.0, 2)
+        is_stale = age_days > KYB_STALE_AFTER_DAYS
+    name_changed_since_check = bool(vendor is not None and row.company_name and row.company_name != vendor.name)
+    no_verifiable_registration = _no_verifiable_registration(row.signals_used)
     return {
         "id": str(row.id),
         "organization_id": str(row.organization_id),
@@ -82,7 +94,29 @@ def _kyb_payload(row: AmlKycCheck) -> dict:
         "ubo_data": row.ubo_data,
         "adverse_media_found": row.adverse_media_found,
         "checked_at": row.checked_at.isoformat() if row.checked_at else None,
+        "days_since_checked": age_days,
+        "is_stale": is_stale,
+        "stale_after_days": KYB_STALE_AFTER_DAYS,
+        "name_changed_since_check": name_changed_since_check,
+        "no_verifiable_registration": no_verifiable_registration,
     }
+
+
+def _no_verifiable_registration(signals_used: dict | None) -> bool:
+    """A vendor that appears in neither GLEIF (LEI registry) nor OpenCorporates (company
+    registry search) is a classic shell-company red flag - not proof of wrongdoing, but a
+    coverage gap that today is silently dropped because ``_kyb_risk`` only looks at
+    offshore-leak/adverse-media hits. Both signals must have actually returned ("available")
+    with zero matches; if either signal errored or was skipped (e.g. no OpenCorporates API
+    key configured), we don't have enough coverage to make this call either way.
+    """
+    if not isinstance(signals_used, dict):
+        return False
+    gleif = signals_used.get("gleif") or {}
+    opencorporates = signals_used.get("opencorporates") or {}
+    if gleif.get("status") != "available" or opencorporates.get("status") != "available":
+        return False
+    return int(gleif.get("match_count") or 0) == 0 and int(opencorporates.get("match_count") or 0) == 0
 
 
 def _kyb_risk(result_or_row: dict | AmlKycCheck) -> tuple[bool, str | None, str | None]:
@@ -90,10 +124,12 @@ def _kyb_risk(result_or_row: dict | AmlKycCheck) -> tuple[bool, str | None, str 
         company_name = result_or_row.company_name
         offshore_links_found = result_or_row.offshore_links_found
         adverse_media_found = result_or_row.adverse_media_found
+        signals_used = result_or_row.signals_used
     else:
         company_name = result_or_row["company_name"]
         offshore_links_found = result_or_row["offshore_links_found"]
         adverse_media_found = result_or_row["adverse_media_found"]
+        signals_used = result_or_row.get("signals_used")
     offshore_found = bool(offshore_links_found.get("found")) if isinstance(offshore_links_found, dict) else False
     if adverse_media_found or offshore_found:
         if offshore_found and adverse_media_found:
@@ -101,6 +137,12 @@ def _kyb_risk(result_or_row: dict | AmlKycCheck) -> tuple[bool, str | None, str 
         if offshore_found:
             return True, "critical", f"KYB check for {company_name} found offshore leak links requiring beneficial-ownership review"
         return True, "high", f"KYB check for {company_name} found adverse media coverage requiring review"
+    if _no_verifiable_registration(signals_used):
+        return (
+            True,
+            "medium",
+            f"KYB check for {company_name} found no verifiable corporate registration in GLEIF or OpenCorporates",
+        )
     return False, None, None
 
 
@@ -593,7 +635,7 @@ def compute_vendor_kyb_check(
     )
     db.commit()
     db.refresh(row)
-    return _kyb_payload(row)
+    return _kyb_payload(row, vendor)
 
 
 def run_periodic_vendor_kyb_rescreen_sweep(db: Session) -> dict[str, int]:
@@ -643,7 +685,7 @@ def get_vendor_kyb_check(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("vendors:read")),
 ) -> dict:
-    VendorService(db).require_vendor_in_org(organization.id, vendor_id)
+    vendor = VendorService(db).require_vendor_in_org(organization.id, vendor_id)
     row = db.execute(
         select(AmlKycCheck)
         .where(AmlKycCheck.organization_id == organization.id, AmlKycCheck.vendor_id == vendor_id)
@@ -652,4 +694,4 @@ def get_vendor_kyb_check(
     ).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor KYB check not found")
-    return _kyb_payload(row)
+    return _kyb_payload(row, vendor)
