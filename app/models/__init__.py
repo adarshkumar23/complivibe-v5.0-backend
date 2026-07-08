@@ -408,6 +408,8 @@ from app.models.audit_schedule import AuditSchedule
 from app.models.evidence_package import EvidencePackage
 from app.models.evidence_package_item import EvidencePackageItem
 from app.models.legal_matter import LegalMatter
+from app.models.legal_matter_evidence_link import LegalMatterEvidenceLink
+from app.models.legal_matter_control_link import LegalMatterControlLink
 from app.models.ip_asset import IPAsset
 from app.models.ip_asset_settings import IPAssetSettings
 from app.models.content_provenance_record import ContentProvenanceRecord

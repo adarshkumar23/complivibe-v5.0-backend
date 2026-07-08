@@ -10,7 +10,11 @@ from app.models.organization import Organization
 from app.models.user import User
 from app.schemas.legal_matter import (
     LegalMatterCloseRequest,
+    LegalMatterControlLinkRead,
     LegalMatterCreate,
+    LegalMatterEvidenceLinkRead,
+    LegalMatterLinkControlRequest,
+    LegalMatterLinkEvidenceRequest,
     LegalMatterLinkIssueRequest,
     LegalMatterLinkRiskRequest,
     LegalMatterResponse,
@@ -25,9 +29,13 @@ router = APIRouter(prefix="/legal-matters", tags=["legal-matters"])
 def _read(db: Session, org_id: uuid.UUID, row: LegalMatter) -> LegalMatterResponse:
     service = LegalMatterService(db)
     return LegalMatterResponse(
-        **LegalMatterResponse.model_validate(row).model_dump(exclude={"risk_escalated_since_linked", "open_linked_issue_warning"}),
+        **LegalMatterResponse.model_validate(row).model_dump(
+            exclude={"risk_escalated_since_linked", "open_linked_issue_warning", "linked_evidence_count", "linked_control_count"}
+        ),
         risk_escalated_since_linked=service.get_escalation_status(org_id, row),
         open_linked_issue_warning=service.get_open_linked_issue_warning(org_id, row),
+        linked_evidence_count=service.count_linked_evidence(org_id, row.id),
+        linked_control_count=service.count_linked_controls(org_id, row.id),
     )
 
 
@@ -147,6 +155,84 @@ def unlink_issue_from_matter(
     db.commit()
     db.refresh(row)
     return _read(db, organization.id, row)
+
+
+@router.post("/{matter_id}/link-evidence", response_model=LegalMatterEvidenceLinkRead, status_code=status.HTTP_201_CREATED)
+def link_evidence_to_matter(
+    matter_id: uuid.UUID,
+    payload: LegalMatterLinkEvidenceRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("legal_matters:write")),
+) -> LegalMatterEvidenceLinkRead:
+    link = LegalMatterService(db).link_evidence(organization.id, matter_id, payload.evidence_id, current_user.id)
+    db.commit()
+    db.refresh(link)
+    return LegalMatterEvidenceLinkRead.model_validate(link)
+
+
+@router.delete("/{matter_id}/link-evidence/{evidence_id}", status_code=status.HTTP_204_NO_CONTENT)
+def unlink_evidence_from_matter(
+    matter_id: uuid.UUID,
+    evidence_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("legal_matters:write")),
+) -> None:
+    LegalMatterService(db).unlink_evidence(organization.id, matter_id, evidence_id, current_user.id)
+    db.commit()
+
+
+@router.get("/{matter_id}/link-evidence", response_model=list[LegalMatterEvidenceLinkRead])
+def list_matter_linked_evidence(
+    matter_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("legal_matters:read")),
+) -> list[LegalMatterEvidenceLinkRead]:
+    rows = LegalMatterService(db).list_linked_evidence(organization.id, matter_id)
+    return [LegalMatterEvidenceLinkRead.model_validate(row) for row in rows]
+
+
+@router.post("/{matter_id}/link-control", response_model=LegalMatterControlLinkRead, status_code=status.HTTP_201_CREATED)
+def link_control_to_matter(
+    matter_id: uuid.UUID,
+    payload: LegalMatterLinkControlRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("legal_matters:write")),
+) -> LegalMatterControlLinkRead:
+    link = LegalMatterService(db).link_control(organization.id, matter_id, payload.control_id, current_user.id)
+    db.commit()
+    db.refresh(link)
+    return LegalMatterControlLinkRead.model_validate(link)
+
+
+@router.delete("/{matter_id}/link-control/{control_id}", status_code=status.HTTP_204_NO_CONTENT)
+def unlink_control_from_matter(
+    matter_id: uuid.UUID,
+    control_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("legal_matters:write")),
+) -> None:
+    LegalMatterService(db).unlink_control(organization.id, matter_id, control_id, current_user.id)
+    db.commit()
+
+
+@router.get("/{matter_id}/link-control", response_model=list[LegalMatterControlLinkRead])
+def list_matter_linked_controls(
+    matter_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("legal_matters:read")),
+) -> list[LegalMatterControlLinkRead]:
+    rows = LegalMatterService(db).list_linked_controls(organization.id, matter_id)
+    return [LegalMatterControlLinkRead.model_validate(row) for row in rows]
 
 
 @router.post("/{matter_id}/status", response_model=LegalMatterResponse)

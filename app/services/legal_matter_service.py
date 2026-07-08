@@ -2,12 +2,16 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.compliance.services.issue_service import IssueService
+from app.models.control import Control
+from app.models.evidence_item import EvidenceItem
 from app.models.issue import Issue
 from app.models.legal_matter import LegalMatter
+from app.models.legal_matter_control_link import LegalMatterControlLink
+from app.models.legal_matter_evidence_link import LegalMatterEvidenceLink
 from app.models.membership import Membership
 from app.models.risk import Risk
 from app.models.user import User
@@ -271,6 +275,220 @@ class LegalMatterService:
             metadata_json={"source": "api"},
         )
         return row
+
+    def _get_org_evidence(self, org_id: uuid.UUID, evidence_id: uuid.UUID) -> EvidenceItem:
+        evidence = self.db.execute(
+            select(EvidenceItem).where(EvidenceItem.id == evidence_id, EvidenceItem.organization_id == org_id)
+        ).scalar_one_or_none()
+        if evidence is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence item not found")
+        return evidence
+
+    def _get_org_control(self, org_id: uuid.UUID, control_id: uuid.UUID) -> Control:
+        control = self.db.execute(
+            select(Control).where(Control.id == control_id, Control.organization_id == org_id)
+        ).scalar_one_or_none()
+        if control is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Control not found")
+        return control
+
+    def link_evidence(
+        self, org_id: uuid.UUID, matter_id: uuid.UUID, evidence_id: uuid.UUID, actor_id: uuid.UUID | None = None
+    ) -> LegalMatterEvidenceLink:
+        row = self.get_matter(org_id, matter_id)
+        # Same closed-matter guardrail as link_risk/link_issue, checked before any
+        # idempotency short-circuit (see G9 item 15): closed means closed.
+        self._reject_if_closed(row, "link evidence")
+        evidence = self._get_org_evidence(org_id, evidence_id)
+
+        existing = self.db.execute(
+            select(LegalMatterEvidenceLink).where(
+                LegalMatterEvidenceLink.organization_id == org_id,
+                LegalMatterEvidenceLink.matter_id == matter_id,
+                LegalMatterEvidenceLink.evidence_id == evidence_id,
+            )
+        ).scalar_one_or_none()
+        now = self.utcnow()
+        if existing is not None:
+            if existing.status == "active":
+                return existing
+            existing.status = "active"
+            existing.linked_by_user_id = actor_id
+            existing.linked_at = now
+            existing.unlinked_at = None
+            link = existing
+        else:
+            link = LegalMatterEvidenceLink(
+                organization_id=org_id,
+                matter_id=matter_id,
+                evidence_id=evidence.id,
+                status="active",
+                linked_by_user_id=actor_id,
+                linked_at=now,
+            )
+            self.db.add(link)
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="legal_matter.evidence_linked",
+            entity_type="legal_matter",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=actor_id,
+            after_json={"evidence_id": str(evidence.id)},
+            metadata_json={"source": "api"},
+        )
+        return link
+
+    def unlink_evidence(
+        self, org_id: uuid.UUID, matter_id: uuid.UUID, evidence_id: uuid.UUID, actor_id: uuid.UUID | None = None
+    ) -> None:
+        row = self.get_matter(org_id, matter_id)
+        link = self.db.execute(
+            select(LegalMatterEvidenceLink).where(
+                LegalMatterEvidenceLink.organization_id == org_id,
+                LegalMatterEvidenceLink.matter_id == matter_id,
+                LegalMatterEvidenceLink.evidence_id == evidence_id,
+                LegalMatterEvidenceLink.status == "active",
+            )
+        ).scalar_one_or_none()
+        if link is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence link not found")
+
+        link.status = "inactive"
+        link.unlinked_at = self.utcnow()
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="legal_matter.evidence_unlinked",
+            entity_type="legal_matter",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=actor_id,
+            after_json={"evidence_id": str(evidence_id)},
+            metadata_json={"source": "api"},
+        )
+
+    def list_linked_evidence(self, org_id: uuid.UUID, matter_id: uuid.UUID) -> list[LegalMatterEvidenceLink]:
+        self.get_matter(org_id, matter_id)
+        return list(
+            self.db.execute(
+                select(LegalMatterEvidenceLink).where(
+                    LegalMatterEvidenceLink.organization_id == org_id,
+                    LegalMatterEvidenceLink.matter_id == matter_id,
+                    LegalMatterEvidenceLink.status == "active",
+                )
+            ).scalars().all()
+        )
+
+    def count_linked_evidence(self, org_id: uuid.UUID, matter_id: uuid.UUID) -> int:
+        return int(
+            self.db.execute(
+                select(func.count(LegalMatterEvidenceLink.id)).where(
+                    LegalMatterEvidenceLink.organization_id == org_id,
+                    LegalMatterEvidenceLink.matter_id == matter_id,
+                    LegalMatterEvidenceLink.status == "active",
+                )
+            ).scalar_one()
+        )
+
+    def link_control(
+        self, org_id: uuid.UUID, matter_id: uuid.UUID, control_id: uuid.UUID, actor_id: uuid.UUID | None = None
+    ) -> LegalMatterControlLink:
+        row = self.get_matter(org_id, matter_id)
+        self._reject_if_closed(row, "link a control")
+        control = self._get_org_control(org_id, control_id)
+
+        existing = self.db.execute(
+            select(LegalMatterControlLink).where(
+                LegalMatterControlLink.organization_id == org_id,
+                LegalMatterControlLink.matter_id == matter_id,
+                LegalMatterControlLink.control_id == control_id,
+            )
+        ).scalar_one_or_none()
+        now = self.utcnow()
+        if existing is not None:
+            if existing.status == "active":
+                return existing
+            existing.status = "active"
+            existing.linked_by_user_id = actor_id
+            existing.linked_at = now
+            existing.unlinked_at = None
+            link = existing
+        else:
+            link = LegalMatterControlLink(
+                organization_id=org_id,
+                matter_id=matter_id,
+                control_id=control.id,
+                status="active",
+                linked_by_user_id=actor_id,
+                linked_at=now,
+            )
+            self.db.add(link)
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="legal_matter.control_linked",
+            entity_type="legal_matter",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=actor_id,
+            after_json={"control_id": str(control.id)},
+            metadata_json={"source": "api"},
+        )
+        return link
+
+    def unlink_control(
+        self, org_id: uuid.UUID, matter_id: uuid.UUID, control_id: uuid.UUID, actor_id: uuid.UUID | None = None
+    ) -> None:
+        row = self.get_matter(org_id, matter_id)
+        link = self.db.execute(
+            select(LegalMatterControlLink).where(
+                LegalMatterControlLink.organization_id == org_id,
+                LegalMatterControlLink.matter_id == matter_id,
+                LegalMatterControlLink.control_id == control_id,
+                LegalMatterControlLink.status == "active",
+            )
+        ).scalar_one_or_none()
+        if link is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Control link not found")
+
+        link.status = "inactive"
+        link.unlinked_at = self.utcnow()
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="legal_matter.control_unlinked",
+            entity_type="legal_matter",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=actor_id,
+            after_json={"control_id": str(control_id)},
+            metadata_json={"source": "api"},
+        )
+
+    def list_linked_controls(self, org_id: uuid.UUID, matter_id: uuid.UUID) -> list[LegalMatterControlLink]:
+        self.get_matter(org_id, matter_id)
+        return list(
+            self.db.execute(
+                select(LegalMatterControlLink).where(
+                    LegalMatterControlLink.organization_id == org_id,
+                    LegalMatterControlLink.matter_id == matter_id,
+                    LegalMatterControlLink.status == "active",
+                )
+            ).scalars().all()
+        )
+
+    def count_linked_controls(self, org_id: uuid.UUID, matter_id: uuid.UUID) -> int:
+        return int(
+            self.db.execute(
+                select(func.count(LegalMatterControlLink.id)).where(
+                    LegalMatterControlLink.organization_id == org_id,
+                    LegalMatterControlLink.matter_id == matter_id,
+                    LegalMatterControlLink.status == "active",
+                )
+            ).scalar_one()
+        )
 
     def close_matter(
         self, org_id: uuid.UUID, matter_id: uuid.UUID, *, confirm: bool, actor_id: uuid.UUID | None = None

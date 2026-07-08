@@ -43,6 +43,38 @@ class LegalMatterLinkIssueRequest(BaseModel):
     issue_id: UUID
 
 
+class LegalMatterLinkEvidenceRequest(BaseModel):
+    evidence_id: UUID
+
+
+class LegalMatterLinkControlRequest(BaseModel):
+    control_id: UUID
+
+
+class LegalMatterEvidenceLinkRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    matter_id: UUID
+    evidence_id: UUID
+    status: str
+    linked_by_user_id: UUID | None = None
+    linked_at: datetime | None = None
+    unlinked_at: datetime | None = None
+
+
+class LegalMatterControlLinkRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    matter_id: UUID
+    control_id: UUID
+    status: str
+    linked_by_user_id: UUID | None = None
+    linked_at: datetime | None = None
+    unlinked_at: datetime | None = None
+
+
 class LegalMatterCloseRequest(BaseModel):
     confirm: bool = False
 
@@ -77,3 +109,5 @@ class LegalMatterResponse(BaseModel):
 
     risk_escalated_since_linked: bool = False
     open_linked_issue_warning: str | None = None
+    linked_evidence_count: int = 0
+    linked_control_count: int = 0

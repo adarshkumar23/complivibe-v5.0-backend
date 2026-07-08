@@ -3,6 +3,8 @@ import uuid
 import pytest
 
 from app.models.audit_log import AuditLog
+from app.models.control import Control
+from app.models.evidence_item import EvidenceItem
 from app.models.issue import Issue
 from app.models.legal_matter import LegalMatter  # noqa: F401  (ensures table registered on Base.metadata)
 from app.models.permission import Permission
@@ -96,6 +98,38 @@ def _create_issue(db_session, org_id: str, owner_id: str, created_by: str, *, st
     db_session.commit()
     db_session.refresh(issue)
     return issue
+
+
+def _create_evidence(db_session, org_id: str, *, title: str = "Contract evidence") -> EvidenceItem:
+    evidence = EvidenceItem(
+        organization_id=uuid.UUID(org_id),
+        title=title,
+        description="x",
+        evidence_type="document",
+        source="manual",
+        status="active",
+        review_status="not_reviewed",
+        freshness_status="unknown",
+        metadata_json={},
+    )
+    db_session.add(evidence)
+    db_session.commit()
+    db_session.refresh(evidence)
+    return evidence
+
+
+def _create_control(db_session, org_id: str, *, title: str = "Contract control") -> Control:
+    control = Control(
+        organization_id=uuid.UUID(org_id),
+        title=title,
+        control_type="process",
+        criticality="medium",
+        status="active",
+    )
+    db_session.add(control)
+    db_session.commit()
+    db_session.refresh(control)
+    return control
 
 
 def test_create_list_get_update_happy_path(client, db_session):
@@ -295,6 +329,134 @@ def test_link_risk_or_issue_to_closed_matter_is_rejected_until_reopened(client, 
     )
     assert retried.status_code == 200
     assert retried.json()["related_risk_id"] == str(risk.id)
+
+
+def test_g9_relinking_already_linked_risk_or_issue_on_closed_matter_still_409s(client, db_session):
+    """G9 item 15: re-submitting the SAME already-linked risk/issue on a closed
+    matter must still 409, consistently with the fresh-link case -- previously the
+    idempotency short-circuit (`if row.related_risk_id == risk_id: return row`) ran
+    BEFORE the closed-matter check, so a no-op re-link silently 200'd."""
+    org = _bootstrap(client, db_session, "lm-closed-relink")
+    risk = _create_risk(db_session, org["organization_id"])
+    issue = _create_issue(db_session, org["organization_id"], org["user_id"], org["user_id"])
+
+    created = client.post(BASE, headers=org["org_headers"], json={"title": "Matter linked then closed"})
+    matter_id = created.json()["id"]
+
+    link_risk = client.post(f"{BASE}/{matter_id}/link-risk", headers=org["org_headers"], json={"risk_id": str(risk.id)})
+    assert link_risk.status_code == 200
+    link_issue = client.post(f"{BASE}/{matter_id}/link-issue", headers=org["org_headers"], json={"issue_id": str(issue.id)})
+    assert link_issue.status_code == 200
+
+    closed = client.post(f"{BASE}/{matter_id}/close", headers=org["org_headers"], json={"confirm": True})
+    assert closed.status_code == 200
+
+    # Re-submitting the SAME risk/issue that's already linked must still 409 -- a
+    # closed matter rejects any link call, no-op or not.
+    relink_risk = client.post(f"{BASE}/{matter_id}/link-risk", headers=org["org_headers"], json={"risk_id": str(risk.id)})
+    assert relink_risk.status_code == 409, relink_risk.text
+
+    relink_issue = client.post(f"{BASE}/{matter_id}/link-issue", headers=org["org_headers"], json={"issue_id": str(issue.id)})
+    assert relink_issue.status_code == 409, relink_issue.text
+
+
+def test_g9_matter_can_link_multiple_evidence_items_and_controls(client, db_session):
+    """G9 item 14: unlike the legacy single-value related_risk_id/related_issue_id
+    columns, a legal matter must be able to link MULTIPLE evidence items and
+    controls (many-to-many), since real legal matters routinely reference several
+    of each."""
+    org = _bootstrap(client, db_session, "lm-multi-link")
+    evidence_a = _create_evidence(db_session, org["organization_id"], title="Contract A")
+    evidence_b = _create_evidence(db_session, org["organization_id"], title="Contract B")
+    control_a = _create_control(db_session, org["organization_id"], title="Access review control")
+    control_b = _create_control(db_session, org["organization_id"], title="Data retention control")
+
+    created = client.post(BASE, headers=org["org_headers"], json={"title": "Multi-link matter"})
+    matter_id = created.json()["id"]
+
+    for evidence in (evidence_a, evidence_b):
+        response = client.post(
+            f"{BASE}/{matter_id}/link-evidence", headers=org["org_headers"], json={"evidence_id": str(evidence.id)}
+        )
+        assert response.status_code == 201, response.text
+
+    for control in (control_a, control_b):
+        response = client.post(
+            f"{BASE}/{matter_id}/link-control", headers=org["org_headers"], json={"control_id": str(control.id)}
+        )
+        assert response.status_code == 201, response.text
+
+    linked_evidence = client.get(f"{BASE}/{matter_id}/link-evidence", headers=org["org_headers"])
+    assert linked_evidence.status_code == 200
+    assert {row["evidence_id"] for row in linked_evidence.json()} == {str(evidence_a.id), str(evidence_b.id)}
+
+    linked_controls = client.get(f"{BASE}/{matter_id}/link-control", headers=org["org_headers"])
+    assert linked_controls.status_code == 200
+    assert {row["control_id"] for row in linked_controls.json()} == {str(control_a.id), str(control_b.id)}
+
+    matter = client.get(f"{BASE}/{matter_id}", headers=org["org_headers"])
+    assert matter.json()["linked_evidence_count"] == 2
+    assert matter.json()["linked_control_count"] == 2
+
+    # Unlink one of each -- the other must remain linked.
+    unlink_evidence = client.delete(f"{BASE}/{matter_id}/link-evidence/{evidence_a.id}", headers=org["org_headers"])
+    assert unlink_evidence.status_code == 204
+    unlink_control = client.delete(f"{BASE}/{matter_id}/link-control/{control_a.id}", headers=org["org_headers"])
+    assert unlink_control.status_code == 204
+
+    matter_after = client.get(f"{BASE}/{matter_id}", headers=org["org_headers"])
+    assert matter_after.json()["linked_evidence_count"] == 1
+    assert matter_after.json()["linked_control_count"] == 1
+
+    remaining_evidence = client.get(f"{BASE}/{matter_id}/link-evidence", headers=org["org_headers"])
+    assert {row["evidence_id"] for row in remaining_evidence.json()} == {str(evidence_b.id)}
+
+
+def test_g9_evidence_and_control_links_blocked_on_closed_matter(client, db_session):
+    """G9 item 14: the same closed-matter guardrail already enforced for risk/issue
+    linking must apply to evidence/control linking too."""
+    org = _bootstrap(client, db_session, "lm-closed-evidence")
+    evidence = _create_evidence(db_session, org["organization_id"])
+    control = _create_control(db_session, org["organization_id"])
+
+    created = client.post(BASE, headers=org["org_headers"], json={"title": "Soon closed matter"})
+    matter_id = created.json()["id"]
+    closed = client.post(f"{BASE}/{matter_id}/close", headers=org["org_headers"], json={"confirm": True})
+    assert closed.status_code == 200
+
+    evidence_attempt = client.post(
+        f"{BASE}/{matter_id}/link-evidence", headers=org["org_headers"], json={"evidence_id": str(evidence.id)}
+    )
+    assert evidence_attempt.status_code == 409, evidence_attempt.text
+    assert "closed legal matter" in evidence_attempt.json()["detail"]
+
+    control_attempt = client.post(
+        f"{BASE}/{matter_id}/link-control", headers=org["org_headers"], json={"control_id": str(control.id)}
+    )
+    assert control_attempt.status_code == 409, control_attempt.text
+    assert "closed legal matter" in control_attempt.json()["detail"]
+
+
+def test_g9_evidence_and_control_links_are_org_scoped(client, db_session):
+    """Cross-org evidence/control IDs must not be linkable -- mirrors the existing
+    cross-org risk-link protection."""
+    org1 = _bootstrap(client, db_session, "lm-evidence-org1")
+    org2 = _bootstrap(client, db_session, "lm-evidence-org2")
+    other_org_evidence = _create_evidence(db_session, org2["organization_id"])
+    other_org_control = _create_control(db_session, org2["organization_id"])
+
+    created = client.post(BASE, headers=org1["org_headers"], json={"title": "Org1 matter"})
+    matter_id = created.json()["id"]
+
+    evidence_attempt = client.post(
+        f"{BASE}/{matter_id}/link-evidence", headers=org1["org_headers"], json={"evidence_id": str(other_org_evidence.id)}
+    )
+    assert evidence_attempt.status_code == 404
+
+    control_attempt = client.post(
+        f"{BASE}/{matter_id}/link-control", headers=org1["org_headers"], json={"control_id": str(other_org_control.id)}
+    )
+    assert control_attempt.status_code == 404
 
 
 def test_link_risk_from_different_org_returns_404(client, db_session):
