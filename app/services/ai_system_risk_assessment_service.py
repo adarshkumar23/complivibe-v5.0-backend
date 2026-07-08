@@ -251,6 +251,7 @@ AUTOPILOT_EXECUTION_INTENT_CAVEAT = (
     "Execution intents are dry-run planning artifacts. Phase 7.1 does not execute actions, create tasks, "
     "create reviews, send notifications, approve, publish, or mutate governance records."
 )
+AUTOPILOT_PENDING_INTENT_STALE_HOURS = 24
 AUTOPILOT_EXECUTION_APPROVAL_CAVEAT = (
     "Execution approvals record human authorization metadata only. Phase 7.2 does not execute actions, create "
     "tasks, create reviews, send notifications, approve compliance, publish, or mutate governance records."
@@ -7038,6 +7039,16 @@ class AISystemRiskAssessmentService:
         actor_user_id: uuid.UUID | None,
     ) -> GovernanceAutopilotExecutionIntent:
         source_type = validate_choice(source_type, AUTOPILOT_EXECUTION_INTENT_SOURCE_TYPES, "source_type", status_code=status.HTTP_400_BAD_REQUEST)
+        if source_type == "candidate_action" and source_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="source_id must be omitted for candidate_action source_type",
+            )
+        if source_type in {"recommendation_snapshot", "copilot_draft_snapshot"} and candidate_action_json is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="candidate_action_json is only allowed for candidate_action source_type",
+            )
         if source_type == "candidate_action":
             if candidate_action_json is None:
                 raise HTTPException(
@@ -7222,7 +7233,34 @@ class AISystemRiskAssessmentService:
         return row
 
     @staticmethod
-    def execution_intent_payload(row: GovernanceAutopilotExecutionIntent) -> dict[str, Any]:
+    def _hours_since(*, now: datetime, from_dt: datetime | None) -> float | None:
+        if from_dt is None:
+            return None
+        dt = AISystemRiskAssessmentService.as_utc(from_dt)
+        if dt is None:
+            return None
+        return round(max(0.0, (now - dt).total_seconds() / 3600.0), 3)
+
+    def execution_intent_payload(self, row: GovernanceAutopilotExecutionIntent) -> dict[str, Any]:
+        now = self.now()
+        intent_age_hours = self._hours_since(now=now, from_dt=row.created_at)
+        pending_intent = bool(
+            row.archived_at is None and row.intent_status in {"planned", "approval_required", "blocked"}
+        )
+        stale_intent = bool(
+            pending_intent and intent_age_hours is not None and intent_age_hours >= AUTOPILOT_PENDING_INTENT_STALE_HOURS
+        )
+        context_flags: list[str] = []
+        if row.intent_status == "archived" or row.archived_at is not None:
+            context_flags.append("archived_intent")
+        if pending_intent:
+            context_flags.append("pending_intent")
+        if bool(row.approval_required):
+            context_flags.append("approval_required")
+        if bool(row.blocked):
+            context_flags.append("blocked_intent")
+        if stale_intent:
+            context_flags.append("stale_pending_intent")
         return {
             "id": row.id,
             "intent_id": row.id,
@@ -7242,12 +7280,16 @@ class AISystemRiskAssessmentService:
             "created_by_user_id": row.created_by_user_id,
             "archived_at": row.archived_at,
             "archive_reason": row.archive_reason,
+            "intent_age_hours": intent_age_hours,
+            "stale_intent": stale_intent,
+            "context_flags": context_flags,
             "created_at": row.created_at,
             "updated_at": row.updated_at,
             "caveat": AUTOPILOT_EXECUTION_INTENT_CAVEAT,
         }
 
     def execution_intent_summary(self, *, organization_id: uuid.UUID) -> dict[str, Any]:
+        now = self.now()
         rows_status = list(
             self.db.execute(
                 select(
@@ -7273,18 +7315,53 @@ class AISystemRiskAssessmentService:
         total_intents = int(sum(by_status.values()))
         blocked_count = int(by_status.get("blocked", 0))
         approval_required_count = int(by_status.get("approval_required", 0))
+        pending_intents = int(by_status.get("planned", 0) + by_status.get("approval_required", 0) + by_status.get("blocked", 0))
         latest_intent_at = self.db.execute(
             select(func.max(GovernanceAutopilotExecutionIntent.created_at)).where(
                 GovernanceAutopilotExecutionIntent.organization_id == organization_id
             )
         ).scalar_one()
+        latest_intent_age_hours = self._hours_since(now=now, from_dt=latest_intent_at)
+        pending_rows = list(
+            self.db.execute(
+                select(GovernanceAutopilotExecutionIntent).where(
+                    GovernanceAutopilotExecutionIntent.organization_id == organization_id,
+                    GovernanceAutopilotExecutionIntent.intent_status.in_(["planned", "approval_required", "blocked"]),
+                    GovernanceAutopilotExecutionIntent.archived_at.is_(None),
+                )
+            ).scalars().all()
+        )
+        stale_pending_intents = int(
+            sum(
+                1
+                for row in pending_rows
+                if (self._hours_since(now=now, from_dt=row.created_at) or 0.0) >= AUTOPILOT_PENDING_INTENT_STALE_HOURS
+            )
+        )
+        oldest_pending_intent_at = None
+        if pending_rows:
+            oldest_pending_intent_at = min((row.created_at for row in pending_rows if row.created_at is not None), default=None)
+        context_flags: list[str] = []
+        if total_intents == 0:
+            context_flags.append("no_execution_intents")
+        if pending_intents > 0:
+            context_flags.append("pending_execution_intents")
+        if approval_required_count > 0:
+            context_flags.append("approval_queue_present")
+        if stale_pending_intents > 0:
+            context_flags.append("stale_pending_intents_present")
         return {
             "total_intents": total_intents,
             "by_status": by_status,
             "by_source_type": by_source_type,
             "blocked_count": blocked_count,
             "approval_required_count": approval_required_count,
+            "pending_intents": pending_intents,
+            "stale_pending_intents": stale_pending_intents,
+            "oldest_pending_intent_at": oldest_pending_intent_at,
             "latest_intent_at": latest_intent_at,
+            "latest_intent_age_hours": latest_intent_age_hours,
+            "context_flags": context_flags,
             "caveat": AUTOPILOT_EXECUTION_INTENT_CAVEAT,
         }
 

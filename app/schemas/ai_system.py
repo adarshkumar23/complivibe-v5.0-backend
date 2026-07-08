@@ -1259,6 +1259,9 @@ class GovernanceAutopilotExecutionIntentRead(UUIDTimestampSchema):
     created_by_user_id: UUID | None = None
     archived_at: datetime | None = None
     archive_reason: str | None = None
+    intent_age_hours: float | None = None
+    stale_intent: bool = False
+    context_flags: list[str] = Field(default_factory=list)
     caveat: str
 
 
@@ -1272,7 +1275,12 @@ class GovernanceAutopilotExecutionIntentSummary(BaseModel):
     by_source_type: dict[str, int]
     blocked_count: int
     approval_required_count: int
+    pending_intents: int = 0
+    stale_pending_intents: int = 0
+    oldest_pending_intent_at: datetime | None = None
     latest_intent_at: datetime | None = None
+    latest_intent_age_hours: float | None = None
+    context_flags: list[str] = Field(default_factory=list)
     caveat: str
 
 
