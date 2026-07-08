@@ -14,6 +14,7 @@ from app.compliance.services.customer_commitment_service import run_daily_custom
 from app.compliance.services.escalation_service import run_daily_escalation_policy_evaluation
 from app.compliance.services.breach_notification_service import run_daily_breach_notification_deadline_sweep
 from app.compliance.services.vendor_mitigation_service import run_daily_vendor_mitigation_overdue_action_sweep
+from app.services.vendor_assessment_service import run_daily_vendor_assessment_staleness_sweep
 from app.compliance.services.pbc_service import run_daily_pbc_overdue_sweep
 from app.compliance.services.pbc_request_service import run_daily_pbc_request_overdue_sweep
 from app.compliance.services.control_exception_service import run_daily_control_exception_expiry_sweep
@@ -73,6 +74,7 @@ SCHEDULER_JOB_IDS: list[str] = [
     "vendor_sanctions_rescreen_sweep",
     "vendor_kyb_rescreen_sweep",
     "vendor_security_rating_continuous_refresh",
+    "vendor_assessment_staleness_sweep",
 ]
 
 
@@ -272,6 +274,29 @@ def _run_mitigation_overdue_action_sweep_job() -> None:
     SchedulerJobLogger.run_logged(
         job_name="mitigation_overdue_action_sweep",
         job_fn=_run_mitigation_overdue_action_sweep_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_vendor_assessment_staleness_sweep_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_vendor_assessment_staleness_sweep(db)
+        db.commit()
+        logger.info("Vendor assessment staleness sweep complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception as exc:
+        db.rollback()
+        _capture_scheduler_exception(exc)
+        logger.exception("Vendor assessment staleness sweep failed")
+        raise
+
+
+def _run_vendor_assessment_staleness_sweep_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="vendor_assessment_staleness_sweep",
+        job_fn=_run_vendor_assessment_staleness_sweep_job_internal,
         db_session_factory=get_session_maker(),
     )
 
@@ -964,6 +989,13 @@ def register_pbc_scheduler(app: FastAPI) -> None:
         _run_vendor_kyb_rescreen_sweep_job,
         trigger=CronTrigger(hour=3, minute=12),
         id="vendor_kyb_rescreen_sweep",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_vendor_assessment_staleness_sweep_job,
+        trigger=CronTrigger(hour=3, minute=15),
+        id="vendor_assessment_staleness_sweep",
         replace_existing=True,
         coalesce=True,
     )

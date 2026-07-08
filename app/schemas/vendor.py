@@ -71,6 +71,7 @@ class VendorRead(UUIDTimestampSchema):
     archived_at: datetime | None = None
     archived_by_user_id: UUID | None = None
     archive_reason: str | None = None
+    has_overdue_assessment: bool = False
 
 
 class VendorSummary(BaseModel):

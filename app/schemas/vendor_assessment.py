@@ -61,6 +61,8 @@ class VendorAssessmentRead(UUIDTimestampSchema):
     notes: str | None = None
     tags_json: dict | list | None = None
     created_by_user_id: UUID
+    is_overdue: bool = False
+    risk_id: UUID | None = None
 
 
 class VendorAssessmentSummary(BaseModel):

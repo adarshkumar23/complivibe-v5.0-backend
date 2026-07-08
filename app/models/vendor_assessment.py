@@ -16,6 +16,7 @@ class VendorAssessment(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMix
         Index("ix_vendor_assessments_org_type", "organization_id", "assessment_type"),
         Index("ix_vendor_assessments_org_assignee", "organization_id", "assigned_to_user_id"),
         Index("ix_vendor_assessments_org_due", "organization_id", "due_date"),
+        Index("ix_vendor_assessments_org_risk", "organization_id", "risk_id"),
     )
 
     vendor_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("vendors.id", ondelete="CASCADE"), nullable=False)
@@ -37,3 +38,9 @@ class VendorAssessment(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMix
     tags_json: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
 
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+
+    # Links to an auto-created Risk register entry when this assessment is flagged
+    # overdue (past due_date, still in a non-terminal status). Idempotency guard
+    # mirroring DORAICTRegister.risk_id -- once a human is tracking the risk, we
+    # don't want to spam the register with duplicates on every subsequent sync.
+    risk_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("risks.id", ondelete="SET NULL"), nullable=True)

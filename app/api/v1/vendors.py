@@ -90,7 +90,7 @@ def _refresh_concentration_risk(
     )
 
 
-def _vendor_read(row: Vendor) -> VendorRead:
+def _vendor_read(row: Vendor, *, has_overdue_assessment: bool = False) -> VendorRead:
     return VendorRead(
         id=row.id,
         organization_id=row.organization_id,
@@ -117,6 +117,7 @@ def _vendor_read(row: Vendor) -> VendorRead:
         archive_reason=row.archive_reason,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        has_overdue_assessment=has_overdue_assessment,
     )
 
 
@@ -141,6 +142,8 @@ def _assessment_read(row: VendorAssessment) -> VendorAssessmentRead:
         created_by_user_id=row.created_by_user_id,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        is_overdue=VendorAssessmentService.is_overdue(row),
+        risk_id=row.risk_id,
     )
 
 
@@ -408,7 +411,8 @@ def list_vendors(
     rows = db.execute(
         stmt.order_by(Vendor.created_at.desc(), Vendor.id.desc()).offset(skip).limit(limit)
     ).scalars().all()
-    return [_vendor_read(row) for row in rows]
+    overdue_vendor_ids = VendorAssessmentService(db).overdue_vendor_ids(organization.id)
+    return [_vendor_read(row, has_overdue_assessment=row.id in overdue_vendor_ids) for row in rows]
 
 
 @router.get("/{vendor_id}", response_model=VendorRead)
@@ -419,7 +423,8 @@ def get_vendor(
     _: Membership = Depends(require_permission("vendors:read")),
 ) -> VendorRead:
     row = VendorService(db).require_vendor_in_org(organization.id, vendor_id)
-    return _vendor_read(row)
+    is_stale = row.id in VendorAssessmentService(db).overdue_vendor_ids(organization.id)
+    return _vendor_read(row, has_overdue_assessment=is_stale)
 
 
 @router.get("/{vendor_id}/criticality", response_model=VendorCriticalityProfileRead)
@@ -659,6 +664,8 @@ def create_vendor_assessment(
         user_agent=request.headers.get("user-agent"),
     )
 
+    service.sync_staleness(organization.id, vendor, row, actor_user_id=current_user.id)
+
     db.commit()
     db.refresh(row)
     return _assessment_read(row)
@@ -760,6 +767,7 @@ def update_vendor_assessment(
     assessment_id: uuid.UUID,
     payload: VendorAssessmentUpdate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("vendors:write")),
 ) -> VendorAssessmentRead:
@@ -777,6 +785,11 @@ def update_vendor_assessment(
 
     for field, value in changes.items():
         setattr(row, field, value)
+    db.flush()
+
+    vendor = service.require_vendor_in_org(organization.id, vendor_id)
+    service.sync_staleness(organization.id, vendor, row, actor_user_id=current_user.id)
+
     db.commit()
     db.refresh(row)
     return _assessment_read(row)
