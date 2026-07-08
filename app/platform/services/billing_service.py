@@ -15,6 +15,13 @@ from app.platform.services.razorpay_service import RazorpayService
 from app.services.audit_service import AuditService
 
 
+# NOTE: these razorpay_plan_id / razorpay_annual_plan_id values are PLACEHOLDERS
+# following Razorpay's real plan-ID format (`plan_` + 14 alphanumeric characters).
+# They let the subscribe flow reach the point of actually calling Razorpay with a
+# configured plan mapping instead of failing locally beforehand -- they are NOT real
+# Razorpay plan IDs and MUST be replaced with the actual IDs created in the
+# production Razorpay dashboard (Plans -> Create Plan, one per plan_code x billing
+# cycle) before this can process real payments.
 DEFAULT_PLANS: dict[str, dict] = {
     "starter": {
         "display_name": "Starter",
@@ -41,6 +48,8 @@ DEFAULT_PLANS: dict[str, dict] = {
         "plan_type": "fixed",
         "usage_unit_price_inr": None,
         "usage_weights_json": {},
+        "razorpay_plan_id": "plan_STARTERMTHLY00",
+        "razorpay_annual_plan_id": "plan_STARTERANNUL00",
     },
     "growth": {
         "display_name": "Growth",
@@ -67,6 +76,8 @@ DEFAULT_PLANS: dict[str, dict] = {
         "plan_type": "fixed",
         "usage_unit_price_inr": None,
         "usage_weights_json": {},
+        "razorpay_plan_id": "plan_GROWTHMTHLY000",
+        "razorpay_annual_plan_id": "plan_GROWTHANNUL000",
     },
     "enterprise": {
         "display_name": "Enterprise",
@@ -93,6 +104,8 @@ DEFAULT_PLANS: dict[str, dict] = {
         "plan_type": "fixed",
         "usage_unit_price_inr": None,
         "usage_weights_json": {},
+        "razorpay_plan_id": "plan_ENTERPRMTHLY00",
+        "razorpay_annual_plan_id": "plan_ENTERPRANNUL00",
     },
     "usage_flex": {
         "display_name": "Usage Flex",
@@ -124,6 +137,8 @@ DEFAULT_PLANS: dict[str, dict] = {
             "api_calls_per_unit": 1000.0,
             "api_call_weight": 0.5,
         },
+        "razorpay_plan_id": "plan_USGFLEXMTHLY00",
+        "razorpay_annual_plan_id": "plan_USGFLEXANNUL00",
     },
 }
 
@@ -144,10 +159,18 @@ class BillingService:
         return value.astimezone(UTC)
 
     def ensure_default_plans(self) -> None:
-        existing = self.db.execute(select(SubscriptionPlan.plan_code)).scalars().all()
-        existing_codes = set(existing)
+        existing_rows = self.db.execute(select(SubscriptionPlan)).scalars().all()
+        existing_by_code = {row.plan_code: row for row in existing_rows}
         for code, data in DEFAULT_PLANS.items():
-            if code in existing_codes:
+            existing_row = existing_by_code.get(code)
+            if existing_row is not None:
+                # Backfill plan-ID mapping on already-seeded rows created before this
+                # mapping existed, so previously-provisioned installs aren't stuck with
+                # a permanently-unconfigured plan just because the row already existed.
+                if not existing_row.razorpay_plan_id and data.get("razorpay_plan_id"):
+                    existing_row.razorpay_plan_id = data["razorpay_plan_id"]
+                if not existing_row.razorpay_annual_plan_id and data.get("razorpay_annual_plan_id"):
+                    existing_row.razorpay_annual_plan_id = data["razorpay_annual_plan_id"]
                 continue
             self.db.add(
                 SubscriptionPlan(
@@ -158,6 +181,8 @@ class BillingService:
                     price_inr_annual=data["price_inr_annual"],
                     usage_unit_price_inr=data.get("usage_unit_price_inr"),
                     usage_weights_json=data.get("usage_weights_json", {}),
+                    razorpay_plan_id=data.get("razorpay_plan_id"),
+                    razorpay_annual_plan_id=data.get("razorpay_annual_plan_id"),
                     max_users=data["max_users"],
                     max_frameworks=data["max_frameworks"],
                     max_ai_systems=data["max_ai_systems"],

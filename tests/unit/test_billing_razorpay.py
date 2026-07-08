@@ -87,6 +87,35 @@ def test_billing_schema_and_plan_seed_and_features(client, db_session):
     assert by_code["usage_flex"]["plan_type"] == "usage_based"
     assert by_code["usage_flex"]["usage_unit_price_inr"] == 12.0
 
+    # G9 item 11: all 4 plans must have a real (even if placeholder) Razorpay plan-ID
+    # mapping seeded, both monthly and annual -- otherwise subscribe fails locally
+    # before ever reaching Razorpay.
+    seeded_plans = db_session.execute(select(SubscriptionPlan)).scalars().all()
+    assert len(seeded_plans) == 4
+    for plan in seeded_plans:
+        assert plan.razorpay_plan_id, f"{plan.plan_code} missing razorpay_plan_id"
+        assert plan.razorpay_annual_plan_id, f"{plan.plan_code} missing razorpay_annual_plan_id"
+        assert plan.razorpay_plan_id.startswith("plan_")
+        assert plan.razorpay_annual_plan_id.startswith("plan_")
+
+
+def test_subscribe_never_fails_locally_for_missing_plan_id_mapping(client, db_session):
+    """G9 item 11: subscribe must reach the Razorpay call for every seeded plan code
+    instead of 422'ing on a missing local plan-ID mapping."""
+    org = bootstrap_org_user(client, email_prefix="billing-plan-mapping")
+
+    for plan_code, cycle in [("starter", "monthly"), ("growth", "annual"), ("enterprise", "monthly"), ("usage_flex", "annual")]:
+        response = client.post(
+            "/api/v1/billing/subscribe",
+            headers=org["org_headers"],
+            json={"plan_code": plan_code, "billing_cycle": cycle},
+        )
+        # Credentials are disabled/placeholder in this environment, so the real
+        # Razorpay call fails upstream (502) -- the important assertion is that it's
+        # NOT the local 422 "Razorpay plan ID not configured" error.
+        assert response.status_code != 422, response.text
+        assert "not configured" not in response.text
+
 
 def test_trial_status_and_expiry_gate(client, db_session):
     org = bootstrap_org_user(client, email_prefix="billing-trial")
