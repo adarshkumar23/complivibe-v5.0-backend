@@ -68,6 +68,11 @@ class AutomationRuleRead(UUIDTimestampSchema):
     version: int
     version_notes: str | None = None
     created_by_user_id: UUID | None = None
+    stale_rule: bool = False
+    hours_since_last_run: float | None = None
+    schedule_overdue: bool = False
+    schedule_drift_minutes: float | None = None
+    context_flags: list[str] = Field(default_factory=list)
 
 
 class AutomationRuleVersionRead(BaseModel):
@@ -124,6 +129,10 @@ class AutomationExecutionRead(UUIDTimestampSchema):
     idempotency_scope: str | None = None
     summary_json: dict | None = None
     created_by_user_id: UUID | None = None
+    duration_seconds: float | None = None
+    success_ratio: float = 0
+    had_errors: bool = False
+    context_flags: list[str] = Field(default_factory=list)
 
 
 class AutomationExecutionDetail(AutomationExecutionRead):
@@ -158,6 +167,10 @@ class AutomationSummary(BaseModel):
     actions_created_last_24h: int
     duplicate_actions_skipped_last_24h: int
     failed_actions_last_24h: int
+    execution_error_rate_last_24h: float = 0
+    stale_active_rules: int = 0
+    active_scheduled_rules_overdue: int = 0
+    context_flags: list[str] = Field(default_factory=list)
 
 
 class AutomationScheduleSummary(BaseModel):
@@ -169,3 +182,6 @@ class AutomationScheduleSummary(BaseModel):
     next_due_run_at: datetime | None = None
     dry_run_executions_last_24h: int
     live_scheduled_executions_last_24h: int
+    overdue_scheduled_rules: int = 0
+    stalled_scheduled_rules: int = 0
+    context_flags: list[str] = Field(default_factory=list)

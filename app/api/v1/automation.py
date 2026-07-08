@@ -29,40 +29,46 @@ from app.schemas.automation import (
 )
 from app.services.audit_service import AuditService
 from app.services.automation_service import AutomationService
+from app.core.validation import validate_choice
 
 router = APIRouter(prefix="/automation", tags=["automation"])
 
 
-def _rule_read(rule: AutomationRule) -> AutomationRuleRead:
+def _rule_read(payload: dict) -> AutomationRuleRead:
     return AutomationRuleRead(
-        id=rule.id,
-        organization_id=rule.organization_id,
-        name=rule.name,
-        description=rule.description,
-        trigger_type=rule.trigger_type,
-        condition_type=rule.condition_type,
-        condition_config_json=rule.condition_config_json,
-        action_type=rule.action_type,
-        action_config_json=rule.action_config_json,
-        status=rule.status,
-        priority=rule.priority,
-        last_run_at=rule.last_run_at,
-        schedule_enabled=rule.schedule_enabled,
-        schedule_cadence=rule.schedule_cadence,
-        schedule_timezone=rule.schedule_timezone,
-        schedule_start_at=rule.schedule_start_at,
-        schedule_end_at=rule.schedule_end_at,
-        schedule_window_start=rule.schedule_window_start,
-        schedule_window_end=rule.schedule_window_end,
-        next_run_at=rule.next_run_at,
-        last_scheduled_run_at=rule.last_scheduled_run_at,
-        last_dry_run_at=rule.last_dry_run_at,
-        run_mode=rule.run_mode,
-        version=rule.version,
-        version_notes=rule.version_notes,
-        created_by_user_id=rule.created_by_user_id,
-        created_at=rule.created_at,
-        updated_at=rule.updated_at,
+        id=payload["id"],
+        organization_id=payload["organization_id"],
+        name=payload["name"],
+        description=payload.get("description"),
+        trigger_type=payload["trigger_type"],
+        condition_type=payload["condition_type"],
+        condition_config_json=payload.get("condition_config_json"),
+        action_type=payload["action_type"],
+        action_config_json=payload.get("action_config_json"),
+        status=payload["status"],
+        priority=payload["priority"],
+        last_run_at=payload.get("last_run_at"),
+        schedule_enabled=bool(payload["schedule_enabled"]),
+        schedule_cadence=payload.get("schedule_cadence"),
+        schedule_timezone=payload["schedule_timezone"],
+        schedule_start_at=payload.get("schedule_start_at"),
+        schedule_end_at=payload.get("schedule_end_at"),
+        schedule_window_start=payload.get("schedule_window_start"),
+        schedule_window_end=payload.get("schedule_window_end"),
+        next_run_at=payload.get("next_run_at"),
+        last_scheduled_run_at=payload.get("last_scheduled_run_at"),
+        last_dry_run_at=payload.get("last_dry_run_at"),
+        run_mode=payload["run_mode"],
+        version=int(payload["version"]),
+        version_notes=payload.get("version_notes"),
+        created_by_user_id=payload.get("created_by_user_id"),
+        stale_rule=bool(payload.get("stale_rule", False)),
+        hours_since_last_run=float(payload["hours_since_last_run"]) if payload.get("hours_since_last_run") is not None else None,
+        schedule_overdue=bool(payload.get("schedule_overdue", False)),
+        schedule_drift_minutes=float(payload["schedule_drift_minutes"]) if payload.get("schedule_drift_minutes") is not None else None,
+        context_flags=[str(item) for item in payload.get("context_flags", [])],
+        created_at=payload["created_at"],
+        updated_at=payload["updated_at"],
     )
 
 
@@ -87,28 +93,32 @@ def _version_read(row: AutomationRuleVersion) -> AutomationRuleVersionRead:
     )
 
 
-def _execution_read(row: AutomationRuleExecution) -> AutomationExecutionRead:
+def _execution_read(payload: dict) -> AutomationExecutionRead:
     return AutomationExecutionRead(
-        id=row.id,
-        organization_id=row.organization_id,
-        rule_id=row.rule_id,
-        status=row.status,
-        started_at=row.started_at,
-        finished_at=row.finished_at,
-        matched_count=row.matched_count,
-        action_count=row.action_count,
-        skipped_count=row.skipped_count,
-        error_count=row.error_count,
-        idempotency_key=row.idempotency_key,
-        trigger_source=row.trigger_source,
-        dry_run=row.dry_run,
-        rule_version=row.rule_version,
-        scheduled_run_at=row.scheduled_run_at,
-        idempotency_scope=row.idempotency_scope,
-        summary_json=row.summary_json,
-        created_by_user_id=row.created_by_user_id,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
+        id=payload["id"],
+        organization_id=payload["organization_id"],
+        rule_id=payload["rule_id"],
+        status=payload["status"],
+        started_at=payload["started_at"],
+        finished_at=payload.get("finished_at"),
+        matched_count=int(payload["matched_count"]),
+        action_count=int(payload["action_count"]),
+        skipped_count=int(payload["skipped_count"]),
+        error_count=int(payload["error_count"]),
+        idempotency_key=payload.get("idempotency_key"),
+        trigger_source=payload["trigger_source"],
+        dry_run=bool(payload["dry_run"]),
+        rule_version=payload.get("rule_version"),
+        scheduled_run_at=payload.get("scheduled_run_at"),
+        idempotency_scope=payload.get("idempotency_scope"),
+        summary_json=payload.get("summary_json"),
+        created_by_user_id=payload.get("created_by_user_id"),
+        duration_seconds=float(payload["duration_seconds"]) if payload.get("duration_seconds") is not None else None,
+        success_ratio=float(payload.get("success_ratio", 0)),
+        had_errors=bool(payload.get("had_errors", False)),
+        context_flags=[str(item) for item in payload.get("context_flags", [])],
+        created_at=payload["created_at"],
+        updated_at=payload["updated_at"],
     )
 
 
@@ -170,8 +180,9 @@ def list_due_scheduled_rules(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("automation:read")),
 ) -> list[AutomationRuleRead]:
-    rows = AutomationService(db).due_scheduled_rules(organization.id, limit=limit)
-    return [_rule_read(row) for row in rows]
+    service = AutomationService(db)
+    rows = service.due_scheduled_rules(organization.id, limit=limit)
+    return [_rule_read(service.rule_payload(rule=row)) for row in rows]
 
 
 @router.post("/schedules/run-due", response_model=AutomationScanResponse)
@@ -196,7 +207,12 @@ def run_due_scheduled_rules(
         entity_type="automation_rule",
         organization_id=organization.id,
         actor_user_id=current_user.id,
-        after_json={"execution_count": len(executions), "dry_run": payload.dry_run},
+        after_json={
+            "execution_count": len(executions),
+            "dry_run_requested": payload.dry_run,
+            "dry_run_executions": int(sum(1 for item in executions if item.dry_run)),
+            "live_executions": int(sum(1 for item in executions if not item.dry_run)),
+        },
         metadata_json={"source": "api"},
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
@@ -226,10 +242,11 @@ def list_rules(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("automation:read")),
 ) -> list[AutomationRuleRead]:
+    service = AutomationService(db)
     rows = db.execute(
         select(AutomationRule).where(AutomationRule.organization_id == organization.id).order_by(AutomationRule.created_at.desc())
     ).scalars().all()
-    return [_rule_read(row) for row in rows]
+    return [_rule_read(service.rule_payload(rule=row)) for row in rows]
 
 
 @router.post("/rules", response_model=AutomationRuleRead, status_code=status.HTTP_201_CREATED)
@@ -273,7 +290,7 @@ def create_rule(
 
     db.commit()
     db.refresh(row)
-    return _rule_read(row)
+    return _rule_read(AutomationService(db).rule_payload(rule=row))
 
 
 @router.get("/rules/{rule_id}", response_model=AutomationRuleRead)
@@ -284,7 +301,7 @@ def get_rule_detail(
     _: Membership = Depends(require_permission("automation:read")),
 ) -> AutomationRuleRead:
     row = _get_rule_or_404(db, organization.id, rule_id)
-    return _rule_read(row)
+    return _rule_read(AutomationService(db).rule_payload(rule=row))
 
 
 @router.patch("/rules/{rule_id}", response_model=AutomationRuleRead)
@@ -357,7 +374,7 @@ def update_rule(
 
     db.commit()
     db.refresh(row)
-    return _rule_read(row)
+    return _rule_read(AutomationService(db).rule_payload(rule=row))
 
 
 @router.patch("/rules/{rule_id}/schedule", response_model=AutomationRuleRead)
@@ -372,6 +389,10 @@ def update_rule_schedule(
 ) -> AutomationRuleRead:
     row = _get_rule_or_404(db, organization.id, rule_id)
     svc = AutomationService(db)
+    if payload.schedule_start_at is not None and payload.schedule_end_at is not None and payload.schedule_end_at < payload.schedule_start_at:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="schedule_end_at must be greater than or equal to schedule_start_at")
+    if (payload.schedule_window_start is None) != (payload.schedule_window_end is None):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="schedule_window_start and schedule_window_end must be set together")
 
     if payload.schedule_enabled:
         svc.validate_schedule_cadence(payload.schedule_cadence or row.schedule_cadence)
@@ -438,7 +459,7 @@ def update_rule_schedule(
 
     db.commit()
     db.refresh(row)
-    return _rule_read(row)
+    return _rule_read(AutomationService(db).rule_payload(rule=row))
 
 
 @router.post("/rules/{rule_id}/archive", response_model=AutomationRuleRead)
@@ -470,7 +491,7 @@ def archive_rule(
 
     db.commit()
     db.refresh(row)
-    return _rule_read(row)
+    return _rule_read(AutomationService(db).rule_payload(rule=row))
 
 
 @router.post("/rules/{rule_id}/run", response_model=AutomationRunResponse)
@@ -654,14 +675,22 @@ def list_executions(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("automation:read")),
 ) -> list[AutomationExecutionRead]:
+    if status_filter is not None:
+        status_filter = validate_choice(
+            status_filter,
+            ("running", "completed", "completed_with_errors"),
+            "status",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
     stmt = select(AutomationRuleExecution).where(AutomationRuleExecution.organization_id == organization.id)
     if rule_id:
         stmt = stmt.where(AutomationRuleExecution.rule_id == rule_id)
     if status_filter:
         stmt = stmt.where(AutomationRuleExecution.status == status_filter)
 
+    service = AutomationService(db)
     rows = db.execute(stmt.order_by(AutomationRuleExecution.started_at.desc()).offset(offset).limit(limit)).scalars().all()
-    return [_execution_read(row) for row in rows]
+    return [_execution_read(service.execution_payload(execution=row)) for row in rows]
 
 
 @router.get("/executions/{execution_id}", response_model=AutomationExecutionDetail)
@@ -671,6 +700,7 @@ def get_execution_detail(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("automation:read")),
 ) -> AutomationExecutionDetail:
+    service = AutomationService(db)
     row = _get_execution_or_404(db, organization.id, execution_id)
     action_logs = db.execute(
         select(AutomationActionLog)
@@ -682,6 +712,6 @@ def get_execution_detail(
     ).scalars().all()
 
     return AutomationExecutionDetail(
-        **_execution_read(row).model_dump(),
+        **_execution_read(service.execution_payload(execution=row)).model_dump(),
         action_logs=[_action_log_read(log) for log in action_logs],
     )

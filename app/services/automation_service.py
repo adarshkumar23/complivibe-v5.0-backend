@@ -41,6 +41,8 @@ ALLOWED_ACTION_TYPES = {
 }
 
 ALLOWED_SCHEDULE_CADENCE = {"hourly", "daily", "weekly", "monthly"}
+AUTOMATION_STALE_RULE_HOURS = 24 * 7
+AUTOMATION_STALLED_SCHEDULE_HOURS = 24
 
 
 class AutomationService:
@@ -138,6 +140,125 @@ class AutomationService:
             "last_scheduled_run_at": rule.last_scheduled_run_at.isoformat() if rule.last_scheduled_run_at else None,
             "last_dry_run_at": rule.last_dry_run_at.isoformat() if rule.last_dry_run_at else None,
             "run_mode": rule.run_mode,
+        }
+
+    def rule_payload(self, *, rule: AutomationRule, now: datetime | None = None) -> dict:
+        now = self._to_utc(now) or self.now()
+        last_run_at = self._to_utc(rule.last_run_at)
+        hours_since_last_run = None
+        if last_run_at is not None:
+            hours_since_last_run = round(max(0.0, (now - last_run_at).total_seconds() / 3600.0), 3)
+        schedule_overdue = bool(
+            rule.status == "active"
+            and rule.trigger_type == "scheduled_placeholder"
+            and rule.schedule_enabled
+            and rule.next_run_at is not None
+            and (self._to_utc(rule.next_run_at) or now) <= now
+        )
+        schedule_drift_minutes = None
+        if schedule_overdue and rule.next_run_at is not None:
+            schedule_drift_minutes = round(max(0.0, (now - (self._to_utc(rule.next_run_at) or now)).total_seconds() / 60.0), 3)
+        stale_rule = bool(
+            rule.status == "active"
+            and hours_since_last_run is not None
+            and hours_since_last_run >= AUTOMATION_STALE_RULE_HOURS
+        )
+        context_flags: list[str] = []
+        if rule.status != "active":
+            context_flags.append("rule_inactive")
+        if stale_rule:
+            context_flags.append("stale_rule")
+        if rule.trigger_type == "scheduled_placeholder" and rule.schedule_enabled:
+            context_flags.append("scheduled_rule")
+        if schedule_overdue:
+            context_flags.append("schedule_overdue")
+        if rule.run_mode == "dry_run":
+            context_flags.append("dry_run_mode")
+        return {
+            "id": rule.id,
+            "organization_id": rule.organization_id,
+            "name": rule.name,
+            "description": rule.description,
+            "trigger_type": rule.trigger_type,
+            "condition_type": rule.condition_type,
+            "condition_config_json": rule.condition_config_json,
+            "action_type": rule.action_type,
+            "action_config_json": rule.action_config_json,
+            "status": rule.status,
+            "priority": rule.priority,
+            "last_run_at": rule.last_run_at,
+            "schedule_enabled": bool(rule.schedule_enabled),
+            "schedule_cadence": rule.schedule_cadence,
+            "schedule_timezone": rule.schedule_timezone,
+            "schedule_start_at": rule.schedule_start_at,
+            "schedule_end_at": rule.schedule_end_at,
+            "schedule_window_start": rule.schedule_window_start,
+            "schedule_window_end": rule.schedule_window_end,
+            "next_run_at": rule.next_run_at,
+            "last_scheduled_run_at": rule.last_scheduled_run_at,
+            "last_dry_run_at": rule.last_dry_run_at,
+            "run_mode": rule.run_mode,
+            "version": int(rule.version),
+            "version_notes": rule.version_notes,
+            "created_by_user_id": rule.created_by_user_id,
+            "stale_rule": stale_rule,
+            "hours_since_last_run": hours_since_last_run,
+            "schedule_overdue": schedule_overdue,
+            "schedule_drift_minutes": schedule_drift_minutes,
+            "context_flags": context_flags,
+            "created_at": rule.created_at,
+            "updated_at": rule.updated_at,
+        }
+
+    def execution_payload(self, *, execution: AutomationRuleExecution, now: datetime | None = None) -> dict:
+        now = self._to_utc(now) or self.now()
+        started_at = self._to_utc(execution.started_at) or now
+        finished_at = self._to_utc(execution.finished_at)
+        duration_seconds = None
+        if finished_at is not None:
+            duration_seconds = round(max(0.0, (finished_at - started_at).total_seconds()), 3)
+        elif execution.status == "running":
+            duration_seconds = round(max(0.0, (now - started_at).total_seconds()), 3)
+        success_ratio = 0.0
+        if execution.matched_count > 0:
+            success_ratio = round(max(0.0, min(1.0, float(execution.action_count) / float(execution.matched_count))), 4)
+        had_errors = bool(execution.error_count > 0 or execution.status in {"failed", "completed_with_errors"})
+        context_flags: list[str] = []
+        if execution.dry_run:
+            context_flags.append("dry_run_execution")
+        if execution.matched_count == 0:
+            context_flags.append("no_matches")
+        if execution.skipped_count > 0:
+            context_flags.append("contains_skips")
+        if had_errors:
+            context_flags.append("contains_errors")
+        if execution.trigger_source == "scheduled_due_run":
+            context_flags.append("scheduled_execution")
+        return {
+            "id": execution.id,
+            "organization_id": execution.organization_id,
+            "rule_id": execution.rule_id,
+            "status": execution.status,
+            "started_at": execution.started_at,
+            "finished_at": execution.finished_at,
+            "matched_count": int(execution.matched_count),
+            "action_count": int(execution.action_count),
+            "skipped_count": int(execution.skipped_count),
+            "error_count": int(execution.error_count),
+            "idempotency_key": execution.idempotency_key,
+            "trigger_source": execution.trigger_source,
+            "dry_run": bool(execution.dry_run),
+            "rule_version": execution.rule_version,
+            "scheduled_run_at": execution.scheduled_run_at,
+            "idempotency_scope": execution.idempotency_scope,
+            "summary_json": execution.summary_json,
+            "created_by_user_id": execution.created_by_user_id,
+            "duration_seconds": duration_seconds,
+            "success_ratio": success_ratio,
+            "had_errors": had_errors,
+            "context_flags": context_flags,
+            "created_at": execution.created_at,
+            "updated_at": execution.updated_at,
         }
 
     def create_rule_version_snapshot(self, *, rule: AutomationRule, actor_user_id: uuid.UUID | None, version_notes: str | None) -> AutomationRuleVersion:
@@ -622,18 +743,19 @@ class AutomationService:
         executions: list[AutomationRuleExecution] = []
         now = self.now()
         for rule in rules:
+            effective_dry_run = bool(dry_run or rule.run_mode == "dry_run")
             execution = self.run_rule(
                 rule=rule,
                 actor_user_id=actor_user_id,
                 trigger_source="scheduled_due_run",
-                dry_run=dry_run,
+                dry_run=effective_dry_run,
                 scheduled_run_at=now,
                 allow_scheduled_placeholder=True,
             )
             executions.append(execution)
         return executions
 
-    def summary(self, organization_id: uuid.UUID) -> dict[str, int]:
+    def summary(self, organization_id: uuid.UUID) -> dict[str, int | float | list[str]]:
         since = self.now() - timedelta(hours=24)
 
         active_rules = int(self.db.execute(select(func.count(AutomationRule.id)).where(AutomationRule.organization_id == organization_id, AutomationRule.status == "active")).scalar_one())
@@ -645,6 +767,21 @@ class AutomationService:
         actions_created_last_24h = int(self.db.execute(select(func.count(AutomationActionLog.id)).where(AutomationActionLog.organization_id == organization_id, AutomationActionLog.created_at >= since, AutomationActionLog.action_status == "created")).scalar_one())
         duplicate_actions_skipped_last_24h = int(self.db.execute(select(func.count(AutomationActionLog.id)).where(AutomationActionLog.organization_id == organization_id, AutomationActionLog.created_at >= since, AutomationActionLog.action_status == "skipped_duplicate")).scalar_one())
         failed_actions_last_24h = int(self.db.execute(select(func.count(AutomationActionLog.id)).where(AutomationActionLog.organization_id == organization_id, AutomationActionLog.created_at >= since, AutomationActionLog.action_status == "failed")).scalar_one())
+        execution_error_rate_last_24h = round((failed_actions_last_24h / actions_created_last_24h), 4) if actions_created_last_24h > 0 else 0.0
+        active_rows = self.db.execute(
+            select(AutomationRule).where(AutomationRule.organization_id == organization_id, AutomationRule.status == "active")
+        ).scalars().all()
+        stale_active_rules = int(sum(1 for row in active_rows if bool(self.rule_payload(rule=row).get("stale_rule"))))
+        active_scheduled_rules_overdue = int(sum(1 for row in active_rows if bool(self.rule_payload(rule=row).get("schedule_overdue"))))
+        context_flags: list[str] = []
+        if executions_last_24h == 0:
+            context_flags.append("no_recent_executions")
+        if execution_error_rate_last_24h > 0:
+            context_flags.append("action_failures_present")
+        if stale_active_rules > 0:
+            context_flags.append("stale_active_rules")
+        if active_scheduled_rules_overdue > 0:
+            context_flags.append("scheduled_rules_overdue")
 
         return {
             "active_rules": active_rules,
@@ -654,6 +791,10 @@ class AutomationService:
             "actions_created_last_24h": actions_created_last_24h,
             "duplicate_actions_skipped_last_24h": duplicate_actions_skipped_last_24h,
             "failed_actions_last_24h": failed_actions_last_24h,
+            "execution_error_rate_last_24h": execution_error_rate_last_24h,
+            "stale_active_rules": stale_active_rules,
+            "active_scheduled_rules_overdue": active_scheduled_rules_overdue,
+            "context_flags": context_flags,
         }
 
     def schedule_summary(self, organization_id: uuid.UUID) -> dict:
@@ -686,6 +827,38 @@ class AutomationService:
 
         dry_run_executions_last_24h = int(self.db.execute(select(func.count(AutomationRuleExecution.id)).where(AutomationRuleExecution.organization_id == organization_id, AutomationRuleExecution.created_at >= since, AutomationRuleExecution.dry_run.is_(True))).scalar_one())
         live_scheduled_executions_last_24h = int(self.db.execute(select(func.count(AutomationRuleExecution.id)).where(AutomationRuleExecution.organization_id == organization_id, AutomationRuleExecution.created_at >= since, AutomationRuleExecution.trigger_source == "scheduled_due_run", AutomationRuleExecution.dry_run.is_(False))).scalar_one())
+        scheduled_active_rows = self.db.execute(
+            select(AutomationRule).where(
+                AutomationRule.organization_id == organization_id,
+                AutomationRule.status == "active",
+                AutomationRule.trigger_type == "scheduled_placeholder",
+                AutomationRule.schedule_enabled.is_(True),
+            )
+        ).scalars().all()
+        overdue_scheduled_rules = int(sum(1 for row in scheduled_active_rows if bool(self.rule_payload(rule=row, now=now).get("schedule_overdue"))))
+        stalled_scheduled_rules = int(
+            sum(
+                1
+                for row in scheduled_active_rows
+                if (
+                    self._to_utc(row.last_scheduled_run_at) is None
+                    and (self._to_utc(row.created_at) or now) <= now - timedelta(hours=AUTOMATION_STALLED_SCHEDULE_HOURS)
+                )
+                or (
+                    self._to_utc(row.last_scheduled_run_at) is not None
+                    and (self._to_utc(row.last_scheduled_run_at) or now) <= now - timedelta(hours=AUTOMATION_STALLED_SCHEDULE_HOURS)
+                )
+            )
+        )
+        context_flags: list[str] = []
+        if due_now > 0:
+            context_flags.append("rules_due_now")
+        if overdue_scheduled_rules > 0:
+            context_flags.append("overdue_scheduled_rules")
+        if stalled_scheduled_rules > 0:
+            context_flags.append("stalled_schedules")
+        if live_scheduled_executions_last_24h == 0 and enabled_schedules > 0:
+            context_flags.append("no_live_scheduled_runs_24h")
 
         return {
             "scheduled_rules": scheduled_rules,
@@ -696,4 +869,7 @@ class AutomationService:
             "next_due_run_at": next_due_run_at,
             "dry_run_executions_last_24h": dry_run_executions_last_24h,
             "live_scheduled_executions_last_24h": live_scheduled_executions_last_24h,
+            "overdue_scheduled_rules": overdue_scheduled_rules,
+            "stalled_scheduled_rules": stalled_scheduled_rules,
+            "context_flags": context_flags,
         }
