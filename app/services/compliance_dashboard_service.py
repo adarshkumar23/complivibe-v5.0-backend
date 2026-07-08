@@ -12,6 +12,7 @@ from app.models.control import Control
 from app.models.control_monitoring_alert import ControlMonitoringAlert
 from app.models.control_monitoring_definition import ControlMonitoringDefinition
 from app.models.control_obligation_mapping import ControlObligationMapping
+from app.models.control_test_definition import ControlTestDefinition
 from app.models.evidence_control_link import EvidenceControlLink
 from app.models.evidence_item import EvidenceItem
 from app.models.framework import Framework
@@ -456,16 +457,27 @@ class ComplianceDashboardService:
         )
 
         now = self.utcnow()
-        controls_with_overdue_checks = int(
-            self.db.execute(
-                select(func.count(func.distinct(ControlMonitoringDefinition.control_id))).where(
-                    ControlMonitoringDefinition.organization_id == organization_id,
-                    ControlMonitoringDefinition.status == "active",
-                    ControlMonitoringDefinition.next_check_due_at.is_not(None),
-                    ControlMonitoringDefinition.next_check_due_at <= now,
-                )
-            ).scalar_one()
-        )
+        overdue_monitoring_control_ids = self.db.execute(
+            select(ControlMonitoringDefinition.control_id).where(
+                ControlMonitoringDefinition.organization_id == organization_id,
+                ControlMonitoringDefinition.status == "active",
+                ControlMonitoringDefinition.next_check_due_at.is_not(None),
+                ControlMonitoringDefinition.next_check_due_at <= now,
+            )
+        ).scalars().all()
+        overdue_test_control_ids = self.db.execute(
+            select(ControlTestDefinition.control_id).where(
+                ControlTestDefinition.organization_id == organization_id,
+                ControlTestDefinition.status == "active",
+                ControlTestDefinition.next_due_at.is_not(None),
+                ControlTestDefinition.next_due_at <= now,
+            )
+        ).scalars().all()
+        # A control can have an overdue check tracked by either object: the older
+        # ControlMonitoringDefinition, or the more commonly-used ControlTestDefinition/test-run
+        # overdue state. Count distinct controls across both so neither overdue-tracking path is
+        # silently excluded from this metric.
+        controls_with_overdue_checks = len(set(overdue_monitoring_control_ids) | set(overdue_test_control_ids))
 
         active_controls = int(
             self.db.execute(
