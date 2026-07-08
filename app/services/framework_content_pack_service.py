@@ -189,6 +189,56 @@ class FrameworkContentPackService:
                 )
         return rows
 
+    @staticmethod
+    def _cross_framework_control_inconsistencies(
+        packs: list[tuple[str, dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
+        """Detect the same control appearing under different frameworks with
+        conflicting description/domain/priority.
+
+        Content packs are authored independently per framework, so nothing else
+        catches the case where two frameworks' starter packs both define a
+        control with the same normalized title (e.g. both call it "Multi-factor
+        authentication") but disagree on what it actually requires -- that's a
+        real content-consistency defect, not just a seed/pack drift.
+        """
+        by_title: dict[str, list[dict[str, Any]]] = {}
+        for pack_key, payload in packs:
+            framework_code = str(payload.get("framework_code") or pack_key)
+            for item in payload.get("control_suggestions", []) or []:
+                title = str(item.get("control_title") or "").strip()
+                if not title:
+                    continue
+                normalized = title.lower()
+                by_title.setdefault(normalized, []).append(
+                    {
+                        "pack_key": pack_key,
+                        "framework_code": framework_code,
+                        "control_title": title,
+                        "control_description": str(item.get("control_description") or "").strip(),
+                        "control_domain": str(item.get("control_domain") or "").strip(),
+                    }
+                )
+
+        inconsistencies: list[dict[str, Any]] = []
+        for normalized, entries in by_title.items():
+            frameworks_involved = {entry["framework_code"] for entry in entries}
+            if len(frameworks_involved) < 2:
+                continue
+            descriptions = {entry["control_description"] for entry in entries}
+            domains = {entry["control_domain"] for entry in entries}
+            if len(descriptions) <= 1 and len(domains) <= 1:
+                continue
+            inconsistencies.append(
+                {
+                    "control_title": entries[0]["control_title"],
+                    "frameworks": sorted(frameworks_involved),
+                    "conflicting_descriptions": sorted(descriptions),
+                    "conflicting_domains": sorted(d for d in domains if d),
+                }
+            )
+        return inconsistencies
+
     def consistency_check(self, *, pack_key: str | None = None) -> dict[str, Any]:
         pack_keys: list[str]
         if pack_key:
@@ -197,16 +247,24 @@ class FrameworkContentPackService:
             pack_keys = sorted(path.stem for path in self.PACK_ROOT.glob("*.json"))
         drift_rows: list[dict[str, Any]] = []
         checked = 0
+        loaded_packs: list[tuple[str, dict[str, Any]]] = []
         for key in pack_keys:
             payload = self.load_pack(key)
             checked += 1
+            loaded_packs.append((key, payload))
             for row in self._seed_pack_drift_rows(payload):
                 drift_rows.append({"pack_key": key, **row})
+
+        cross_framework_inconsistencies = (
+            self._cross_framework_control_inconsistencies(loaded_packs) if len(loaded_packs) > 1 else []
+        )
+
         return {
             "pack_count_checked": checked,
             "drift_count": len(drift_rows),
             "drift_rows": drift_rows,
-            "ok": len(drift_rows) == 0,
+            "cross_framework_control_inconsistencies": cross_framework_inconsistencies,
+            "ok": len(drift_rows) == 0 and len(cross_framework_inconsistencies) == 0,
         }
 
     def apply_pack(

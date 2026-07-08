@@ -199,10 +199,18 @@ class FrameworkContentConsistencyDriftItem(BaseModel):
     fields: list[str]
 
 
+class FrameworkContentCrossFrameworkInconsistency(BaseModel):
+    control_title: str
+    frameworks: list[str]
+    conflicting_descriptions: list[str]
+    conflicting_domains: list[str]
+
+
 class FrameworkContentConsistencyCheckResponse(BaseModel):
     pack_count_checked: int
     drift_count: int
     drift_rows: list[FrameworkContentConsistencyDriftItem]
+    cross_framework_control_inconsistencies: list[FrameworkContentCrossFrameworkInconsistency] = []
     ok: bool
 
 

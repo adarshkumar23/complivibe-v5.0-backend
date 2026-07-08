@@ -235,3 +235,108 @@ def test_seed_pack_consistency_check_catches_reintroduced_gdpr_drift(client, mon
     assert validate.status_code == 200
     assert validate.json()["valid"] is False
     assert any("seed/pack drift" in msg for msg in validate.json()["validation_errors"])
+
+
+def _minimal_pack(*, framework_code: str, control_title: str, control_description: str, control_domain: str) -> dict:
+    return {
+        "pack_key": f"{framework_code.lower()}_synthetic",
+        "framework_code": framework_code,
+        "framework_name": framework_code,
+        "version_label": "2024",
+        "coverage_level": "starter",
+        "review_status": "unreviewed",
+        "caveat": (
+            "This framework content pack is a structured starter representation and does not "
+            "constitute legal advice or complete regulatory coverage."
+        ),
+        "sections": [],
+        "obligations": [],
+        "content_versions": [],
+        "applicability_questions": [],
+        "evidence_requirements": [],
+        "control_suggestions": [
+            {
+                "reference_code": f"{framework_code}-OBL-1",
+                "control_title": control_title,
+                "control_description": control_description,
+                "control_domain": control_domain,
+                "priority": "high",
+                "status": "active",
+            }
+        ],
+    }
+
+
+def test_consistency_check_flags_cross_framework_control_description_conflict(client, monkeypatch, tmp_path):
+    owner = _register(client, "p37-owner-crossfw@example.com", "Pass1234!@", "P37 CrossFW Org")
+    org_id = _org_id(client, owner)
+
+    pack_dir = tmp_path / "frameworks"
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    (pack_dir / "framework_a.json").write_text(
+        json.dumps(
+            _minimal_pack(
+                framework_code="FW_A",
+                control_title="Multi-factor authentication",
+                control_description="Require MFA for all administrative access.",
+                control_domain="access_control",
+            )
+        )
+    )
+    (pack_dir / "framework_b.json").write_text(
+        json.dumps(
+            _minimal_pack(
+                framework_code="FW_B",
+                control_title="Multi-factor authentication",
+                control_description="Require MFA for all customer-facing logins.",
+                control_domain="identity",
+            )
+        )
+    )
+    monkeypatch.setattr(FrameworkContentPackService, "PACK_ROOT", pack_dir)
+
+    result = client.get("/api/v1/framework-content/consistency-check", headers=_headers(owner, org_id))
+    assert result.status_code == 200
+    body = result.json()
+    assert body["ok"] is False
+    inconsistencies = body["cross_framework_control_inconsistencies"]
+    assert len(inconsistencies) == 1
+    entry = inconsistencies[0]
+    assert entry["control_title"] == "Multi-factor authentication"
+    assert set(entry["frameworks"]) == {"FW_A", "FW_B"}
+    assert len(entry["conflicting_descriptions"]) == 2
+
+
+def test_consistency_check_does_not_flag_same_framework_or_identical_controls(client, monkeypatch, tmp_path):
+    owner = _register(client, "p37-owner-crossfw-clean@example.com", "Pass1234!@", "P37 CrossFW Clean Org")
+    org_id = _org_id(client, owner)
+
+    pack_dir = tmp_path / "frameworks"
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    (pack_dir / "framework_c.json").write_text(
+        json.dumps(
+            _minimal_pack(
+                framework_code="FW_C",
+                control_title="Encryption at rest",
+                control_description="Encrypt all data at rest using AES-256.",
+                control_domain="cryptography",
+            )
+        )
+    )
+    (pack_dir / "framework_d.json").write_text(
+        json.dumps(
+            _minimal_pack(
+                framework_code="FW_D",
+                control_title="Encryption at rest",
+                control_description="Encrypt all data at rest using AES-256.",
+                control_domain="cryptography",
+            )
+        )
+    )
+    monkeypatch.setattr(FrameworkContentPackService, "PACK_ROOT", pack_dir)
+
+    result = client.get("/api/v1/framework-content/consistency-check", headers=_headers(owner, org_id))
+    assert result.status_code == 200
+    body = result.json()
+    assert body["cross_framework_control_inconsistencies"] == []
+    assert body["ok"] is True
