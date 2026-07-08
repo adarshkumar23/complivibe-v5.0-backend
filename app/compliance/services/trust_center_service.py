@@ -263,6 +263,15 @@ class TrustCenterService:
         if policy is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Policy not found")
 
+        if policy.status != "approved":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Cannot publish policy to the trust center while it is in '{policy.status}' status. "
+                    "Only approved policies may be published publicly."
+                ),
+            )
+
         row = self.db.execute(
             select(TrustCenterPublishedPolicy).where(
                 TrustCenterPublishedPolicy.organization_id == org_id,

@@ -69,6 +69,36 @@ def test_public_trust_center_excludes_expired_certifications(client, db_session)
     assert body["data_generated_at"]
 
 
+def test_publish_policy_rejects_draft_status(client, db_session):
+    """G9 item 4: a draft (unapproved) policy must never be publishable to the trust center."""
+    org = bootstrap_org_user(client, email_prefix="trust-policy-draft")
+    _enable_trust_center(client, org)
+
+    org_id = UUID(org["organization_id"])
+    user_id = UUID(org["user_id"])
+    policy = CompliancePolicy(
+        organization_id=org_id,
+        title="Unapproved Draft Policy",
+        policy_type="security",
+        status="draft",
+        owner_user_id=user_id,
+    )
+    db_session.add(policy)
+    db_session.commit()
+
+    publish = client.post(
+        "/api/v1/compliance/trust-center/publish-policy",
+        headers=org["org_headers"],
+        json={"policy_id": str(policy.id), "summary": "Should not be allowed"},
+    )
+    assert publish.status_code == 400, publish.text
+    assert "approved" in publish.json()["detail"].lower()
+
+    listing = client.get("/api/v1/compliance/trust-center/policies", headers=org["org_headers"])
+    assert listing.status_code == 200
+    assert listing.json() == []
+
+
 def test_admin_published_policies_listing_flags_staleness_and_archival(client, db_session):
     org = bootstrap_org_user(client, email_prefix="trust-policy-stale")
     _enable_trust_center(client, org)
