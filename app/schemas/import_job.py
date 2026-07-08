@@ -47,6 +47,8 @@ class ImportDryRunPreviewRead(BaseModel):
     would_create: dict[str, int]
     would_update: dict[str, int]
     would_skip: dict[str, int]
+    context_flags: list[str] = Field(default_factory=list)
+    insights: dict[str, Any] = Field(default_factory=dict)
 
 
 class ImportCommitRead(BaseModel):
@@ -56,6 +58,8 @@ class ImportCommitRead(BaseModel):
     updated: dict[str, int]
     skipped: dict[str, int]
     row_errors: list[dict[str, Any]]
+    context_flags: list[str] = Field(default_factory=list)
+    insights: dict[str, Any] = Field(default_factory=dict)
 
 
 class ImportParityModuleRead(BaseModel):

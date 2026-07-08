@@ -166,6 +166,8 @@ class ImportJobService:
             "would_create": preview["would_create"],
             "would_update": preview["would_update"],
             "would_skip": preview["would_skip"],
+            "context_flags": preview.get("context_flags", []),
+            "insights": preview.get("insights", {}),
         }
 
     def commit(self, organization_id: uuid.UUID, job_id: uuid.UUID, actor_user_id: uuid.UUID | None) -> dict[str, Any]:
@@ -186,7 +188,7 @@ class ImportJobService:
         for idx, row in enumerate(parsed, start=1):
             entity = row["entity_type"]
             action = preview["row_actions"].get(str(row["row_number"]), "skip")
-            if action == "skip":
+            if action not in {"create", "update"}:
                 skipped[entity] += 1
                 job.progress_current = idx
                 continue
@@ -241,6 +243,14 @@ class ImportJobService:
         }
         job.updated_at = self._utcnow()
         self.db.flush()
+        execution_insights = self._execution_insights(
+            parsed_rows=parsed,
+            row_errors=row_errors,
+            created=dict(created),
+            updated=dict(updated),
+            skipped=dict(skipped),
+            preview_payload=preview,
+        )
         return {
             "job_id": job.id,
             "status": job.status,
@@ -248,6 +258,8 @@ class ImportJobService:
             "updated": dict(updated),
             "skipped": dict(skipped),
             "row_errors": row_errors,
+            "context_flags": execution_insights["context_flags"],
+            "insights": execution_insights["insights"],
         }
 
     def _build_preview(
@@ -261,9 +273,29 @@ class ImportJobService:
         would_update = defaultdict(int)
         would_skip = defaultdict(int)
         row_actions: dict[str, str] = {}
+        seen_identity_keys: set[tuple[str, str]] = set()
+        duplicate_rows: list[dict[str, Any]] = []
+        timestamp_anomaly_count = 0
 
         for row in parsed_rows:
             entity = row["entity_type"]
+            identity_key = self._row_identity_key(row)
+            if identity_key in seen_identity_keys:
+                would_skip[entity] += 1
+                row_actions[str(row["row_number"])] = "skip_duplicate"
+                duplicate_rows.append(
+                    {
+                        "row_number": row["row_number"],
+                        "entity_type": entity,
+                        "identity": identity_key[1],
+                    }
+                )
+                continue
+            seen_identity_keys.add(identity_key)
+
+            if entity == "evidence" and self._has_evidence_timestamp_anomaly(row):
+                timestamp_anomaly_count += 1
+
             existing = self._find_existing(organization_id, row)
             if existing is None:
                 would_create[entity] += 1
@@ -275,6 +307,21 @@ class ImportJobService:
                 would_skip[entity] += 1
                 row_actions[str(row["row_number"])] = "skip"
 
+        context_flags: list[str] = []
+        if not parsed_rows:
+            context_flags.append("no_parsed_rows")
+        if row_errors:
+            context_flags.append("row_errors_present")
+        if duplicate_rows:
+            context_flags.append("duplicate_rows_skipped")
+        if sum(would_update.values()) > 0:
+            context_flags.append("updates_pending")
+        if timestamp_anomaly_count > 0:
+            context_flags.append("evidence_timestamp_anomaly_detected")
+
+        total_rows = len(parsed_rows) + len(row_errors)
+        estimated_success_rate_pct = round((len(parsed_rows) / total_rows) * 100.0, 2) if total_rows > 0 else 0.0
+
         return {
             "parsed_rows": parsed_rows,
             "row_errors": row_errors,
@@ -282,7 +329,72 @@ class ImportJobService:
             "would_update": dict(would_update),
             "would_skip": dict(would_skip),
             "row_actions": row_actions,
+            "context_flags": sorted(set(context_flags)),
+            "insights": {
+                "duplicate_row_count": len(duplicate_rows),
+                "duplicate_rows": duplicate_rows[:20],
+                "timestamp_anomaly_count": timestamp_anomaly_count,
+                "estimated_success_rate_pct": estimated_success_rate_pct,
+            },
         }
+
+    def _execution_insights(
+        self,
+        *,
+        parsed_rows: list[dict[str, Any]],
+        row_errors: list[dict[str, Any]],
+        created: dict[str, int],
+        updated: dict[str, int],
+        skipped: dict[str, int],
+        preview_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        context_flags = list(preview_payload.get("context_flags", []))
+        if sum(created.values()) == 0 and sum(updated.values()) == 0 and parsed_rows:
+            context_flags.append("no_material_changes")
+        if row_errors:
+            context_flags.append("commit_completed_with_parse_errors")
+        if sum(updated.values()) > 0:
+            context_flags.append("existing_records_updated")
+        if sum(skipped.values()) > 0:
+            context_flags.append("rows_skipped")
+
+        total_rows = len(parsed_rows) + len(row_errors)
+        applied_rows = sum(created.values()) + sum(updated.values())
+        applied_rate_pct = round((applied_rows / total_rows) * 100.0, 2) if total_rows > 0 else 0.0
+        insights = {
+            "applied_row_count": applied_rows,
+            "skipped_row_count": sum(skipped.values()),
+            "row_error_count": len(row_errors),
+            "applied_rate_pct": applied_rate_pct,
+            "duplicate_row_count": int((preview_payload.get("insights") or {}).get("duplicate_row_count", 0)),
+        }
+        return {
+            "context_flags": sorted(set(context_flags)),
+            "insights": insights,
+        }
+
+    def _row_identity_key(self, row: dict[str, Any]) -> tuple[str, str]:
+        entity = str(row.get("entity_type") or "").strip().lower()
+        if entity == "business_unit":
+            identity = str(row.get("code") or row.get("title") or "").strip().lower().replace(" ", "_")
+        elif entity == "control":
+            identity = str(row.get("code") or row.get("title") or "").strip().lower()
+        elif entity == "policy":
+            identity = f"{str(row.get('title') or '').strip().lower()}::{str(row.get('policy_type') or '').strip().lower()}"
+        elif entity == "evidence":
+            identity = f"{str(row.get('title') or '').strip().lower()}::{str(row.get('evidence_type') or '').strip().lower()}"
+        else:
+            identity = str(row.get("title") or "").strip().lower()
+        return entity, identity
+
+    def _has_evidence_timestamp_anomaly(self, row: dict[str, Any]) -> bool:
+        if str(row.get("entity_type") or "") != "evidence":
+            return False
+        collected_at = self._parse_optional_datetime(row.get("collected_at"))
+        original_created_at = self._parse_optional_datetime(row.get("original_created_at"))
+        if collected_at is None or original_created_at is None:
+            return False
+        return original_created_at > collected_at
 
     def _parse_records(
         self,
