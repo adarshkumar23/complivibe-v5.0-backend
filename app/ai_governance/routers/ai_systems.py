@@ -632,7 +632,8 @@ def create_system_approval_envelope(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("ai_governance:write")),
 ) -> ApprovalEnvelopeRead:
-    row = ApprovalEnvelopeService(db).create_envelope(
+    service = ApprovalEnvelopeService(db)
+    row = service.create_envelope(
         organization.id,
         system_id,
         payload.transition_from,
@@ -643,7 +644,7 @@ def create_system_approval_envelope(
     )
     db.commit()
     db.refresh(row)
-    return ApprovalEnvelopeRead.model_validate(row)
+    return ApprovalEnvelopeRead.model_validate(service.envelope_payloads(organization.id, [row])[0])
 
 
 @router.get("/{system_id}/approval-envelopes", response_model=list[ApprovalEnvelopeRead])
@@ -654,13 +655,14 @@ def list_system_approval_envelopes(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("ai_governance:read")),
 ) -> list[ApprovalEnvelopeRead]:
-    rows = ApprovalEnvelopeService(db).list_envelopes(
+    service = ApprovalEnvelopeService(db)
+    rows = service.list_envelopes(
         organization.id,
         system_id=system_id,
         status_filter=status_filter,
     )
     db.commit()
-    return [ApprovalEnvelopeRead.model_validate(row) for row in rows]
+    return [ApprovalEnvelopeRead.model_validate(item) for item in service.envelope_payloads(organization.id, rows)]
 
 
 @router.post("/{system_id}/monitoring-configs", response_model=MonitoringConfigRead, status_code=status.HTTP_201_CREATED)

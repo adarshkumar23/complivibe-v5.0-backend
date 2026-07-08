@@ -83,6 +83,15 @@ class ApprovalEnvelopeRead(BaseModel):
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
+    required_approver_count: int = 0
+    approvals_count: int = 0
+    approval_progress_pct: float = 0.0
+    pending_approver_ids: list[str] = Field(default_factory=list)
+    rejected_approver_ids: list[str] = Field(default_factory=list)
+    system_deployment_status: str | None = None
+    stale_pending: bool = False
+    has_context_drift: bool = False
+    context_flags: list[str] = Field(default_factory=list)
 
 
 class EnvelopeDecisionRequest(BaseModel):

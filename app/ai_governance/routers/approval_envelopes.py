@@ -24,13 +24,14 @@ def list_envelopes(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("ai_governance:read")),
 ) -> list[ApprovalEnvelopeRead]:
-    rows = ApprovalEnvelopeService(db).list_envelopes(
+    service = ApprovalEnvelopeService(db)
+    rows = service.list_envelopes(
         organization.id,
         system_id=system_id,
         status_filter=status_filter,
     )
     db.commit()
-    return [ApprovalEnvelopeRead.model_validate(row) for row in rows]
+    return [ApprovalEnvelopeRead.model_validate(item) for item in service.envelope_payloads(organization.id, rows)]
 
 
 @router.get("/{envelope_id}", response_model=ApprovalEnvelopeRead)
@@ -40,10 +41,11 @@ def get_envelope(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("ai_governance:read")),
 ) -> ApprovalEnvelopeRead:
-    row = ApprovalEnvelopeService(db).get_envelope(organization.id, envelope_id)
+    service = ApprovalEnvelopeService(db)
+    row = service.get_envelope(organization.id, envelope_id)
     db.commit()
     db.refresh(row)
-    return ApprovalEnvelopeRead.model_validate(row)
+    return ApprovalEnvelopeRead.model_validate(service.envelope_payloads(organization.id, [row])[0])
 
 
 @router.post("/{envelope_id}/approve", response_model=ApprovalEnvelopeRead)
@@ -54,7 +56,8 @@ def approve_envelope(
     organization: Organization = Depends(get_current_organization),
     current_membership: Membership = Depends(require_permission("ai_governance:approve")),
 ) -> ApprovalEnvelopeRead:
-    row = ApprovalEnvelopeService(db).approve_envelope(
+    service = ApprovalEnvelopeService(db)
+    row = service.approve_envelope(
         organization.id,
         envelope_id,
         current_membership.user_id,
@@ -62,7 +65,7 @@ def approve_envelope(
     )
     db.commit()
     db.refresh(row)
-    return ApprovalEnvelopeRead.model_validate(row)
+    return ApprovalEnvelopeRead.model_validate(service.envelope_payloads(organization.id, [row])[0])
 
 
 @router.post("/{envelope_id}/reject", response_model=ApprovalEnvelopeRead)
@@ -73,7 +76,8 @@ def reject_envelope(
     organization: Organization = Depends(get_current_organization),
     current_membership: Membership = Depends(require_permission("ai_governance:approve")),
 ) -> ApprovalEnvelopeRead:
-    row = ApprovalEnvelopeService(db).reject_envelope(
+    service = ApprovalEnvelopeService(db)
+    row = service.reject_envelope(
         organization.id,
         envelope_id,
         current_membership.user_id,
@@ -81,4 +85,4 @@ def reject_envelope(
     )
     db.commit()
     db.refresh(row)
-    return ApprovalEnvelopeRead.model_validate(row)
+    return ApprovalEnvelopeRead.model_validate(service.envelope_payloads(organization.id, [row])[0])
