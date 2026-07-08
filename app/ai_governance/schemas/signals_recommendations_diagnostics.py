@@ -20,6 +20,15 @@ class AIRiskSignalRead(BaseModel):
     review_notes: str | None
     created_at: datetime
     updated_at: datetime
+    is_open: bool = False
+    needs_attention: bool = False
+    has_review_notes: bool = False
+    signal_age_days: int = 0
+    reviewed_latency_hours: int | None = None
+    stale_signal: bool = False
+    system_deployment_status: str | None = None
+    system_changed_since_detection: bool = False
+    context_flags: list[str] = Field(default_factory=list)
 
 
 class AIRiskSignalReviewRequest(BaseModel):

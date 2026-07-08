@@ -798,7 +798,8 @@ def list_system_risk_signals(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("ai_governance:read")),
 ) -> list[AIRiskSignalRead]:
-    rows = SignalService(db).list_signals(
+    service = SignalService(db)
+    rows = service.list_signals(
         organization.id,
         system_id=system_id,
         signal_type=signal_type,
@@ -807,7 +808,7 @@ def list_system_risk_signals(
         skip=skip,
         limit=limit,
     )
-    return [AIRiskSignalRead.model_validate(row) for row in rows]
+    return [AIRiskSignalRead.model_validate(item) for item in service.signal_payloads(organization.id, rows)]
 
 
 @router.post("/{system_id}/risk-signals/{signal_id}/review", response_model=AIRiskSignalRead)
@@ -834,7 +835,7 @@ def review_system_risk_signal(
     )
     db.commit()
     db.refresh(updated)
-    return AIRiskSignalRead.model_validate(updated)
+    return AIRiskSignalRead.model_validate(service.signal_payloads(organization.id, [updated])[0])
 
 
 @router.post("/{system_id}/generate-recommendations", response_model=list[AIRiskRecommendationRead])
