@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
 from app.models.membership import Membership
 from app.models.organization import Organization
+from app.models.risk import Risk
 from app.models.risk_quantification import RiskQuantificationRun
 from app.models.user import User
 from app.schemas.risk_quantification import RiskQuantificationRequest, RiskQuantificationRunRead
@@ -24,8 +25,22 @@ def _request_meta(request: Request) -> dict:
     }
 
 
-def _run_read(run: RiskQuantificationRun) -> RiskQuantificationRunRead:
-    return RiskQuantificationRunRead.model_validate(run)
+def _run_read(run: RiskQuantificationRun, service: RiskQuantificationService, risk: Risk) -> RiskQuantificationRunRead:
+    context = service.build_run_context(run, risk)
+    return RiskQuantificationRunRead(
+        id=run.id,
+        organization_id=run.organization_id,
+        risk_id=run.risk_id,
+        methodology=run.methodology,
+        input_parameters_json=run.input_parameters_json,
+        loss_exceedance_curve_json=run.loss_exceedance_curve_json,
+        expected_annual_loss=float(run.expected_annual_loss),
+        confidence_intervals_json=run.confidence_intervals_json,
+        sensitivity_json=run.sensitivity_json,
+        computed_at=run.computed_at,
+        computed_by_user_id=run.computed_by_user_id,
+        **context,
+    )
 
 
 @router.post(
@@ -58,7 +73,9 @@ def quantify_risk(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
-    result = _run_read(run)
+    db.commit()
+    db.refresh(run)
+    result = _run_read(run, service, risk)
     AuditService(db).write_audit_log(
         action="risk_quantification_run.computed",
         entity_type="risk_quantification_run",
@@ -69,8 +86,7 @@ def quantify_risk(
         **_request_meta(request),
     )
     db.commit()
-    db.refresh(run)
-    return _run_read(run)
+    return result
 
 
 @router.get(
@@ -88,4 +104,4 @@ def get_quantification_history(
     if risk is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Risk not found in this organization")
 
-    return [_run_read(run) for run in service.list_runs(organization.id, risk_id)]
+    return [_run_read(run, service, risk) for run in service.list_runs(organization.id, risk_id)]

@@ -34,6 +34,14 @@ class RiskQuantificationConfidenceIntervals(BaseModel):
     p95: float
 
 
+class RiskQuantificationAppetiteComparison(BaseModel):
+    risk_category: str
+    max_acceptable_score: int
+    current_risk_score: int | None = None
+    breached: bool
+    escalation_owner_id: uuid.UUID
+
+
 class RiskQuantificationRunRead(BaseModel):
     id: uuid.UUID
     organization_id: uuid.UUID
@@ -46,5 +54,8 @@ class RiskQuantificationRunRead(BaseModel):
     sensitivity_json: RiskQuantificationSensitivity
     computed_at: datetime
     computed_by_user_id: uuid.UUID | None = None
+    context_flags: list[str] = Field(default_factory=list)
+    percent_change_from_previous_run: float | None = None
+    appetite_comparison: RiskQuantificationAppetiteComparison | None = None
 
     model_config = {"from_attributes": True}

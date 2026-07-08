@@ -36,7 +36,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.risk import Risk
+from app.models.risk_appetite_threshold import RiskAppetiteThreshold
 from app.models.risk_quantification import RiskQuantificationRun
+
+# Above this relative shift in expected annual loss between two consecutive
+# quantification runs for the same risk, callers are flagged that the change
+# is material enough to warrant re-review (new inputs, changed threat
+# environment, etc.) rather than routine sampling noise.
+_MATERIAL_CHANGE_THRESHOLD_PCT = 50.0
 
 _DEFAULT_N_ITERATIONS = 10000
 _CURVE_POINTS = 20
@@ -196,6 +203,88 @@ class RiskQuantificationService:
                 .order_by(RiskQuantificationRun.computed_at.desc())
             ).scalars()
         )
+
+    # ------------------------------------------------------------------
+    # Context / intelligence
+    # ------------------------------------------------------------------
+    def _get_previous_run(self, run: RiskQuantificationRun) -> RiskQuantificationRun | None:
+        return self.db.execute(
+            select(RiskQuantificationRun)
+            .where(
+                RiskQuantificationRun.organization_id == run.organization_id,
+                RiskQuantificationRun.risk_id == run.risk_id,
+                RiskQuantificationRun.id != run.id,
+                RiskQuantificationRun.computed_at < run.computed_at,
+            )
+            .order_by(RiskQuantificationRun.computed_at.desc())
+        ).scalars().first()
+
+    def _get_active_appetite_threshold(self, risk: Risk) -> RiskAppetiteThreshold | None:
+        base = select(RiskAppetiteThreshold).where(
+            RiskAppetiteThreshold.organization_id == risk.organization_id,
+            RiskAppetiteThreshold.risk_category == risk.category,
+            RiskAppetiteThreshold.is_active.is_(True),
+        )
+        if risk.business_unit_id is not None:
+            scoped = self.db.execute(
+                base.where(
+                    RiskAppetiteThreshold.scope_type == "business_unit",
+                    RiskAppetiteThreshold.scope_id == risk.business_unit_id,
+                )
+            ).scalars().first()
+            if scoped is not None:
+                return scoped
+        return self.db.execute(base.where(RiskAppetiteThreshold.scope_type == "org")).scalars().first()
+
+    def build_run_context(self, run: RiskQuantificationRun, risk: Risk) -> dict[str, Any]:
+        """Derive escalation-relevant intelligence and staleness flags for a run.
+
+        Not persisted -- computed fresh against current Risk/appetite state on
+        every read so it always reflects the latest org configuration, even
+        for historical runs.
+        """
+        flags: list[str] = []
+
+        previous_run = self._get_previous_run(run)
+        percent_change: float | None = None
+        if previous_run is None:
+            flags.append("first_quantification_run_for_risk")
+        elif float(previous_run.expected_annual_loss) != 0:
+            percent_change = (
+                (float(run.expected_annual_loss) - float(previous_run.expected_annual_loss))
+                / float(previous_run.expected_annual_loss)
+                * 100.0
+            )
+            if abs(percent_change) >= _MATERIAL_CHANGE_THRESHOLD_PCT:
+                flags.append("expected_annual_loss_shifted_significantly_from_prior_run")
+
+        appetite_comparison: dict[str, Any] | None = None
+        threshold = self._get_active_appetite_threshold(risk)
+        risk_score = risk.residual_score if risk.residual_score is not None else risk.inherent_score
+        if threshold is not None:
+            breached = risk_score is not None and risk_score > threshold.max_acceptable_score
+            appetite_comparison = {
+                "risk_category": threshold.risk_category,
+                "max_acceptable_score": threshold.max_acceptable_score,
+                "current_risk_score": risk_score,
+                "breached": breached,
+                "escalation_owner_id": threshold.escalation_owner_id,
+            }
+            if breached:
+                flags.append("risk_score_exceeds_appetite_threshold")
+        else:
+            flags.append("no_appetite_threshold_configured_for_category")
+
+        if risk.updated_at is not None and run.computed_at is not None and risk.updated_at > run.computed_at:
+            flags.append("risk_characteristics_changed_since_this_run")
+        if risk.review_due_at is not None and run.computed_at is not None and risk.review_due_at < run.computed_at:
+            flags.append("risk_review_was_overdue_at_time_of_computation")
+
+        return {
+            "context_flags": sorted(set(flags)),
+            "percent_change_from_previous_run": percent_change,
+            "appetite_comparison": appetite_comparison,
+        }
 
     # ------------------------------------------------------------------
     # Simulation
