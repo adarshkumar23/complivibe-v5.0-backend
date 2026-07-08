@@ -192,9 +192,14 @@ class LegalMatterService:
 
     def link_risk(self, org_id: uuid.UUID, matter_id: uuid.UUID, risk_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> LegalMatter:
         row = self.get_matter(org_id, matter_id)
+        # The closed-matter guardrail must apply consistently regardless of whether
+        # this call is a no-op (re-linking the already-linked risk) -- a closed matter
+        # rejects ANY link attempt, matching the fresh-risk case below. Checking this
+        # before the idempotency short-circuit closes a gap where re-submitting the
+        # same risk_id on a closed matter silently 200'd instead of 409ing.
+        self._reject_if_closed(row, "link a risk")
         if row.related_risk_id == risk_id:
             return row
-        self._reject_if_closed(row, "link a risk")
 
         risk = self._get_org_risk(org_id, risk_id)
 
@@ -236,9 +241,13 @@ class LegalMatterService:
 
     def link_issue(self, org_id: uuid.UUID, matter_id: uuid.UUID, issue_id: uuid.UUID, actor_id: uuid.UUID | None = None) -> LegalMatter:
         row = self.get_matter(org_id, matter_id)
+        # See link_risk() above: the closed-matter guardrail must be checked BEFORE
+        # the idempotency short-circuit, or re-submitting the same already-linked
+        # issue on a closed matter silently 200s instead of 409ing like a fresh link
+        # attempt does. Closed means closed, regardless of whether the link is a no-op.
+        self._reject_if_closed(row, "link an issue")
         if row.related_issue_id == issue_id:
             return row
-        self._reject_if_closed(row, "link an issue")
 
         issue = IssueService(self.db).get_issue(org_id, issue_id)
 
