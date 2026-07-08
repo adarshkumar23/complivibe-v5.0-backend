@@ -1,3 +1,5 @@
+import uuid
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -8,6 +10,8 @@ from app.models.user import User
 from app.schemas.attestation_tokens import (
     AttestationTokenCreateRequest,
     AttestationTokenCreateResponse,
+    AttestationTokenRevokeRequest,
+    AttestationTokenRevokeResponse,
     AttestationTokenValidationResponse,
 )
 from app.services.attestation_token_service import AttestationTokenService
@@ -43,6 +47,33 @@ def create_attestation_token(
         expires_at=row.expires_at,
         plaintext_token=plaintext_token,
         warning="Token is shown only once. Store it securely.",
+    )
+
+
+@router.post("/{token_id}/revoke", response_model=AttestationTokenRevokeResponse)
+def revoke_attestation_token(
+    token_id: uuid.UUID,
+    payload: AttestationTokenRevokeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("attestations:write")),
+) -> AttestationTokenRevokeResponse:
+    row = AttestationTokenService(db).revoke_token(
+        organization_id=organization.id,
+        token_id=token_id,
+        reason=payload.reason,
+        actor_user_id=current_user.id,
+    )
+    db.commit()
+    db.refresh(row)
+    return AttestationTokenRevokeResponse(
+        token_id=row.id,
+        organization_id=row.organization_id,
+        status=row.status,
+        revoked_at=row.revoked_at,
+        revoked_by_user_id=row.revoked_by_user_id,
+        revocation_reason=row.revocation_reason,
     )
 
 

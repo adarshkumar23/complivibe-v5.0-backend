@@ -186,6 +186,56 @@ class AttestationTokenService:
         )
         return row, plaintext_token
 
+    def require_token(self, *, organization_id: uuid.UUID, token_id: uuid.UUID) -> AttestationToken:
+        row = self.db.execute(
+            select(AttestationToken).where(
+                AttestationToken.organization_id == organization_id,
+                AttestationToken.id == token_id,
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attestation token not found")
+        return row
+
+    def revoke_token(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        token_id: uuid.UUID,
+        reason: str | None,
+        actor_user_id: uuid.UUID,
+    ) -> AttestationToken:
+        # The token system has no other way to invalidate a token before its
+        # natural expiry -- if a plaintext token leaks (logs, a compromised
+        # integration, etc.) there was previously no way to stop it validating
+        # successfully until expires_at. Revocation is checked by validate_token
+        # via `status != "active"`, so setting status here is sufficient to
+        # immediately deny every future validation.
+        row = self.require_token(organization_id=organization_id, token_id=token_id)
+        if row.status == "revoked":
+            return row
+        if row.status == "expired":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Token has already expired")
+
+        before_status = row.status
+        row.status = "revoked"
+        row.revoked_at = self.utcnow()
+        row.revoked_by_user_id = actor_user_id
+        row.revocation_reason = reason
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="attestation_token.revoked",
+            entity_type="attestation_token",
+            entity_id=row.id,
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+            before_json={"status": before_status},
+            after_json={"status": row.status, "revocation_reason": reason},
+            metadata_json={"source": "api"},
+        )
+        return row
+
     def validate_token(self, plaintext_token: str) -> AttestationToken:
         claims = self._parse_and_verify_token(plaintext_token)
         token_hash = self.hash_token(plaintext_token)

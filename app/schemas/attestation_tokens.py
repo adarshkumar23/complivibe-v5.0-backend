@@ -37,3 +37,16 @@ class AttestationTokenValidationResponse(BaseModel):
     expires_at: datetime
     validation_count: int
     last_validated_at: datetime | None = None
+
+
+class AttestationTokenRevokeRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class AttestationTokenRevokeResponse(BaseModel):
+    token_id: UUID
+    organization_id: UUID
+    status: str = Field(pattern=ATTESTATION_TOKEN_STATUS_PATTERN)
+    revoked_at: datetime | None = None
+    revoked_by_user_id: UUID | None = None
+    revocation_reason: str | None = None
