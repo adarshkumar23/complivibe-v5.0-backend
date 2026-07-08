@@ -158,6 +158,8 @@ class BiaAssessmentRead(BaseModel):
 class BiaAssessmentHistoryResponse(BaseModel):
     latest: BiaAssessmentRead | None
     history: list[BiaAssessmentRead]
+    is_stale: bool = False
+    context_flags: list[str] = Field(default_factory=list)
 
 
 class OverdueReviewItem(BaseModel):

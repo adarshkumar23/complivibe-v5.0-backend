@@ -156,13 +156,15 @@ def get_bia_assessment(
     _: Membership = Depends(require_permission("bcm:read")),
 ) -> BiaAssessmentHistoryResponse:
     service = BcmService(db)
-    # Ensures the process exists in this org before returning history.
-    service.get_process(organization.id, process_id)
+    process = service.get_process(organization.id, process_id)
     history = service.list_bia_history(organization.id, process_id)
     latest = history[0] if history else None
+    context = service.build_bia_context(organization.id, process, latest)
     return BiaAssessmentHistoryResponse(
         latest=_bia_read(latest) if latest else None,
         history=[_bia_read(item) for item in history],
+        is_stale=context["is_stale"],
+        context_flags=context["context_flags"],
     )
 
 

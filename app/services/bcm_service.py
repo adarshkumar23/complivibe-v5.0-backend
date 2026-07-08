@@ -12,6 +12,13 @@ from app.models.bcm import BiaAssessment, BusinessProcess
 from app.models.membership import Membership
 from app.models.user import User
 
+# Common DR/BCM practice ceilings: tier_1_critical processes are expected to
+# recover within a business day, tier_2_high within a business week. These
+# are advisory (surfaced as context flags, not enforced as hard errors) since
+# an organization's actual DR capability may legitimately differ.
+_RTO_CEILING_HOURS_BY_TIER = {"tier_1_critical": 24, "tier_2_high": 72}
+_LOW_IMPACT_TIERS_FOR_CRITICAL_PROCESS = {"low"}
+
 
 class BcmService:
     def __init__(self, db: Session) -> None:
@@ -34,8 +41,21 @@ class BcmService:
         if membership.status != "active" or not user.is_active or user.status != "active":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field_name} must be an active organization member")
 
+    @staticmethod
+    def _validate_no_self_dependency(process_name: str, dependencies_json: list[dict] | None) -> None:
+        if not dependencies_json:
+            return
+        normalized_name = process_name.strip().lower()
+        for entry in dependencies_json:
+            if entry.get("type") == "process" and str(entry.get("name", "")).strip().lower() == normalized_name:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="A process cannot list itself as a dependency",
+                )
+
     def create_process(self, organization_id: uuid.UUID, *, data: dict, created_by_user_id: uuid.UUID | None) -> BusinessProcess:
         self._validate_org_user(data.get("owner_user_id"), organization_id, field_name="owner_user_id")
+        self._validate_no_self_dependency(data.get("name", ""), data.get("dependencies_json"))
         process = BusinessProcess(
             organization_id=organization_id,
             created_by_user_id=created_by_user_id,
@@ -68,6 +88,9 @@ class BcmService:
         process = self.get_process(organization_id, process_id)
         if "owner_user_id" in data:
             self._validate_org_user(data["owner_user_id"], organization_id, field_name="owner_user_id")
+        effective_name = data.get("name", process.name)
+        effective_dependencies = data.get("dependencies_json", process.dependencies_json)
+        self._validate_no_self_dependency(effective_name, effective_dependencies)
         for key, value in data.items():
             setattr(process, key, value)
         self.db.flush()
@@ -161,7 +184,10 @@ class BcmService:
         return {"is_stale": len(reasons) > 0, "stale_reasons": reasons}
 
     def list_overdue_reviews(self, organization_id: uuid.UUID) -> list[dict]:
-        processes = self.list_processes(organization_id)
+        # Archived processes are no longer operating, so continuity review
+        # cadence no longer applies to them -- only active processes are
+        # candidates for a "review overdue" finding.
+        processes = [p for p in self.list_processes(organization_id) if p.status == "active"]
         results: list[dict] = []
         for process in processes:
             bia = self.get_latest_bia(organization_id, process.id)
@@ -179,3 +205,56 @@ class BcmService:
                     }
                 )
         return results
+
+    # ------------------------------------------------------------------
+    # Intelligence: BIA quality/consistency signals
+    # ------------------------------------------------------------------
+    def build_bia_context(
+        self,
+        organization_id: uuid.UUID,
+        process: BusinessProcess,
+        bia: BiaAssessment | None,
+    ) -> dict:
+        """Surface insight beyond the raw BIA record: DR-practice consistency
+        checks, appetite-style ceilings, and dependency-chain freshness --
+        plus the staleness engine already used by the overdue-reviews list,
+        so a single process's BIA view carries the same signal.
+        """
+        owner_user = self.db.get(User, process.owner_user_id) if process.owner_user_id else None
+        staleness = self.compute_staleness(process, bia, owner_user)
+        flags: list[str] = list(staleness["stale_reasons"])
+
+        ceiling = _RTO_CEILING_HOURS_BY_TIER.get(process.criticality_tier)
+        if ceiling is not None and process.recovery_time_objective_hours > ceiling:
+            flags.append(
+                f"recovery_time_objective_exceeds_recommended_ceiling_for_{process.criticality_tier} "
+                f"(RTO={process.recovery_time_objective_hours}h, recommended<={ceiling}h)"
+            )
+
+        if bia is not None and bia.financial_impact_tier is not None:
+            if (
+                process.criticality_tier == "tier_1_critical"
+                and bia.financial_impact_tier in _LOW_IMPACT_TIERS_FOR_CRITICAL_PROCESS
+            ):
+                flags.append(
+                    "financial_impact_tier_inconsistent_with_process_criticality "
+                    f"(process is {process.criticality_tier} but BIA rates financial impact "
+                    f"'{bia.financial_impact_tier}')"
+                )
+
+        if process.dependencies_json:
+            active_process_names = {
+                p.name.strip().lower()
+                for p in self.list_processes(organization_id)
+                if p.status == "active"
+            }
+            for entry in process.dependencies_json:
+                if entry.get("type") != "process":
+                    continue
+                dep_name = str(entry.get("name", "")).strip().lower()
+                if dep_name and dep_name not in active_process_names:
+                    flags.append(
+                        f"dependency_process_not_found_or_inactive: '{entry.get('name')}'"
+                    )
+
+        return {"is_stale": staleness["is_stale"], "context_flags": sorted(set(flags))}
