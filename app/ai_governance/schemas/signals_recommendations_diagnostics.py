@@ -41,6 +41,13 @@ class AIRiskRecommendationRead(BaseModel):
     source_ref_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
+    priority_weight: int = 1
+    action_due_in_days: int = 60
+    linked_task_count: int = 0
+    source_age_days: int | None = None
+    stale_source: bool = False
+    source_updated_after_generation: bool = False
+    context_flags: list[str] = Field(default_factory=list)
 
 
 class AIGovEventRead(BaseModel):

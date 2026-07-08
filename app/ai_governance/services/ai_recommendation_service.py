@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai_governance.services.ai_governance_event_service import AIGovernanceEventService
@@ -18,6 +18,8 @@ ALLOWED_SOURCE_TYPES = {"risk_assessment", "monitoring_breach", "signal", "manua
 ALLOWED_RECOMMENDATION_CATEGORY = {"technical_control", "process_control", "documentation", "audit", "decommission"}
 ALLOWED_PRIORITY = {"critical", "high", "medium", "low"}
 ALLOWED_STATUS = {"active", "applied", "dismissed"}
+RECOMMENDATION_SOURCE_STALE_DAYS = 30
+PRIORITY_ACTION_DAYS = {"critical": 7, "high": 14, "medium": 30, "low": 60}
 
 
 class AIRecommendationService:
@@ -28,6 +30,14 @@ class AIRecommendationService:
     @staticmethod
     def utcnow() -> datetime:
         return datetime.now(UTC)
+
+    @staticmethod
+    def _as_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
     def _require_system(self, org_id: uuid.UUID, system_id: uuid.UUID) -> AISystem:
         row = self.db.execute(
@@ -86,6 +96,100 @@ class AIRecommendationService:
             )
             .order_by(AIRiskAssessment.completed_at.desc(), AIRiskAssessment.created_at.desc())
         ).scalars().first()
+
+    def _assessment_map(self, source_ref_ids: list[uuid.UUID]) -> dict[uuid.UUID, AIRiskAssessment]:
+        if not source_ref_ids:
+            return {}
+        rows = self.db.execute(select(AIRiskAssessment).where(AIRiskAssessment.id.in_(source_ref_ids))).scalars().all()
+        return {row.id: row for row in rows}
+
+    def _task_count_map(self, org_id: uuid.UUID, recommendation_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
+        if not recommendation_ids:
+            return {}
+        rows = self.db.execute(
+            select(Task.linked_entity_id, func.count(Task.id))
+            .where(
+                Task.organization_id == org_id,
+                Task.linked_entity_id.in_(recommendation_ids),
+            )
+            .group_by(Task.linked_entity_id)
+        ).all()
+        return {row[0]: int(row[1]) for row in rows if row[0] is not None}
+
+    def recommendation_payload(
+        self,
+        row: AIRiskRecommendation,
+        *,
+        source_assessment: AIRiskAssessment | None,
+        linked_task_count: int,
+    ) -> dict:
+        source_age_days: int | None = None
+        stale_source = False
+        source_updated_after_generation = False
+        if source_assessment is not None and source_assessment.completed_at is not None:
+            completed_at_utc = self._as_utc(source_assessment.completed_at)
+            recommendation_updated_utc = self._as_utc(row.updated_at)
+            assessment_updated_utc = self._as_utc(source_assessment.updated_at)
+            now_utc = self._as_utc(self.utcnow())
+            if completed_at_utc is not None and now_utc is not None:
+                source_age_days = max(0, int((now_utc - completed_at_utc).total_seconds() // 86400))
+            stale_source = source_age_days >= RECOMMENDATION_SOURCE_STALE_DAYS
+            source_updated_after_generation = bool(
+                assessment_updated_utc is not None
+                and recommendation_updated_utc is not None
+                and assessment_updated_utc > recommendation_updated_utc
+            )
+
+        action_due_in_days = int(PRIORITY_ACTION_DAYS.get(row.priority, PRIORITY_ACTION_DAYS["low"]))
+        priority_weight = int({"critical": 4, "high": 3, "medium": 2, "low": 1}.get(row.priority, 1))
+
+        context_flags: list[str] = []
+        if row.status == "active":
+            context_flags.append("action_pending")
+        if row.status == "applied":
+            context_flags.append("recommendation_applied")
+        if row.status == "dismissed":
+            context_flags.append("recommendation_dismissed")
+        if linked_task_count > 0:
+            context_flags.append("task_linked")
+        if stale_source:
+            context_flags.append("stale_source")
+        if source_updated_after_generation:
+            context_flags.append("source_updated_after_generation")
+
+        return {
+            "id": row.id,
+            "organization_id": row.organization_id,
+            "ai_system_id": row.ai_system_id,
+            "source_type": row.source_type,
+            "recommendation_text": row.recommendation_text,
+            "recommendation_category": row.recommendation_category,
+            "priority": row.priority,
+            "status": row.status,
+            "source_ref_id": row.source_ref_id,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "priority_weight": priority_weight,
+            "action_due_in_days": action_due_in_days,
+            "linked_task_count": linked_task_count,
+            "source_age_days": source_age_days,
+            "stale_source": stale_source,
+            "source_updated_after_generation": source_updated_after_generation,
+            "context_flags": context_flags,
+        }
+
+    def recommendation_payloads(self, org_id: uuid.UUID, rows: list[AIRiskRecommendation]) -> list[dict]:
+        source_ref_ids = [row.source_ref_id for row in rows if row.source_ref_id is not None]
+        assessments = self._assessment_map(source_ref_ids)
+        task_counts = self._task_count_map(org_id, [row.id for row in rows])
+        return [
+            self.recommendation_payload(
+                row,
+                source_assessment=assessments.get(row.source_ref_id) if row.source_ref_id is not None else None,
+                linked_task_count=task_counts.get(row.id, 0),
+            )
+            for row in rows
+        ]
 
     def generate_recommendations(
         self,
@@ -161,6 +265,7 @@ class AIRecommendationService:
     ) -> list[AIRiskRecommendation]:
         stmt = select(AIRiskRecommendation).where(AIRiskRecommendation.organization_id == org_id)
         if system_id is not None:
+            self._require_system(org_id, system_id)
             stmt = stmt.where(AIRiskRecommendation.ai_system_id == system_id)
         if status_value is not None:
             status_value = validate_choice(status_value, ALLOWED_STATUS, "status")
@@ -176,6 +281,17 @@ class AIRecommendationService:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Dismissed recommendation cannot be applied")
         if row.status == "applied":
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Recommendation already applied")
+        existing_task = self.db.execute(
+            select(Task.id).where(
+                Task.organization_id == org_id,
+                Task.linked_entity_id == row.id,
+            )
+        ).scalar_one_or_none()
+        if existing_task is not None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Recommendation already has linked task",
+            )
 
         now = self.utcnow()
         row.status = "applied"
@@ -224,6 +340,10 @@ class AIRecommendationService:
 
     def dismiss_recommendation(self, org_id: uuid.UUID, rec_id: uuid.UUID, user_id: uuid.UUID) -> AIRiskRecommendation:
         row = self._require_recommendation(org_id, rec_id)
+        if row.status == "dismissed":
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Recommendation already dismissed")
+        if row.status == "applied":
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Applied recommendation cannot be dismissed")
         row.status = "dismissed"
         row.updated_at = self.utcnow()
         self.db.flush()

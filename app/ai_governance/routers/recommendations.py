@@ -19,10 +19,11 @@ def apply_recommendation(
     organization: Organization = Depends(get_current_organization),
     membership: Membership = Depends(require_permission("ai_governance:write")),
 ) -> AIRiskRecommendationRead:
-    row = AIRecommendationService(db).apply_recommendation(organization.id, rec_id, membership.user_id)
+    service = AIRecommendationService(db)
+    row = service.apply_recommendation(organization.id, rec_id, membership.user_id)
     db.commit()
     db.refresh(row)
-    return AIRiskRecommendationRead.model_validate(row)
+    return AIRiskRecommendationRead.model_validate(service.recommendation_payloads(organization.id, [row])[0])
 
 
 @router.post("/{rec_id}/dismiss", response_model=AIRiskRecommendationRead)
@@ -32,7 +33,8 @@ def dismiss_recommendation(
     organization: Organization = Depends(get_current_organization),
     membership: Membership = Depends(require_permission("ai_governance:write")),
 ) -> AIRiskRecommendationRead:
-    row = AIRecommendationService(db).dismiss_recommendation(organization.id, rec_id, membership.user_id)
+    service = AIRecommendationService(db)
+    row = service.dismiss_recommendation(organization.id, rec_id, membership.user_id)
     db.commit()
     db.refresh(row)
-    return AIRiskRecommendationRead.model_validate(row)
+    return AIRiskRecommendationRead.model_validate(service.recommendation_payloads(organization.id, [row])[0])

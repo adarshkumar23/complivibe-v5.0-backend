@@ -844,13 +844,14 @@ def generate_system_recommendations(
     organization: Organization = Depends(get_current_organization),
     membership: Membership = Depends(require_permission("ai_governance:write")),
 ) -> list[AIRiskRecommendationRead]:
-    rows = AIRecommendationService(db).generate_recommendations(
+    service = AIRecommendationService(db)
+    rows = service.generate_recommendations(
         organization.id,
         system_id,
         membership.user_id,
     )
     db.commit()
-    return [AIRiskRecommendationRead.model_validate(row) for row in rows]
+    return [AIRiskRecommendationRead.model_validate(item) for item in service.recommendation_payloads(organization.id, rows)]
 
 
 @router.get("/{system_id}/recommendations", response_model=list[AIRiskRecommendationRead])
@@ -862,13 +863,14 @@ def list_system_recommendations(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("ai_governance:read")),
 ) -> list[AIRiskRecommendationRead]:
-    rows = AIRecommendationService(db).list_recommendations(
+    service = AIRecommendationService(db)
+    rows = service.list_recommendations(
         organization.id,
         system_id=system_id,
         status_value=status_value,
         priority=priority,
     )
-    return [AIRiskRecommendationRead.model_validate(row) for row in rows]
+    return [AIRiskRecommendationRead.model_validate(item) for item in service.recommendation_payloads(organization.id, rows)]
 
 
 @router.get("/{system_id}/event-log", response_model=list[AIGovEventRead])
