@@ -118,6 +118,7 @@ def _vendor_read(row: Vendor, *, has_overdue_assessment: bool = False) -> Vendor
         created_at=row.created_at,
         updated_at=row.updated_at,
         has_overdue_assessment=has_overdue_assessment,
+        risk_tier_source=row.risk_tier_source,
     )
 
 
@@ -298,6 +299,9 @@ def create_vendor(
         primary_contact_name=payload.primary_contact_name,
         primary_contact_email=str(payload.primary_contact_email) if payload.primary_contact_email else None,
         risk_tier=payload.risk_tier,
+        # A caller explicitly picking a non-default tier at creation time is a
+        # manual assertion; leaving it at the "not_assessed" default is not.
+        risk_tier_source="manual" if payload.risk_tier != "not_assessed" else "computed",
         status=payload.status,
         owner_user_id=payload.owner_user_id,
         data_access=payload.data_access,
@@ -516,6 +520,13 @@ def update_vendor(
         if field == "primary_contact_email" and value is not None:
             value = str(value)
         setattr(row, field, value)
+
+    # An explicit PATCH of risk_tier is, by definition, a human asserting the
+    # tier -- mark it manual so automated compute paths (VendorRiskService,
+    # questionnaire scoring, sanctions/KYB escalation) know not to silently
+    # clobber it on their next run.
+    if "risk_tier" in changes:
+        row.risk_tier_source = "manual"
     db.flush()
 
     AuditService(db).write_audit_log(
@@ -529,6 +540,7 @@ def update_vendor(
             "name": row.name,
             "vendor_type": row.vendor_type,
             "risk_tier": row.risk_tier,
+            "risk_tier_source": row.risk_tier_source,
             "status": row.status,
             "owner_user_id": str(row.owner_user_id),
             "archived_at": row.archived_at.isoformat() if row.archived_at else None,
@@ -1057,6 +1069,7 @@ def create_vendor_risk_score(
         notes=payload.notes,
         scored_by_user_id=current_user.id,
         triggered_by="user_action",
+        confirm_override=payload.confirm_override,
     )
 
     AuditService(db).write_audit_log(

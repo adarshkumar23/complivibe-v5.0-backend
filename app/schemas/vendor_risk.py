@@ -12,6 +12,10 @@ class VendorRiskScoreCreate(BaseModel):
     likelihood: str = Field(pattern=VENDOR_RISK_AXIS_PATTERN)
     impact: str = Field(pattern=VENDOR_RISK_AXIS_PATTERN)
     notes: str | None = None
+    # Required to overwrite a vendor.risk_tier that was manually set (see
+    # Vendor.risk_tier_source) -- prevents a routine recompute from silently
+    # clobbering a human's explicit judgment call.
+    confirm_override: bool = False
 
 
 class VendorRiskScoreRead(BaseModel):

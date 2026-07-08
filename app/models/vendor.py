@@ -26,6 +26,12 @@ class Vendor(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, Base):
     primary_contact_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     primary_contact_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     risk_tier: Mapped[str] = mapped_column(String(32), nullable=False, default="not_assessed")
+    # Provenance for risk_tier: "manual" once a human has explicitly set it via
+    # PATCH /vendors/{id}, "computed" when it was last written by an automated
+    # scoring/escalation path (vendor risk-score compute, questionnaire scoring,
+    # sanctions/KYB escalation). Automated compute paths must not silently
+    # clobber a manually-set tier -- see VendorRiskService.create_risk_score.
+    risk_tier_source: Mapped[str] = mapped_column(String(32), nullable=False, default="computed")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     owner_user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
 

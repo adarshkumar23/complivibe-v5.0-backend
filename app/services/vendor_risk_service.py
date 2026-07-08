@@ -88,6 +88,7 @@ class VendorRiskService:
         notes: str | None,
         scored_by_user_id: uuid.UUID,
         triggered_by: str = "user_action",
+        confirm_override: bool = False,
     ) -> tuple[VendorRiskScore, int | None]:
         vendor = self.require_vendor_in_org(organization_id, vendor_id)
         if assessment_id is not None:
@@ -126,8 +127,23 @@ class VendorRiskService:
         self.db.flush()
 
         previous_tier = vendor.risk_tier
+        previous_tier_source = vendor.risk_tier_source
         if previous_tier != row.risk_level:
+            # A manually-set tier (see Vendor.risk_tier_source) represents a human's
+            # explicit judgment call -- e.g. a compliance officer who knows context
+            # this likelihood x impact scoring doesn't capture. A routine recompute
+            # must not silently clobber that; it needs an explicit confirm_override.
+            if vendor.risk_tier_source == "manual" and not confirm_override:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"Vendor risk_tier was manually set to '{previous_tier}'. This score "
+                        f"would overwrite it with '{row.risk_level}'. Pass confirm_override=true "
+                        "to proceed."
+                    ),
+                )
             vendor.risk_tier = row.risk_level
+            vendor.risk_tier_source = "computed"
             self.db.flush()
             AuditService(self.db).write_audit_log(
                 action="vendor.risk_tier.updated",
@@ -135,11 +151,13 @@ class VendorRiskService:
                 entity_id=vendor.id,
                 organization_id=organization_id,
                 actor_user_id=scored_by_user_id,
-                before_json={"risk_tier": previous_tier},
+                before_json={"risk_tier": previous_tier, "risk_tier_source": previous_tier_source},
                 after_json={
                     "risk_tier": vendor.risk_tier,
+                    "risk_tier_source": vendor.risk_tier_source,
                     "vendor_risk_score_id": str(row.id),
                     "inherent_risk_score": row.inherent_risk_score,
+                    "manual_override_confirmed": confirm_override,
                 },
                 metadata_json={"source": "vendor_risk_score"},
             )

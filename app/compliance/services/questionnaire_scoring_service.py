@@ -167,9 +167,14 @@ class QuestionnaireScoringService:
         ).scalar_one_or_none()
         if vendor is not None:
             previous_tier = vendor.risk_tier
+            previous_tier_source = vendor.risk_tier_source
             computed_tier = self.risk_tier_from_score(final_score)
-            if computed_tier != previous_tier:
+            # A manually-set tier is a human's explicit judgment call; a routine
+            # questionnaire recompute must not silently clobber it (mirrors the
+            # same guard in VendorRiskService.create_risk_score).
+            if computed_tier != previous_tier and previous_tier_source != "manual":
                 vendor.risk_tier = computed_tier
+                vendor.risk_tier_source = "computed"
                 self.db.flush()
                 AuditService(self.db).write_audit_log(
                     action="vendor.risk_tier.updated",
@@ -177,9 +182,20 @@ class QuestionnaireScoringService:
                     entity_id=vendor.id,
                     organization_id=org_id,
                     actor_user_id=actor_user_id,
-                    before_json={"risk_tier": previous_tier},
-                    after_json={"risk_tier": computed_tier, "questionnaire_score": final_score},
+                    before_json={"risk_tier": previous_tier, "risk_tier_source": previous_tier_source},
+                    after_json={"risk_tier": computed_tier, "risk_tier_source": "computed", "questionnaire_score": final_score},
                     metadata_json={"source": "questionnaire_scoring"},
+                )
+            elif computed_tier != previous_tier:
+                AuditService(self.db).write_audit_log(
+                    action="vendor.risk_tier.override_skipped",
+                    entity_type="vendor",
+                    entity_id=vendor.id,
+                    organization_id=org_id,
+                    actor_user_id=actor_user_id,
+                    before_json={"risk_tier": previous_tier, "risk_tier_source": "manual"},
+                    after_json={"would_be_risk_tier": computed_tier, "questionnaire_score": final_score},
+                    metadata_json={"source": "questionnaire_scoring", "reason": "manual_tier_protected"},
                 )
 
         AuditService(self.db).write_audit_log(
