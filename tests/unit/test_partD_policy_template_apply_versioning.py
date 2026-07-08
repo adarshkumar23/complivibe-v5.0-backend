@@ -3,6 +3,7 @@ from app.models.compliance_policy_version import CompliancePolicyVersion
 from tests.helpers.auth_org import bootstrap_org_user
 
 BASE_TEMPLATES = "/api/v1/compliance/policy-templates"
+BASE_POLICIES = "/api/v1/compliance/policies"
 
 
 def test_verify_template_apply_creates_real_policy_version(client, db_session):
@@ -40,3 +41,64 @@ def test_verify_template_apply_creates_real_policy_version(client, db_session):
     assert matched is not None, "BUG: template-created version not returned by GET policy versions"
     assert matched["content_snapshot_json"]["source"] == "policy_template"
     assert matched["content_snapshot_json"]["content"] == version.content_snapshot_json["content"]
+
+
+def test_g6_direct_create_accepts_every_policy_type_a_template_can_apply(client, db_session):
+    """Regression test for the G6 bug: CompliancePolicyCreate.policy_type used a
+    Pydantic pattern that only allowed 7 values (acceptable_use, data_retention,
+    incident_response, access_control, change_management, business_continuity,
+    other), while SeedService.ensure_policy_templates's slug_policy_type_map stores
+    5 additional values via template-apply (data_privacy, vendor_management,
+    information_security, ai_governance, third_party_risk) with no schema
+    validation at all. Applying an "ai-governance" template produced a
+    CompliancePolicy with policy_type="ai_governance" that POST /compliance/policies
+    would then itself reject with 422 for the exact same value.
+
+    This applies the real "ai-governance" system template end to end, confirms
+    the resulting policy's policy_type is "ai_governance", and then asserts
+    POST /compliance/policies with policy_type="ai_governance" (and the other
+    template-only values) now succeeds instead of 422.
+    """
+    org = bootstrap_org_user(client, email_prefix="partD-g6-policytype")
+
+    templates = client.get(BASE_TEMPLATES, headers=org["org_headers"])
+    assert templates.status_code == 200
+    ai_gov_template = next((t for t in templates.json() if t.get("slug") == "ai-governance"), None)
+    assert ai_gov_template is not None, "expected the system 'ai-governance' policy template to exist"
+
+    applied = client.post(
+        f"{BASE_TEMPLATES}/{ai_gov_template['id']}/apply",
+        headers=org["org_headers"],
+        json={},
+    )
+    assert applied.status_code == 200, applied.text
+    applied_policy_id = applied.json()["policy_id"]
+
+    from app.models.compliance_policy import CompliancePolicy
+
+    applied_policy = db_session.get(CompliancePolicy, uuid.UUID(applied_policy_id))
+    assert applied_policy is not None
+    assert applied_policy.policy_type == "ai_governance"
+
+    # The exact same value that template-apply just stored, attempted via direct
+    # create, must not be rejected.
+    for policy_type in (
+        "ai_governance",
+        "third_party_risk",
+        "information_security",
+        "vendor_management",
+        "data_privacy",
+    ):
+        direct_create = client.post(
+            BASE_POLICIES,
+            headers=org["org_headers"],
+            json={
+                "title": f"Direct-create {policy_type} policy",
+                "policy_type": policy_type,
+                "owner_user_id": org["user_id"],
+            },
+        )
+        assert direct_create.status_code == 201, (
+            f"policy_type={policy_type!r} rejected by direct-create schema: {direct_create.text}"
+        )
+        assert direct_create.json()["policy_type"] == policy_type

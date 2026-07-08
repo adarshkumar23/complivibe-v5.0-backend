@@ -11,10 +11,11 @@ DEFINITION OF "COMPLIANT" AT THE ORG LEVEL (read this before touching logic)
 For a given AI system:
 
 1. Resolve "the" usage policy for it. There is no dedicated policy_type in
-   CompliancePolicy for "AI usage" (POLICY_TYPE_PATTERN is limited to
-   acceptable_use|data_retention|incident_response|access_control|
-   change_management|business_continuity|other), so per-org auto-detection
-   uses the convention that an "acceptable_use" policy is the org's AI usage
+   CompliancePolicy literally named "AI usage" (see POLICY_TYPE_PATTERN in
+   app/schemas/compliance_policy.py for the full allowed set, which includes
+   "ai_governance" for AI-governance-program policies but not an "ai_usage"
+   type specifically), so per-org auto-detection uses the convention that an
+   "acceptable_use" policy is the org's AI usage
    policy: the most recently effective, non-archived, approved
    CompliancePolicy with policy_type == 'acceptable_use' (ties broken by
    created_at desc). A policy still in 'draft'/'under_review'/'deprecated'

@@ -5,7 +5,16 @@ from pydantic import BaseModel, Field
 
 from app.schemas.common import UUIDTimestampSchema
 
-POLICY_TYPE_PATTERN = "^(acceptable_use|data_retention|incident_response|access_control|change_management|business_continuity|other)$"
+# Must be a superset of every policy_type that PolicyTemplateService /
+# SeedService.ensure_policy_templates (slug_policy_type_map) can write via
+# template-apply, so a template can never store a value this direct-create
+# schema would itself reject. Keep in sync with that map when new system
+# policy templates are added.
+POLICY_TYPE_PATTERN = (
+    "^(acceptable_use|data_retention|data_privacy|incident_response|access_control|"
+    "change_management|business_continuity|vendor_management|information_security|"
+    "ai_governance|third_party_risk|other)$"
+)
 POLICY_STATUS_PATTERN = "^(draft|under_review|approved|deprecated|archived)$"
 
 
