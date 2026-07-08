@@ -250,6 +250,8 @@ def run_control_test(
     control = service.require_control_in_org(organization.id, definition.control_id)
     service.require_evidence_in_org(organization.id, payload.evidence_item_id)
 
+    submitted_note: str | None = None
+
     if definition.test_type == "manual_attestation":
         if payload.manual_result is None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="manual_result is required for manual_attestation")
@@ -257,13 +259,28 @@ def run_control_test(
         result = payload.manual_result
         result_reason = payload.result_reason or "Manual attestation result"
     else:
+        if payload.manual_result is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"check_key '{definition.check_key}' is server-computed and does not accept a "
+                    "client-submitted manual_result. Remove manual_result from the request, or create "
+                    "a manual_attestation test definition if a human-entered result is required."
+                ),
+            )
         result, default_reason = service.evaluate_internal_check(
             organization_id=organization.id,
             control=control,
             check_key=definition.check_key,
             evidence_item_id=payload.evidence_item_id,
         )
-        result_reason = payload.result_reason or default_reason
+        # The result and its reason are both server-computed for these check types. A
+        # client-submitted result_reason must never overwrite the authoritative computed
+        # reason (doing so previously produced runs with result="failed" stored alongside a
+        # pass-sounding justification). Any free text the caller supplies is preserved
+        # separately as a tagged submitter note rather than conflated with the reason.
+        result_reason = default_reason
+        submitted_note = payload.result_reason
 
     if payload.dry_run:
         return ControlTestRunResponse(
@@ -272,6 +289,10 @@ def run_control_test(
             computed_result=result,
             computed_reason=result_reason,
         )
+
+    metadata_json: dict = {"test_type": definition.test_type, "dry_run": False}
+    if submitted_note:
+        metadata_json["submitted_note"] = submitted_note
 
     run = ControlTestRun(
         organization_id=organization.id,
@@ -283,7 +304,7 @@ def run_control_test(
         executed_by_user_id=current_user.id,
         execution_source="manual",
         evidence_item_id=payload.evidence_item_id,
-        metadata_json={"test_type": definition.test_type, "dry_run": False},
+        metadata_json=metadata_json,
         created_at=service.now(),
     )
     db.add(run)
