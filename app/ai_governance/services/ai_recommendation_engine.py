@@ -3,6 +3,9 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.ai_bias_assessment import AIBiasAssessment
+from app.models.ai_monitoring_config import AIMonitoringConfig
+from app.models.ai_monitoring_reading import AIMonitoringReading
 from app.models.ai_risk_assessment import AIRiskAssessment
 
 AI_RISK_RECOMMENDATION_TEMPLATES = {
@@ -68,7 +71,28 @@ CAVEAT = "These are suggestions for human review, not compliance determinations.
 
 
 class AIRecommendationEngine:
-    def generate(self, org_id: uuid.UUID, system_id: uuid.UUID, db: Session) -> list[str]:
+    def generate(self, org_id: uuid.UUID, system_id: uuid.UUID, db: Session) -> list[tuple[str, str, uuid.UUID | None]]:
+        """Return recommendation candidates as ``(text, source_type, source_ref_id)`` tuples.
+
+        Combines three independent, state-aware signal sources so that a system with an
+        active drift breach or a failed bias assessment always gets a recommendation that
+        reflects that live state -- not just a stale/generic set derived from the last
+        completed risk assessment:
+          * the latest completed risk assessment's high/critical dimension ratings
+            (``source_type="risk_assessment"``)
+          * any active monitoring config whose most recent reading breaches its threshold
+            (``source_type="monitoring_breach"``)
+          * any protected-attribute/metric combination whose latest bias assessment failed
+            (``source_type="signal"``)
+        """
+        candidates: list[tuple[str, str, uuid.UUID | None]] = []
+        seen: set[str] = set()
+
+        def _add(text: str, source_type: str, source_ref_id: uuid.UUID | None) -> None:
+            if text not in seen:
+                seen.add(text)
+                candidates.append((text, source_type, source_ref_id))
+
         assessment = db.execute(
             select(AIRiskAssessment)
             .where(
@@ -79,30 +103,74 @@ class AIRecommendationEngine:
             .order_by(AIRiskAssessment.completed_at.desc(), AIRiskAssessment.created_at.desc())
         ).scalars().first()
 
-        if assessment is None:
-            return GENERIC_RECOMMENDATIONS
+        if assessment is not None:
+            dimension_ratings = {
+                "bias": assessment.bias_risk_rating,
+                "fairness": assessment.fairness_risk_rating,
+                "explainability": assessment.explainability_risk_rating,
+                "privacy": assessment.privacy_risk_rating,
+                "misuse": assessment.misuse_risk_rating,
+                "security": assessment.security_risk_rating,
+            }
+            for dimension, rating in dimension_ratings.items():
+                if rating not in {"high", "critical"}:
+                    continue
+                templates = AI_RISK_RECOMMENDATION_TEMPLATES.get((dimension, rating)) or AI_RISK_RECOMMENDATION_TEMPLATES.get(
+                    (dimension, "high"),
+                    [],
+                )
+                for template in templates:
+                    _add(template, "risk_assessment", assessment.id)
 
-        recommendations: list[str] = []
-        seen: set[str] = set()
-        dimension_ratings = {
-            "bias": assessment.bias_risk_rating,
-            "fairness": assessment.fairness_risk_rating,
-            "explainability": assessment.explainability_risk_rating,
-            "privacy": assessment.privacy_risk_rating,
-            "misuse": assessment.misuse_risk_rating,
-            "security": assessment.security_risk_rating,
-        }
-
-        for dimension, rating in dimension_ratings.items():
-            if rating not in {"high", "critical"}:
-                continue
-            templates = AI_RISK_RECOMMENDATION_TEMPLATES.get((dimension, rating)) or AI_RISK_RECOMMENDATION_TEMPLATES.get(
-                (dimension, "high"),
-                [],
+        # Active drift/monitoring breaches: any active config whose most recent reading is
+        # outside the configured threshold represents a live, unresolved problem right now.
+        configs = db.execute(
+            select(AIMonitoringConfig).where(
+                AIMonitoringConfig.organization_id == org_id,
+                AIMonitoringConfig.ai_system_id == system_id,
+                AIMonitoringConfig.is_active.is_(True),
+                AIMonitoringConfig.deleted_at.is_(None),
             )
-            for template in templates:
-                if template not in seen:
-                    seen.add(template)
-                    recommendations.append(template)
+        ).scalars().all()
+        for config in configs:
+            latest_reading = db.execute(
+                select(AIMonitoringReading)
+                .where(AIMonitoringReading.config_id == config.id)
+                .order_by(AIMonitoringReading.created_at.desc())
+            ).scalars().first()
+            if latest_reading is not None and not latest_reading.within_threshold:
+                text = (
+                    f"Active monitoring breach on {config.metric_type}: the latest reading "
+                    "is outside the configured threshold -- investigate immediately and "
+                    "determine root cause (e.g. drift, degradation) before further production use."
+                )
+                _add(text, "monitoring_breach", latest_reading.id)
 
-        return recommendations or GENERIC_RECOMMENDATIONS
+        # Failed bias assessments: for each protected-attribute/metric combination, look at
+        # only the most recent assessment -- a later passing re-test should not keep
+        # generating a stale failure recommendation.
+        bias_rows = db.execute(
+            select(AIBiasAssessment)
+            .where(
+                AIBiasAssessment.organization_id == org_id,
+                AIBiasAssessment.system_id == system_id,
+            )
+            .order_by(AIBiasAssessment.assessed_at.desc())
+        ).scalars().all()
+        latest_bias_by_key: dict[tuple[str, str], AIBiasAssessment] = {}
+        for row in bias_rows:
+            key = (row.protected_attribute, row.metric_name)
+            if key not in latest_bias_by_key:
+                latest_bias_by_key[key] = row
+        for (protected_attribute, metric_name), row in latest_bias_by_key.items():
+            if not row.passed:
+                text = (
+                    f"Bias assessment failed for protected attribute '{protected_attribute}' "
+                    f"on metric '{metric_name}' -- conduct bias testing across all protected "
+                    "attributes within 14 days and document a remediation plan."
+                )
+                _add(text, "signal", row.id)
+
+        if not candidates:
+            return [(text, "manual", None) for text in GENERIC_RECOMMENDATIONS]
+        return candidates

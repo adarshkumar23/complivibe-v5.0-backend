@@ -196,27 +196,40 @@ class FrameworkContentService:
         ).scalars().first()
 
         total_sections = int(self.db.execute(select(func.count(FrameworkSection.id)).where(FrameworkSection.framework_id == framework_id)).scalar_one())
-        total_obligations = int(self.db.execute(select(func.count(Obligation.id)).where(Obligation.framework_id == framework_id)).scalar_one())
+        # Inactive obligations (e.g. retired placeholder rows -- see
+        # SeedService.ensure_pci_dss_framework) are deliberately excluded from totals here,
+        # matching the ``Obligation.status == "active"`` convention used by every other
+        # obligation-count query in this codebase (applicability, coverage matrices,
+        # dashboards, etc). Otherwise a flagged-inactive placeholder would keep inflating
+        # "total_obligations" (and, by extension, "unreviewed_obligations") forever.
+        total_obligations = int(
+            self.db.execute(
+                select(func.count(Obligation.id)).where(
+                    Obligation.framework_id == framework_id,
+                    Obligation.status == "active",
+                )
+            ).scalar_one()
+        )
 
         obligations_with_content_versions = int(
             self.db.execute(
                 select(func.count(func.distinct(ObligationContentVersion.obligation_id)))
                 .join(Obligation, Obligation.id == ObligationContentVersion.obligation_id)
-                .where(Obligation.framework_id == framework_id)
+                .where(Obligation.framework_id == framework_id, Obligation.status == "active")
             ).scalar_one()
         )
         obligations_with_evidence_requirements = int(
             self.db.execute(
                 select(func.count(func.distinct(ObligationEvidenceRequirement.obligation_id)))
                 .join(Obligation, Obligation.id == ObligationEvidenceRequirement.obligation_id)
-                .where(Obligation.framework_id == framework_id)
+                .where(Obligation.framework_id == framework_id, Obligation.status == "active")
             ).scalar_one()
         )
         obligations_with_control_suggestions = int(
             self.db.execute(
                 select(func.count(func.distinct(ObligationControlSuggestion.obligation_id)))
                 .join(Obligation, Obligation.id == ObligationControlSuggestion.obligation_id)
-                .where(Obligation.framework_id == framework_id)
+                .where(Obligation.framework_id == framework_id, Obligation.status == "active")
             ).scalar_one()
         )
         applicability_questions = int(
@@ -231,6 +244,7 @@ class FrameworkContentService:
                 .join(Obligation, Obligation.id == ObligationContentVersion.obligation_id)
                 .where(
                     Obligation.framework_id == framework_id,
+                    Obligation.status == "active",
                     ObligationContentVersion.review_status.in_(list(ACTIVE_REVIEWED_STATUSES)),
                 )
             ).scalar_one()

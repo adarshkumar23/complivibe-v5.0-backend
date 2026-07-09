@@ -101,13 +101,25 @@ def test_a32_exception_lifecycle_create_update_list_withdraw(client, db_session)
     assert withdrawn.status_code == 200
     assert withdrawn.json()["status"] == "withdrawn"
 
-    hidden = client.get(BASE, headers=org["org_headers"])
-    assert hidden.status_code == 200
-    assert hidden.json() == []
+    # Withdrawn is a terminal status like "rejected"/"expired" -- it stays visible via
+    # list/get (both v1 and v2 share this record), it just no longer matches the
+    # ``status_value=pending`` filter used above. It must NOT vanish from the default
+    # (unfiltered) list the way a soft-deleted row would.
+    no_longer_pending = client.get(BASE, headers=org["org_headers"], params={"status_value": "pending"})
+    assert no_longer_pending.status_code == 200
+    assert no_longer_pending.json() == []
+
+    still_visible = client.get(BASE, headers=org["org_headers"])
+    assert still_visible.status_code == 200
+    assert any(row["id"] == created["id"] and row["status"] == "withdrawn" for row in still_visible.json())
+
+    fetched = client.get(f"{BASE}/{created['id']}", headers=org["org_headers"])
+    assert fetched.status_code == 200
+    assert fetched.json()["status"] == "withdrawn"
 
     row = db_session.query(PolicyException).filter(PolicyException.id == uuid.UUID(created["id"])).one()
     assert row.status == "withdrawn"
-    assert row.deleted_at is not None
+    assert row.deleted_at is None
 
 
 def test_a32_policy_cross_org_forbidden_and_tenant_isolation(client, db_session):

@@ -40,11 +40,20 @@ def search(
             entity_types=entity_types,
             limit=limit,
         )
-    except SearchUnavailableError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Search service is temporarily unavailable. Please try again shortly.",
-        ) from exc
+    except SearchUnavailableError:
+        # Meilisearch is an external, best-effort search cache -- never a system of record
+        # (see search_indexing_service.py). The write path already treats an unreachable
+        # backend as non-fatal; the read path should degrade the same way instead of
+        # returning an opaque hard 503 for what is, from the caller's point of view, just
+        # "no results available right now". Callers that need to distinguish "nothing
+        # matched" from "couldn't search" should check `degraded`.
+        return SearchResponse(
+            query=q,
+            took_ms=0,
+            hits=[],
+            degraded=True,
+            degraded_reason="search_backend_unavailable",
+        )
 
     return SearchResponse(
         query=result["query"],

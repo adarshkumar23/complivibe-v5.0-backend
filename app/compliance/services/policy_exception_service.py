@@ -204,8 +204,15 @@ class PolicyExceptionService:
         if actor_id != row.requested_by and not self._has_manage(actor_id, org_id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to withdraw this exception")
 
+        # NOTE: "withdrawn" is a terminal status like "rejected"/"expired" -- it must stay
+        # visible via require_exception()/list_exceptions() the same way those do. It must
+        # NOT set deleted_at: deleted_at is reserved for actual soft-deletion, and both v1
+        # (app/api/v1/policy_exceptions.py) and v2 (app/compliance/routers/policy_exceptions.py)
+        # share this same table/service, so setting it here made a withdrawn exception
+        # disappear from v2's get/list (which filter deleted_at IS NULL) while v1 still showed
+        # it (its dashboard/summary reads didn't apply that filter) -- an inconsistent,
+        # confusing split of the same record's visibility across the two surfaces.
         row.status = "withdrawn"
-        row.deleted_at = self.utcnow()
         self.db.flush()
 
         AuditService(self.db).write_audit_log(
@@ -214,7 +221,7 @@ class PolicyExceptionService:
             entity_id=row.id,
             organization_id=org_id,
             actor_user_id=actor_id,
-            after_json={"status": row.status, "deleted_at": row.deleted_at.isoformat() if row.deleted_at else None},
+            after_json={"status": row.status},
             metadata_json={"source": "api"},
         )
         return row
