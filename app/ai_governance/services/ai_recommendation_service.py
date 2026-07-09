@@ -86,17 +86,6 @@ class AIRecommendationService:
             return "decommission"
         return "process_control"
 
-    def _latest_completed_assessment(self, org_id: uuid.UUID, system_id: uuid.UUID) -> AIRiskAssessment | None:
-        return self.db.execute(
-            select(AIRiskAssessment)
-            .where(
-                AIRiskAssessment.organization_id == org_id,
-                AIRiskAssessment.ai_system_id == system_id,
-                AIRiskAssessment.status == "completed",
-            )
-            .order_by(AIRiskAssessment.completed_at.desc(), AIRiskAssessment.created_at.desc())
-        ).scalars().first()
-
     def _assessment_map(self, source_ref_ids: list[uuid.UUID]) -> dict[uuid.UUID, AIRiskAssessment]:
         if not source_ref_ids:
             return {}
@@ -198,12 +187,11 @@ class AIRecommendationService:
         user_id: uuid.UUID,
     ) -> list[AIRiskRecommendation]:
         self._require_system(org_id, system_id)
-        texts = self.engine.generate(org_id, system_id, self.db)
-        source_assessment = self._latest_completed_assessment(org_id, system_id)
+        candidates = self.engine.generate(org_id, system_id, self.db)
 
         created_rows: list[AIRiskRecommendation] = []
         now = self.utcnow()
-        for text in texts:
+        for text, source_type, source_ref_id in candidates:
             existing_active = self.db.execute(
                 select(AIRiskRecommendation).where(
                     AIRiskRecommendation.organization_id == org_id,
@@ -218,12 +206,12 @@ class AIRecommendationService:
             row = AIRiskRecommendation(
                 organization_id=org_id,
                 ai_system_id=system_id,
-                source_type="risk_assessment" if source_assessment else "manual",
+                source_type=source_type,
                 recommendation_text=text,
                 recommendation_category=self._category_from_text(text),
                 priority=self._priority_from_text(text),
                 status="active",
-                source_ref_id=source_assessment.id if source_assessment else None,
+                source_ref_id=source_ref_id,
                 created_at=now,
                 updated_at=now,
             )
