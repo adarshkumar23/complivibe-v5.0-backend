@@ -639,7 +639,7 @@ class CommonControlsService:
             )
 
         cross_framework_control_inconsistencies = self._cross_framework_control_inconsistencies(
-            org_id, [row.control_id for row in common_controls]
+            org_id, common_control_ids
         )
 
         return {

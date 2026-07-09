@@ -416,7 +416,7 @@ def test_p2_monitoring_inbound(client):
     rd = client.post(
         "/api/v1/ai-monitoring/readings",
         headers={"X-CompliVibe-Key": "inbound-key-123456"},
-        json={"config_id": cfg.json()["id"], "value": "0.85"},
+        json={"config_id": cfg.json()["id"], "value": "0.75"},
     )
     assert rd.status_code == 201
     assert rd.json()["within_threshold"] is False

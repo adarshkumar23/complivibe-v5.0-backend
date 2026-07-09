@@ -21,7 +21,7 @@ def test_phase91_iso42001_tracker_context_and_summary_alias(client, db_session):
     update = client.post(
         f"{ISO42001_BASE}/conformity-tracker/4.1/update",
         headers=org["org_headers"],
-        json={"status": "in_progress", "notes": "Scope drafted"},
+        json={"implementation_status": "in_progress", "notes": "Scope drafted"},
     )
     assert update.status_code == 200
     assert update.json()["is_completed"] is False

@@ -102,7 +102,7 @@ def test_iso42001_status_only_update_preserves_notes_and_evidence(client):
     with_notes = client.post(
         f"{ISO42001_BASE}/conformity-tracker/4.1/update",
         headers=org["org_headers"],
-        json={"status": "in_progress", "notes": "Scope drafted", "evidence_id": evidence_id},
+        json={"implementation_status": "in_progress", "notes": "Scope drafted", "evidence_id": evidence_id},
     )
     assert with_notes.status_code == 200
     assert with_notes.json()["notes"] == "Scope drafted"
@@ -112,7 +112,7 @@ def test_iso42001_status_only_update_preserves_notes_and_evidence(client):
     status_only = client.post(
         f"{ISO42001_BASE}/conformity-tracker/4.1/update",
         headers=org["org_headers"],
-        json={"status": "implemented"},
+        json={"implementation_status": "implemented"},
     )
     assert status_only.status_code == 200
     assert status_only.json()["implementation_status"] == "implemented"
@@ -123,7 +123,7 @@ def test_iso42001_status_only_update_preserves_notes_and_evidence(client):
     explicit_clear = client.post(
         f"{ISO42001_BASE}/conformity-tracker/4.1/update",
         headers=org["org_headers"],
-        json={"status": "implemented", "notes": None},
+        json={"implementation_status": "implemented", "notes": None},
     )
     assert explicit_clear.status_code == 200
     assert explicit_clear.json()["notes"] is None
@@ -147,7 +147,7 @@ def test_iso42001_rejects_evidence_outside_org(client):
     cross_org = client.post(
         f"{ISO42001_BASE}/conformity-tracker/4.1/update",
         headers=org_a["org_headers"],
-        json={"status": "implemented", "evidence_id": foreign_id},
+        json={"implementation_status": "implemented", "evidence_id": foreign_id},
     )
     assert cross_org.status_code == 422
     assert "evidence_id" in cross_org.json()["detail"]
@@ -155,7 +155,7 @@ def test_iso42001_rejects_evidence_outside_org(client):
     nonexistent = client.post(
         f"{ISO42001_BASE}/conformity-tracker/4.1/update",
         headers=org_a["org_headers"],
-        json={"status": "implemented", "evidence_id": str(uuid.uuid4())},
+        json={"implementation_status": "implemented", "evidence_id": str(uuid.uuid4())},
     )
     assert nonexistent.status_code == 422
 

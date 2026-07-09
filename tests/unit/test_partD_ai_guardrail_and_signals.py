@@ -118,7 +118,7 @@ def test_verify_output_drift_breach_auto_creates_risk_signal(client):
         json={
             "metric_type": "output_drift",
             "threshold_value": "0.20",
-            "comparison_direction": "below",
+            "comparison_direction": "above",
             "api_key": "test-api-key-for-drift-config",
         },
     )
