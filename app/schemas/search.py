@@ -24,3 +24,10 @@ class SearchResponse(BaseModel):
     query: str
     took_ms: int
     hits: list[SearchHit]
+    # True when the search backend (Meilisearch) could not be reached and this response is a
+    # degraded empty-result fallback rather than a real (possibly also empty) search result.
+    # Search is explicitly a best-effort cache over source-of-truth Postgres rows elsewhere in
+    # this codebase (see search_indexing_service.py) -- callers should treat `degraded=True` as
+    # "search is temporarily unavailable, not that nothing matched" and may want to retry later.
+    degraded: bool = False
+    degraded_reason: str | None = None
