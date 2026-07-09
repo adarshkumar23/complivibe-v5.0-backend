@@ -171,6 +171,29 @@ class BillingService:
                     existing_row.razorpay_plan_id = data["razorpay_plan_id"]
                 if not existing_row.razorpay_annual_plan_id and data.get("razorpay_annual_plan_id"):
                     existing_row.razorpay_annual_plan_id = data["razorpay_annual_plan_id"]
+                # Sync feature/limit fields from the DEFAULT_PLANS code constant so a
+                # plan row seeded by an older code version doesn't permanently drift
+                # from the plan definition (e.g. a new feature flag added to a plan
+                # never reaching pre-existing DBs). DEFAULT_PLANS is the single source
+                # of truth for plan definitions -- there is no admin UI/API that lets
+                # operators hand-edit an individual plan row's features, so it is
+                # always safe to overwrite these fields wholesale on every call.
+                if existing_row.features != data["features"]:
+                    existing_row.features = data["features"]
+                if existing_row.max_users != data["max_users"]:
+                    existing_row.max_users = data["max_users"]
+                if existing_row.max_frameworks != data["max_frameworks"]:
+                    existing_row.max_frameworks = data["max_frameworks"]
+                if existing_row.max_ai_systems != data["max_ai_systems"]:
+                    existing_row.max_ai_systems = data["max_ai_systems"]
+                if existing_row.max_dsr_per_month != data["max_dsr_per_month"]:
+                    existing_row.max_dsr_per_month = data["max_dsr_per_month"]
+                if existing_row.display_name != data["display_name"]:
+                    existing_row.display_name = data["display_name"]
+                if existing_row.price_inr_monthly != data["price_inr_monthly"]:
+                    existing_row.price_inr_monthly = data["price_inr_monthly"]
+                if existing_row.price_inr_annual != data["price_inr_annual"]:
+                    existing_row.price_inr_annual = data["price_inr_annual"]
                 continue
             self.db.add(
                 SubscriptionPlan(
@@ -418,12 +441,9 @@ class BillingService:
         if not org:
             return False
 
-        if org.subscription_status == "trial":
-            plan_code = "starter"
-        elif org.subscription_status not in ("active", "trial"):
+        if org.subscription_status not in ("active", "trial"):
             return False
-        else:
-            plan_code = org.subscription_plan
+        plan_code = org.subscription_plan
 
         plan = self.db.execute(select(SubscriptionPlan).where(SubscriptionPlan.plan_code == plan_code)).scalar_one_or_none()
         if not plan:
