@@ -7,7 +7,7 @@ try:
 except Exception:  # pragma: no cover - optional in local test environments
     sentry_sdk = None  # type: ignore[assignment]
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.compliance.services.audit_schedule_service import run_daily_audit_schedule_reminder_sweep
 from app.compliance.services.customer_commitment_service import run_daily_customer_commitment_trigger_sweep
@@ -697,6 +697,34 @@ def _run_sanctions_dataset_refresh_job() -> None:
     )
 
 
+def _run_sanctions_dataset_bootstrap_if_empty_job_internal(*, db) -> dict:
+    from app.models.sanctions_entity import SanctionsEntity
+
+    existing = int(db.execute(select(func.count(SanctionsEntity.id))).scalar_one())
+    if existing > 0:
+        return {"skipped": True, "reason": "sanctions_entities already populated", "records_processed": 0}
+    try:
+        result = run_daily_sanctions_dataset_refresh(db)
+        db.commit()
+        logger.info("Sanctions dataset startup bootstrap complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception as exc:
+        db.rollback()
+        _capture_scheduler_exception(exc)
+        logger.exception("Sanctions dataset startup bootstrap failed")
+        raise
+
+
+def _run_sanctions_dataset_bootstrap_if_empty_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="sanctions_dataset_bootstrap_if_empty",
+        job_fn=_run_sanctions_dataset_bootstrap_if_empty_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
 def _run_vendor_sanctions_rescreen_sweep_job_internal(*, db) -> dict:
     try:
         result = run_periodic_vendor_sanctions_rescreen_sweep(db)
@@ -1011,6 +1039,20 @@ def register_pbc_scheduler(app: FastAPI) -> None:
     def _start_scheduler() -> None:
         if not scheduler.running:
             scheduler.start()
+        # The sanctions dataset refresh only runs on the 3:00 AM cron trigger above. On a
+        # freshly provisioned/migrated database (new deploy, restored DB, new environment)
+        # `sanctions_entities` starts empty, and screen_vendor() raises
+        # SanctionsDatasetUnavailable (-> HTTP 503) for *every* screening attempt until that
+        # cron eventually fires -- and stays broken indefinitely if the cron job ever fails
+        # silently (e.g. a transient network egress issue) since nothing else ever re-checks.
+        # Fire the same refresh once, immediately, in the background if the table is empty
+        # so screening works right after startup instead of depending on wall-clock time.
+        scheduler.add_job(
+            _run_sanctions_dataset_bootstrap_if_empty_job,
+            id="sanctions_dataset_bootstrap_if_empty",
+            replace_existing=True,
+            misfire_grace_time=None,
+        )
 
     @app.on_event("shutdown")
     def _shutdown_scheduler() -> None:

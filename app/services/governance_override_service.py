@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.export_attestation import ExportAttestation
@@ -327,6 +328,16 @@ class GovernanceOverrideService:
 
     def require_request(self, *, organization_id: uuid.UUID, override_id: uuid.UUID) -> GovernanceOverrideRequest:
         row = self.repo.get_request(override_id)
+        if row is None or row.organization_id != organization_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Override request not found")
+        return row
+
+    def require_request_for_update(self, *, organization_id: uuid.UUID, override_id: uuid.UUID) -> GovernanceOverrideRequest:
+        """Same lookup as require_request(), but takes a row lock (see
+        GovernanceOverrideRepository.get_request_for_update) so concurrent approve/reject
+        calls against the same override request serialize instead of racing. Use this for
+        any mutating decision path (approve/reject) rather than require_request()."""
+        row = self.repo.get_request_for_update(override_id)
         if row is None or row.organization_id != organization_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Override request not found")
         return row
@@ -858,7 +869,19 @@ class GovernanceOverrideService:
                 actor_user_id=approver_user_id,
                 details_json={"approval_count": row.approval_count, "required_approvals": row.required_approvals},
             )
-        self.db.flush()
+        try:
+            self.db.flush()
+        except IntegrityError as exc:
+            # Defense in depth alongside the row lock taken by
+            # require_request_for_update()/get_request_for_update(): if a duplicate
+            # approval from the same approver ever reaches this point anyway (e.g. a
+            # caller that bypassed the locked lookup), surface it as a clean 409 instead
+            # of an unhandled IntegrityError (-> raw 500).
+            self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Approver has already reviewed this override request",
+            ) from exc
         return row
 
     def reject(
@@ -907,7 +930,14 @@ class GovernanceOverrideService:
             actor_user_id=approver_user_id,
             details_json={"reason": reason},
         )
-        self.db.flush()
+        try:
+            self.db.flush()
+        except IntegrityError as exc:
+            self.db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Approver has already reviewed this override request",
+            ) from exc
         return row
 
     def cancel(
