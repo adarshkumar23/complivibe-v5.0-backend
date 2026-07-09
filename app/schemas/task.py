@@ -48,6 +48,7 @@ class TaskRead(UUIDTimestampSchema):
     description: str | None = None
     status: str
     priority: str
+    escalation_tier: str | None = None
     task_type: str
     owner_user_id: UUID | None = None
     created_by_user_id: UUID | None = None

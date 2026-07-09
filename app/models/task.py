@@ -22,6 +22,10 @@ class Task(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="open")
     priority: Mapped[str] = mapped_column(String(16), nullable=False, default="normal")
+    # Computed by the overdue-task reminder job (how urgent the *reminder* is),
+    # kept distinct from `priority` (the user's own, deliberately-set priority)
+    # so the background job never overwrites what the user chose.
+    escalation_tier: Mapped[str | None] = mapped_column(String(16), nullable=True)
     task_type: Mapped[str] = mapped_column(String(32), nullable=False, default="general")
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
         "owner_id",

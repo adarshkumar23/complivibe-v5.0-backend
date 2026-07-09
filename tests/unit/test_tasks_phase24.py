@@ -447,7 +447,10 @@ def test_g9_overdue_task_reminder_uses_overdue_template_and_escalates_priority(c
     assert response.json()["queued_count"] == 1
 
     db_session.refresh(task)
-    assert task.priority == "urgent"
+    # The reminder job's computed escalation tier must not clobber the task's own
+    # user-set priority -- it's recorded on a distinct field instead.
+    assert task.priority == "normal"
+    assert task.escalation_tier == "urgent"
     assert task.reminder_status == "sent"
 
     outbox = (
