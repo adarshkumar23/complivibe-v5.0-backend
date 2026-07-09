@@ -37,7 +37,14 @@ def _enable_siem_feature(db_session, organization_id: str) -> None:
     db_session.commit()
 
 
-def test_siem_export_endpoints_and_formats(client, db_session):
+class _PushSuccessResponse:
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+
+def test_siem_export_endpoints_and_formats(client, db_session, monkeypatch):
     org = bootstrap_org_user(client, email_prefix="siem-a")
     org_b = bootstrap_org_user(client, email_prefix="siem-b")
     _enable_siem_feature(db_session, org["organization_id"])
@@ -46,6 +53,14 @@ def test_siem_export_endpoints_and_formats(client, db_session):
     tables = set(inspect(db_session.bind).get_table_names())
     assert "siem_export_configs" in tables
     assert "siem_export_runs" in tables
+
+    pushed_calls: list[dict] = []
+
+    def _fake_post(url, **kwargs):
+        pushed_calls.append({"url": url, **kwargs})
+        return _PushSuccessResponse()
+
+    monkeypatch.setattr("httpx.post", _fake_post)
 
     create_resp = client.post(
         "/api/v1/siem/config",
@@ -80,6 +95,13 @@ def test_siem_export_endpoints_and_formats(client, db_session):
     assert export_json.status_code == 200
     assert export_json.json()["records"] >= 2
     assert isinstance(export_json.json()["payload"], list)
+    # Config has delivery_method="webhook" + an endpoint_url, so export_batch must have
+    # actually pushed the batch via HTTP POST, not just returned it for pull.
+    assert export_json.json()["push_delivered"] is True
+    assert export_json.json()["push_error"] is None
+    assert pushed_calls
+    assert pushed_calls[-1]["url"] == "https://example.com/ingest"
+    assert pushed_calls[-1]["json"] == export_json.json()["payload"]
 
     switch_cef = client.patch("/api/v1/siem/config", headers=org["org_headers"], json={"export_format": "cef"})
     assert switch_cef.status_code == 200
@@ -126,7 +148,9 @@ def test_siem_cursor_pagination_and_audit_and_admin_gate(client, db_session):
     create = client.post(
         "/api/v1/siem/config",
         headers=org["org_headers"],
-        json={"export_format": "json", "delivery_method": "webhook", "batch_size": 2},
+        # api_pull: this test only exercises cursor pagination over the pull endpoint, so
+        # no endpoint_url is needed (delivery_method="webhook" would require one).
+        json={"export_format": "json", "delivery_method": "api_pull", "batch_size": 2},
     )
     assert create.status_code == 201
 
@@ -161,3 +185,60 @@ def test_siem_cursor_pagination_and_audit_and_admin_gate(client, db_session):
 
     delete_resp = client.delete("/api/v1/siem/config", headers=org["org_headers"])
     assert delete_resp.status_code == 204
+
+
+def test_siem_push_requires_endpoint_url_and_rejects_unimplemented_methods(client, db_session):
+    org = bootstrap_org_user(client, email_prefix="siem-push-validate")
+    _enable_siem_feature(db_session, org["organization_id"])
+
+    # delivery_method="webhook" (the default) with no endpoint_url must be rejected up
+    # front rather than silently accepted and then never delivering.
+    missing_endpoint = client.post(
+        "/api/v1/siem/config",
+        headers=org["org_headers"],
+        json={"delivery_method": "webhook"},
+    )
+    assert missing_endpoint.status_code == 422
+
+    # delivery_method values the platform doesn't actually implement push transport for
+    # yet must be rejected clearly instead of silently no-op'ing.
+    unimplemented = client.post(
+        "/api/v1/siem/config",
+        headers=org["org_headers"],
+        json={"delivery_method": "syslog"},
+    )
+    assert unimplemented.status_code == 422
+    assert "not yet implemented" in unimplemented.json()["detail"]
+
+
+def test_siem_push_failure_is_recorded_and_counted(client, db_session, monkeypatch):
+    org = bootstrap_org_user(client, email_prefix="siem-push-fail")
+    _enable_siem_feature(db_session, org["organization_id"])
+
+    def _fake_post(url, **kwargs):
+        raise ConnectionError("connection refused")
+
+    monkeypatch.setattr("httpx.post", _fake_post)
+
+    create = client.post(
+        "/api/v1/siem/config",
+        headers=org["org_headers"],
+        json={"delivery_method": "webhook", "endpoint_url": "https://example.com/ingest"},
+    )
+    assert create.status_code == 201
+
+    client.post("/api/v1/siem/config/activate", headers=org["org_headers"])
+    _seed_audit(db_session, org["organization_id"], "siem.push.fail.one", 1)
+
+    export_resp = client.post("/api/v1/siem/export", headers=org["org_headers"], json={"limit": 10})
+    assert export_resp.status_code == 200
+    body = export_resp.json()
+    assert body["push_delivered"] is False
+    assert "connection refused" in body["push_error"]
+
+    config = client.get("/api/v1/siem/config", headers=org["org_headers"]).json()
+    assert config["export_failures"] == 1
+
+    runs = client.get("/api/v1/siem/export/runs", headers=org["org_headers"]).json()
+    assert runs[0]["status"] == "partial"
+    assert "connection refused" in runs[0]["error_message"]

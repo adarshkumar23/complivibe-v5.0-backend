@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import uuid
+
+import pytest
+
+from app.data_observability.integrations.openmetadata_client import OpenMetadataClient
+from app.models.openmetadata_integration import OpenMetadataIntegration
 from tests.helpers.auth_org import bootstrap_org_user
 
 ASSETS_BASE = "/api/v1/data-observability/assets"
@@ -377,3 +383,43 @@ def test_c76_quality_metrics(client):
     org_b = bootstrap_org_user(client, email_prefix="c76-org-b")
     forbidden = client.get(f"{QUALITY_BASE}/configs/{cfg_breach_id}", headers=org_b["org_headers"])
     assert forbidden.status_code == 404
+
+
+def test_openmetadata_sync_failure_persists_diagnostic_state(client, db_session, monkeypatch):
+    """sync_openmetadata's except block used to `flush()` the failure diagnostics
+    (sync_status="failed", last_sync_error) and re-raise without ever committing. Since
+    the request handler only commits on the success path, the re-raise meant the pending
+    transaction got rolled away when the session was torn down -- every real sync failure
+    surfaced as a bare 500 with the integration row still showing "in_progress"/whatever
+    it was before, with zero trace of what actually went wrong. This asserts the failure
+    diagnostics actually land in the database.
+    """
+    org = bootstrap_org_user(client, email_prefix="om-sync-fail")
+
+    configured = client.post(
+        f"{LINEAGE_BASE}/openmetadata/configure",
+        headers=org["org_headers"],
+        json={
+            "base_url": "https://openmetadata.example.com",
+            "jwt_token": "dummy-token",
+            "org_api_key": "om-sync-fail-api-key-12345",
+        },
+    )
+    assert configured.status_code == 200
+
+    def _boom(self, limit=100, offset=0):
+        raise RuntimeError("OpenMetadata connection failed: simulated network error")
+
+    monkeypatch.setattr(OpenMetadataClient, "list_tables", _boom)
+
+    with pytest.raises(RuntimeError, match="simulated network error"):
+        client.post(f"{LINEAGE_BASE}/openmetadata/sync", headers=org["org_headers"])
+
+    integration = db_session.execute(
+        db_session.query(OpenMetadataIntegration)
+        .filter(OpenMetadataIntegration.organization_id == uuid.UUID(org["organization_id"]))
+        .statement
+    ).scalar_one()
+    assert integration.sync_status == "failed"
+    assert integration.last_sync_error is not None
+    assert "simulated network error" in integration.last_sync_error

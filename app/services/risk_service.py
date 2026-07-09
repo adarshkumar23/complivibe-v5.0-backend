@@ -211,7 +211,37 @@ class RiskService:
             user_agent=audit_user_agent,
         )
         self.check_appetite_breach(organization_id=organization_id, risk=risk, actor_user_id=created_by_user_id)
+        self.emit_if_critical(organization_id=organization_id, risk=risk, previous_severity=None)
         return risk
+
+    def emit_if_critical(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        risk: Risk,
+        previous_severity: str | None,
+    ) -> None:
+        """Fire the "risk.critical" webhook event whenever a risk's severity
+        (newly-computed on create, or recomputed on update) becomes "critical",
+        covering both the creation path and the score-recalculation-on-update path.
+        """
+        if risk.severity != "critical" or previous_severity == "critical":
+            return
+
+        from app.compliance.services.webhook_service import WebhookService
+
+        WebhookService(self.db).emit(
+            organization_id,
+            "risk.critical",
+            {
+                "risk_id": str(risk.id),
+                "title": risk.title,
+                "category": risk.category,
+                "previous_severity": previous_severity,
+                "severity": risk.severity,
+                "inherent_score": risk.inherent_score,
+            },
+        )
 
     def require_control_in_org(self, organization_id: uuid.UUID, control_id: uuid.UUID) -> Control:
         control = self.db.execute(

@@ -27,6 +27,7 @@ from app.schemas.evidence import (
     EvidenceReviewRequest,
     EvidenceUpdate,
 )
+from app.compliance.services.webhook_service import WebhookService
 from app.services.audit_service import AuditService
 from app.services.evidence_service import EvidenceService
 
@@ -130,6 +131,7 @@ def list_evidence(
         db.flush()
         db.commit()
         bus = EventBus.get_instance()
+        webhook_service = WebhookService(db)
         for row in expired_rows:
             bus.emit(
                 EventType.EVIDENCE_EXPIRED,
@@ -144,6 +146,20 @@ def list_evidence(
                     db=db,
                 ),
             )
+            webhook_service.emit(
+                organization.id,
+                "evidence.expired",
+                {
+                    "evidence_id": str(row.id),
+                    "title": row.title,
+                    "evidence_type": row.evidence_type,
+                    "valid_until": row.valid_until.isoformat() if row.valid_until else None,
+                },
+            )
+        # The db.commit() above ran before the webhook deliveries were queued;
+        # commit again so they're actually persisted instead of left pending in
+        # the session.
+        db.commit()
     return [_evidence_read(row) for row in rows]
 
 
@@ -241,6 +257,19 @@ def get_evidence_detail(
                 db=db,
             ),
         )
+        WebhookService(db).emit(
+            organization.id,
+            "evidence.expired",
+            {
+                "evidence_id": str(evidence.id),
+                "title": evidence.title,
+                "evidence_type": evidence.evidence_type,
+                "valid_until": evidence.valid_until.isoformat() if evidence.valid_until else None,
+            },
+        )
+        # The db.commit() above ran before the webhook delivery was queued; commit
+        # again so it's actually persisted instead of left pending in the session.
+        db.commit()
     links = EvidenceControlLinkRepository(db).list_for_evidence(organization.id, evidence.id)
 
     control_ids = [l.control_id for l in links]

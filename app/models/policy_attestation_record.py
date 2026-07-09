@@ -12,7 +12,7 @@ class PolicyAttestationRecord(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationO
     __tablename__ = "policy_attestation_records"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'attested', 'expired', 'exempted')",
+            "status IN ('pending', 'attested', 'declined', 'expired', 'exempted')",
             name="ck_policy_attestation_records_status",
         ),
         UniqueConstraint("campaign_id", "user_id", name="uq_policy_attestation_records_campaign_user"),

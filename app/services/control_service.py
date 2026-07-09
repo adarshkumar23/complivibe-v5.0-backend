@@ -70,6 +70,25 @@ class ControlService:
             ),
         )
 
+        if new_status == "failed":
+            # This is the single chokepoint for every control status transition (API
+            # updates, archive, and technical-control automated ingest via
+            # ControlService.set_status all route through here), so it's the correct
+            # place to fire the "control.failed" webhook event for org-configured
+            # webhook endpoints subscribed to it.
+            from app.compliance.services.webhook_service import WebhookService
+
+            WebhookService(db).emit(
+                organization_id,
+                "control.failed",
+                {
+                    "control_id": str(control_id),
+                    "previous_status": previous_status,
+                    "new_status": new_status,
+                    "triggered_by": triggered_by,
+                },
+            )
+
     @staticmethod
     def set_status(
         db: Session,

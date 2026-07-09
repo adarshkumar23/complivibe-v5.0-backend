@@ -292,6 +292,20 @@ class ComplianceDeadlineService:
                         if queued is not None:
                             outbox_queued = True
                             outbox_id = str(queued)
+
+                        from app.compliance.services.webhook_service import WebhookService
+
+                        WebhookService(self.db).emit(
+                            organization_id,
+                            "deadline.overdue",
+                            {
+                                "deadline_id": str(deadline.id),
+                                "title": deadline.title,
+                                "deadline_type": deadline.deadline_type,
+                                "due_date": deadline.due_date.isoformat(),
+                                "owner_user_id": str(deadline.owner_user_id),
+                            },
+                        )
                     event = ComplianceDeadlineEvent(
                         organization_id=organization_id,
                         deadline_id=deadline.id,

@@ -667,7 +667,16 @@ class LineageService:
             integration.sync_status = "failed"
             integration.last_sync_error = str(exc)[:1000]
             integration.updated_at = self.utcnow()
-            self.db.flush()
+            # Must be commit(), not flush(): the caller (POST /openmetadata/sync) only
+            # commits after a *successful* return, so on the re-raise below the request
+            # handler never gets there. A bare flush() leaves this diagnostic write
+            # pending in the transaction; when the session is torn down (get_db's
+            # `finally: db.close()`) that pending transaction is implicitly rolled back,
+            # discarding sync_status/last_sync_error and turning every sync failure into
+            # a bare 500 with zero trace of what happened. Committing here persists the
+            # diagnostic state (and any lineage nodes/edges already upserted this run)
+            # independently of whatever the caller does with the exception.
+            self.db.commit()
             raise
 
 

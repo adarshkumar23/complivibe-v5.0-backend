@@ -35,6 +35,7 @@ class AttestationCampaignResponse(BaseModel):
     updated_at: datetime
     total_assigned: int
     attested_count: int
+    declined_count: int = 0
     pending_count: int
     expired_count: int
     exempted_count: int

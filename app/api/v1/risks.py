@@ -573,6 +573,7 @@ def update_risk(
         )
 
     service.check_appetite_breach(organization_id=organization.id, risk=risk, actor_user_id=current_user.id)
+    service.emit_if_critical(organization_id=organization.id, risk=risk, previous_severity=before["severity"])
 
     db.commit()
     db.refresh(risk)

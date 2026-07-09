@@ -355,6 +355,10 @@ def update_control(
         new_status=control.status,
         triggered_by="user_action",
     )
+    # emit_control_status_changed may have queued webhook deliveries (e.g. for a
+    # transition into "failed"); the commit above ran before that call, so commit
+    # again to persist them instead of leaving them stranded in the session.
+    db.commit()
     db.refresh(control)
     return _control_read_with_owner_status(db, organization.id, control)
 
