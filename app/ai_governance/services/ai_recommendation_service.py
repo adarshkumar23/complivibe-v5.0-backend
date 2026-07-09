@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.ai_governance.services.ai_governance_event_service import AIGovernanceEventService
 from app.ai_governance.services.ai_recommendation_engine import CAVEAT, AIRecommendationEngine
-from app.models.ai_risk_assessment import AIRiskAssessment
+from app.models.ai_system_risk_assessment import AISystemRiskAssessment
 from app.models.ai_risk_recommendation import AIRiskRecommendation
 from app.models.ai_system import AISystem
 from app.models.task import Task
@@ -76,15 +76,15 @@ class AIRecommendationService:
             return "decommission"
         return "process_control"
 
-    def _latest_completed_assessment(self, org_id: uuid.UUID, system_id: uuid.UUID) -> AIRiskAssessment | None:
+    def _latest_completed_assessment(self, org_id: uuid.UUID, system_id: uuid.UUID) -> AISystemRiskAssessment | None:
         return self.db.execute(
-            select(AIRiskAssessment)
+            select(AISystemRiskAssessment)
             .where(
-                AIRiskAssessment.organization_id == org_id,
-                AIRiskAssessment.ai_system_id == system_id,
-                AIRiskAssessment.status == "completed",
+                AISystemRiskAssessment.organization_id == org_id,
+                AISystemRiskAssessment.ai_system_id == system_id,
+                AISystemRiskAssessment.status == "completed",
             )
-            .order_by(AIRiskAssessment.completed_at.desc(), AIRiskAssessment.created_at.desc())
+            .order_by(AISystemRiskAssessment.completed_at.desc(), AISystemRiskAssessment.created_at.desc())
         ).scalars().first()
 
     def generate_recommendations(

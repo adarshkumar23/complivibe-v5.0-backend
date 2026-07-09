@@ -180,16 +180,50 @@ class RecertificationService:
             )
         return out
 
+    def _control_scope_condition(self, policy: EvidenceRecertificationPolicy | None):
+        """Resolve the Control-scoping condition described by a policy's scope_config_json.
+
+        Mirrors `_policy_scope_condition` but targets `Control.id` (used by the
+        control-reassessment track) instead of `EvidenceItem`. A policy with
+        scope_type "all_evidence" (or no policy at all) applies to every
+        control; scope_type "control" restricts the run to the control(s)
+        named in scope_config_json.
+        """
+        if policy is None:
+            return True
+        scope = policy.scope_config_json or {}
+        if policy.scope_type == "all_evidence":
+            return True
+        if policy.scope_type == "control":
+            control_ids = scope.get("control_ids")
+            control_id = scope.get("control_id")
+            ids: list[uuid.UUID] = []
+            if control_ids:
+                ids = [uuid.UUID(str(cid)) for cid in control_ids]
+            elif control_id:
+                ids = [uuid.UUID(str(control_id))]
+            if not ids:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="scope_config_json.control_id or scope_config_json.control_ids is required",
+                )
+            return Control.id.in_(ids)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"scope_type '{policy.scope_type}' is not supported for control reassessment",
+        )
+
     def discover_due_control_tests(
         self,
         *,
         organization_id: uuid.UUID,
         due_within_days: int,
         limit: int,
+        policy: EvidenceRecertificationPolicy | None = None,
     ) -> list[dict]:
         now = self.now()
         due_before = now + timedelta(days=due_within_days)
-        rows = self.db.execute(
+        stmt = (
             select(ControlTestDefinition, Control)
             .join(Control, Control.id == ControlTestDefinition.control_id)
             .where(
@@ -200,9 +234,11 @@ class RecertificationService:
                 Control.organization_id == organization_id,
                 Control.status != "archived",
             )
-            .order_by(ControlTestDefinition.next_due_at.asc())
-            .limit(limit)
-        ).all()
+        )
+        condition = self._control_scope_condition(policy)
+        if condition is not True:
+            stmt = stmt.where(condition)
+        rows = self.db.execute(stmt.order_by(ControlTestDefinition.next_due_at.asc()).limit(limit)).all()
 
         out: list[dict] = []
         for test_def, control in rows:
@@ -324,9 +360,11 @@ class RecertificationService:
         *,
         organization_id: uuid.UUID,
         test_id: uuid.UUID,
+        policy_id: uuid.UUID | None,
         due_marker: str,
     ) -> str:
-        return f"reassessment:{organization_id}:control_test:{test_id}:{due_marker}"
+        marker = policy_id if policy_id is not None else "default"
+        return f"reassessment:{organization_id}:control_test:{test_id}:{marker}:{due_marker}"
 
     def _queue_owner_email(
         self,
@@ -498,6 +536,7 @@ class RecertificationService:
         self,
         *,
         organization_id: uuid.UUID,
+        policy: EvidenceRecertificationPolicy | None,
         dry_run: bool,
         notify_owner: bool,
         due_within_days: int,
@@ -508,11 +547,12 @@ class RecertificationService:
             organization_id=organization_id,
             due_within_days=due_within_days,
             limit=limit,
+            policy=policy,
         )
 
         run = self._create_run(
             organization_id=organization_id,
-            policy_id=None,
+            policy_id=policy.id if policy else None,
             run_type="control_reassessment",
             dry_run=dry_run,
             created_by_user_id=created_by_user_id,
@@ -530,6 +570,7 @@ class RecertificationService:
             idem = self._build_control_idempotency_key(
                 organization_id=organization_id,
                 test_id=item["test_id"],
+                policy_id=policy.id if policy else None,
                 due_marker=due_marker,
             )
             log_idem = f"{idem}:dryrun" if dry_run else idem
@@ -538,7 +579,7 @@ class RecertificationService:
                 self._log_action(
                     organization_id=organization_id,
                     run_id=run.id,
-                    policy_id=None,
+                    policy_id=policy.id if policy else None,
                     entity_type="control_test_definition",
                     entity_id=item["test_id"],
                     action_type="create_reassessment_task",
@@ -583,7 +624,7 @@ class RecertificationService:
                 self._log_action(
                     organization_id=organization_id,
                     run_id=run.id,
-                    policy_id=None,
+                    policy_id=policy.id if policy else None,
                     entity_type="control_test_definition",
                     entity_id=item["test_id"],
                     action_type="create_reassessment_task",
@@ -600,7 +641,7 @@ class RecertificationService:
                 self._log_action(
                     organization_id=organization_id,
                     run_id=run.id,
-                    policy_id=None,
+                    policy_id=policy.id if policy else None,
                     entity_type="control_test_definition",
                     entity_id=item["test_id"],
                     action_type="create_reassessment_task",
@@ -625,6 +666,11 @@ class RecertificationService:
             "error_count": run.error_count,
             "dry_run": dry_run,
         }
+
+        if policy is not None:
+            policy.last_run_at = run.finished_at
+            policy.next_run_at = self.calculate_next_run_at(policy.cadence, base_time=run.finished_at)
+
         self.db.flush()
         return run
 

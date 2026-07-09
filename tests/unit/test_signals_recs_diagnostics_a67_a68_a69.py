@@ -4,7 +4,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from app.ai_governance.services.signal_service import SignalService
-from app.models.ai_risk_assessment import AIRiskAssessment
+from app.models.ai_risk_assessment_question import AIRiskAssessmentQuestion
+from app.models.ai_risk_assessment_response import AIRiskAssessmentResponse
 from app.models.task import Task
 from tests.helpers.auth_org import bootstrap_org_user
 
@@ -12,6 +13,7 @@ SYSTEMS_BASE = "/api/v1/ai-governance/systems"
 RISK_SIGNALS_BASE = "/api/v1/ai-governance/risk-signals"
 RECOMMENDATIONS_BASE = "/api/v1/ai-governance/recommendations"
 EVENTS_BASE = "/api/v1/ai-governance/events"
+RISK_ASSESS_BASE = "/api/v1/ai-governance/risk-assessments"
 
 
 def _create_system(client, headers: dict[str, str], owner_id: str, name: str) -> str:
@@ -122,17 +124,35 @@ def test_a68_recommendations_and_apply_dismiss(db_session, client):
     system_id = _create_system(client, org["org_headers"], org["user_id"], "A68 System")
     system_uuid = uuid.UUID(system_id)
 
-    # Create assessment then force completed + bias high for deterministic template selection.
+    # Create assessment, then answer real questions to force bias=high (and every
+    # other dimension low) for deterministic template selection, and complete it
+    # through the real service (not a DB shortcut) so the completion is mirrored
+    # onto ai_system_risk_assessments the same way production traffic is.
     created_assessment = client.post(f"{SYSTEMS_BASE}/{system_id}/risk-assessments", headers=org["org_headers"])
     assert created_assessment.status_code == 201
     assessment_id = uuid.UUID(created_assessment.json()["id"])
 
-    row = db_session.query(AIRiskAssessment).filter(AIRiskAssessment.id == assessment_id).one()
-    row.status = "completed"
-    row.bias_risk_rating = "high"
-    row.completed_at = datetime.now(UTC)
-    row.updated_at = datetime.now(UTC)
-    db_session.commit()
+    response_rows = (
+        db_session.query(AIRiskAssessmentResponse, AIRiskAssessmentQuestion)
+        .join(AIRiskAssessmentQuestion, AIRiskAssessmentQuestion.id == AIRiskAssessmentResponse.question_id)
+        .filter(AIRiskAssessmentResponse.assessment_id == assessment_id)
+        .all()
+    )
+    payload = {
+        "responses": [
+            {
+                "question_id": str(resp.question_id),
+                "response": "high_risk" if question.risk_dimension == "bias" else "low_risk",
+            }
+            for resp, question in response_rows
+        ]
+    }
+    submitted = client.post(f"{RISK_ASSESS_BASE}/{assessment_id}/submit-responses", headers=org["org_headers"], json=payload)
+    assert submitted.status_code == 200
+
+    completed = client.post(f"{RISK_ASSESS_BASE}/{assessment_id}/complete", headers=org["org_headers"])
+    assert completed.status_code == 200
+    assert completed.json()["bias_risk_rating"] == "high"
 
     generated = client.post(f"{SYSTEMS_BASE}/{system_id}/generate-recommendations", headers=org["org_headers"])
     assert generated.status_code == 200

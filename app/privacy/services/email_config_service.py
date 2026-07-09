@@ -59,6 +59,20 @@ class EmailConfigService:
         ).scalar_one_or_none()
 
     def upsert_config(self, org_id: uuid.UUID, data, created_by: uuid.UUID, membership: Membership) -> OrgEmailConfig:
+        """Create/update the org's email configuration.
+
+        `OrgEmailConfig` (table `org_email_configs`) is the single source of
+        truth for per-org email settings — it's shared with the
+        `/api/v1/email-config` endpoints (`app/platform/routers/email_config.py`).
+        The real send path (`SESService._resolve_client`) only honors a
+        custom sender when `use_platform_ses` is False and the structured
+        `aws_access_key_id_enc`/`aws_secret_key_enc`/`from_email` columns are
+        populated — it does not look at `config_json` unless
+        `use_platform_ses` is already False. This method must therefore set
+        those same canonical columns (not just the legacy `config_json`
+        blob), or credentials submitted here would be silently ignored by
+        every real outbound email.
+        """
         self._require_admin_membership(membership)
 
         payload = data.model_dump()
@@ -70,6 +84,12 @@ class EmailConfigService:
                 "from_address": str(payload["from_address"]),
             }
         )
+
+        from app.platform.services.ses_service import SESService
+
+        ses = SESService()
+        access_key_enc = ses.encrypt_credential(payload["aws_access_key_id"])
+        secret_key_enc = ses.encrypt_credential(payload["aws_secret_access_key"])
 
         now = self.utcnow()
         row = self.get_config(org_id)
@@ -84,6 +104,11 @@ class EmailConfigService:
                 created_by=created_by,
                 created_at=now,
                 updated_at=now,
+                use_platform_ses=False,
+                aws_access_key_id_enc=access_key_enc,
+                aws_secret_key_enc=secret_key_enc,
+                aws_region=payload["region"],
+                from_email=str(payload["from_address"]),
             )
             self.db.add(row)
         else:
@@ -91,6 +116,11 @@ class EmailConfigService:
             row.config_json = encrypted
             row.is_active = bool(payload.get("is_active", row.is_active))
             row.updated_at = now
+            row.use_platform_ses = False
+            row.aws_access_key_id_enc = access_key_enc
+            row.aws_secret_key_enc = secret_key_enc
+            row.aws_region = payload["region"]
+            row.from_email = str(payload["from_address"])
             action = "org_email_config.updated"
 
         self.db.flush()
@@ -118,7 +148,6 @@ class EmailConfigService:
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active email config found")
 
-        config = self.decrypt_config(row.config_json)
         destination = to_address
         if not destination:
             owner_user = self.db.execute(
@@ -141,22 +170,21 @@ class EmailConfigService:
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="No destination email available")
             destination = owner_user.email
 
-        from app.compliance.services.email_delivery_service import SESEmailDeliveryService
+        # Use the same resolver/sender as every other outbound email (SESService),
+        # instead of re-parsing config_json into a bespoke delivery client, so a
+        # test send actually exercises the config that real traffic will use.
+        from app.platform.services.ses_service import SESService
 
-        sender = SESEmailDeliveryService(
-            aws_access_key_id=config["aws_access_key_id"],
-            aws_secret_access_key=config["aws_secret_access_key"],
-            region=config["region"],
-            from_address=config["from_address"],
-        )
-        ok = sender.send(
-            to=destination,
+        result = SESService().send_email(
+            to_email=destination,
             subject="CompliVibe SES configuration test",
             html_body="<p>This is a CompliVibe SES configuration test email.</p>",
             text_body="This is a CompliVibe SES configuration test email.",
+            org_id=org_id,
+            db=self.db,
         )
-        if not ok:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="SES test email failed")
+        if not result["success"]:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=result["error"])
 
         row.test_sent_at = self.utcnow()
         row.updated_at = row.test_sent_at

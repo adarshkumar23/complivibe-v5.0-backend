@@ -334,16 +334,19 @@ def run_evidence(
 
 @router.get("/controls/due", response_model=list[DueControlReassessmentRead])
 def due_controls(
+    policy_id: uuid.UUID | None = Query(default=None),
     due_within_days: int = Query(default=7, ge=0, le=365),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("recertification:read")),
 ) -> list[DueControlReassessmentRead]:
+    policy = _policy_or_404(db, organization.id, policy_id) if policy_id else None
     rows = RecertificationService(db).discover_due_control_tests(
         organization_id=organization.id,
         due_within_days=due_within_days,
         limit=limit,
+        policy=policy,
     )
     return [DueControlReassessmentRead(**row) for row in rows]
 
@@ -357,9 +360,12 @@ def run_controls(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("recertification:execute")),
 ) -> RecertificationRunRead:
+    policy = _policy_or_404(db, organization.id, payload.policy_id) if payload.policy_id else None
+
     service = RecertificationService(db)
     run = service.run_control_reassessment(
         organization_id=organization.id,
+        policy=policy,
         dry_run=payload.dry_run,
         notify_owner=payload.notify_owner,
         due_within_days=payload.due_within_days,

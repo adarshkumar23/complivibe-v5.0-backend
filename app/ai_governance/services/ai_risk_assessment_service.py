@@ -13,6 +13,7 @@ from app.models.ai_risk_assessment import AIRiskAssessment
 from app.models.ai_risk_assessment_question import AIRiskAssessmentQuestion
 from app.models.ai_risk_assessment_response import AIRiskAssessmentResponse
 from app.models.ai_system import AISystem
+from app.models.ai_system_risk_assessment import AISystemRiskAssessment
 from app.models.risk import Risk
 from app.services.audit_service import AuditService
 from app.core.validation import validate_choice
@@ -264,6 +265,53 @@ class AIRiskAssessmentService:
             return "high"
         return "critical"
 
+    def _sync_completion_to_system_assessment(
+        self,
+        *,
+        org_id: uuid.UUID,
+        assessment: AIRiskAssessment,
+        system: AISystem,
+        dimension_results: dict[str, Decimal],
+        overall_score: Decimal,
+        user_id: uuid.UUID,
+    ) -> AISystemRiskAssessment:
+        """Mirror a completed questionnaire onto `ai_system_risk_assessments`.
+
+        `ai_system_risk_assessments` (AISystemRiskAssessment) is the
+        authoritative AI-risk-assessment table: it has far more columns, is
+        the source read by the AI governance dashboard/diagnostics
+        (`ai_governance_diagnostic_service.py`), and backs the 52-endpoint
+        "AI Risk Assessment Engine" that most of the AI governance module
+        depends on. Without this sync, completing this guided questionnaire
+        (the "AI System Risk Assessments (v2)" feature, `ai_risk_assessments`
+        table) never clears the dashboard's "needs risk assessment" warning
+        because the dashboard reads a different table than this feature
+        writes to.
+        """
+        severity = self._to_rating(overall_score)
+        row = AISystemRiskAssessment(
+            organization_id=org_id,
+            ai_system_id=system.id,
+            title=f"AI Risk Questionnaire v{assessment.assessment_version}",
+            description="Auto-synced from the guided AI risk questionnaire (bias/fairness/explainability/privacy/misuse/security).",
+            assessment_type="initial" if assessment.assessment_version == 1 else "periodic",
+            status="completed",
+            owner_user_id=system.owner_id,
+            risk_level=severity,
+            likelihood=severity,
+            impact=severity,
+            inherent_risk_score=int(overall_score),
+            residual_risk_score=int(overall_score),
+            risk_dimensions_json={dim: self._to_rating(score) for dim, score in dimension_results.items()},
+            methodology_version="ai_risk_questionnaire_v1",
+            calculated_risk_level=severity,
+            completed_at=assessment.completed_at,
+            created_by_user_id=user_id,
+        )
+        self.db.add(row)
+        self.db.flush()
+        return row
+
     def complete_assessment(self, org_id: uuid.UUID, assessment_id: uuid.UUID, user_id: uuid.UUID) -> AIRiskAssessment:
         assessment = self._require_assessment(org_id, assessment_id)
         system = self._require_system(org_id, assessment.ai_system_id)
@@ -345,6 +393,15 @@ class AIRiskAssessmentService:
         self.db.flush()
         from app.services.risk_service import RiskService
         RiskService(self.db).check_appetite_breach(organization_id=org_id, risk=risk, actor_user_id=user_id)
+
+        self._sync_completion_to_system_assessment(
+            org_id=org_id,
+            assessment=assessment,
+            system=system,
+            dimension_results=dimension_results,
+            overall_score=overall_score,
+            user_id=user_id,
+        )
 
         AIGovernanceEventService.log(
             self.db,
