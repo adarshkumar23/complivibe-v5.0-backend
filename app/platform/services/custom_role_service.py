@@ -176,12 +176,17 @@ class CustomRoleService:
                 )
             ).scalar_one()
         )
-        if active_assignments > 0:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Role has {active_assignments} active membership assignment(s); reassign members before deactivation",
-            )
 
+        # Deactivation must take effect immediately for anyone still assigned --
+        # permission checks join Role.is_active (see RBACService.get_user_permissions),
+        # so as soon as this commits, assigned members lose the role's permissions on
+        # their very next request. Blocking deactivation until every member was
+        # manually reassigned first (the old behavior) meant an org admin could not
+        # urgently revoke a role's access -- e.g. after granting overly broad
+        # permissions by mistake -- without first hunting down and reassigning every
+        # affected member. The still-active memberships are left in place (not
+        # unassigned) so the admin can see and reassign them at their own pace; they
+        # just no longer carry any permissions in the meantime.
         role.is_active = False
         self.db.flush()
         AuditService(self.db).write_audit_log(
@@ -190,7 +195,7 @@ class CustomRoleService:
             entity_id=role.id,
             organization_id=org_id,
             actor_user_id=deactivated_by,
-            after_json={"is_active": role.is_active},
+            after_json={"is_active": role.is_active, "active_membership_assignments_at_deactivation": active_assignments},
             metadata_json={"source": "api"},
         )
         return role
