@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.ai_governance.schemas.ai_risk_assessments import (
+    AIRiskAssessmentQuestionRead,
     AIRiskAssessmentRead,
     AIRiskAssessmentResponseSubmitRequest,
     ComputeBiasRequest,
@@ -48,6 +49,21 @@ def list_ai_risk_assessments_for_system(
         status_filter=status_filter,
     )
     return [service.to_read(organization.id, row) for row in rows]
+
+
+@router.get("/questions", response_model=list[AIRiskAssessmentQuestionRead])
+def list_ai_risk_assessment_questions(
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("ai_governance:read")),
+) -> list[AIRiskAssessmentQuestionRead]:
+    """Discovery endpoint: lists the active AI risk assessment question bank
+    (id, risk_dimension, question_text, weight, order_index) so callers can
+    look up valid question_id values before calling submit-responses, instead
+    of having to guess IDs ahead of time."""
+    rows = AIRiskAssessmentService(db).list_questions()
+    db.commit()
+    return [AIRiskAssessmentQuestionRead.model_validate(row) for row in rows]
 
 
 @router.get("/{assessment_id}", response_model=AIRiskAssessmentRead)

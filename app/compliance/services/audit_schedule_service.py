@@ -419,7 +419,7 @@ class AuditScheduleService:
         user_id: uuid.UUID,
     ) -> AuditSchedule:
         row = self.require_schedule(org_id, schedule_id)
-        self.engagement_service.require_engagement(org_id, engagement_id)
+        engagement = self.engagement_service.require_engagement(org_id, engagement_id)
 
         before = {
             "last_audit_engagement_id": str(row.last_audit_engagement_id) if row.last_audit_engagement_id else None,
@@ -430,6 +430,12 @@ class AuditScheduleService:
         current_due = row.next_due_date or row.next_audit_date
         row.next_due_date = self._advance_due_date(current_due, row.recurrence)
         row.next_audit_date = row.next_due_date
+
+        # Manually-linked engagements must be attributed back to the schedule the
+        # same way auto-created ones are (source_schedule_id), otherwise
+        # get_schedule_history()'s source_schedule_id filter silently drops them.
+        if engagement.source_schedule_id is None:
+            engagement.source_schedule_id = row.id
         self.db.flush()
 
         AuditService(self.db).write_audit_log(
@@ -442,8 +448,9 @@ class AuditScheduleService:
             after_json={
                 "last_audit_engagement_id": str(row.last_audit_engagement_id),
                 "next_due_date": str(row.next_due_date) if row.next_due_date else None,
+                "engagement_source_schedule_id": str(engagement.source_schedule_id),
             },
-            metadata_json={"source": "api"},
+            metadata_json={"source": "api", "link_type": "manual"},
         )
         return row
 

@@ -138,6 +138,12 @@ class AIRiskAssessmentService:
             )
         return rows
 
+    def list_questions(self) -> list[AIRiskAssessmentQuestion]:
+        """Discovery endpoint support: expose the active question bank (id, dimension,
+        text, weight, order) so callers can find valid question_id values instead of
+        having to guess them before calling submit_responses()."""
+        return self._question_bank()
+
     def create_assessment(self, org_id: uuid.UUID, system_id: uuid.UUID, created_by: uuid.UUID) -> AIRiskAssessment:
         self._require_system(org_id, system_id)
 

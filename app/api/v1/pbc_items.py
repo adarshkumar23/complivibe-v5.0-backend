@@ -10,6 +10,7 @@ from app.models.organization import Organization
 from app.models.pbc_item import PbcItem
 from app.models.user import User
 from app.schemas.pbc_item import (
+    PbcAcceptRequest,
     PbcItemCreate,
     PbcItemRead,
     PbcItemUpdate,
@@ -42,6 +43,7 @@ def _read(row: PbcItem, context: dict | None = None) -> PbcItemRead:
         fieldwork_deadline=ctx.get("fieldwork_deadline"),
         overdue_relative_to_fieldwork_deadline=bool(ctx.get("overdue_relative_to_fieldwork_deadline", False)),
         days_past_fieldwork_deadline=ctx.get("days_past_fieldwork_deadline", 0),
+        acceptance_override_reason=row.acceptance_override_reason,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -158,13 +160,19 @@ def submit_pbc_item(
 @router.post("/{item_id}/accept", response_model=PbcItemRead)
 def accept_pbc_item(
     item_id: uuid.UUID,
+    payload: PbcAcceptRequest = PbcAcceptRequest(),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> PbcItemRead:
     service = PbcService(db)
-    row = service.accept_pbc_item(organization.id, item_id, current_user.id)
+    row = service.accept_pbc_item(
+        organization.id,
+        item_id,
+        current_user.id,
+        override_reason=payload.override_reason,
+    )
     db.commit()
     db.refresh(row)
     return _read_one(row, service, organization.id)

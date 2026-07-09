@@ -262,14 +262,37 @@ class PbcService:
         )
         return row
 
-    def accept_pbc_item(self, org_id: uuid.UUID, item_id: uuid.UUID, user_id: uuid.UUID) -> PbcItem:
+    def accept_pbc_item(
+        self,
+        org_id: uuid.UUID,
+        item_id: uuid.UUID,
+        user_id: uuid.UUID,
+        override_reason: str | None = None,
+    ) -> PbcItem:
         row = self.require_pbc_item(org_id, item_id)
         if row.requester_id != user_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only requester can accept this PBC item")
 
         self._transition(row, "accepted")
+
+        # A PBC item with no evidence attached is missing the client's proof of
+        # compliance. Accepting it silently would defeat the point of the PBC
+        # workflow, so acceptance requires either evidence being on file or an
+        # explicit, recorded override reason documenting why it's being waived.
+        override_reason = override_reason.strip() if override_reason else None
+        if row.evidence_id is None and not override_reason:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Cannot accept a PBC item with no evidence attached. Attach evidence via "
+                    "/submit, or supply override_reason to explicitly document why acceptance "
+                    "is proceeding without it."
+                ),
+            )
+
         row.status = "accepted"
         row.accepted_at = self.utcnow()
+        row.acceptance_override_reason = override_reason
         self.db.flush()
 
         AuditService(self.db).write_audit_log(
@@ -281,8 +304,10 @@ class PbcService:
             after_json={
                 "status": row.status,
                 "accepted_at": row.accepted_at.isoformat() if row.accepted_at else None,
+                "evidence_id": str(row.evidence_id) if row.evidence_id else None,
+                "acceptance_override_reason": row.acceptance_override_reason,
             },
-            metadata_json={"source": "api"},
+            metadata_json={"source": "api", "accepted_without_evidence": row.evidence_id is None},
         )
         return row
 

@@ -30,6 +30,12 @@ class PbcRejectRequest(BaseModel):
     rejection_reason: str = Field(min_length=1)
 
 
+class PbcAcceptRequest(BaseModel):
+    # Required only when the item has no evidence attached; the service enforces
+    # that at least one of (evidence present, override_reason) holds.
+    override_reason: str | None = Field(default=None, min_length=1)
+
+
 class PbcItemRead(UUIDTimestampSchema):
     organization_id: UUID
     audit_engagement_id: UUID
@@ -48,6 +54,7 @@ class PbcItemRead(UUIDTimestampSchema):
     fieldwork_deadline: date | None = None
     overdue_relative_to_fieldwork_deadline: bool = False
     days_past_fieldwork_deadline: int = 0
+    acceptance_override_reason: str | None = None
 
 
 class PbcSummary(BaseModel):
