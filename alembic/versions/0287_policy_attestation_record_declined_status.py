@@ -1,7 +1,7 @@
 """add declined to policy_attestation_records status
 
-Revision ID: 0285_policy_attestation_record_declined_status
-Revises: 0284_trust_center_slug_confirmed_at
+Revision ID: 0287_policy_attestation_record_declined_status
+Revises: 0286_entity_risk_scores_add_data_asset_entity_type
 Create Date: 2026-07-09 00:00:00.000000
 
 The completion-tracking table (policy_attestation_records, aka "legacy" record in
@@ -19,8 +19,8 @@ from collections.abc import Sequence
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0285_policy_attestation_record_declined_status"
-down_revision: str | None = "0284_trust_center_slug_confirmed_at"
+revision: str = "0287_policy_attestation_record_declined_status"
+down_revision: str | None = "0286_entity_risk_scores_add_data_asset_entity_type"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
