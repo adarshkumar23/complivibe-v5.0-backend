@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.models.ai_bias_assessment import AIBiasAssessment
 from app.models.ai_monitoring_config import AIMonitoringConfig
 from app.models.ai_monitoring_reading import AIMonitoringReading
-from app.models.ai_risk_assessment import AIRiskAssessment
+from app.models.ai_system_risk_assessment import AISystemRiskAssessment
 
 AI_RISK_RECOMMENDATION_TEMPLATES = {
     ("bias", "critical"): [
@@ -94,23 +94,24 @@ class AIRecommendationEngine:
                 candidates.append((text, source_type, source_ref_id))
 
         assessment = db.execute(
-            select(AIRiskAssessment)
+            select(AISystemRiskAssessment)
             .where(
-                AIRiskAssessment.organization_id == org_id,
-                AIRiskAssessment.ai_system_id == system_id,
-                AIRiskAssessment.status == "completed",
+                AISystemRiskAssessment.organization_id == org_id,
+                AISystemRiskAssessment.ai_system_id == system_id,
+                AISystemRiskAssessment.status == "completed",
             )
-            .order_by(AIRiskAssessment.completed_at.desc(), AIRiskAssessment.created_at.desc())
+            .order_by(AISystemRiskAssessment.completed_at.desc(), AISystemRiskAssessment.created_at.desc())
         ).scalars().first()
 
         if assessment is not None:
+            dimensions_json = assessment.risk_dimensions_json if isinstance(assessment.risk_dimensions_json, dict) else {}
             dimension_ratings = {
-                "bias": assessment.bias_risk_rating,
-                "fairness": assessment.fairness_risk_rating,
-                "explainability": assessment.explainability_risk_rating,
-                "privacy": assessment.privacy_risk_rating,
-                "misuse": assessment.misuse_risk_rating,
-                "security": assessment.security_risk_rating,
+                "bias": dimensions_json.get("bias"),
+                "fairness": dimensions_json.get("fairness"),
+                "explainability": dimensions_json.get("explainability"),
+                "privacy": dimensions_json.get("privacy"),
+                "misuse": dimensions_json.get("misuse"),
+                "security": dimensions_json.get("security"),
             }
             for dimension, rating in dimension_ratings.items():
                 if rating not in {"high", "critical"}:

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.ai_governance.services.ai_governance_event_service import AIGovernanceEventService
 from app.ai_governance.services.ai_recommendation_engine import CAVEAT, AIRecommendationEngine
-from app.models.ai_risk_assessment import AIRiskAssessment
+from app.models.ai_system_risk_assessment import AISystemRiskAssessment
 from app.models.ai_risk_recommendation import AIRiskRecommendation
 from app.models.ai_system import AISystem
 from app.models.task import Task
@@ -86,10 +86,12 @@ class AIRecommendationService:
             return "decommission"
         return "process_control"
 
-    def _assessment_map(self, source_ref_ids: list[uuid.UUID]) -> dict[uuid.UUID, AIRiskAssessment]:
+    def _assessment_map(self, source_ref_ids: list[uuid.UUID]) -> dict[uuid.UUID, AISystemRiskAssessment]:
         if not source_ref_ids:
             return {}
-        rows = self.db.execute(select(AIRiskAssessment).where(AIRiskAssessment.id.in_(source_ref_ids))).scalars().all()
+        rows = self.db.execute(
+            select(AISystemRiskAssessment).where(AISystemRiskAssessment.id.in_(source_ref_ids))
+        ).scalars().all()
         return {row.id: row for row in rows}
 
     def _task_count_map(self, org_id: uuid.UUID, recommendation_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
@@ -109,7 +111,7 @@ class AIRecommendationService:
         self,
         row: AIRiskRecommendation,
         *,
-        source_assessment: AIRiskAssessment | None,
+        source_assessment: AISystemRiskAssessment | None,
         linked_task_count: int,
     ) -> dict:
         source_age_days: int | None = None

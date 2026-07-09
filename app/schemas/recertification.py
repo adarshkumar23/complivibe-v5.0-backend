@@ -81,6 +81,7 @@ class RecertificationRunRequest(BaseModel):
 
 
 class ControlReassessmentRunRequest(BaseModel):
+    policy_id: UUID | None = None
     dry_run: bool = False
     notify_owner: bool = False
     due_within_days: int = Field(default=7, ge=0, le=365)

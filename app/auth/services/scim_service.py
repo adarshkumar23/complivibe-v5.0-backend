@@ -17,6 +17,21 @@ from app.services.seed_service import SeedService
 
 
 class SCIMService:
+    @staticmethod
+    def org_users_query(org_id: uuid.UUID):
+        """Base query for all users belonging to an organization (via membership).
+
+        Shared by the SCIM user-listing endpoint and any other endpoint (e.g.
+        `GET /api/v1/users`) that needs the same underlying org-scoped user
+        data, so both stay in sync with a single source of truth.
+        """
+        return (
+            select(User)
+            .join(Membership, Membership.user_id == User.id)
+            .where(Membership.organization_id == org_id)
+            .order_by(User.created_at.asc())
+        )
+
     def list_users(
         self,
         org_id: uuid.UUID,
