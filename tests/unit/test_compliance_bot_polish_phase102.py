@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import uuid
 from datetime import UTC, date, datetime, timedelta
 
 from app.models.compliance_bot_outbox import ComplianceBotOutbox
 from app.models.compliance_bot_subscription import ComplianceBotSubscription
 from app.models.compliance_policy import CompliancePolicy
+from app.models.organization import Organization
 from app.models.policy_attestation_campaign import PolicyAttestationCampaign
 from app.models.policy_attestation_record import PolicyAttestationRecord
 from app.models.user import User
@@ -35,6 +39,19 @@ def _org_id(client, token: str) -> str:
 
 def _user(db_session, email: str) -> User:
     return db_session.query(User).filter(User.email == email).one()
+
+
+def _set_webhook_secret(db_session, org_id: str, secret: str = "test-webhook-secret") -> str:
+    org = db_session.query(Organization).filter(Organization.id == uuid.UUID(org_id)).one()
+    org.compliance_bot_webhook_secret = secret
+    db_session.commit()
+    return secret
+
+
+def _signed_webhook_post(client, path: str, secret: str, payload: dict):
+    body = json.dumps(payload).encode()
+    signature = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return client.post(path, content=body, headers={"Content-Type": "application/json", "X-ComplianceBot-Signature": signature})
 
 
 def _seed_policy_attestation_record(db_session, org_id: str, user: User) -> PolicyAttestationRecord:
@@ -91,10 +108,12 @@ def test_phase102_slack_retry_with_same_trigger_id_does_not_double_approve(clien
             "digest_enabled": True,
             "digest_time_utc": "08:00",
             "sla_alerts_enabled": True,
+            "platform_user_ref": "U-SLACK-1",
         },
     )
     assert sub.status_code == 200
 
+    secret = _set_webhook_secret(db_session, org_id)
     slack_payload = {
         "command": "/complivibe",
         "text": f"approve {record.id}",
@@ -103,11 +122,7 @@ def test_phase102_slack_retry_with_same_trigger_id_does_not_double_approve(clien
         "trigger_id": "T-RETRY-1234.5678",
     }
 
-    first = client.post(
-        "/api/v1/compliance-bot/slack/commands",
-        headers=_headers(token, org_id),
-        json=slack_payload,
-    )
+    first = _signed_webhook_post(client, f"/api/v1/compliance-bot/slack/commands/{org_id}", secret, slack_payload)
     assert first.status_code == 200, first.text
     assert first.json()["state_changed"] is True
     assert first.json()["replayed"] is False
@@ -115,11 +130,7 @@ def test_phase102_slack_retry_with_same_trigger_id_does_not_double_approve(clien
     # Slack retries the identical delivery (same trigger_id) because our first ack was
     # slow/lost. This must not re-run submit_attestation (which would 400 on a
     # non-pending record) - it should replay the stored response instead.
-    retry = client.post(
-        "/api/v1/compliance-bot/slack/commands",
-        headers=_headers(token, org_id),
-        json=slack_payload,
-    )
+    retry = _signed_webhook_post(client, f"/api/v1/compliance-bot/slack/commands/{org_id}", secret, slack_payload)
     assert retry.status_code == 200, retry.text
     retry_body = retry.json()
     assert retry_body["replayed"] is True
@@ -162,14 +173,17 @@ def test_phase102_different_trigger_id_is_not_treated_as_duplicate(client, db_se
             "digest_enabled": True,
             "digest_time_utc": "08:00",
             "sla_alerts_enabled": True,
+            "platform_user_ref": "U-SLACK-DISTINCT",
         },
     )
 
+    secret = _set_webhook_secret(db_session, org_id)
     for trigger in ("T-A", "T-B"):
-        response = client.post(
-            "/api/v1/compliance-bot/slack/commands",
-            headers=_headers(token, org_id),
-            json={"command": "/complivibe", "text": "status", "trigger_id": trigger},
+        response = _signed_webhook_post(
+            client,
+            f"/api/v1/compliance-bot/slack/commands/{org_id}",
+            secret,
+            {"command": "/complivibe", "text": "status", "trigger_id": trigger, "user_id": "U-SLACK-DISTINCT"},
         )
         assert response.status_code == 200
         assert response.json()["replayed"] is False

@@ -1,7 +1,11 @@
+import hashlib
+import hmac
+import json
 import uuid
 from datetime import UTC, date, timedelta
 
 from app.compliance.services.sla_service import SLAService
+from app.models.organization import Organization
 from app.models.audit_log import AuditLog
 from app.models.compliance_bot_outbox import ComplianceBotOutbox
 from app.models.compliance_bot_subscription import ComplianceBotSubscription
@@ -39,6 +43,19 @@ def _org_id(client, token: str) -> str:
 
 def _user(db_session, email: str) -> User:
     return db_session.query(User).filter(User.email == email).one()
+
+
+def _set_webhook_secret(db_session, org_id: str, secret: str = "test-webhook-secret") -> str:
+    org = db_session.query(Organization).filter(Organization.id == uuid.UUID(org_id)).one()
+    org.compliance_bot_webhook_secret = secret
+    db_session.commit()
+    return secret
+
+
+def _signed_webhook_post(client, path: str, secret: str, payload: dict):
+    body = json.dumps(payload).encode()
+    signature = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return client.post(path, content=body, headers={"Content-Type": "application/json", "X-ComplianceBot-Signature": signature})
 
 
 def _seed_policy_attestation_record(db_session, org_id: str, user: User) -> PolicyAttestationRecord:
@@ -95,14 +112,20 @@ def test_i2_slack_approve_command_mutates_attestation_record(client, db_session)
             "digest_enabled": True,
             "digest_time_utc": "08:00",
             "sla_alerts_enabled": True,
+            "platform_user_ref": "U-SLACK-1",
         },
     )
     assert sub.status_code == 200, sub.text
 
-    command_response = client.post(
-        "/api/v1/compliance-bot/slack/commands",
-        headers=_headers(token, org_id),
-        json={
+    # Real Slack traffic hits this endpoint with no Bearer JWT -- authenticity is
+    # an HMAC-SHA256 signature over the raw body using the org's own
+    # compliance_bot_webhook_secret (same pattern as issue-sync/Razorpay).
+    secret = _set_webhook_secret(db_session, org_id)
+    command_response = _signed_webhook_post(
+        client,
+        f"/api/v1/compliance-bot/slack/commands/{org_id}",
+        secret,
+        {
             "command": "/complivibe",
             "text": f"approve {record.id}",
             "channel_id": "C-I2-ALERTS",
@@ -180,14 +203,17 @@ def test_i2_teams_urgent_command_triggers_sla_breach_state_change(client, db_ses
             "digest_enabled": False,
             "digest_time_utc": "08:00",
             "sla_alerts_enabled": True,
+            "platform_user_ref": "TEAMS-USER-1",
         },
     )
     assert sub.status_code == 200
 
-    urgent_response = client.post(
-        "/api/v1/compliance-bot/teams/commands",
-        headers=_headers(token, org_id),
-        json={"text": "/complivibe urgent", "conversation_id": "teams-chat-123"},
+    secret = _set_webhook_secret(db_session, org_id)
+    urgent_response = _signed_webhook_post(
+        client,
+        f"/api/v1/compliance-bot/teams/commands/{org_id}",
+        secret,
+        {"text": "/complivibe urgent", "conversation_id": "teams-chat-123", "from_user_id": "TEAMS-USER-1"},
     )
     assert urgent_response.status_code == 200, urgent_response.text
     body = urgent_response.json()

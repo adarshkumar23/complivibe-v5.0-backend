@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -59,6 +61,7 @@ class ComplianceBotService:
         digest_time_utc: str,
         sla_alerts_enabled: bool,
         actor_user_id: uuid.UUID,
+        platform_user_ref: str | None = None,
     ) -> ComplianceBotSubscription:
         row = (
             self.db.execute(
@@ -83,6 +86,7 @@ class ComplianceBotService:
                 digest_time_utc=normalized_time,
                 sla_alerts_enabled=sla_alerts_enabled,
                 created_by_user_id=actor_user_id,
+                platform_user_ref=platform_user_ref,
             )
             self.db.add(row)
             self.db.flush()
@@ -113,6 +117,8 @@ class ComplianceBotService:
         row.digest_enabled = digest_enabled
         row.digest_time_utc = normalized_time
         row.sla_alerts_enabled = sla_alerts_enabled
+        if platform_user_ref is not None:
+            row.platform_user_ref = platform_user_ref
         self.db.flush()
         AuditService(self.db).write_audit_log(
             action="compliance_bot.subscription_updated",
@@ -195,6 +201,46 @@ class ComplianceBotService:
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Compliance bot subscription not found")
         return row
+
+    @staticmethod
+    def verify_webhook_signature(webhook_secret: str | None, *, raw_body: bytes, signature: str | None) -> None:
+        """Verify the HMAC-SHA256 signature on an inbound compliance-bot Slack/Teams
+        webhook request, the same signature-only pattern the Razorpay webhook and
+        the Jira/Linear issue-sync webhooks use in place of a Bearer JWT (which real
+        Slack/Teams webhook traffic can never present).
+        """
+        if not webhook_secret:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Organization has no compliance_bot_webhook_secret configured",
+            )
+        if not signature:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing webhook signature")
+        expected = hmac.new(webhook_secret.encode(), raw_body, hashlib.sha256).hexdigest()
+        provided = signature.strip().lower()
+        if provided.startswith("sha256="):
+            provided = provided[len("sha256="):]
+        if not hmac.compare_digest(expected, provided):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid webhook signature")
+
+    def resolve_actor_by_platform_ref(self, organization_id: uuid.UUID, platform: str, platform_user_ref: str) -> uuid.UUID:
+        """Resolve which CompliVibe user issued a signature-authenticated webhook
+        command, from the external Slack/Teams user id -- used instead of a Bearer
+        JWT, which real Slack/Teams webhook traffic never carries."""
+        user_id = self.db.execute(
+            select(ComplianceBotSubscription.user_id).where(
+                ComplianceBotSubscription.organization_id == organization_id,
+                ComplianceBotSubscription.platform == platform,
+                ComplianceBotSubscription.platform_user_ref == platform_user_ref,
+                ComplianceBotSubscription.is_active.is_(True),
+            )
+        ).scalar_one_or_none()
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No compliance bot subscription is linked to this Slack/Teams user for this organization",
+            )
+        return user_id
 
     def _queue_outbox(
         self,
