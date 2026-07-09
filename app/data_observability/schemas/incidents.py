@@ -17,6 +17,13 @@ class DataIncidentCreate(BaseModel):
     detected_by: str = "manual"
 
 
+class IncidentStatusNoteRead(BaseModel):
+    status: str
+    note: str
+    user_id: uuid.UUID | None = None
+    at: datetime
+
+
 class DataIncidentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -36,6 +43,7 @@ class DataIncidentRead(BaseModel):
     detected_at: datetime
     resolved_by: uuid.UUID | None
     resolved_at: datetime | None
+    status_notes_json: list[IncidentStatusNoteRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
     age_hours: int = 0
@@ -44,8 +52,14 @@ class DataIncidentRead(BaseModel):
     context_flags: list[str] = []
 
 
-class ResolveIncidentRequest(BaseModel):
+class IncidentTransitionRequest(BaseModel):
+    """Optional free-text note captured at a status-transition endpoint (investigate/contain/resolve/dismiss)."""
+
     notes: str | None = None
+
+
+# Kept as an alias for backward compatibility with existing imports/call sites.
+ResolveIncidentRequest = IncidentTransitionRequest
 
 
 class DataIncidentSummaryRead(BaseModel):

@@ -95,6 +95,7 @@ class DataIncidentService:
             "detected_at": row.detected_at,
             "resolved_by": row.resolved_by,
             "resolved_at": row.resolved_at,
+            "status_notes_json": row.status_notes_json or [],
             "created_at": row.created_at,
             "updated_at": row.updated_at,
             "age_hours": context["age_hours"],
@@ -375,9 +376,19 @@ class DataIncidentService:
             row.resolved_at = self.utcnow()
         row.updated_at = self.utcnow()
         if notes:
-            evidence = dict(row.evidence_json or {})
-            evidence["status_note"] = notes
-            row.evidence_json = evidence
+            # Append (never overwrite) so notes from earlier transitions (e.g. investigate,
+            # contain) survive later transitions (e.g. resolve, dismiss) and remain queryable
+            # via GET /data-observability/incidents/{id} (status_notes_json).
+            history = list(row.status_notes_json or [])
+            history.append(
+                {
+                    "status": new_status,
+                    "note": notes,
+                    "user_id": str(user_id),
+                    "at": self.utcnow().isoformat(),
+                }
+            )
+            row.status_notes_json = history
         self.db.flush()
 
         AuditService(self.db).write_audit_log(
@@ -386,22 +397,22 @@ class DataIncidentService:
             entity_id=row.id,
             organization_id=org_id,
             actor_user_id=user_id,
-            after_json={"status": row.status},
+            after_json={"status": row.status, "note": notes},
             metadata_json={"source": "api"},
         )
         return row
 
-    def investigate_incident(self, org_id: uuid.UUID, incident_id: uuid.UUID, user_id: uuid.UUID) -> DataIncident:
-        return self._set_status(org_id, incident_id, "investigating", user_id)
+    def investigate_incident(self, org_id: uuid.UUID, incident_id: uuid.UUID, user_id: uuid.UUID, notes: str | None = None) -> DataIncident:
+        return self._set_status(org_id, incident_id, "investigating", user_id, notes=notes)
 
-    def contain_incident(self, org_id: uuid.UUID, incident_id: uuid.UUID, user_id: uuid.UUID) -> DataIncident:
-        return self._set_status(org_id, incident_id, "contained", user_id)
+    def contain_incident(self, org_id: uuid.UUID, incident_id: uuid.UUID, user_id: uuid.UUID, notes: str | None = None) -> DataIncident:
+        return self._set_status(org_id, incident_id, "contained", user_id, notes=notes)
 
     def resolve_incident(self, org_id: uuid.UUID, incident_id: uuid.UUID, resolved_by: uuid.UUID, notes: str | None = None) -> DataIncident:
         return self._set_status(org_id, incident_id, "resolved", resolved_by, notes=notes)
 
-    def dismiss_incident(self, org_id: uuid.UUID, incident_id: uuid.UUID, user_id: uuid.UUID) -> DataIncident:
-        return self._set_status(org_id, incident_id, "dismissed", user_id)
+    def dismiss_incident(self, org_id: uuid.UUID, incident_id: uuid.UUID, user_id: uuid.UUID, notes: str | None = None) -> DataIncident:
+        return self._set_status(org_id, incident_id, "dismissed", user_id, notes=notes)
 
     def escalate_to_issue(self, org_id: uuid.UUID, incident_id: uuid.UUID, user_id: uuid.UUID) -> Issue:
         incident = self._require_incident(org_id, incident_id)

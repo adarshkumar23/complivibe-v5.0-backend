@@ -47,5 +47,10 @@ class DataIncident(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     resolved_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Append-only history of free-text notes captured at each status transition (investigate,
+    # contain, resolve, dismiss). Each entry is {"status": str, "note": str, "user_id": str,
+    # "at": iso-timestamp}. Kept separate from evidence_json so investigation/containment notes
+    # are never silently clobbered by a later transition's note.
+    status_notes_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

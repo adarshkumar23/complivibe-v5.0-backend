@@ -381,7 +381,13 @@ class BreachNotificationService:
                     f"Special category involved: {'yes' if row.special_category_data_involved else 'no'}. "
                     f"Description: {issue.description}."
                 )
-                draft_text = drafting._call_azure_openai(system_prompt=system_prompt, user_prompt=user_prompt)
+                # _call_azure_openai returns (draft_text, truncated) -- must unpack, not assign
+                # the tuple directly. Assigning the raw tuple here previously made draft_text a
+                # 2-tuple, which is a str field on BreachGenerateArticle33DraftRead: FastAPI's
+                # explicit BreachGenerateArticle33DraftRead.model_validate(...) call in the
+                # router then raised an uncaught pydantic ValidationError -> 500 whenever AI
+                # drafting was actually enabled and the Azure OpenAI call succeeded.
+                draft_text, _truncated = drafting._call_azure_openai(system_prompt=system_prompt, user_prompt=user_prompt)
                 used_ai = True
             except Exception:
                 draft_text = self._deterministic_article33_draft(row, issue)
