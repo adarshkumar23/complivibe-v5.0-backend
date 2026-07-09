@@ -9,6 +9,7 @@ from app.data_observability.schemas.incidents import (
     DataIncidentRead,
     DataIncidentSummaryRead,
     EscalateIncidentRead,
+    IncidentTransitionRequest,
     ResolveIncidentRequest,
 )
 from app.data_observability.services.incident_detection_service import DataIncidentService
@@ -101,13 +102,14 @@ def get_incident(
 @router.post("/{incident_id}/investigate", response_model=DataIncidentRead)
 def investigate_incident(
     incident_id: uuid.UUID,
+    payload: IncidentTransitionRequest = IncidentTransitionRequest(),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:write")),
 ) -> DataIncidentRead:
     service = DataIncidentService(db)
-    row = service.investigate_incident(organization.id, incident_id, current_user.id)
+    row = service.investigate_incident(organization.id, incident_id, current_user.id, notes=payload.notes)
     db.commit()
     db.refresh(row)
     return _incident_read(service, row)
@@ -116,13 +118,14 @@ def investigate_incident(
 @router.post("/{incident_id}/contain", response_model=DataIncidentRead)
 def contain_incident(
     incident_id: uuid.UUID,
+    payload: IncidentTransitionRequest = IncidentTransitionRequest(),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:write")),
 ) -> DataIncidentRead:
     service = DataIncidentService(db)
-    row = service.contain_incident(organization.id, incident_id, current_user.id)
+    row = service.contain_incident(organization.id, incident_id, current_user.id, notes=payload.notes)
     db.commit()
     db.refresh(row)
     return _incident_read(service, row)
@@ -147,13 +150,14 @@ def resolve_incident(
 @router.post("/{incident_id}/dismiss", response_model=DataIncidentRead)
 def dismiss_incident(
     incident_id: uuid.UUID,
+    payload: IncidentTransitionRequest = IncidentTransitionRequest(),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("data:write")),
 ) -> DataIncidentRead:
     service = DataIncidentService(db)
-    row = service.dismiss_incident(organization.id, incident_id, current_user.id)
+    row = service.dismiss_incident(organization.id, incident_id, current_user.id, notes=payload.notes)
     db.commit()
     db.refresh(row)
     return _incident_read(service, row)
