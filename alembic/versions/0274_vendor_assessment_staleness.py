@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0270_vendor_assessment_staleness"
-down_revision: str | None = "0269_attestation_token_revocation"
+revision: str = "0274_vendor_assessment_staleness"
+down_revision: str | None = "0273_risk_dependencies"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
