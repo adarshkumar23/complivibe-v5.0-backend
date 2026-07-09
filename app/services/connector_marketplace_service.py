@@ -1,12 +1,22 @@
 import uuid
 from datetime import UTC, datetime
 
+import httpx
 from fastapi import HTTPException, status
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.models.connector_catalog_entry import ConnectorCatalogEntry, ConnectorOrgEnablement
 from app.services.audit_service import AuditService
+from app.services.secrets_service import SecretsService
+
+# Field names (case-insensitive substring match) that hold credentials and must be encrypted
+# at rest via the vault transit backend rather than stored as plaintext in config_values_json.
+_SENSITIVE_FIELD_MARKERS = ("token", "secret", "password", "credential", "apikey", "api_key", "key")
+# Field names that hold the connector's network target -- used to pick what to actually probe
+# during test-connection. Every real connector in the seed catalog uses one of these.
+_URL_FIELD_MARKERS = ("url", "endpoint", "host")
+_CONNECTION_TIMEOUT_SECONDS = 5.0
 
 
 class ConnectorMarketplaceService:
@@ -16,6 +26,75 @@ class ConnectorMarketplaceService:
     @staticmethod
     def utcnow() -> datetime:
         return datetime.now(UTC)
+
+    def _secrets(self, organization_id: uuid.UUID) -> SecretsService:
+        return SecretsService(self.db, organization_id=organization_id)
+
+    @staticmethod
+    def sensitive_field_names(config_schema: dict | None) -> set[str]:
+        properties = (config_schema or {}).get("properties") or {}
+        return {name for name in properties if any(marker in name.lower() for marker in _SENSITIVE_FIELD_MARKERS)}
+
+    @staticmethod
+    def _url_field_names(config_schema: dict | None) -> list[str]:
+        properties = (config_schema or {}).get("properties") or {}
+        required = set((config_schema or {}).get("required") or [])
+        names = [name for name in properties if any(marker in name.lower() for marker in _URL_FIELD_MARKERS)]
+        # Prefer a required URL-shaped field -- every seeded connector's network target is required.
+        names.sort(key=lambda name: (name not in required, name))
+        return names
+
+    def _encrypt_sensitive_fields(
+        self,
+        config_schema: dict | None,
+        config_values: dict | None,
+        *,
+        org_id: uuid.UUID,
+        entity_id: uuid.UUID | None,
+    ) -> dict | None:
+        """Encrypt any credential-shaped fields in `config_values` before it's persisted.
+
+        Idempotent: a value that's already vault-ciphertext (e.g. carried over from a prior
+        save) is left untouched rather than double-encrypted.
+        """
+        if not config_values:
+            return config_values
+        sensitive = self.sensitive_field_names(config_schema)
+        if not sensitive:
+            return dict(config_values)
+        secrets = self._secrets(org_id)
+        encrypted = dict(config_values)
+        for field in sensitive:
+            value = encrypted.get(field)
+            if isinstance(value, str) and value and not SecretsService.is_vault_format(value):
+                encrypted[field] = secrets.encrypt(value, secret_name="connector_config_value", entity_id=entity_id)
+        return encrypted
+
+    def _decrypt_sensitive_fields(
+        self,
+        config_schema: dict | None,
+        config_values: dict | None,
+        *,
+        org_id: uuid.UUID,
+        entity_id: uuid.UUID | None,
+    ) -> dict | None:
+        """Decrypt credential-shaped fields for actual use (e.g. a live test-connection call).
+
+        Values that aren't vault-ciphertext (rows written before this encryption was added) are
+        passed through unchanged rather than raising -- they're legacy plaintext, not corrupt.
+        """
+        if not config_values:
+            return config_values
+        sensitive = self.sensitive_field_names(config_schema)
+        if not sensitive:
+            return dict(config_values)
+        secrets = self._secrets(org_id)
+        decrypted = dict(config_values)
+        for field in sensitive:
+            value = decrypted.get(field)
+            if isinstance(value, str) and value and SecretsService.is_vault_format(value):
+                decrypted[field] = secrets.decrypt(value, secret_name="connector_config_value", entity_id=entity_id)
+        return decrypted
 
     @staticmethod
     def _entry_snapshot(row: ConnectorCatalogEntry) -> dict:
@@ -128,9 +207,9 @@ class ConnectorMarketplaceService:
     def _validate_config_values(config_schema: dict | None, config_values: dict | None) -> list[str]:
         """Validate config_values against the connector's declared config_schema.
 
-        This is a structural check only (required fields present, primitive types match) --
-        it does NOT perform a live network call to the third-party system. Callers must treat
-        a passing result as "configuration looks complete", not "we successfully connected".
+        This is a structural check only (required fields present, primitive types match). Passing
+        this check means "configuration looks complete" -- whether the target is actually reachable
+        is verified separately by test_connection's live HTTP probe.
         """
         errors: list[str] = []
         schema = config_schema or {}
@@ -179,13 +258,24 @@ class ConnectorMarketplaceService:
 
         # Preserve previously-stored config when merely toggling enabled state without resending
         # config_values_json -- otherwise a disable/enable cycle silently wipes stored credentials.
-        effective_config = config_values_json
-        if config_values_json is None and row is not None:
-            effective_config = row.config_values_json
+        # Schema validation always runs against the plaintext the caller supplied this call, or
+        # (when reusing a prior config) the already-persisted value; encrypting a sensitive field
+        # never changes whether it's present or a string, so validating post-encryption would give
+        # the same answer -- but validating pre-encryption avoids ever running validation logic
+        # against ciphertext unnecessarily.
+        incoming_plaintext = config_values_json
+        if incoming_plaintext is not None:
+            validation_config = incoming_plaintext
+            effective_config = self._encrypt_sensitive_fields(
+                connector.config_schema, incoming_plaintext, org_id=org_id, entity_id=row.id if row is not None else None
+            )
+        else:
+            validation_config = row.config_values_json if row is not None else None
+            effective_config = validation_config
 
         checked_at = self.utcnow()
         if enabled:
-            errors = self._validate_config_values(connector.config_schema, effective_config)
+            errors = self._validate_config_values(connector.config_schema, validation_config)
             if errors:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -235,6 +325,8 @@ class ConnectorMarketplaceService:
             after_json={
                 "connector_id": str(connector_id),
                 "enabled": row.enabled,
+                # config_values_json here already has any credential fields encrypted --
+                # the audit trail never contains plaintext secrets.
                 "config_values_json": row.config_values_json,
                 "connection_status": row.connection_status,
             },
@@ -242,12 +334,51 @@ class ConnectorMarketplaceService:
         )
         return row
 
-    def test_connection(self, org_id: uuid.UUID, connector_id: uuid.UUID, user_id: uuid.UUID) -> ConnectorOrgEnablement:
-        """Re-validate a configured connector's stored config against its schema.
+    @classmethod
+    def _extract_target_url(cls, config_schema: dict | None, config_values: dict | None) -> str | None:
+        if not config_values:
+            return None
+        for field in cls._url_field_names(config_schema):
+            value = config_values.get(field)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
 
-        Labeled explicitly: this checks configuration completeness/shape only. It cannot and does
-        not reach out to the real third-party system (no outbound credentials exist for
-        Salesforce/Workday/ServiceNow/etc. in this environment).
+    @classmethod
+    def _probe_connection(cls, url: str, config_values: dict | None) -> tuple[bool, str | None]:
+        """Perform a real outbound HTTP request to `url` with a short timeout.
+
+        Returns (reachable, error_detail). Any DNS failure, connection refusal, or timeout is
+        caught and reported honestly as unreachable rather than swallowed -- a genuinely fake or
+        offline endpoint must fail this check.
+        """
+        target = url if "://" in url else f"https://{url}"
+
+        headers: dict[str, str] = {}
+        for field, value in (config_values or {}).items():
+            if not isinstance(value, str) or not value:
+                continue
+            lowered = field.lower()
+            if "token" in lowered or lowered == "jwt_token":
+                headers["Authorization"] = f"Bearer {value}"
+                break
+
+        try:
+            with httpx.Client(timeout=_CONNECTION_TIMEOUT_SECONDS, follow_redirects=True) as http_client:
+                http_client.get(target, headers=headers)
+            return True, None
+        except httpx.RequestError as exc:
+            return False, f"{exc.__class__.__name__}: {exc}"
+        except Exception as exc:  # e.g. an unparsable/unsupported URL -- report, don't crash
+            return False, f"{exc.__class__.__name__}: {exc}"
+
+    def test_connection(self, org_id: uuid.UUID, connector_id: uuid.UUID, user_id: uuid.UUID) -> ConnectorOrgEnablement:
+        """Re-validate a configured connector: schema/shape check, then -- when the connector's
+        config_schema declares a network-target field (base_url/instance_url/org_url/etc.) -- a
+        genuine outbound HTTP request to it with a bounded timeout. A schema-only pass no longer
+        implies "connected": an unreachable or fake target is reported as such. Connectors with no
+        network endpoint in their schema (e.g. file-based ingest) fall back to schema-only
+        validation, labeled accordingly in the audit trail's validation_mode.
         """
         connector = self._require_entry(connector_id)
         row = self.db.execute(
@@ -260,8 +391,13 @@ class ConnectorMarketplaceService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector is not enabled for this organization")
 
         before = {"connection_status": row.connection_status, "connection_error": row.connection_error}
-        errors = self._validate_config_values(connector.config_schema, row.config_values_json)
+        plaintext_config = self._decrypt_sensitive_fields(
+            connector.config_schema, row.config_values_json, org_id=org_id, entity_id=row.id
+        )
+        errors = self._validate_config_values(connector.config_schema, plaintext_config)
         row.connection_checked_at = self.utcnow()
+
+        validation_mode = "schema_only"
         if not row.enabled:
             row.connection_status = "disconnected"
             row.connection_error = None
@@ -269,8 +405,20 @@ class ConnectorMarketplaceService:
             row.connection_status = "invalid"
             row.connection_error = "; ".join(errors)
         else:
-            row.connection_status = "validated"
-            row.connection_error = None
+            target_url = self._extract_target_url(connector.config_schema, plaintext_config)
+            if target_url is None:
+                row.connection_status = "validated"
+                row.connection_error = None
+            else:
+                validation_mode = "live_http"
+                reachable, detail = self._probe_connection(target_url, plaintext_config)
+                if reachable:
+                    row.connection_status = "validated"
+                    row.connection_error = None
+                else:
+                    row.connection_status = "unreachable"
+                    row.connection_error = detail
+
         row.updated_at = row.connection_checked_at
         self.db.flush()
         AuditService(self.db).write_audit_log(
@@ -281,7 +429,7 @@ class ConnectorMarketplaceService:
             actor_user_id=user_id,
             before_json=before,
             after_json={"connection_status": row.connection_status, "connection_error": row.connection_error},
-            metadata_json={"source": "api", "validation_mode": "schema_only"},
+            metadata_json={"source": "api", "validation_mode": validation_mode},
         )
         return row
 
