@@ -239,6 +239,88 @@ class EvidenceService:
             return evidence_item.original_created_at or evidence_item.collected_at or evidence_item.created_at
         return evidence_item.collected_at or evidence_item.created_at
 
+    def find_active_duplicate_by_checksum(
+        self, organization_id: uuid.UUID, checksum_sha256: str | None
+    ) -> EvidenceItem | None:
+        """Content-based dedup: an evidence item with the same checksum already
+        active (not archived) in this org is a genuine duplicate document, regardless
+        of which ingestion path (manual/webhook/email/form) it came in through."""
+        if not checksum_sha256:
+            return None
+        return self.db.execute(
+            select(EvidenceItem)
+            .where(
+                EvidenceItem.organization_id == organization_id,
+                EvidenceItem.checksum_sha256 == checksum_sha256,
+                EvidenceItem.status != "archived",
+            )
+            .order_by(EvidenceItem.created_at.asc())
+        ).scalars().first()
+
+    def _link_evidence_to_control(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        evidence: EvidenceItem,
+        target_control_id: uuid.UUID,
+        actor_user_id: uuid.UUID | None,
+        link_confidence: str,
+        link_rationale: str | None,
+        source: str,
+        request_ip: str | None,
+        request_user_agent: str | None,
+    ) -> EvidenceControlLink:
+        self.require_control_in_org(organization_id, target_control_id)
+        now = self.now()
+        existing_link = self.db.execute(
+            select(EvidenceControlLink).where(
+                EvidenceControlLink.organization_id == organization_id,
+                EvidenceControlLink.evidence_item_id == evidence.id,
+                EvidenceControlLink.control_id == target_control_id,
+            )
+        ).scalar_one_or_none()
+        if existing_link is not None:
+            if existing_link.link_status != "active":
+                existing_link.link_status = "active"
+                existing_link.confidence = link_confidence
+                existing_link.rationale = link_rationale
+                existing_link.linked_by_user_id = actor_user_id
+                existing_link.linked_at = now
+                existing_link.unlinked_at = None
+                self.db.flush()
+            return existing_link
+
+        link = EvidenceControlLink(
+            organization_id=organization_id,
+            evidence_item_id=evidence.id,
+            control_id=target_control_id,
+            link_status="active",
+            confidence=link_confidence,
+            rationale=link_rationale,
+            linked_by_user_id=actor_user_id,
+            linked_at=now,
+        )
+        self.db.add(link)
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="evidence.control_linked",
+            entity_type="evidence_control_link",
+            entity_id=link.id,
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+            after_json={
+                "evidence_item_id": str(evidence.id),
+                "control_id": str(target_control_id),
+                "link_status": link.link_status,
+                "confidence": link.confidence,
+            },
+            metadata_json={"source": source},
+            ip_address=request_ip,
+            user_agent=request_user_agent,
+        )
+        return link
+
     def create_evidence_item(
         self,
         *,
@@ -263,13 +345,65 @@ class EvidenceService:
         request_ip: str | None = None,
         request_user_agent: str | None = None,
         audit_metadata: dict | None = None,
-    ) -> tuple[EvidenceItem, EvidenceControlLink | None]:
+    ) -> tuple[EvidenceItem, EvidenceControlLink | None, bool]:
+        """Returns (evidence_item, control_link_or_none, is_duplicate). When a checksum
+        match against an existing active evidence item is found, no new EvidenceItem row
+        is created -- the existing one is reused (and linked to target_control_id if
+        provided) so duplicate submissions never silently create disconnected rows."""
         if valid_from and valid_until and valid_until < valid_from:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="valid_until cannot be earlier than valid_from")
         if size_bytes is not None and size_bytes < 0:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="size_bytes cannot be negative")
         if not title.strip():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="title is required")
+
+        duplicate = self.find_active_duplicate_by_checksum(organization_id, checksum_sha256)
+        if duplicate is not None:
+            meta = dict(duplicate.metadata_json or {})
+            submissions = meta.get("duplicate_submissions")
+            if not isinstance(submissions, list):
+                submissions = []
+            submissions.append(
+                {
+                    "detected_at": self.now().isoformat(),
+                    "source": source,
+                    "title": title.strip(),
+                }
+            )
+            meta["duplicate_submissions"] = submissions
+            meta["duplicate_submission_count"] = len(submissions)
+            duplicate.metadata_json = meta
+            self.db.flush()
+
+            AuditService(self.db).write_audit_log(
+                action="evidence.duplicate_detected",
+                entity_type="evidence_item",
+                entity_id=duplicate.id,
+                organization_id=organization_id,
+                actor_user_id=actor_user_id,
+                after_json={
+                    "checksum_sha256": checksum_sha256,
+                    "duplicate_submission_count": meta["duplicate_submission_count"],
+                },
+                metadata_json=(audit_metadata or {"source": source}),
+                ip_address=request_ip,
+                user_agent=request_user_agent,
+            )
+
+            dup_link: EvidenceControlLink | None = None
+            if target_control_id is not None:
+                dup_link = self._link_evidence_to_control(
+                    organization_id=organization_id,
+                    evidence=duplicate,
+                    target_control_id=target_control_id,
+                    actor_user_id=actor_user_id,
+                    link_confidence=link_confidence,
+                    link_rationale=link_rationale,
+                    source=source,
+                    request_ip=request_ip,
+                    request_user_agent=request_user_agent,
+                )
+            return duplicate, dup_link, True
 
         evidence = EvidenceItem(
             organization_id=organization_id,
@@ -313,39 +447,19 @@ class EvidenceService:
 
         link: EvidenceControlLink | None = None
         if target_control_id is not None:
-            self.require_control_in_org(organization_id, target_control_id)
-            now = self.now()
-            link = EvidenceControlLink(
+            link = self._link_evidence_to_control(
                 organization_id=organization_id,
-                evidence_item_id=evidence.id,
-                control_id=target_control_id,
-                link_status="active",
-                confidence=link_confidence,
-                rationale=link_rationale,
-                linked_by_user_id=actor_user_id,
-                linked_at=now,
-            )
-            self.db.add(link)
-            self.db.flush()
-
-            AuditService(self.db).write_audit_log(
-                action="evidence.control_linked",
-                entity_type="evidence_control_link",
-                entity_id=link.id,
-                organization_id=organization_id,
+                evidence=evidence,
+                target_control_id=target_control_id,
                 actor_user_id=actor_user_id,
-                after_json={
-                    "evidence_item_id": str(evidence.id),
-                    "control_id": str(target_control_id),
-                    "link_status": link.link_status,
-                    "confidence": link.confidence,
-                },
-                metadata_json={"source": source},
-                ip_address=request_ip,
-                user_agent=request_user_agent,
+                link_confidence=link_confidence,
+                link_rationale=link_rationale,
+                source=source,
+                request_ip=request_ip,
+                request_user_agent=request_user_agent,
             )
 
-        return evidence, link
+        return evidence, link, False
 
     def list_control_gaps(
         self,

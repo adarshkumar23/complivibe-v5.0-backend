@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -171,24 +171,23 @@ def readiness_gaps(
 def create_evidence(
     payload: EvidenceCreate,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("evidence:write")),
 ) -> EvidenceRead:
-    if payload.valid_from and payload.valid_until and payload.valid_until < payload.valid_from:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="valid_until cannot be earlier than valid_from")
-
-    freshness = EvidenceService.calculate_freshness_status(payload.valid_until)
-    evidence = EvidenceItem(
+    # Routed through EvidenceService.create_evidence_item so the manual upload path
+    # shares the same checksum-based dedup as the webhook/email/form automation paths
+    # (see app/services/evidence_automation_service.py) instead of re-implementing
+    # evidence-row creation (and silently skipping dedup) here.
+    evidence, _, is_duplicate = EvidenceService(db).create_evidence_item(
         organization_id=organization.id,
+        actor_user_id=current_user.id,
         title=payload.title,
         description=payload.description,
         evidence_type=payload.evidence_type,
         source=payload.source,
-        status="active",
-        review_status="not_reviewed",
-        freshness_status=freshness,
         file_name=payload.file_name,
         mime_type=payload.mime_type,
         size_bytes=payload.size_bytes,
@@ -197,31 +196,22 @@ def create_evidence(
         valid_from=payload.valid_from,
         valid_until=payload.valid_until,
         collected_at=payload.collected_at,
-        uploaded_by_user_id=current_user.id,
         metadata_json=payload.metadata_json,
-    )
-    db.add(evidence)
-    db.flush()
-
-    AuditService(db).write_audit_log(
-        action="evidence.created",
-        entity_type="evidence_item",
-        entity_id=evidence.id,
-        organization_id=organization.id,
-        actor_user_id=current_user.id,
-        after_json={
-            "title": evidence.title,
-            "status": evidence.status,
-            "review_status": evidence.review_status,
-            "freshness_status": evidence.freshness_status,
-        },
-        metadata_json={"source": "api"},
-        ip_address=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
+        request_ip=request.client.host if request.client else None,
+        request_user_agent=request.headers.get("user-agent"),
+        audit_metadata={"source": "api"},
     )
 
     db.commit()
     db.refresh(evidence)
+
+    if is_duplicate:
+        # A checksum match against an existing, active evidence item was found: no new
+        # row was created. Signal this to the caller via status code + header rather
+        # than silently returning 201 as if a fresh evidence item had been created.
+        response.status_code = status.HTTP_200_OK
+        response.headers["X-Evidence-Duplicate-Of"] = str(evidence.id)
+
     return _evidence_read(evidence)
 
 

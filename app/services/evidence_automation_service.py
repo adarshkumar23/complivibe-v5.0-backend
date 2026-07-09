@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import uuid
@@ -109,6 +110,25 @@ class EvidenceAutomationService:
             raise ValueError("transform_template.metadata must be an object")
         return parsed
 
+    # Fields an inbound webhook/email/form payload may use to carry the checksum of the
+    # actual underlying document/attachment. Checked in order; first match wins.
+    _CHECKSUM_PAYLOAD_KEYS = ("checksum_sha256", "sha256", "file_checksum_sha256", "content_checksum_sha256")
+
+    @classmethod
+    def _compute_checksum(cls, payload: dict[str, Any]) -> str:
+        """Content-based fingerprint for an ingested evidence payload. If the source
+        system already tells us the document's checksum (common for webhook/email/form
+        integrations that forward a hash of the attached file), use that directly so two
+        deliveries of the same document dedupe correctly. Otherwise fall back to hashing
+        the canonical (sorted-key) JSON of the whole payload, so a byte-identical
+        resubmission of the same event is still recognized as a duplicate."""
+        for key in cls._CHECKSUM_PAYLOAD_KEYS:
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        canonical = json.dumps(payload, sort_keys=True, default=str)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
     def _apply_transform(
         self,
         *,
@@ -142,13 +162,28 @@ class EvidenceAutomationService:
             base = received_at or self._utc_now()
             valid_until = base + timedelta(days=valid_until_days)
 
+        # Note: an explicit title_template that renders to an empty string (e.g. a
+        # placeholder path that doesn't exist in the payload) is intentionally left as
+        # empty here rather than silently falling back to default_title -- it surfaces
+        # as create_evidence_item's "title is required" error, which is how a
+        # misconfigured rule's consecutive_error_count/needs_attention flag gets set.
+        title = self._render_template(title_template, payload) if title_template else default_title
+
+        file_name = payload.get("file_name") if isinstance(payload.get("file_name"), str) else None
+        mime_type = payload.get("mime_type") if isinstance(payload.get("mime_type"), str) else None
+        size_bytes = payload.get("size_bytes") if isinstance(payload.get("size_bytes"), int) else None
+
         return {
-            "title": self._render_template(title_template, payload) if title_template else default_title,
+            "title": title,
             "description": self._render_template(description_template, payload) if description_template else None,
             "external_reference_url": self._render_template(link_template, payload) if link_template else None,
             "collected_at": received_at or self._utc_now(),
             "valid_until": valid_until,
             "metadata_json": metadata,
+            "checksum_sha256": self._compute_checksum(payload),
+            "file_name": file_name,
+            "mime_type": mime_type,
+            "size_bytes": size_bytes,
         }
 
     def create_rule(
@@ -313,13 +348,17 @@ class EvidenceAutomationService:
             try:
                 with self.db.begin_nested():
                     transformed = self._apply_transform(rule=rule, payload=payload, received_at=received_at)
-                    evidence, _ = self.evidence_service.create_evidence_item(
+                    evidence, _, is_content_duplicate = self.evidence_service.create_evidence_item(
                         organization_id=organization_id,
                         actor_user_id=actor_user_id,
                         title=transformed["title"],
                         description=transformed["description"],
                         evidence_type=rule.evidence_type,
                         source=f"automation_{source}",
+                        file_name=transformed["file_name"],
+                        mime_type=transformed["mime_type"],
+                        size_bytes=transformed["size_bytes"],
+                        checksum_sha256=transformed["checksum_sha256"],
                         external_reference_url=transformed["external_reference_url"],
                         collected_at=transformed["collected_at"],
                         valid_until=transformed["valid_until"],
@@ -337,11 +376,15 @@ class EvidenceAutomationService:
                             automation_rule_id=rule.id,
                             source=source,
                             idempotency_key=idempotency_key,
-                            status="created",
+                            status="duplicate" if is_content_duplicate else "created",
                             evidence_item_id=evidence.id,
                         )
                     )
                     self.db.flush()
+                if is_content_duplicate:
+                    duplicates.append((rule.id, idempotency_key or transformed["checksum_sha256"]))
+                    rule.last_matched_at = now
+                    continue
                 created.append(evidence)
                 rule.last_triggered_at = now
                 rule.trigger_count = (rule.trigger_count or 0) + 1
