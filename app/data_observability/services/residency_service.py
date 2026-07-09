@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.compliance.services.subprocessor_service import SubprocessorService
+from app.core.geo import region_covers
 from app.data_observability.services.incident_detection_service import DataIncidentService
 from app.models.data_asset import DataAsset
 from app.models.data_incident import DataIncident
@@ -144,23 +145,35 @@ class ResidencyService:
         )
         return row
 
+    # Hierarchical region matching lives in app.core.geo.region_covers (shared
+    # across residency, subprocessor, access-monitoring, and obligation
+    # jurisdiction logic) so a scope like "IN" correctly covers a more
+    # specific location like "IN-Mumbai" instead of requiring exact equality.
+    region_covers = staticmethod(region_covers)
+
     def check_residency_compliance(self, asset: DataAsset, policy: DataResidencyPolicy) -> dict:
         asset_locations = set(asset.geographic_locations or [])
         violations: list[dict] = []
 
         prohibited = set(policy.prohibited_countries or [])
-        in_prohibited = sorted(asset_locations & prohibited)
+        in_prohibited = sorted(
+            {loc for loc in asset_locations if any(self.region_covers(country, loc) for country in prohibited)}
+        )
         if in_prohibited:
             violations.append({"type": "data_in_prohibited_country", "countries": in_prohibited})
 
         required = set(policy.required_countries or [])
         if required:
-            missing = sorted(required - asset_locations)
+            missing = sorted(
+                {country for country in required if not any(self.region_covers(country, loc) for loc in asset_locations)}
+            )
             if missing:
                 violations.append({"type": "data_outside_required_country", "countries": missing})
 
         if policy.require_eea_only:
-            outside_eea = sorted(asset_locations - EEA_COUNTRIES)
+            outside_eea = sorted(
+                {loc for loc in asset_locations if not any(self.region_covers(country, loc) for country in EEA_COUNTRIES)}
+            )
             if outside_eea:
                 violations.append({"type": "data_outside_eea", "countries": outside_eea})
 

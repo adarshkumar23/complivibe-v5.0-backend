@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.geo import region_covers
 from app.data_observability.services.classification_service import classify_metadata, classify_sample
 from app.models.data_asset import DataAsset
 from app.models.membership import Membership
@@ -164,7 +165,7 @@ class DataAssetService:
             org is not None
             and bool(org.is_significant_data_fiduciary)
             and classification_type in DPDP_LOCALIZATION_CLASSIFICATIONS
-            and "IN" not in regions
+            and not any(region_covers("IN", region) for region in regions)
         ):
             regions.append("IN")
         return regions

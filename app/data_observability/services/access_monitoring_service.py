@@ -5,6 +5,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.geo import region_covers
 from app.data_observability.services.anomaly_detection_service import AnomalyDetectionService
 from app.data_observability.services.incident_detection_service import DataIncidentService
 from app.data_observability.services.lineage_service import LineageService
@@ -72,7 +73,16 @@ class AccessMonitoringService:
 
         permitted_regions = self._parse_asset_regions(asset)
         source_country = (row.source_country or "").upper()
-        if source_country and permitted_regions and source_country not in permitted_regions:
+        # source_country is always a plain 2-letter ISO country code, while
+        # permitted_regions may contain more specific hierarchical entries
+        # (e.g. "IN-Mumbai"). A source country covers a permitted region when
+        # it's the broader country the region belongs to, so compare
+        # hierarchically instead of requiring an exact string match.
+        if (
+            source_country
+            and permitted_regions
+            and not any(region_covers(source_country, region) for region in permitted_regions)
+        ):
             context_flags.append("cross_border_region_mismatch")
             risk_score += 35
 

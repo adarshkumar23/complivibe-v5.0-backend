@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.geo import region_covers
 from app.models.data_access_anomaly_rule import DataAccessAnomalyRule
 from app.models.data_access_log import DataAccessLog
 from app.models.data_asset import DataAsset
@@ -138,7 +139,10 @@ class AnomalyDetectionService:
             if access_log.source_country:
                 asset = self.db.get(DataAsset, access_log.data_asset_id)
                 permitted = list(asset.permitted_regions or []) if asset else []
-                if permitted and access_log.source_country not in permitted:
+                # source_country is a plain country code; permitted regions may be
+                # hierarchical (e.g. "IN-Mumbai"), so match hierarchically rather
+                # than requiring an exact string match.
+                if permitted and not any(region_covers(access_log.source_country, region) for region in permitted):
                     return {
                         "breached": True,
                         "reason": f"Access from {access_log.source_country} not in permitted regions: {permitted}",
