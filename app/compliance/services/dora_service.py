@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.compliance.services.issue_service import IssueService
+from app.models.control_monitoring_alert import ControlMonitoringAlert
 from app.models.dora_ict_register import DORAICTRegister
 from app.models.issue import Issue
 from app.models.membership import Membership
@@ -51,6 +52,13 @@ class DORAService:
         were the only place these findings surfaced -- nothing actually landed in the
         risk register a compliance officer works from day to day, and nothing paged
         anyone when a previously-compliant entry drifted into gap state.
+
+        Mirrors the generic vendor-assessment staleness cascade
+        (VendorAssessmentService.sync_staleness) which lands the same finding in a Risk,
+        a real ControlMonitoringAlert (surfaced via /compliance/monitoring/alerts), AND
+        an Issue. This path used to stop at Risk + Issue and skip the alert, which meant
+        a DORA-critical ICT gap silently never showed up on the monitoring-alerts board
+        that the equivalent generic vendor-assessment gap does.
 
         Idempotent per entry (guarded by DORAICTRegister.risk_id) so repeated writes
         to an already-flagged entry don't spawn duplicate risks; once a human is
@@ -97,6 +105,26 @@ class DORAService:
             audit_source="dora_ict_register",
         )
         row.risk_id = risk.id
+
+        alert = ControlMonitoringAlert(
+            organization_id=org_id,
+            alert_type="dora_ict_register_gap",
+            severity="high" if reason == "missing_exit_strategy" else "medium",
+            status="open",
+            title=f"DORA ICT register gap: {row.counterparty_name}",
+            description=description,
+            alert_context_json={
+                "dora_ict_register_id": str(row.id),
+                "vendor_id": str(row.vendor_id) if row.vendor_id else None,
+                "risk_id": str(risk.id),
+                "reason": reason,
+                "event": "dora_ict_register_gap",
+            },
+            assigned_to_user_id=row.owner_id,
+        )
+        self.db.add(alert)
+        self.db.flush()
+
         existing_issue = self.db.execute(
             select(Issue).where(
                 Issue.organization_id == org_id,
@@ -127,7 +155,7 @@ class DORAService:
             entity_id=row.id,
             organization_id=org_id,
             actor_user_id=actor_user_id,
-            after_json={"risk_id": str(risk.id), "reason": reason},
+            after_json={"risk_id": str(risk.id), "alert_id": str(alert.id), "reason": reason},
             metadata_json={"source": "dora_ict_register"},
         )
 
