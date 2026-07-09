@@ -19,8 +19,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0280_data_incident_status_notes"
-down_revision: str | None = "0279_bia_last_reviewed_at_nullable"
+revision: str = "0283_data_incident_status_notes"
+down_revision: str | None = "0282_compliance_bot_webhook_signature_auth"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
