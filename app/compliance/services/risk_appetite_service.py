@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
-from sqlalchemy import case, select
+from sqlalchemy import case, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.business_unit import BusinessUnit
@@ -12,6 +12,21 @@ from app.models.risk import Risk
 from app.models.risk_appetite_threshold import RiskAppetiteThreshold
 from app.models.user import User
 from app.services.audit_service import AuditService
+
+# Risk appetite categories that risks can be directly evaluated against. Any risk whose
+# own `category` is not one of these is conservatively mapped to "operational" for
+# appetite purposes (see RiskService.APPETITE_FALLBACK_CATEGORIES) -- retroactive
+# re-evaluation must use the same mapping so it covers exactly the same risks that
+# write-time checks would.
+APPETITE_CATEGORIES = {
+    "operational",
+    "financial",
+    "compliance",
+    "reputational",
+    "technology",
+    "vendor",
+    "ai_governance",
+}
 
 
 class RiskAppetiteService:
@@ -372,3 +387,55 @@ class RiskAppetiteService:
             resolved_count += 1
 
         return resolved_count
+
+    def reevaluate_existing_risks(
+        self,
+        *,
+        org_id: uuid.UUID,
+        threshold: RiskAppetiteThreshold,
+        actor_user_id: uuid.UUID | None = None,
+    ) -> list[ControlMonitoringAlert]:
+        """Retroactively re-evaluate existing risks against a threshold that was just
+        created, or whose max_acceptable_score was just lowered. Without this, a new/
+        tightened threshold would only ever be checked against future risk writes
+        (check_appetite_breach is only invoked when a Risk itself is created/updated),
+        leaving pre-existing non-compliant risks silently unflagged until their next
+        unrelated write.
+
+        Every candidate risk is re-run through the normal check_appetite_breach path so
+        scope resolution (org vs. more-specific business_unit threshold) stays authoritative
+        and consistent with write-time behavior.
+        """
+        stmt = select(Risk).where(Risk.organization_id == org_id)
+
+        if threshold.risk_category == "operational":
+            # "operational" is also the fallback appetite category for any risk whose own
+            # category isn't one of the supported appetite categories (see APPETITE_CATEGORIES).
+            stmt = stmt.where(or_(Risk.category == "operational", Risk.category.notin_(APPETITE_CATEGORIES)))
+        else:
+            stmt = stmt.where(Risk.category == threshold.risk_category)
+
+        if threshold.scope_type == "business_unit":
+            # Only risks tagged with this business unit can be affected by a business-unit
+            # scoped threshold.
+            risks = [
+                row
+                for row in self.db.execute(stmt).scalars().all()
+                if isinstance(row.metadata_json, dict)
+                and row.metadata_json.get("business_unit_id") == str(threshold.scope_id)
+            ]
+        else:
+            risks = list(self.db.execute(stmt).scalars().all())
+
+        new_alerts: list[ControlMonitoringAlert] = []
+        for risk in risks:
+            alert = self.check_appetite_breach(
+                org_id=org_id,
+                risk_id=risk.id,
+                new_score=risk.inherent_score,
+                risk_category=threshold.risk_category,
+                actor_user_id=actor_user_id,
+            )
+            if alert is not None:
+                new_alerts.append(alert)
+        return new_alerts
