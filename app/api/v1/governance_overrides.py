@@ -299,7 +299,7 @@ def approve_override(
     _=Depends(require_permission("governance_override:approve")),
 ) -> GovernanceOverrideRequestRead:
     service = GovernanceOverrideService(db)
-    row = service.require_request(organization_id=organization.id, override_id=override_id)
+    row = service.require_request_for_update(organization_id=organization.id, override_id=override_id)
     row = service.approve(row=row, approver_user_id=current_user.id, reason=payload.reason)
     AuditService(db).write_audit_log(
         action="governance_override.approved",
@@ -328,7 +328,7 @@ def reject_override(
     _=Depends(require_permission("governance_override:approve")),
 ) -> GovernanceOverrideRequestRead:
     service = GovernanceOverrideService(db)
-    row = service.require_request(organization_id=organization.id, override_id=override_id)
+    row = service.require_request_for_update(organization_id=organization.id, override_id=override_id)
     row = service.reject(row=row, approver_user_id=current_user.id, reason=payload.reason)
     AuditService(db).write_audit_log(
         action="governance_override.rejected",

@@ -6150,14 +6150,38 @@ class AISystemRiskAssessmentService:
         if action_risk_tier == "high":
             requires_human_approval = True
 
-        if bool(action.get("automation_allowed")) and not bool(policy.get("external_effects_allowed", False)):
-            blocked_reasons.append("external_effects_not_allowed")
-        if not bool(policy.get("task_creation_allowed", False)) and action_type == "create_task":
-            blocked_reasons.append("task_creation_not_allowed")
-        if not bool(policy.get("review_creation_allowed", False)) and action_type == "create_review":
-            blocked_reasons.append("review_creation_not_allowed")
-        if not bool(policy.get("source_record_mutation_allowed", False)) and action_type == "update_record":
-            blocked_reasons.append("source_record_mutation_not_allowed")
+        # BUG (policy-allowlist validation gap): these four checks used to gate on
+        # action.get("automation_allowed") (an arbitrary client-supplied boolean that is
+        # identical -- True -- for every real-execution candidate submitted for
+        # auto-execution, regardless of what that action actually does) and on the literal
+        # action_type strings "create_task"/"create_review"/"update_record", which none of
+        # the three dispatchable real-execution action_types (refresh_signals,
+        # attach_evidence, send_reminder) ever equal. Net effect: any org whose policy left
+        # external_effects_allowed at its safe default (False) had *every* real-execution
+        # action blocked with "external_effects_not_allowed" even though none of these
+        # capabilities have external effects, while an org that opted into
+        # external_effects_allowed got send_reminder (which genuinely creates a task) and
+        # refresh_signals/flag_stale_evidence (which genuinely mutate the source risk
+        # assessment) auto-executed even if it had explicitly left task_creation_allowed /
+        # source_record_mutation_allowed at False -- a policy bypass in the unsafe
+        # direction. Gate on the capability's own external_effects/creates_task/
+        # creates_review/mutates_source_record flags instead, which reflect what the
+        # action_type actually does.
+        # These gates only need to apply when the caller is actually requesting real
+        # auto-execution (automation_allowed=True) -- a planning-only candidate (e.g. one
+        # routed through the human-approval workflow) never reaches a runner regardless of
+        # what these flags say, so gating it here would only produce false blocks with no
+        # safety benefit.
+        capability_for_gates = self._capability_by_action_type().get(action_type, {})
+        if bool(action.get("automation_allowed")):
+            if bool(capability_for_gates.get("external_effects")) and not bool(policy.get("external_effects_allowed", False)):
+                blocked_reasons.append("external_effects_not_allowed")
+            if bool(capability_for_gates.get("creates_task")) and not bool(policy.get("task_creation_allowed", False)):
+                blocked_reasons.append("task_creation_not_allowed")
+            if bool(capability_for_gates.get("creates_review")) and not bool(policy.get("review_creation_allowed", False)):
+                blocked_reasons.append("review_creation_not_allowed")
+            if bool(capability_for_gates.get("mutates_source_record")) and not bool(policy.get("source_record_mutation_allowed", False)):
+                blocked_reasons.append("source_record_mutation_not_allowed")
 
         allowed = len(blocked_reasons) == 0
         if not allowed:
@@ -6798,16 +6822,64 @@ class AISystemRiskAssessmentService:
             sent += 1
         return sent
 
+    def _resolve_target_assessment_for_execution(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        action: dict[str, Any],
+    ) -> AISystemRiskAssessment:
+        """Resolve the risk assessment a real-execution runner should mutate.
+
+        BUG (AI risk-assessment lookup 404 at execution time): the runners for
+        flag_stale_evidence/refresh_signals used to call require_assessment() directly
+        against action["target_entity_id"], silently assuming that id was always a
+        risk_assessment id. But a candidate action's target_entity_type can legitimately be
+        "ai_system" (e.g. a signal scoped to the AI system rather than a specific
+        assessment) -- in that case target_entity_id is an ai_system id, and passing it to
+        require_assessment() raised a 404 ("AI risk assessment not found") on every such
+        execution, even though a corresponding assessment genuinely exists and should have
+        been resolved via related_risk_assessment_id / a lookup by ai_system_id. Resolve by
+        entity type instead of assuming the id's type from context.
+        """
+        target_entity_type = str(action.get("target_entity_type") or "")
+        target_entity_id = action.get("target_entity_id")
+        related_assessment_id = action.get("related_risk_assessment_id")
+        if target_entity_type == "risk_assessment" and target_entity_id is not None:
+            return self.require_assessment(organization_id=organization_id, assessment_id=uuid.UUID(str(target_entity_id)))
+        if related_assessment_id is not None:
+            return self.require_assessment(organization_id=organization_id, assessment_id=uuid.UUID(str(related_assessment_id)))
+        if target_entity_type == "ai_system" and target_entity_id is not None:
+            row = self.db.execute(
+                select(AISystemRiskAssessment)
+                .where(
+                    AISystemRiskAssessment.organization_id == organization_id,
+                    AISystemRiskAssessment.ai_system_id == uuid.UUID(str(target_entity_id)),
+                )
+                .order_by(AISystemRiskAssessment.created_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if row is not None:
+                return row
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No risk assessment exists yet for the targeted AI system",
+            )
+        if target_entity_id is not None:
+            # Last resort: some callers still pass a bare assessment id without an explicit
+            # target_entity_type. Preserve the previous behavior for that shape.
+            return self.require_assessment(organization_id=organization_id, assessment_id=uuid.UUID(str(target_entity_id)))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to resolve a risk assessment for this candidate action (missing target_entity_id/related_risk_assessment_id)",
+        )
+
     def _execute_action_flag_stale_evidence(
         self,
         *,
         organization_id: uuid.UUID,
         action: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-        target_entity_id = action.get("target_entity_id")
-        if target_entity_id is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="target_entity_id is required for flag_stale_evidence")
-        assessment = self.require_assessment(organization_id=organization_id, assessment_id=uuid.UUID(str(target_entity_id)))
+        assessment = self._resolve_target_assessment_for_execution(organization_id=organization_id, action=action)
         old_value = assessment.mitigation_summary
         marker = "[AUTOPILOT] Evidence flagged stale for manual review."
         assessment.mitigation_summary = marker if not old_value else f"{old_value}\n{marker}"
@@ -6864,10 +6936,7 @@ class AISystemRiskAssessmentService:
         organization_id: uuid.UUID,
         action: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-        target_entity_id = action.get("target_entity_id") or action.get("related_risk_assessment_id")
-        if target_entity_id is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="target_entity_id is required for refresh_signals")
-        assessment = self.require_assessment(organization_id=organization_id, assessment_id=uuid.UUID(str(target_entity_id)))
+        assessment = self._resolve_target_assessment_for_execution(organization_id=organization_id, action=action)
         before_risk_factors = dict(assessment.risk_factors_json or {}) if isinstance(assessment.risk_factors_json, dict) else {}
         updated = dict(before_risk_factors)
         updated["autopilot_last_refresh_at"] = self.now().isoformat()

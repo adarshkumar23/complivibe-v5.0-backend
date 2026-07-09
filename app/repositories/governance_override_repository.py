@@ -17,6 +17,21 @@ class GovernanceOverrideRepository:
     def get_request(self, override_id: uuid.UUID) -> GovernanceOverrideRequest | None:
         return self.db.execute(select(GovernanceOverrideRequest).where(GovernanceOverrideRequest.id == override_id)).scalar_one_or_none()
 
+    def get_request_for_update(self, override_id: uuid.UUID) -> GovernanceOverrideRequest | None:
+        """Same lookup as get_request(), but takes a row lock so concurrent approve/reject
+        requests against the same override request serialize instead of racing. Without
+        this, concurrent requests can all read the same approval_count before any of them
+        commits (a lost-update: the final persisted count reflects only the last writer,
+        not the sum of all approvals), and two concurrent requests from the same approver
+        can both pass the "already reviewed" check before either commits, then both try to
+        insert a governance_override_approvals row for the same (override_request_id,
+        approver_user_id) pair -- the second INSERT violates uq_override_approval_once and
+        raises an unhandled IntegrityError (-> raw 500) instead of the intended clean
+        "already reviewed" 400."""
+        return self.db.execute(
+            select(GovernanceOverrideRequest).where(GovernanceOverrideRequest.id == override_id).with_for_update()
+        ).scalar_one_or_none()
+
     def list_requests(
         self,
         *,

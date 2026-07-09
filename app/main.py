@@ -1,3 +1,4 @@
+import inspect
 import re
 from contextlib import asynccontextmanager
 
@@ -119,7 +120,27 @@ def create_application() -> FastAPI:
     async def lifespan(app: FastAPI):
         if Instrumentator is not None:
             Instrumentator().instrument(app).expose(app)
-        yield
+        # Passing an explicit `lifespan=` to FastAPI() replaces Starlette's
+        # `_DefaultLifespan`, which is the *only* thing that ever invokes
+        # `router.on_startup`/`router.on_shutdown` (i.e. the legacy
+        # `@app.on_event("startup"/"shutdown")` handlers). register_pbc_scheduler()
+        # below registers the APScheduler start/stop exclusively via those on_event
+        # decorators, so with a custom lifespan in place those handlers were silently
+        # never called -- the scheduler (and therefore every cron job it drives,
+        # including the sanctions dataset refresh/bootstrap and the daily rescreen
+        # sweep) never actually started in this process. Run them explicitly here so
+        # the scheduler genuinely starts/stops with the app lifecycle again.
+        for startup_handler in app.router.on_startup:
+            result = startup_handler()
+            if inspect.isawaitable(result):
+                await result
+        try:
+            yield
+        finally:
+            for shutdown_handler in app.router.on_shutdown:
+                result = shutdown_handler()
+                if inspect.isawaitable(result):
+                    await result
 
     app = FastAPI(title=settings.APP_NAME, version="0.1.0", lifespan=lifespan)
     register_event_listeners()
