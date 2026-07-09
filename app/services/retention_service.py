@@ -6,10 +6,14 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.models.audit_log import AuditLog
+from app.models.compliance_report import ComplianceReport
+from app.models.evidence_item import EvidenceItem
 from app.models.export_attestation import ExportAttestation
 from app.models.export_job import ExportJob
 from app.models.export_job_event import ExportJobEvent
 from app.models.retention_policy import RetentionPolicy
+from app.models.score_snapshot import ScoreSnapshot
 from app.repositories.retention_repository import RetentionRepository
 from app.core.validation import validate_choice
 
@@ -19,6 +23,18 @@ ALLOWED_RETENTION_ENTITY_TYPES = {
     "evidence_item",
     "score_snapshot",
     "audit_log",
+}
+
+# Non-export_job entity types have no dedicated locked_until/retention_until/
+# legal_hold columns of their own -- they are governed purely by the org's
+# RetentionPolicy for that entity_type, applied against the row's created_at.
+# This mapping is what makes evaluate()/enforcement generic across all 5
+# ALLOWED_RETENTION_ENTITY_TYPES instead of only ever handling export_job.
+_DERIVED_ENTITY_MODELS: dict[str, type] = {
+    "compliance_report": ComplianceReport,
+    "evidence_item": EvidenceItem,
+    "score_snapshot": ScoreSnapshot,
+    "audit_log": AuditLog,
 }
 
 
@@ -87,6 +103,68 @@ class RetentionService:
         self.db.flush()
         return job
 
+    def _evaluate_derived_entity(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        entity_type: str,
+        now: datetime,
+        retained: list[dict[str, Any]],
+        locked: list[dict[str, Any]],
+        under_legal_hold: list[dict[str, Any]],
+        retention_elapsed: list[dict[str, Any]],
+        eligible_for_archive: list[dict[str, Any]],
+    ) -> None:
+        """Enforce retention for entity types with no dedicated locked_until/
+        retention_until/legal_hold columns, by deriving those values from the
+        org's active RetentionPolicy for this entity_type applied to created_at.
+        Mirrors the export_job evaluation semantics above.
+        """
+        model = _DERIVED_ENTITY_MODELS[entity_type]
+        policy = self.repo.active_policy_for_entity(organization_id, entity_type)
+        rows = self.db.execute(select(model).where(model.organization_id == organization_id)).scalars().all()
+        for row in rows:
+            created_at = self.as_utc(row.created_at)
+            if policy is None or created_at is None:
+                # No active policy (or no created_at) means retention cannot be
+                # determined for this row -- treat as retained, not silently
+                # skipped, so it is still visible in the evaluation output.
+                item = {
+                    "entity_type": entity_type,
+                    "entity_id": str(row.id),
+                    "locked_until": None,
+                    "retention_until": None,
+                    "legal_hold": False,
+                }
+                retained.append(item)
+                continue
+
+            locked_until = created_at + timedelta(days=policy.lock_days) if policy.lock_days > 0 else None
+            retention_until = created_at + timedelta(days=policy.retention_days)
+            legal_hold = bool(policy.legal_hold_default)
+
+            item = {
+                "entity_type": entity_type,
+                "entity_id": str(row.id),
+                "locked_until": locked_until.isoformat() if locked_until else None,
+                "retention_until": retention_until.isoformat(),
+                "legal_hold": legal_hold,
+            }
+
+            if legal_hold:
+                under_legal_hold.append(item)
+
+            is_locked = locked_until is not None and locked_until > now
+            if is_locked:
+                locked.append(item)
+
+            if retention_until <= now:
+                retention_elapsed.append(item)
+                if not legal_hold and not is_locked:
+                    eligible_for_archive.append(item)
+            else:
+                retained.append(item)
+
     def evaluate(self, *, organization_id: uuid.UUID, entity_type: str | None) -> dict[str, list[dict[str, Any]]]:
         now = self.now()
         retained: list[dict[str, Any]] = []
@@ -117,6 +195,20 @@ class RetentionService:
                         eligible_for_archive.append(item)
                 else:
                     retained.append(item)
+
+        for derived_entity_type in _DERIVED_ENTITY_MODELS:
+            if entity_type is not None and entity_type != derived_entity_type:
+                continue
+            self._evaluate_derived_entity(
+                organization_id=organization_id,
+                entity_type=derived_entity_type,
+                now=now,
+                retained=retained,
+                locked=locked,
+                under_legal_hold=under_legal_hold,
+                retention_elapsed=retention_elapsed,
+                eligible_for_archive=eligible_for_archive,
+            )
 
         return {
             "retained": retained,

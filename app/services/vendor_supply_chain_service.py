@@ -316,23 +316,45 @@ class VendorSupplyChainService:
             metadata_json={"source": trigger},
         )
 
+    # Hard cap on total edge visits during graph traversal. Cycle detection below
+    # deliberately re-explores a shared node's outgoing edges once per distinct path
+    # that reaches it (see build_graph docstring), which is unbounded in the worst
+    # case for a densely diamond-shaped graph. depth is already capped at
+    # MAX_GRAPH_DEPTH, so this is a defense-in-depth ceiling against pathological
+    # fan-in/fan-out data, not something realistic vendor graphs should ever hit.
+    MAX_GRAPH_EDGE_VISITS = 5000
+
     def build_graph(self, *, organization_id: uuid.UUID, root_vendor_id: uuid.UUID, depth: int) -> dict[str, Any]:
+        """Traverse the supply-chain graph and detect real cycles.
+
+        Cycle detection uses a proper DFS with per-branch recursion-stack (gray-node)
+        tracking: `on_path` holds the ancestors of the node currently being expanded,
+        scoped to *this* call stack, not a single graph-wide visited set. A node
+        reachable via multiple parents (a diamond) is therefore expanded once per
+        distinct incoming path, so a back-edge that only closes a cycle through one of
+        those paths (e.g. B -> N -> B, where N is also reachable via an unrelated A) is
+        never silently skipped just because that edge happened to be explored first via
+        a non-cyclic branch. `edges`/`vendors_by_id` are still deduped for the response
+        payload (by id), independent of traversal state, so the same link/vendor is
+        never listed twice even though it may be visited on more than one branch.
+        """
         root = self.vendor_service.require_vendor_in_org(organization_id, root_vendor_id)
         if depth < 1 or depth > MAX_GRAPH_DEPTH:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"depth must be between 1 and {MAX_GRAPH_DEPTH}")
         vendors_by_id: dict[uuid.UUID, Vendor] = {root.id: root}
-        edges: list[VendorSupplyChainLink] = []
+        edges_by_id: dict[uuid.UUID, VendorSupplyChainLink] = {}
         cycles: list[list[uuid.UUID]] = []
-        queue: deque[tuple[uuid.UUID, int, list[uuid.UUID]]] = deque([(root.id, 0, [root.id])])
-        visited_edges: set[uuid.UUID] = set()
+        seen_cycle_signatures: set[frozenset[uuid.UUID]] = set()
         # True if the traversal reached vendors it could not expand only because the
         # requested depth ran out (not because they have no further links). Without this,
         # a caller who asks for depth=1 on a 5-tier supply chain sees a graph that looks
         # complete when it is actually a truncated view - "no further risk found" and
         # "we didn't look further" must never be visually indistinguishable.
         truncated = False
-        while queue:
-            current_id, current_depth, path = queue.popleft()
+        edge_visits = 0
+
+        def visit(current_id: uuid.UUID, current_depth: int, path: list[uuid.UUID], on_path: frozenset[uuid.UUID]) -> None:
+            nonlocal truncated, edge_visits
             if current_depth >= depth:
                 has_more = self.db.execute(
                     select(VendorSupplyChainLink.id)
@@ -345,7 +367,7 @@ class VendorSupplyChainService:
                 ).scalar_one_or_none()
                 if has_more is not None:
                     truncated = True
-                continue
+                return
             links = self.db.execute(
                 select(VendorSupplyChainLink).where(
                     VendorSupplyChainLink.organization_id == organization_id,
@@ -354,20 +376,31 @@ class VendorSupplyChainService:
                 )
             ).scalars().all()
             for link in links:
-                if link.id in visited_edges:
-                    continue
-                visited_edges.add(link.id)
-                edges.append(link)
+                if edge_visits >= self.MAX_GRAPH_EDGE_VISITS:
+                    truncated = True
+                    return
+                edge_visits += 1
+                edges_by_id[link.id] = link
                 if link.sub_vendor_id not in vendors_by_id:
                     vendor = self.vendor_service.require_vendor_in_org(organization_id, link.sub_vendor_id)
                     vendors_by_id[vendor.id] = vendor
-                if link.sub_vendor_id in path:
+                if link.sub_vendor_id in on_path:
                     cycle_start = path.index(link.sub_vendor_id)
                     cycle = path[cycle_start:] + [link.sub_vendor_id]
-                    if cycle not in cycles:
+                    signature = frozenset(cycle)
+                    if signature not in seen_cycle_signatures:
+                        seen_cycle_signatures.add(signature)
                         cycles.append(cycle)
                     continue
-                queue.append((link.sub_vendor_id, current_depth + 1, path + [link.sub_vendor_id]))
+                visit(
+                    link.sub_vendor_id,
+                    current_depth + 1,
+                    path + [link.sub_vendor_id],
+                    on_path | {link.sub_vendor_id},
+                )
+
+        visit(root.id, 0, [root.id], frozenset({root.id}))
+        edges: list[VendorSupplyChainLink] = list(edges_by_id.values())
         alerts = self.db.execute(
             select(VendorSupplyChainAlert).where(
                 VendorSupplyChainAlert.organization_id == organization_id,

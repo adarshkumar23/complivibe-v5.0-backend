@@ -10,6 +10,12 @@ KRI_METRIC_TYPE_PATTERN = (
 )
 KRI_STATUS_PATTERN = "^(green|amber|red|not_calculated)$"
 
+# Rate-type KRIs are computed and thresholded on a 0-100 percentage scale (see
+# app.compliance.services.kri_calculator.KRICalculator.RATE_METRIC_TYPES). A
+# threshold of "80" means 80%, not 0.8 -- entering a 0-1 fraction here silently
+# makes breach detection nearly impossible to trigger.
+RATE_METRIC_TYPES = {"control_expiry_rate", "evidence_gap_rate", "overdue_task_rate"}
+
 
 class RiskIndicatorLinkedRiskSummary(BaseModel):
     id: UUID
@@ -34,6 +40,17 @@ class RiskIndicatorCreate(BaseModel):
     def validate_thresholds(self) -> "RiskIndicatorCreate":
         if self.warning_threshold >= self.critical_threshold:
             raise ValueError("warning_threshold must be less than critical_threshold")
+        if self.metric_type in RATE_METRIC_TYPES:
+            for field_name, value in (
+                ("target_value", self.target_value),
+                ("warning_threshold", self.warning_threshold),
+                ("critical_threshold", self.critical_threshold),
+            ):
+                if not (0 <= value <= 100):
+                    raise ValueError(
+                        f"{field_name} must be between 0 and 100 (percentage scale) for rate-based "
+                        f"metric_type '{self.metric_type}'"
+                    )
         return self
 
 

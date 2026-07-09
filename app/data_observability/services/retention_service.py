@@ -381,6 +381,33 @@ class RetentionService:
         row.resolved_at = self.utcnow()
         row.evidence_notes = evidence_notes
         row.updated_at = row.resolved_at
+
+        # Push the asset's next review date out to today + retention_days
+        # (not just "today"). run_retention_sweep() flags an asset whenever
+        # retention_review_date <= now, so leaving it at today -- or never
+        # advancing it at all -- means the very next sweep sees the asset as
+        # still overdue and immediately creates a brand new review/task for
+        # the one that was just resolved, i.e. an infinite reflagging loop.
+        asset = self.db.execute(
+            select(DataAsset).where(
+                DataAsset.id == row.data_asset_id,
+                DataAsset.organization_id == org_id,
+            )
+        ).scalar_one_or_none()
+        if asset is not None:
+            retention_days = None
+            if row.policy_id is not None:
+                policy = self.db.execute(
+                    select(DataRetentionPolicy).where(DataRetentionPolicy.id == row.policy_id)
+                ).scalar_one_or_none()
+                if policy is not None:
+                    retention_days = policy.retention_days
+            if retention_days is None:
+                retention_days = asset.retention_policy_days
+            if retention_days is not None:
+                asset.retention_review_date = (self.utcnow() + timedelta(days=int(retention_days))).date()
+                asset.updated_at = self.utcnow()
+
         self.db.flush()
 
         AuditService(self.db).write_audit_log(

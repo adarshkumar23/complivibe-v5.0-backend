@@ -58,7 +58,14 @@ def test_t1_6_permissions_seeded(client, db_session):
 def test_t1_6_recompute_creates_single_risk_register_entry_for_breach(client, db_session):
     org = bootstrap_org_user(client, email_prefix="t16-breach")
 
-    shared = _create_vendor(client, org["org_headers"], org["user_id"], name="Shared Critical Platform")
+    # shared is intentionally NOT independently critical/high tier: this test's
+    # signal is "3 distinct critical apps all depend on the same downstream
+    # vendor" (a classic hub/single-point-of-failure concentration risk), not
+    # "a vendor that is both directly critical AND a dependency of another
+    # vendor" -- that combined case is covered separately (G3 dedup fix) and
+    # must NOT be double-counted. Keeping shared at a non-critical tier here
+    # isolates the fan-in signal this test is actually about.
+    shared = _create_vendor(client, org["org_headers"], org["user_id"], name="Shared Critical Platform", risk_tier="medium")
     app_a = _create_vendor(client, org["org_headers"], org["user_id"], name="Critical App A")
     app_b = _create_vendor(client, org["org_headers"], org["user_id"], name="Critical App B")
     app_c = _create_vendor(client, org["org_headers"], org["user_id"], name="Critical App C")
@@ -129,7 +136,11 @@ def test_t1_6_auto_refreshes_when_new_supply_chain_link_created(client, db_sessi
     """
     org = bootstrap_org_user(client, email_prefix="t16-autolink")
 
-    shared = _create_vendor(client, org["org_headers"], org["user_id"], name="Autolink Shared Platform")
+    # Non-critical shared vendor: isolates the "N distinct critical apps depend
+    # on the same downstream vendor" fan-in signal from the separately-covered
+    # G3 fix for a vendor that is both directly critical AND a dependency
+    # (which must count once, not twice).
+    shared = _create_vendor(client, org["org_headers"], org["user_id"], name="Autolink Shared Platform", risk_tier="medium")
     app_a = _create_vendor(client, org["org_headers"], org["user_id"], name="Autolink App A")
     app_b = _create_vendor(client, org["org_headers"], org["user_id"], name="Autolink App B")
     _link_dependency(client, org["org_headers"], parent_vendor_id=app_a["id"], sub_vendor_id=shared["id"])
