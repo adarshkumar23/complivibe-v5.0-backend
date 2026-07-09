@@ -17,8 +17,11 @@ from app.models.offboarding_record import OffboardingRecord
 from app.models.risk import Risk
 from app.models.task import Task
 from app.models.user import User
+from app.models.user_session import UserSession
 from app.models.vendor import Vendor
+from app.services.activation_token_service import ActivationTokenService
 from app.services.audit_service import AuditService
+from app.services.rbac_service import RBACService
 
 
 class OffboardingService:
@@ -174,6 +177,20 @@ class OffboardingService:
             if deactivated_user_id == chosen_successor:
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="deactivated_user_id and successor_id cannot be the same")
 
+        deactivated_membership = self.db.execute(
+            select(Membership).where(
+                Membership.organization_id == org_id,
+                Membership.user_id == deactivated_user_id,
+            )
+        ).scalar_one_or_none()
+        if deactivated_membership is not None and deactivated_membership.status == "active":
+            RBACService.assert_not_last_owner_change(
+                self.db,
+                target_membership=deactivated_membership,
+                organization_id=org_id,
+                deactivating=True,
+            )
+
         counts: dict[str, int] = {
             "risks": 0,
             "controls": 0,
@@ -184,6 +201,59 @@ class OffboardingService:
         }
 
         with self.db.begin_nested():
+            # Revoke login/session access for the deactivated user before touching
+            # ownership records. Reassigning data without also cutting off login
+            # access is a security bug on its own -- an "offboarded" teammate who
+            # can still authenticate still has full standing access to everything
+            # their role permits, regardless of who now owns their old records.
+            membership_status_before = deactivated_membership.status if deactivated_membership is not None else None
+            activation_tokens_revoked = 0
+            if deactivated_membership is not None and deactivated_membership.status != "inactive":
+                deactivated_membership.status = "inactive"
+                activation_tokens_revoked = ActivationTokenService(self.db).revoke_active_tokens_for_membership(
+                    deactivated_membership.id
+                )
+
+            now = self.utcnow()
+            active_sessions = self.db.execute(
+                select(UserSession).where(
+                    UserSession.organization_id == org_id,
+                    UserSession.user_id == deactivated_user_id,
+                    UserSession.status == "active",
+                )
+            ).scalars().all()
+            for session_row in active_sessions:
+                session_row.status = "revoked"
+                session_row.revoked_at = now
+                session_row.revoked_by = executed_by
+            sessions_revoked = len(active_sessions)
+
+            # If this was the user's only active membership across the whole platform,
+            # fully deactivate their account too -- otherwise `POST /auth/login` still
+            # lets them authenticate (it only checks User.is_active/status, not
+            # membership status) and, having no active membership anywhere, would even
+            # issue them a legacy session-less token via the "no active membership"
+            # fallback path.
+            deactivated_user_row = self.db.execute(select(User).where(User.id == deactivated_user_id)).scalar_one_or_none()
+            remaining_active_membership_elsewhere = self.db.execute(
+                select(Membership.id).where(
+                    Membership.user_id == deactivated_user_id,
+                    Membership.status == "active",
+                    Membership.organization_id != org_id,
+                )
+            ).scalar_one_or_none()
+            user_account_deactivated = False
+            if (
+                deactivated_user_row is not None
+                and remaining_active_membership_elsewhere is None
+                and (deactivated_user_row.is_active or deactivated_user_row.status == "active")
+            ):
+                deactivated_user_row.is_active = False
+                deactivated_user_row.status = "deactivated"
+                user_account_deactivated = True
+
+            self.db.flush()
+
             if chosen_successor is not None:
                 result = self.db.execute(
                     update(Risk)
@@ -264,6 +334,21 @@ class OffboardingService:
                 "reason": f"offboarding_user_{deactivated_user_id}",
                 "successor_id": str(chosen_successor),
             }
+            AuditService(self.db).write_audit_log(
+                action="offboarding.login_access_revoked",
+                entity_type="membership",
+                entity_id=deactivated_membership.id if deactivated_membership is not None else None,
+                organization_id=org_id,
+                actor_user_id=executed_by,
+                before_json={"membership_status": membership_status_before},
+                after_json={
+                    "membership_status": "inactive" if deactivated_membership is not None else None,
+                    "sessions_revoked": sessions_revoked,
+                    "activation_tokens_revoked": activation_tokens_revoked,
+                    "user_account_deactivated": user_account_deactivated,
+                },
+                metadata_json=metadata,
+            )
             AuditService(self.db).write_audit_log(
                 action="offboarding.risks_reassigned",
                 entity_type="risk",
