@@ -285,6 +285,21 @@ class PolicyAttestationService:
         row.declined_at = self.utcnow()
         row.decline_reason = decline_reason
         row.ip_address = ip_address
+
+        legacy = self.db.execute(
+            select(PolicyAttestationRecord).where(
+                PolicyAttestationRecord.organization_id == org_id,
+                PolicyAttestationRecord.campaign_id == campaign_id,
+                PolicyAttestationRecord.user_id == user_id,
+            )
+        ).scalar_one_or_none()
+        if legacy is not None and legacy.status == "pending":
+            # This is the completion-tracking table dashboards/reports actually read
+            # (see employee_attestation_service, experience_service,
+            # custom_report_generator) -- keep it in sync the same way attest() does,
+            # so a decline doesn't stay stuck showing as "pending" forever.
+            legacy.status = "declined"
+
         self.db.flush()
 
         AuditService(self.db).write_audit_log(

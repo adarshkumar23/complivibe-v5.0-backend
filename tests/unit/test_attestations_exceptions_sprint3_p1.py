@@ -7,6 +7,7 @@ from app.core.security import get_password_hash
 from app.models.audit_log import AuditLog
 from app.models.membership import Membership
 from app.models.policy_attestation import PolicyAttestation
+from app.models.policy_attestation_record import PolicyAttestationRecord
 from app.models.policy_exception import PolicyException
 from app.models.role import Role
 from app.models.user import User
@@ -122,6 +123,19 @@ def test_s3_p1_attestation_campaign_and_attest_decline_flow(client, db_session):
         .one()
     )
     assert att_row.status == "attested"
+
+    # The decline above was made by the org owner. The completion-tracking table
+    # (policy_attestation_records) is what dashboards/reports actually read -- assert it
+    # was synced to "declined" instead of being stuck on "pending" forever.
+    owner_legacy_record = (
+        db_session.query(PolicyAttestationRecord)
+        .filter(
+            PolicyAttestationRecord.campaign_id == uuid.UUID(campaign["id"]),
+            PolicyAttestationRecord.user_id == uuid.UUID(org["user_id"]),
+        )
+        .one()
+    )
+    assert owner_legacy_record.status == "declined"
 
 
 def test_s3_p1_campaign_flags_policy_changed_since_start(client, db_session):

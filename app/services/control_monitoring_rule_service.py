@@ -374,6 +374,20 @@ class ControlMonitoringRuleService:
                 self.db.add(alert)
                 self.db.flush()
                 created_alert_ids.append(str(alert.id))
+
+                from app.compliance.services.webhook_service import WebhookService
+
+                WebhookService(self.db).emit(
+                    organization_id,
+                    "alert.triggered",
+                    {
+                        "alert_id": str(alert.id),
+                        "title": alert.title,
+                        "severity": alert.severity,
+                        "rule_id": str(rule.id),
+                        "control_id": str(definition.control_id) if definition.control_id else None,
+                    },
+                )
             else:
                 task = Task(
                     organization_id=organization_id,

@@ -4,15 +4,24 @@ import hashlib
 import uuid
 from datetime import UTC, datetime
 
+import httpx
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.url_security import UnsafeURLTargetError, assert_public_http_url, raise_unsafe_url_http_error
 from app.models.audit_log import AuditLog
 from app.models.siem_export_config import SiemExportConfig
 from app.models.siem_export_run import SiemExportRun
 from app.platform.schemas.siem import SiemConfigCreate, SiemConfigUpdate
 from app.services.audit_service import AuditService
+
+# Delivery methods that push over HTTP(S) and are actually implemented today. "webhook"
+# is the only push transport wired up to real HTTP delivery; "syslog"/"file" are accepted
+# by the schema/DB check constraint but have no delivery implementation, and "api_pull" is
+# intentionally pull-only (the SIEM polls /siem/export).
+PUSH_CAPABLE_DELIVERY_METHODS = {"webhook"}
+UNIMPLEMENTED_PUSH_DELIVERY_METHODS = {"syslog", "file"}
 
 
 class SiemExportService:
@@ -30,6 +39,8 @@ class SiemExportService:
         existing = self._get_config(org_id, db)
         if existing:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="SIEM config already exists. Update it.")
+
+        self._validate_delivery_method(data.delivery_method, data.endpoint_url)
 
         api_key_hash = hashlib.sha256(data.api_key.encode()).hexdigest() if data.api_key else None
         config = SiemExportConfig(
@@ -74,6 +85,10 @@ class SiemExportService:
         if "api_key" in payload:
             raw = payload.pop("api_key")
             config.api_key_hash = hashlib.sha256(raw.encode()).hexdigest() if raw else None
+
+        effective_delivery_method = payload.get("delivery_method", config.delivery_method)
+        effective_endpoint_url = payload.get("endpoint_url", config.endpoint_url)
+        self._validate_delivery_method(effective_delivery_method, effective_endpoint_url)
 
         for field, value in payload.items():
             setattr(config, field, value)
@@ -184,7 +199,20 @@ class SiemExportService:
         last_id = entries[-1].id
         now = self.utcnow()
 
-        run.status = "completed"
+        # Push delivery runs on the same cadence/event source as pull: whenever a batch is
+        # exported (this method), a "webhook"-configured org also gets it POSTed to its
+        # endpoint_url. Previously delivery_method/endpoint_url were captured at config time
+        # but nothing ever read them again -- every export was silently pull-only regardless
+        # of what the org configured.
+        push_error = self._deliver_push(config, payload)
+
+        if push_error:
+            run.status = "partial"
+            run.error_message = push_error
+            config.export_failures = (config.export_failures or 0) + 1
+        else:
+            run.status = "completed"
+
         run.records_exported = len(entries)
         run.completed_at = now
         run.cursor_end = last_id
@@ -198,7 +226,68 @@ class SiemExportService:
             "cursor": str(last_id),
             "has_more": len(entries) == effective_limit,
             "format": config.export_format,
+            "push_delivered": config.delivery_method in PUSH_CAPABLE_DELIVERY_METHODS and push_error is None,
+            "push_error": push_error,
         }
+
+    def _validate_delivery_method(self, delivery_method: str, endpoint_url: str | None) -> None:
+        if delivery_method in PUSH_CAPABLE_DELIVERY_METHODS:
+            if not endpoint_url:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"endpoint_url is required when delivery_method is '{delivery_method}'",
+                )
+            try:
+                assert_public_http_url(endpoint_url, field_name="endpoint_url")
+            except UnsafeURLTargetError as exc:
+                raise_unsafe_url_http_error(exc, field_name="endpoint_url")
+        elif delivery_method in UNIMPLEMENTED_PUSH_DELIVERY_METHODS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"delivery_method '{delivery_method}' is not yet implemented. "
+                    "Supported delivery methods are 'webhook' (HTTP push) and 'api_pull' (poll /siem/export)."
+                ),
+            )
+        # "api_pull" needs no endpoint_url and is always supported (it's the pull path).
+
+    def _deliver_push(self, config: SiemExportConfig, payload: list[dict] | str) -> str | None:
+        """POST the formatted export payload to config.endpoint_url. Returns an error
+        string on failure, or None on success / when the config isn't push-configured."""
+        if config.delivery_method not in PUSH_CAPABLE_DELIVERY_METHODS:
+            return None
+        if not config.endpoint_url:
+            return "delivery_method is 'webhook' but no endpoint_url is configured"
+
+        try:
+            # Re-validate at delivery time (not just at config-save time) to guard against
+            # DNS rebinding between when the endpoint was configured and when we deliver.
+            assert_public_http_url(config.endpoint_url, field_name="endpoint_url")
+        except UnsafeURLTargetError as exc:
+            return str(exc)
+
+        headers = {"X-CompliVibe-Export-Format": config.export_format}
+        try:
+            if isinstance(payload, str):
+                headers["Content-Type"] = "text/plain"
+                response = httpx.post(
+                    config.endpoint_url,
+                    content=payload,
+                    headers=headers,
+                    timeout=httpx.Timeout(15.0, connect=10.0),
+                )
+            else:
+                headers["Content-Type"] = "application/json"
+                response = httpx.post(
+                    config.endpoint_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=httpx.Timeout(15.0, connect=10.0),
+                )
+            response.raise_for_status()
+            return None
+        except Exception as exc:  # pragma: no cover - network/timeout errors
+            return str(exc) or type(exc).__name__
 
     def preview_export(self, org_id: uuid.UUID, db: Session) -> dict:
         config = self._get_config(org_id, db)

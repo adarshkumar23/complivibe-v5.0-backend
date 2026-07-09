@@ -82,6 +82,7 @@ class AttestationCampaignService:
         return {
             "total_assigned": total,
             "attested_count": counts.get("attested", 0),
+            "declined_count": counts.get("declined", 0),
             "pending_count": counts.get("pending", 0),
             "expired_count": counts.get("expired", 0),
             "exempted_count": counts.get("exempted", 0),

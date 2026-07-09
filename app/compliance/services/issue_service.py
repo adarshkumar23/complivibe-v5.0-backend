@@ -101,6 +101,21 @@ class IssueService:
             },
             metadata_json={"source": "api"},
         )
+
+        from app.compliance.services.webhook_service import WebhookService
+
+        WebhookService(self.db).emit(
+            org_id,
+            "issue.created",
+            {
+                "issue_id": str(row.id),
+                "title": row.title,
+                "issue_type": row.issue_type,
+                "severity": row.severity,
+                "source_type": row.source_type,
+                "source_id": str(row.source_id) if row.source_id else None,
+            },
+        )
         return row
 
     def get_issue(self, org_id: uuid.UUID, issue_id: uuid.UUID) -> Issue:
