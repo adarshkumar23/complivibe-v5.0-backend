@@ -23,8 +23,8 @@ from collections.abc import Sequence
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0270_widen_draft_requests_draft_type"
-down_revision: str | None = "0269_attestation_token_revocation"
+revision: str = "0271_widen_draft_requests_draft_type"
+down_revision: str | None = "0270_backfill_timestamp_server_defaults"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
