@@ -420,6 +420,7 @@ from app.models.vendor_geopolitical_exposure import VendorGeopoliticalExposure
 from app.models.ot_ics_agent import OtIcsAgent
 from app.models.ot_ics_asset import OtIcsAsset
 from app.models.ot_ics_finding import OtIcsFinding
+from app.models.ot_ics_segment_risk_detection import OtIcsSegmentRiskDetection
 from app.models.ai_usage_policy_check import AiUsagePolicyCheck
 from app.models.training_completion_record import TrainingCompletionRecord
 
@@ -766,6 +767,7 @@ __all__ = [
     "OtIcsAgent",
     "OtIcsAsset",
     "OtIcsFinding",
+    "OtIcsSegmentRiskDetection",
     "AiUsagePolicyCheck",
     "TrainingCompletionRecord",
 ]

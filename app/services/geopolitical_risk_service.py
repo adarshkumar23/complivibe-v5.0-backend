@@ -62,12 +62,22 @@ from app.models.vendor import Vendor
 from app.models.vendor_geopolitical_exposure import VendorGeopoliticalExposure
 from app.schemas.geopolitical_risk import VendorGeopoliticalExposureCreate
 from app.services.audit_service import AuditService
+from app.services.risk_service import RiskService
 from app.services.vendor_risk_service import VendorRiskService
 
 GDELT_DOC_API_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 GDELT_HTTP_TIMEOUT_SECONDS = 10.0
 
 SEVERITY_ORDER: dict[str, int] = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+# Mirrors Vendor.risk_tier's implicit ordering (same convention as KYB/AML's
+# RISK_TIER_RANK in app/satellites/tprm_intelligence/router.py -- the sibling
+# domain-finding -> risk cascade this follows).
+_VENDOR_RISK_TIER_RANK: dict[str, int] = {"not_assessed": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+
+# Only a "critical" geopolitical signal is severe enough to cascade into a vendor's
+# risk assessment -- lower severities stay informational in the geopolitical dashboard.
+CASCADE_SEVERITY = "critical"
 
 # GDELT is a near-real-time news feed (typically indexed within minutes of
 # publication). If this org has not run a *successful* ingest for a given
@@ -286,6 +296,15 @@ class GeopoliticalRiskService:
             },
             metadata_json={"source": "gdelt", "region_query": region_query},
         )
+
+        # A critical signal is a genuine threat to vendors operating in that region --
+        # cascade it into their risk assessment instead of leaving it to live only in
+        # the geopolitical dashboard (see module docstring / _cascade_critical_signals
+        # for the full rationale).
+        self._cascade_critical_signals_to_vendor_risk(
+            org_id=org_id, region_query=region_query, created_rows=created_rows, actor_id=actor_id
+        )
+
         self.db.commit()
         for row in created_rows:
             self.db.refresh(row)
@@ -298,6 +317,107 @@ class GeopoliticalRiskService:
             "source_error": None,
             "signals": created_rows,
         }
+
+    # ------------------------------------------------------------------
+    # Vendor risk cascade
+    # ------------------------------------------------------------------
+    def _cascade_critical_signals_to_vendor_risk(
+        self,
+        *,
+        org_id: uuid.UUID,
+        region_query: str,
+        created_rows: list[GeopoliticalRiskSignal],
+        actor_id: uuid.UUID | None,
+    ) -> None:
+        """Escalate risk_tier and create a Risk register entry for every vendor
+        exposed to a region that just received a critical geopolitical signal.
+
+        Follows the same cascade convention as KYB/AML risk-tier escalation
+        (``compute_vendor_kyb_check_and_apply_effects`` in
+        ``app/satellites/tprm_intelligence/router.py``): escalate risk_tier only if
+        the vendor is currently under-tiered relative to the signal severity, ranked
+        via a not_assessed < low < medium < high < critical ordering. A Risk register
+        entry is created once per vendor/region exposure (tracked via
+        ``VendorGeopoliticalExposure.cascaded_risk_id``) so repeated critical signals
+        for a region an org is already tracking as a risk don't spam duplicate rows --
+        this mirrors ``VendorConcentrationRiskService.recompute``'s "create once, keep
+        risk_id" pattern.
+        """
+        critical_rows = [row for row in created_rows if row.severity == CASCADE_SEVERITY]
+        if not critical_rows:
+            return
+
+        exposures = self.db.execute(
+            select(VendorGeopoliticalExposure).where(
+                VendorGeopoliticalExposure.organization_id == org_id,
+                VendorGeopoliticalExposure.region == region_query,
+                VendorGeopoliticalExposure.deleted_at.is_(None),
+            )
+        ).scalars().all()
+        if not exposures:
+            return
+
+        # Multiple critical articles can land in one ingest; the vendor only cares
+        # about the worst headline, not one Risk per article.
+        worst = max(critical_rows, key=lambda row: (row.detected_at or self.utcnow()))
+        audit = AuditService(self.db)
+
+        for exposure in exposures:
+            vendor = self.db.get(Vendor, exposure.vendor_id)
+            if vendor is None or vendor.status == "archived":
+                continue
+
+            if _VENDOR_RISK_TIER_RANK.get(CASCADE_SEVERITY, 0) > _VENDOR_RISK_TIER_RANK.get(vendor.risk_tier, 0):
+                before_tier = vendor.risk_tier
+                vendor.risk_tier = CASCADE_SEVERITY
+                self.db.flush()
+                audit.write_audit_log(
+                    action="vendor.risk_tier_escalated",
+                    entity_type="vendor",
+                    entity_id=vendor.id,
+                    organization_id=org_id,
+                    actor_user_id=actor_id,
+                    before_json={"risk_tier": before_tier},
+                    after_json={"risk_tier": CASCADE_SEVERITY, "reason": "geopolitical_critical_signal"},
+                    metadata_json={
+                        "source": "geopolitical_risk",
+                        "region": region_query,
+                        "signal_id": str(worst.id),
+                    },
+                )
+
+            exposure.last_cascaded_severity = CASCADE_SEVERITY
+            exposure.last_cascaded_at = self.utcnow()
+
+            if exposure.cascaded_risk_id is None:
+                description = (
+                    f"A critical geopolitical signal was detected for {region_query!r}, a region "
+                    f"{vendor.name} is exposed to: {worst.headline or 'no headline available'!r} "
+                    f"(category: {worst.category})."
+                )
+                risk = RiskService(self.db).create_risk_from_service(
+                    organization_id=org_id,
+                    title=f"Critical geopolitical exposure: {vendor.name} in {region_query}",
+                    description=description,
+                    category="vendor",
+                    likelihood=4,
+                    impact=5,
+                    treatment_strategy="mitigate",
+                    risk_context_external=(
+                        f"Source: GDELT DOC 2.0 API. Signal id {worst.id}, category "
+                        f"{worst.category}, detected_at {worst.detected_at.isoformat() if worst.detected_at else None}."
+                    ),
+                    metadata_json={
+                        "source": "geopolitical_risk",
+                        "vendor_id": str(vendor.id),
+                        "region": region_query,
+                        "geopolitical_signal_id": str(worst.id),
+                    },
+                    created_by_user_id=actor_id,
+                    audit_source="geopolitical_risk",
+                )
+                exposure.cascaded_risk_id = risk.id
+            self.db.flush()
 
     # ------------------------------------------------------------------
     # Signals

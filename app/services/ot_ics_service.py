@@ -5,7 +5,7 @@ from collections import Counter, defaultdict
 from datetime import UTC, datetime
 
 from fastapi import Depends, Header, HTTPException, status
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_db
@@ -13,6 +13,7 @@ from app.models.data_asset import DataAsset
 from app.models.ot_ics_agent import OtIcsAgent
 from app.models.ot_ics_asset import OtIcsAsset
 from app.models.ot_ics_finding import OtIcsFinding
+from app.models.ot_ics_segment_risk_detection import OtIcsSegmentRiskDetection
 from app.schemas.ot_ics import (
     OtIcsAgentCreate,
     OtIcsAssetCreate,
@@ -21,6 +22,16 @@ from app.schemas.ot_ics import (
     OtIcsFindingResolveRequest,
 )
 from app.services.audit_service import AuditService
+from app.services.risk_service import RiskService
+
+# A finding at this severity or above is a genuine risk to the org, not just
+# monitoring noise -- it must create a real risk-register entry (see
+# _cascade_finding_to_risk), matching every other domain's staleness/finding logic
+# in this codebase (vendor concentration risk, KYB/AML, geopolitical risk, ...).
+FINDING_RISK_CASCADE_SEVERITIES = {"high", "critical"}
+# Matches OtIcsFindingService.get_summary's existing "flagged_network_segments"
+# threshold for concentration reporting.
+SEGMENT_FLAG_THRESHOLD = 2
 
 
 def _utcnow() -> datetime:
@@ -350,6 +361,10 @@ class OtIcsFindingService:
             after_json={"resolved_at": row.resolved_at.isoformat()},
             metadata_json={"source": "api", "resolution_note": payload.resolution_note},
         )
+
+        asset = self.db.get(OtIcsAsset, row.asset_id)
+        if asset is not None and asset.network_segment:
+            self._recompute_segment_risk(org_id, asset.network_segment)
         return row
 
     def ingest_finding(self, agent: OtIcsAgent, payload: OtIcsFindingIngestRequest) -> OtIcsFinding:
@@ -385,7 +400,121 @@ class OtIcsFindingService:
             },
             metadata_json={"source": "agent_ingest"},
         )
+
+        self._cascade_finding_to_risk(row, asset)
         return row
+
+    def _cascade_finding_to_risk(self, finding: OtIcsFinding, asset: OtIcsAsset) -> None:
+        """A high/critical OT/ICS finding is a genuine operational-technology risk, not
+        just monitoring noise -- create a real risk-register entry for it, the same
+        way every other domain's staleness/finding logic in this codebase does
+        (vendor concentration risk, KYB/AML, geopolitical risk). One finding creates
+        at most one Risk (tracked via ``finding.risk_id``).
+        """
+        if finding.severity not in FINDING_RISK_CASCADE_SEVERITIES:
+            return
+
+        description = (
+            f"OT/ICS convergence monitoring detected a {finding.severity}-severity "
+            f"{finding.finding_type.replace('_', ' ')} finding on asset {asset.name!r} "
+            f"({asset.asset_type}, network segment {asset.network_segment or 'unspecified'})."
+        )
+        if finding.description:
+            description += f" {finding.description}"
+
+        risk = RiskService(self.db).create_risk_from_service(
+            organization_id=finding.organization_id,
+            title=f"OT/ICS finding: {finding.finding_type.replace('_', ' ')} on {asset.name}",
+            description=description,
+            category="operational",
+            likelihood=3 if finding.severity == "high" else 4,
+            impact=4 if finding.severity == "high" else 5,
+            treatment_strategy="mitigate",
+            risk_context_external=(
+                f"Source: OT/ICS convergence-monitoring agent ingest. Finding id {finding.id}, "
+                f"asset id {asset.id}, detected_at {finding.detected_at.isoformat()}."
+            ),
+            metadata_json={
+                "source": "ot_ics",
+                "finding_id": str(finding.id),
+                "asset_id": str(asset.id),
+                "network_segment": asset.network_segment,
+                "finding_type": finding.finding_type,
+                "severity": finding.severity,
+            },
+            created_by_user_id=None,
+            audit_source="ot_ics_finding_ingest",
+        )
+        finding.risk_id = risk.id
+        self.db.flush()
+
+        if asset.network_segment:
+            self._recompute_segment_risk(finding.organization_id, asset.network_segment)
+
+    def _recompute_segment_risk(self, org_id: uuid.UUID, network_segment: str) -> None:
+        """Recompute open high/critical finding concentration for one network segment
+        and, the first time it crosses ``SEGMENT_FLAG_THRESHOLD`` (matching
+        ``get_summary``'s existing "flagged_network_segments" reporting threshold),
+        create a single Risk register entry for the segment as a whole -- a flagged
+        multi-finding segment is a distinct, worse risk than any one finding alone.
+        """
+        count = self.db.execute(
+            select(func.count(OtIcsFinding.id))
+            .select_from(OtIcsFinding)
+            .join(OtIcsAsset, OtIcsAsset.id == OtIcsFinding.asset_id)
+            .where(
+                OtIcsFinding.organization_id == org_id,
+                OtIcsFinding.deleted_at.is_(None),
+                OtIcsFinding.resolved_at.is_(None),
+                OtIcsFinding.severity.in_(FINDING_RISK_CASCADE_SEVERITIES),
+                OtIcsAsset.network_segment == network_segment,
+            )
+        ).scalar_one()
+
+        detection = self.db.execute(
+            select(OtIcsSegmentRiskDetection).where(
+                OtIcsSegmentRiskDetection.organization_id == org_id,
+                OtIcsSegmentRiskDetection.network_segment == network_segment,
+            )
+        ).scalar_one_or_none()
+        if detection is None:
+            detection = OtIcsSegmentRiskDetection(
+                organization_id=org_id,
+                network_segment=network_segment,
+                threshold_count=SEGMENT_FLAG_THRESHOLD,
+                computed_at=_utcnow(),
+            )
+            self.db.add(detection)
+
+        detection.open_high_or_critical_count = count
+        detection.computed_at = _utcnow()
+        detection.status = "flagged" if count >= SEGMENT_FLAG_THRESHOLD else "below_threshold"
+        self.db.flush()
+
+        if detection.status == "flagged" and detection.risk_id is None:
+            risk = RiskService(self.db).create_risk_from_service(
+                organization_id=org_id,
+                title=f"OT/ICS network segment risk concentration: {network_segment}",
+                description=(
+                    f"Network segment {network_segment!r} has {count} open high-or-critical "
+                    "OT/ICS convergence-monitoring findings across its assets, exceeding the "
+                    f"{SEGMENT_FLAG_THRESHOLD}-finding concentration threshold."
+                ),
+                category="operational",
+                likelihood=4,
+                impact=4,
+                treatment_strategy="mitigate",
+                risk_context_external="Source: OT/ICS convergence-monitoring findings/summary concentration threshold.",
+                metadata_json={
+                    "source": "ot_ics_segment_concentration",
+                    "network_segment": network_segment,
+                    "open_high_or_critical_count": count,
+                },
+                created_by_user_id=None,
+                audit_source="ot_ics_segment_concentration",
+            )
+            detection.risk_id = risk.id
+            self.db.flush()
 
     def list_findings(
         self,

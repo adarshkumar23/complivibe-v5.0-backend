@@ -95,6 +95,7 @@ class OtIcsFindingResponse(BaseModel):
     detected_at: datetime
     resolved_at: datetime | None = None
     created_at: datetime
+    risk_id: UUID | None = None
 
 
 class OtIcsFindingIngestResponse(BaseModel):

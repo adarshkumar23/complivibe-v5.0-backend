@@ -77,6 +77,7 @@ def _finding_read(row: OtIcsFinding) -> OtIcsFindingResponse:
         detected_at=row.detected_at,
         resolved_at=row.resolved_at,
         created_at=row.created_at,
+        risk_id=row.risk_id,
     )
 
 

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 from app.satellites.tprm_intelligence.config import get_tprm_intelligence_settings
 from app.satellites.tprm_intelligence.http_client import SatelliteHTTPClient
-from app.satellites.tprm_intelligence.vendor_security_rating import normalize_domain
+from app.satellites.tprm_intelligence.vendor_security_rating import normalize_domain, weighted_score_with_confidence
 
 
 class ThreatIntelligenceService:
@@ -23,10 +23,18 @@ class ThreatIntelligenceService:
             "gdelt_threat_media": self._gdelt(normalized),
         }
         indicators = self._collect_indicators(signals)
+        result = weighted_score_with_confidence(signals, self.WEIGHTS)
         return {
             "domain": normalized,
             "signals_used": signals,
-            "threat_score": self._weighted_score(signals),
+            # None (not a fabricated 0.0) when zero signals returned real data. A
+            # threat score of 0.0 reads as "confirmed clean", which would be a false
+            # negative if it actually means "we have no data" -- see
+            # weighted_score_with_confidence for the shared root-cause fix.
+            "threat_score": result["score"],
+            "confidence": result["confidence"],
+            "signals_available": result["signals_available"],
+            "signals_total": result["signals_total"],
             "indicators_found": indicators,
             "computed_at": datetime.now(UTC).isoformat(),
         }
@@ -90,19 +98,6 @@ class ThreatIntelligenceService:
             }
         except Exception as exc:
             return {"status": "error", "source": "gdelt", "score": None, "message": str(exc)}
-
-    def _weighted_score(self, signals: dict[str, dict]) -> float:
-        weighted_sum = 0.0
-        weight_used = 0.0
-        for name, signal in signals.items():
-            score = signal.get("score")
-            if signal.get("status") == "available" and isinstance(score, (int, float)):
-                weight = self.WEIGHTS[name]
-                weighted_sum += float(score) * weight
-                weight_used += weight
-        if weight_used == 0:
-            return 0.0
-        return round(weighted_sum / weight_used, 2)
 
     def _collect_indicators(self, signals: dict[str, dict]) -> dict:
         indicators: dict[str, object] = {}

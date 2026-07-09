@@ -50,6 +50,9 @@ def test_t1_1_vendor_security_rating_persists_skips_and_audits(client, db_sessio
         return {
             "domain": domain,
             "composite_score": 88.5,
+            "confidence": 70.0,
+            "signals_available": 2,
+            "signals_total": 4,
             "signals_used": {
                 "mozilla_observatory": {"status": "available", "source": "mozilla_observatory", "grade": "A", "score": 95},
                 "gdelt_adverse_media": {"status": "available", "source": "gdelt", "score": 90, "article_count": 1},
@@ -94,6 +97,9 @@ def test_t1_1_security_rating_get_survives_multiple_computes(client, monkeypatch
         return {
             "domain": domain,
             "composite_score": next(scores),
+            "confidence": 100.0,
+            "signals_available": 4,
+            "signals_total": 4,
             "signals_used": {
                 "mozilla_observatory": {"status": "skipped", "source": "mozilla_observatory", "score": None, "message": "skipped"},
                 "gdelt_adverse_media": {"status": "skipped", "source": "gdelt", "score": None, "message": "skipped"},
@@ -133,6 +139,9 @@ def test_t1_2_vendor_threat_intelligence_persists_skips_and_audits(client, db_se
         return {
             "domain": domain,
             "threat_score": 25.0,
+            "confidence": 25.0,
+            "signals_available": 1,
+            "signals_total": 3,
             "signals_used": {
                 "alienvault_otx": {"status": "skipped", "source": "alienvault_otx", "score": None, "message": "OTX signal skipped: no API key configured"},
                 "abuseipdb": {"status": "skipped", "source": "abuseipdb", "score": None, "message": "AbuseIPDB signal skipped: API key not configured"},
@@ -722,7 +731,14 @@ def test_t1_3_supply_chain_propagates_nth_party_signal_to_first_party(client, db
         assert linked.status_code == 201, linked.text
 
     def degraded_rating(self, domain: str) -> dict:
-        return {"domain": domain, "composite_score": 42.0, "signals_used": {"mozilla_observatory": {"status": "available", "score": 42}}}
+        return {
+            "domain": domain,
+            "composite_score": 42.0,
+            "confidence": 45.0,
+            "signals_available": 1,
+            "signals_total": 4,
+            "signals_used": {"mozilla_observatory": {"status": "available", "score": 42}},
+        }
 
     monkeypatch.setattr(VendorSecurityRatingService, "compute", degraded_rating)
     computed = client.post(f"{SATELLITE_BASE}/{fifth_party['id']}/security-rating/compute", headers=org["org_headers"])
