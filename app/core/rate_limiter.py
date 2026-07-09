@@ -4,6 +4,7 @@ import hashlib
 import time
 import uuid
 
+import limits as limits_lib
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
@@ -77,6 +78,40 @@ class CompliVibeRateLimiter:
             return "public"
         return "api_general"
 
+    def check_general_limit(self, request: Request, db: Session | None) -> tuple[bool, str, str]:
+        """Enforce the general per-request rate limit for every request.
+
+        slowapi's `SlowAPIMiddleware` relies on `default_limits` plus scanning
+        `app.routes` at request time to find the matching endpoint handler and
+        decide whether a route-specific limit applies. In this app, `/api/v1/*`
+        routes are registered via a router included with FastAPI's lazy
+        include-router mechanism, which `SlowAPIMiddleware`'s route scan does not
+        see -- it only finds a handler (and therefore only ever enforces
+        `default_limits`) for routes attached directly on the app object. As a
+        result `default_limits` never actually applied to any `/api/v1/*` route;
+        only endpoints with their own explicit `@rate_limiter.limiter.limit(...)`
+        decorator (login/register/roi-calculator) were ever rate limited.
+        This performs the same limit check slowapi's middleware was meant to do
+        -- same key function, same per-endpoint-group defaults, same per-org
+        overrides, same underlying storage/strategy -- but invoked directly from
+        our own request-scoped middleware (see `app.main`), which runs for every
+        request regardless of how its route was registered.
+        """
+        endpoint_group = getattr(request.state, "endpoint_group", None) or self.endpoint_group_for_path(request.url.path)
+        limit_str = ENDPOINT_GROUP_DEFAULTS.get(endpoint_group, ENDPOINT_GROUP_DEFAULTS["api_general"])
+
+        org_id = getattr(request.state, "organization_id", None)
+        if org_id and db is not None:
+            try:
+                limit_str = self.get_org_limit(uuid.UUID(str(org_id)), endpoint_group, db)
+            except (ValueError, TypeError):
+                pass
+
+        item = limits_lib.parse(limit_str)
+        key = self._get_rate_key(request)
+        allowed = self.limiter._limiter.hit(item, "general", endpoint_group, key)
+        return allowed, endpoint_group, limit_str
+
     def get_org_limit(self, org_id: uuid.UUID, endpoint_group: str, db: Session) -> str:
         config = (
             db.query(RateLimitConfig)
@@ -145,6 +180,33 @@ def build_rate_limit_exceeded_response(request: Request, detail: str) -> JSONRes
             "message": "Too many requests",
             "retry_after": retry_after,
             "limit": limit_value,
+            "endpoint_group": endpoint_group,
+        },
+    )
+
+
+def build_general_rate_limit_exceeded_response(endpoint_group: str, limit_str: str) -> JSONResponse:
+    """Same response shape as `build_rate_limit_exceeded_response`, built directly
+    from a "N/unit" limit string (as produced by `check_general_limit`) instead of
+    slowapi's "N per M unit" exception detail string."""
+    amount_str, _, unit = limit_str.partition("/")
+    limit_per_minute = int(amount_str) if amount_str.isdigit() else 60
+    retry_after = {"minute": 60, "hour": 3600, "day": 86400}.get(unit, 60)
+
+    headers = {
+        "Retry-After": str(retry_after),
+        "X-RateLimit-Limit": str(limit_per_minute),
+        "X-RateLimit-Remaining": "0",
+        "X-RateLimit-Reset": str(int(time.time()) + retry_after),
+    }
+    return JSONResponse(
+        status_code=429,
+        headers=headers,
+        content={
+            "error": "rate_limit_exceeded",
+            "message": "Too many requests",
+            "retry_after": retry_after,
+            "limit": limit_str,
             "endpoint_group": endpoint_group,
         },
     )

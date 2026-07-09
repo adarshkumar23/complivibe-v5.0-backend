@@ -13,6 +13,10 @@ class ComplianceBotSubscriptionCreate(BaseModel):
     digest_enabled: bool = True
     digest_time_utc: str = Field(default="08:00", pattern="^[0-2][0-9]:[0-5][0-9]$")
     sla_alerts_enabled: bool = True
+    # The external Slack `user_id` / Teams `from_user_id` this member will send
+    # slash commands from -- lets the signature-authenticated webhook endpoint
+    # (no Bearer JWT) resolve which CompliVibe user issued a command.
+    platform_user_ref: str | None = Field(default=None, max_length=255)
 
 
 class ComplianceBotSubscriptionRead(UUIDTimestampSchema):
@@ -27,6 +31,7 @@ class ComplianceBotSubscriptionRead(UUIDTimestampSchema):
     last_digest_sent_at: datetime | None = None
     last_sla_alert_sent_at: datetime | None = None
     created_by_user_id: UUID | None = None
+    platform_user_ref: str | None = None
     context_flags: list[str] = []
 
 

@@ -8,7 +8,7 @@ from app.models.audit_log import AuditLog
 from app.models.membership import Membership
 from app.models.permission import Permission
 from app.models.role import Role
-from tests.helpers.auth_org import bootstrap_org_user
+from tests.helpers.auth_org import bootstrap_org_user, org_headers
 
 BASE = "/api/v1/organizations/custom-roles"
 
@@ -116,11 +116,16 @@ def test_s5_p5_assign_role_and_permission_gate(client, db_session):
     assert deny.status_code == 403, deny.text
 
 
-def test_s5_p5_deactivate_blocked_when_assigned(client):
+def test_s5_p5_deactivate_takes_effect_immediately_when_assigned(client):
+    # Deactivating a custom role must take effect immediately for members still
+    # assigned to it -- not be blocked until they're manually reassigned first
+    # (that would leave an org admin unable to urgently revoke a role's access).
+    # Permission checks join Role.is_active, so the assigned member should lose
+    # the role's permissions on their very next request, with no re-login needed.
     org = bootstrap_org_user(client, email_prefix="s5p5-deact-block")
     other = bootstrap_org_user(client, email_prefix="s5p5-deact-block-user")
 
-    role = _create_role(client, org["org_headers"], name="Vendor Manager", permission_codes=["vendor:read"])
+    role = _create_role(client, org["org_headers"], name="Vendor Manager", permission_codes=["vendors:read"])
 
     create_membership = client.post(
         "/api/v1/memberships",
@@ -141,13 +146,22 @@ def test_s5_p5_deactivate_blocked_when_assigned(client):
     )
     assert assign.status_code == 200, assign.text
 
+    # `other` is a member of `org`'s organization (not their own bootstrapped
+    # org), so use their own access token with org's organization_id header.
+    other_in_org_headers = org_headers(other["access_token"], org["organization_id"])
+
+    before = client.get("/api/v1/compliance/vendors", headers=other_in_org_headers)
+    assert before.status_code == 200, before.text
+
     deactivate = client.post(
         f"/api/v1/organizations/custom-roles/{role['id']}/deactivate",
         headers=org["org_headers"],
     )
-    assert deactivate.status_code == 409, deactivate.text
-    assert "active membership assignment" in deactivate.json()["detail"]
-    assert "Role has 1 active membership assignment(s)" in deactivate.json()["detail"]
+    assert deactivate.status_code == 200, deactivate.text
+    assert deactivate.json()["is_active"] is False
+
+    after = client.get("/api/v1/compliance/vendors", headers=other_in_org_headers)
+    assert after.status_code == 403, after.text
 
 
 def test_s5_p5_deactivate_no_assignments_succeeds_and_system_role_protected(client, db_session):

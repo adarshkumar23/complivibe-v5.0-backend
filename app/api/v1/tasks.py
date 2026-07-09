@@ -60,6 +60,7 @@ def _task_read(task: Task) -> TaskRead:
         description=task.description,
         status=task.status,
         priority=task.priority,
+        escalation_tier=task.escalation_tier,
         task_type=task.task_type,
         owner_user_id=task.owner_user_id,
         created_by_user_id=task.created_by_user_id,
@@ -182,7 +183,10 @@ def queue_task_reminders(
                     "escalation_message": escalation["escalation_message"],
                 },
             )
-            task.priority = escalation["priority"]
+            # Record the computed escalation tier on its own field -- `priority`
+            # is the task owner/creator's own deliberate setting and must not be
+            # silently overwritten by this background job.
+            task.escalation_tier = escalation["priority"]
         else:
             outbox_id = service.queue_task_notification(
                 organization_id=organization.id,

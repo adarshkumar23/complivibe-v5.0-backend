@@ -32,3 +32,8 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     onboarding_step: Mapped[str | None] = mapped_column(String(30), nullable=True, default="not_started")
     created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    # Shared secret used to verify the HMAC-SHA256 signature on inbound
+    # compliance-bot Slack/Teams webhook requests -- see
+    # ComplianceBotService.verify_webhook_signature. Signature-only auth, same
+    # pattern as issue-sync connections' webhook_secret and the Razorpay webhook.
+    compliance_bot_webhook_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)

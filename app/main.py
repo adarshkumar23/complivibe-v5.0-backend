@@ -22,11 +22,16 @@ except Exception:  # pragma: no cover - optional in local test environments
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.pbc_scheduler import register_pbc_scheduler
-from app.core.rate_limiter import build_rate_limit_exceeded_response, rate_limiter
+from app.core.rate_limiter import (
+    build_general_rate_limit_exceeded_response,
+    build_rate_limit_exceeded_response,
+    rate_limiter,
+)
 from app.core.security import decode_access_token
 from app.core.startup import register_event_listeners
 from app.core.telemetry import instrument_app
 from app.core.validation import InvalidChoiceError
+from app.db.session import get_session_maker
 from app.platform.routers.billing import webhook_router as billing_webhook_router
 
 # Many schema fields restrict values to a fixed set via Field(pattern="^(a|b|c)$") rather
@@ -177,6 +182,23 @@ def create_application() -> FastAPI:
             org_header = request.headers.get("X-Organization-ID")
             if org_header:
                 request.state.organization_id = org_header
+
+            # General per-request rate limiting. SlowAPIMiddleware below only
+            # enforces a limit for routes it can resolve a handler for via
+            # `app.routes` -- because `/api/v1/*` is attached with FastAPI's lazy
+            # include-router mechanism, it never finds a handler there, so its
+            # `default_limits` never actually applied to any general API route
+            # (see `CompliVibeRateLimiter.check_general_limit`). This performs
+            # that same check explicitly, for every request, using the same
+            # limiter/storage/key/config as the rest of the rate-limiting system.
+            db = get_session_maker()() if request.state.organization_id else None
+            try:
+                allowed, endpoint_group, limit_str = rate_limiter.check_general_limit(request, db)
+            finally:
+                if db is not None:
+                    db.close()
+            if not allowed:
+                return build_general_rate_limit_exceeded_response(endpoint_group, limit_str)
 
             return await call_next(request)
 

@@ -43,10 +43,17 @@ class RBACService:
         if membership is None:
             return set()
 
+        # Join Role and require it to still be active: a deactivated custom role
+        # must stop granting permissions on the very next permission check, even
+        # though the membership row still points at it (deactivating a role does
+        # not, by itself, unassign anyone). Without this, a role deactivation had
+        # no real effect on already-assigned members until they were manually
+        # reassigned to a different role.
         stmt = (
             select(Permission.key)
             .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .where(RolePermission.role_id == membership.role_id)
+            .join(Role, Role.id == RolePermission.role_id)
+            .where(RolePermission.role_id == membership.role_id, Role.is_active.is_(True))
         )
         return set(db.execute(stmt).scalars().all())
 

@@ -194,15 +194,21 @@ async def ingest_jira_webhook(
     connection_id: uuid.UUID,
     request: Request,
     db: Session = Depends(get_db),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("issue_sync_webhook:jira")),
     x_webhook_secret: str | None = Header(default=None, alias="X-Webhook-Secret"),
     x_atlassian_webhook_identifier: str | None = Header(default=None, alias="X-Atlassian-Webhook-Identifier"),
     secret: str | None = Query(default=None),
 ) -> IssueSyncWebhookResponse:
+    # Real Jira webhook deliveries hit this endpoint directly and can never present
+    # an internal Bearer JWT for a CompliVibe user/org membership -- authenticity is
+    # established purely by the connection's own shared webhook secret (see
+    # `IssueSyncService._verify_shared_secret`), the same signature-only pattern the
+    # Razorpay billing webhook uses. The org is resolved from the connection_id in
+    # the URL, not from a caller-supplied header.
+    service = IssueSyncService(db)
+    org_id = service.resolve_connection_org_id(connection_id)
     _raw_body, payload = await _parse_webhook_body(request)
-    row, is_duplicate = IssueSyncService(db).ingest_jira_webhook(
-        org_id=organization.id,
+    row, is_duplicate = service.ingest_jira_webhook(
+        org_id=org_id,
         connection_id=connection_id,
         webhook_identifier=x_atlassian_webhook_identifier,
         payload=payload,
@@ -218,13 +224,16 @@ async def ingest_linear_webhook(
     connection_id: uuid.UUID,
     request: Request,
     db: Session = Depends(get_db),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("issue_sync_webhook:linear")),
     linear_signature: str | None = Header(default=None, alias="Linear-Signature"),
 ) -> IssueSyncWebhookResponse:
+    # Same reasoning as the Jira webhook above: real Linear deliveries authenticate
+    # via the connection's HMAC-signed `Linear-Signature` header
+    # (`IssueSyncService._verify_hmac_signature`), not a Bearer JWT.
+    service = IssueSyncService(db)
+    org_id = service.resolve_connection_org_id(connection_id)
     raw_body, payload = await _parse_webhook_body(request)
-    row, is_duplicate = IssueSyncService(db).ingest_linear_webhook(
-        org_id=organization.id,
+    row, is_duplicate = service.ingest_linear_webhook(
+        org_id=org_id,
         connection_id=connection_id,
         payload=payload,
         raw_body=raw_body,

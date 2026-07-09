@@ -28,6 +28,14 @@ class VendorService:
             )
         ).scalar_one_or_none()
         if row is None:
+            # Distinguish "doesn't exist at all" (404) from "exists, but belongs to
+            # a different organization" (403) -- a cross-tenant lookup (e.g. a
+            # spoofed X-Organization-ID header naming a vendor_id that belongs to
+            # another org) should be denied the same way every other entity in
+            # this codebase denies it, not fall through to a plain 404.
+            exists_elsewhere = self.db.execute(select(Vendor.id).where(Vendor.id == vendor_id)).scalar_one_or_none()
+            if exists_elsewhere is not None:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Vendor does not belong to this organization")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor not found")
         return row
 

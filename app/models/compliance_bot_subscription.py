@@ -20,6 +20,10 @@ class ComplianceBotSubscription(UUIDPrimaryKeyMixin, TimestampMixin, Organizatio
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     platform: Mapped[str] = mapped_column(String(16), nullable=False)
     channel_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    # The external Slack `user_id` / Teams `from_user_id` for this member on this
+    # platform. Lets an inbound webhook request (which carries no internal Bearer
+    # JWT) resolve which CompliVibe user issued a slash command.
+    platform_user_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     digest_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     digest_time_utc: Mapped[str] = mapped_column(String(5), nullable=False, default="08:00")

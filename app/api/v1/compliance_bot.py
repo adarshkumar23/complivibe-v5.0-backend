@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends
+import uuid
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
@@ -35,6 +38,7 @@ def _subscription_read(row, service: ComplianceBotService) -> ComplianceBotSubsc
         last_digest_sent_at=row.last_digest_sent_at,
         last_sla_alert_sent_at=row.last_sla_alert_sent_at,
         created_by_user_id=row.created_by_user_id,
+        platform_user_ref=row.platform_user_ref,
         context_flags=service.describe_subscription_context(row),
     )
 
@@ -78,6 +82,7 @@ def upsert_subscription(
         digest_time_utc=payload.digest_time_utc,
         sla_alerts_enabled=payload.sla_alerts_enabled,
         actor_user_id=current_user.id,
+        platform_user_ref=payload.platform_user_ref,
     )
     db.commit()
     db.refresh(row)
@@ -96,17 +101,36 @@ def list_subscriptions(
     return [_subscription_read(row, service) for row in rows]
 
 
-@router.post("/slack/commands", response_model=ComplianceBotCommandResponse)
-def handle_slack_command(
-    payload: SlackSlashCommandPayload,
+async def _require_org_by_id(db: Session, organization_id: uuid.UUID) -> Organization:
+    organization = db.execute(select(Organization).where(Organization.id == organization_id)).scalar_one_or_none()
+    if organization is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+    return organization
+
+
+@router.post("/slack/commands/{organization_id}", response_model=ComplianceBotCommandResponse)
+async def handle_slack_command(
+    organization_id: uuid.UUID,
+    request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("compliance_bot:slack_command")),
+    x_compliancebot_signature: str | None = Header(default=None, alias="X-ComplianceBot-Signature"),
 ) -> ComplianceBotCommandResponse:
-    result = ComplianceBotService(db).handle_command(
+    # Real Slack slash-command traffic hits this endpoint directly and can never
+    # present an internal Bearer JWT -- authenticity is established purely by an
+    # HMAC-SHA256 signature over the raw body using the organization's own
+    # compliance_bot_webhook_secret, the same signature-only pattern the Razorpay
+    # and issue-sync webhooks use. The org is identified by the URL, not a header.
+    organization = await _require_org_by_id(db, organization_id)
+    raw_body = await request.body()
+    ComplianceBotService.verify_webhook_signature(
+        organization.compliance_bot_webhook_secret, raw_body=raw_body, signature=x_compliancebot_signature
+    )
+    payload = SlackSlashCommandPayload.model_validate_json(raw_body)
+    service = ComplianceBotService(db)
+    actor_user_id = service.resolve_actor_by_platform_ref(organization.id, "slack", payload.user_id or "")
+    result = service.handle_command(
         organization_id=organization.id,
-        actor_user_id=current_user.id,
+        actor_user_id=actor_user_id,
         platform="slack",
         command=payload.command,
         text=payload.text,
@@ -116,17 +140,24 @@ def handle_slack_command(
     return ComplianceBotCommandResponse(**result)
 
 
-@router.post("/teams/commands", response_model=ComplianceBotCommandResponse)
-def handle_teams_command(
-    payload: TeamsCommandPayload,
+@router.post("/teams/commands/{organization_id}", response_model=ComplianceBotCommandResponse)
+async def handle_teams_command(
+    organization_id: uuid.UUID,
+    request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("compliance_bot:teams_command")),
+    x_compliancebot_signature: str | None = Header(default=None, alias="X-ComplianceBot-Signature"),
 ) -> ComplianceBotCommandResponse:
-    result = ComplianceBotService(db).handle_command(
+    organization = await _require_org_by_id(db, organization_id)
+    raw_body = await request.body()
+    ComplianceBotService.verify_webhook_signature(
+        organization.compliance_bot_webhook_secret, raw_body=raw_body, signature=x_compliancebot_signature
+    )
+    payload = TeamsCommandPayload.model_validate_json(raw_body)
+    service = ComplianceBotService(db)
+    actor_user_id = service.resolve_actor_by_platform_ref(organization.id, "teams", payload.from_user_id or "")
+    result = service.handle_command(
         organization_id=organization.id,
-        actor_user_id=current_user.id,
+        actor_user_id=actor_user_id,
         platform="teams",
         command="/complivibe",
         text=payload.text,

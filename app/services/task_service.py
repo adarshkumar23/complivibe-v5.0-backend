@@ -167,8 +167,9 @@ class TaskService:
     def escalation_for_overdue_days(days_overdue: int) -> dict[str, str]:
         """Real escalation tiers for an overdue task reminder, keyed by how many whole
         days past due_date the task is. Used both for the email's priority/subject and
-        for the task's own `priority` field, so an old, deeply overdue task actually
-        looks urgent everywhere -- not stuck at "normal" forever."""
+        for the task's own `escalation_tier` field, so an old, deeply overdue task
+        actually looks urgent everywhere -- not stuck at "normal" forever -- without
+        clobbering the task's user-set `priority`."""
         if days_overdue >= 14:
             return {
                 "escalation_level": "critical",
