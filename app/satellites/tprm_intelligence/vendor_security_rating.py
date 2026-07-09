@@ -12,6 +12,51 @@ from app.satellites.tprm_intelligence.http_client import SatelliteHTTPClient
 GRADE_SCORES = {"A+": 100, "A": 95, "B": 85, "C": 70, "D": 55, "E": 35, "F": 15}
 
 
+def weighted_score_with_confidence(signals: dict[str, dict], weights: dict[str, float]) -> dict:
+    """Shared scoring core for both VendorSecurityRatingService and ThreatIntelligenceService.
+
+    Root-cause fix for signal-quality swings: of the 4 (or 3) independent signals each
+    service aggregates, typically 1-2 are always skipped (no API key configured in this
+    environment) and the remaining ones frequently error/rate-limit against real domains.
+    Previously each service's ``_weighted_score`` correctly excluded missing/errored
+    signals from the weighted average *while at least one signal was available*, but
+    silently collapsed to a hardcoded ``0.0`` the moment *zero* signals came back --
+    indistinguishable from "we checked and everything is clean/terrible" even though it
+    actually means "we have no data at all". That is what let the composite score swing
+    100 -> 0 purely based on which signals happened to respond, with no way for a caller
+    to tell a confident bad reading apart from an empty one.
+
+    Returns a dict with:
+      - ``score``: the weighted average across only the signals that returned real data
+        (``status == "available"``), or ``None`` if none did -- never a fabricated 0.0.
+      - ``confidence``: 0-100, the percentage of total possible signal weight that is
+        actually backed by real data. This is the "how much do we actually know" field
+        that was previously completely absent from the score output.
+      - ``signals_available``/``signals_total``: raw counts for transparency, mirroring
+        the same evidence-summary convention already used by the KYB/AML signal set
+        (see ``_kyb_evidence_summary`` in ``tprm_intelligence/router.py``).
+    """
+    total_weight = sum(weights.values()) or 1.0
+    weighted_sum = 0.0
+    weight_used = 0.0
+    signals_available = 0
+    for name, signal in signals.items():
+        score = signal.get("score")
+        if signal.get("status") == "available" and isinstance(score, (int, float)):
+            weight = weights[name]
+            weighted_sum += float(score) * weight
+            weight_used += weight
+            signals_available += 1
+    confidence = round((weight_used / total_weight) * 100, 2)
+    score = round(weighted_sum / weight_used, 2) if weight_used > 0 else None
+    return {
+        "score": score,
+        "confidence": confidence,
+        "signals_available": signals_available,
+        "signals_total": len(signals),
+    }
+
+
 def normalize_domain(value: str) -> str:
     raw = (value or "").strip()
     parsed = urlparse(raw if "://" in raw else f"https://{raw}")
@@ -47,11 +92,14 @@ class VendorSecurityRatingService:
             "abuseipdb": self._abuseipdb(normalized),
             "hibp": self._hibp(normalized),
         }
-        score = self._weighted_score(signals)
+        result = weighted_score_with_confidence(signals, self.WEIGHTS)
         return {
             "domain": normalized,
             "signals_used": signals,
-            "composite_score": score,
+            "composite_score": result["score"],
+            "confidence": result["confidence"],
+            "signals_available": result["signals_available"],
+            "signals_total": result["signals_total"],
             "computed_at": datetime.now(UTC).isoformat(),
         }
 
@@ -137,15 +185,3 @@ class VendorSecurityRatingService:
         except Exception as exc:
             return {"status": "error", "source": "hibp", "score": None, "message": str(exc)}
 
-    def _weighted_score(self, signals: dict[str, dict]) -> float:
-        weighted_sum = 0.0
-        weight_used = 0.0
-        for name, signal in signals.items():
-            score = signal.get("score")
-            if signal.get("status") == "available" and isinstance(score, (int, float)):
-                weight = self.WEIGHTS[name]
-                weighted_sum += float(score) * weight
-                weight_used += weight
-        if weight_used == 0:
-            return 0.0
-        return round(weighted_sum / weight_used, 2)

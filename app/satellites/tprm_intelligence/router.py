@@ -80,6 +80,26 @@ def _kyb_evidence_summary(sources_checked: list[dict[str, Any]]) -> dict[str, An
     }
 
 
+def _score_trend(history: list[dict], score_key: str, *, higher_is_better: bool) -> dict[str, Any]:
+    """Compute a score delta/trend over a history window, skipping entries with no
+    real score (``None`` -- zero signals available for that computation) rather than
+    letting a missing-data snapshot masquerade as an extreme score movement.
+    """
+    scored = [entry[score_key] for entry in history if entry[score_key] is not None]
+    if len(scored) < 2:
+        return {"latest_score": history[0][score_key] if history else None, "score_delta_over_window": None, "trend": "insufficient_data"}
+    latest_score = scored[0]
+    oldest_score = scored[-1]
+    score_delta = round(latest_score - oldest_score, 2)
+    if score_delta > 1.0:
+        trend = "improving" if higher_is_better else "escalating"
+    elif score_delta < -1.0:
+        trend = "declining" if higher_is_better else "improving"
+    else:
+        trend = "stable"
+    return {"latest_score": latest_score, "score_delta_over_window": score_delta, "trend": trend}
+
+
 def _rating_payload(row: VendorExternalRating) -> dict:
     return {
         "id": str(row.id),
@@ -87,7 +107,12 @@ def _rating_payload(row: VendorExternalRating) -> dict:
         "vendor_id": str(row.vendor_id),
         "domain": row.domain,
         "signals_used": row.signals_used,
-        "composite_score": float(row.composite_score),
+        "composite_score": float(row.composite_score) if row.composite_score is not None else None,
+        # How much of the score is actually backed by real signal data (0-100). A low
+        # confidence score means "we barely have any data", not "we have good data
+        # that confirms a good/bad posture" -- read composite_score alongside this.
+        "confidence": float(row.confidence),
+        "has_sufficient_data": float(row.confidence) >= 50.0,
         "computed_at": row.computed_at.isoformat() if row.computed_at else None,
     }
 
@@ -105,7 +130,12 @@ def _threat_payload(row: VendorThreatIntelligence) -> dict:
         "vendor_id": str(row.vendor_id),
         "domain": row.domain,
         "signals_used": row.signals_used,
-        "threat_score": float(row.threat_score),
+        "threat_score": float(row.threat_score) if row.threat_score is not None else None,
+        # How much of the score is actually backed by real signal data (0-100). Read
+        # alongside threat_score: a None/low-confidence score means "no data", never
+        # treat it as "confirmed clean".
+        "confidence": float(row.confidence),
+        "has_sufficient_data": float(row.confidence) >= 50.0,
         "indicators_found": row.indicators_found,
         "computed_at": row.computed_at.isoformat() if row.computed_at else None,
         "days_since_computed": age_days,
@@ -470,24 +500,12 @@ def get_vendor_security_rating_history(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor security rating not found")
 
     history = [_rating_payload(row) for row in rows]  # newest first
-    latest_score = history[0]["composite_score"]
-    oldest_score = history[-1]["composite_score"]
-    score_delta = round(latest_score - oldest_score, 2)
-    if len(history) < 2:
-        trend = "insufficient_data"
-    elif score_delta > 1.0:
-        trend = "improving"
-    elif score_delta < -1.0:
-        trend = "declining"
-    else:
-        trend = "stable"
+    trend_info = _score_trend(history, "composite_score", higher_is_better=True)
 
     return {
         "vendor_id": str(vendor_id),
         "count": len(history),
-        "latest_score": latest_score,
-        "score_delta_over_window": score_delta,
-        "trend": trend,
+        **trend_info,
         "history": history,
     }
 
@@ -510,12 +528,14 @@ def compute_vendor_threat_intelligence(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     result = ThreatIntelligenceService().compute(domain)
+    threat_score = result["threat_score"]
     row = VendorThreatIntelligence(
         organization_id=organization.id,
         vendor_id=vendor.id,
         domain=result["domain"],
         signals_used=result["signals_used"],
-        threat_score=Decimal(str(result["threat_score"])),
+        threat_score=Decimal(str(threat_score)) if threat_score is not None else None,
+        confidence=Decimal(str(result.get("confidence", 0.0))),
         indicators_found=result["indicators_found"],
         # Assign microsecond-precision computed_at in application code rather
         # than relying on the DB's server_default(func.now()): the primary key
@@ -534,12 +554,21 @@ def compute_vendor_threat_intelligence(
         entity_id=row.id,
         organization_id=organization.id,
         actor_user_id=current_user.id,
-        after_json={"vendor_id": str(vendor.id), "domain": row.domain, "threat_score": float(row.threat_score)},
+        after_json={
+            "vendor_id": str(vendor.id),
+            "domain": row.domain,
+            "threat_score": float(row.threat_score) if row.threat_score is not None else None,
+            "confidence": float(row.confidence),
+        },
         metadata_json={"source": "tprm_intelligence_satellite"},
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
-    if float(row.threat_score) >= 50.0:
+    # A None threat_score means zero signals returned real data -- there is nothing to
+    # compare against the elevated-threat threshold, and a fabricated 0.0 previously
+    # made "no data" indistinguishable from (and read as) "confirmed clean". Only
+    # evaluate the threshold when a real score exists.
+    if row.threat_score is not None and float(row.threat_score) >= 50.0:
         severity = "critical" if float(row.threat_score) >= 80.0 else "high"
         alerts = VendorSupplyChainService(db).propagate_vendor_signal(
             organization_id=organization.id,
@@ -631,24 +660,12 @@ def get_vendor_threat_intelligence_history(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor threat intelligence not found")
 
     history = [_threat_payload(row) for row in rows]  # newest first
-    latest_score = history[0]["threat_score"]
-    oldest_score = history[-1]["threat_score"]
-    score_delta = round(latest_score - oldest_score, 2)
-    if len(history) < 2:
-        trend = "insufficient_data"
-    elif score_delta > 1.0:
-        trend = "escalating"
-    elif score_delta < -1.0:
-        trend = "improving"
-    else:
-        trend = "stable"
+    trend_info = _score_trend(history, "threat_score", higher_is_better=False)
 
     return {
         "vendor_id": str(vendor_id),
         "count": len(history),
-        "latest_score": latest_score,
-        "score_delta_over_window": score_delta,
-        "trend": trend,
+        **trend_info,
         "is_stale": history[0]["is_stale"],
         "history": history,
     }
@@ -737,3 +754,65 @@ def get_vendor_kyb_check(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor KYB check not found")
     return _kyb_payload(row, vendor)
+
+
+_KYB_SEVERITY_RANK = {"critical": 3, "high": 2, "medium": 1}
+
+
+@router.get("/{vendor_id}/kyb-check/history")
+def get_vendor_kyb_check_history(
+    vendor_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("vendors:read")),
+    limit: int = 50,
+) -> dict:
+    """Return the KYB/AML screening trend over time so a reviewer sees an escalating
+    or clearing beneficial-ownership/adverse-media pattern, not just an isolated
+    snapshot -- mirrors the ``/security-rating/history`` and
+    ``/threat-intelligence/history`` endpoints (same pagination, auth/org-scoping,
+    and response-shape conventions) so KYB/AML has the same historical visibility as
+    its sibling vendor-intelligence signals.
+    """
+    vendor = VendorService(db).require_vendor_in_org(organization.id, vendor_id)
+    bounded_limit = max(1, min(limit, 200))
+    rows = db.execute(
+        select(AmlKycCheck)
+        .where(AmlKycCheck.organization_id == organization.id, AmlKycCheck.vendor_id == vendor_id)
+        .order_by(AmlKycCheck.checked_at.desc(), AmlKycCheck.id.desc())
+        .limit(bounded_limit)
+    ).scalars().all()
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor KYB check not found")
+
+    history = [_kyb_payload(row, vendor) for row in rows]  # newest first
+
+    # KYB/AML doesn't produce a continuous numeric score like security-rating/threat-
+    # intelligence -- its output is a has_risk/severity determination per check. Trend
+    # is derived from the severity rank instead of a score delta, but the response
+    # shape (count, trend, is_stale, history) intentionally matches the sibling
+    # endpoints above.
+    risk_flags = [_kyb_risk(row) for row in rows]
+    latest_has_risk, latest_severity, _ = risk_flags[0]
+    if len(rows) < 2:
+        trend = "insufficient_data"
+    else:
+        oldest_has_risk, oldest_severity, _ = risk_flags[-1]
+        latest_rank = _KYB_SEVERITY_RANK.get(latest_severity, 0) if latest_has_risk else 0
+        oldest_rank = _KYB_SEVERITY_RANK.get(oldest_severity, 0) if oldest_has_risk else 0
+        if latest_rank > oldest_rank:
+            trend = "escalating"
+        elif latest_rank < oldest_rank:
+            trend = "improving"
+        else:
+            trend = "stable"
+
+    return {
+        "vendor_id": str(vendor_id),
+        "count": len(history),
+        "latest_has_risk": latest_has_risk,
+        "latest_severity": latest_severity,
+        "trend": trend,
+        "is_stale": history[0]["is_stale"],
+        "history": history,
+    }

@@ -47,3 +47,7 @@ class OtIcsFinding(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, 
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set when this finding's severity (high/critical) creates a real risk-register
+    # entry -- see OtIcsFindingService._cascade_finding_to_risk. One finding creates
+    # at most one Risk.
+    risk_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("risks.id", ondelete="SET NULL"), nullable=True)

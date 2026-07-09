@@ -42,12 +42,14 @@ def record_vendor_security_rating(
     so both paths stay in lock-step on audit logging and alert propagation.
     """
     result = VendorSecurityRatingService().compute(domain)
+    composite_score = result["composite_score"]
     row = VendorExternalRating(
         organization_id=organization_id,
         vendor_id=vendor.id,
         domain=result["domain"],
         signals_used=result["signals_used"],
-        composite_score=Decimal(str(result["composite_score"])),
+        composite_score=Decimal(str(composite_score)) if composite_score is not None else None,
+        confidence=Decimal(str(result.get("confidence", 0.0))),
         # Set explicitly (microsecond resolution) rather than relying on the
         # DB server default: some backends (SQLite's CURRENT_TIMESTAMP) only
         # have second precision, which made "latest rating" / history
@@ -65,13 +67,22 @@ def record_vendor_security_rating(
         entity_id=row.id,
         organization_id=organization_id,
         actor_user_id=actor_user_id,
-        after_json={"vendor_id": str(vendor.id), "domain": row.domain, "composite_score": float(row.composite_score)},
+        after_json={
+            "vendor_id": str(vendor.id),
+            "domain": row.domain,
+            "composite_score": float(row.composite_score) if row.composite_score is not None else None,
+            "confidence": float(row.confidence),
+        },
         metadata_json={"source": source},
         ip_address=ip_address,
         user_agent=user_agent,
     )
 
-    if float(row.composite_score) < DEGRADED_THRESHOLD:
+    # A score of None means zero of the 4 signals returned real data -- there is
+    # nothing here to compare against the degraded/critical thresholds, and treating
+    # "no data" as "below threshold" would be exactly the false-extreme-swing bug this
+    # confidence field exists to prevent. Only compare when a real score exists.
+    if row.composite_score is not None and float(row.composite_score) < DEGRADED_THRESHOLD:
         severity = "high" if float(row.composite_score) < CRITICAL_THRESHOLD else "medium"
         alerts = VendorSupplyChainService(db).propagate_vendor_signal(
             organization_id=organization_id,

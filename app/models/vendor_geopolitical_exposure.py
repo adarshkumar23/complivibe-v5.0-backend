@@ -33,3 +33,13 @@ class VendorGeopoliticalExposure(UUIDPrimaryKeyMixin, TimestampMixin, Organizati
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Cascade tracking: set the first time a critical GeopoliticalRiskSignal for this
+    # exposure's region creates a Risk register entry for this vendor, so repeat
+    # critical signals for the same region don't spam duplicate Risk rows. See
+    # GeopoliticalRiskService._cascade_critical_signals_to_vendor_risk.
+    cascaded_risk_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("risks.id", ondelete="SET NULL"), nullable=True
+    )
+    last_cascaded_severity: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_cascaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
