@@ -203,7 +203,21 @@ class XBRLExportService:
             },
         )
 
+        # The XBRL 2.1 instance schema (xbrl-instance-2003-12-31.xsd, xbrlType) requires
+        # three strictly ordered groups of children under <xbrli:xbrl>:
+        #   1. schemaRef / linkbaseRef / roleType / arcroleType (any order among themselves)
+        #   2. context / unit (any order among themselves)
+        #   3. fact items / tuples / footnoteLink (any order among themselves)
+        # Once an element from a later group appears, no element from an earlier group
+        # may follow it. The previous implementation built context_1, fact_1, context_2,
+        # fact_2, ... interleaved, and appended every <unit> only after all facts -- both
+        # violate the required group ordering, so a conformant XBRL processor rejects the
+        # document with xmlSchema:elementUnexpected on literally every export (any
+        # taxonomy, any concept, as soon as more than one data point or any unit was
+        # present). Build all contexts+units first, then all facts, to respect this.
         unit_ids: dict[str, str] = {}
+        fact_specs: list[tuple[str, dict[str, str], str]] = []
+
         for index, point in enumerate(payload.data_points):
             context_id = f"c{index + 1}"
             context = ET.SubElement(root, "{http://www.xbrl.org/2003/instance}context", {"id": context_id})
@@ -242,12 +256,15 @@ class XBRLExportService:
                 unit_id = unit_ids.setdefault(point.unit, f"u{len(unit_ids) + 1}")
                 attrs["unitRef"] = unit_id
                 attrs["decimals"] = str(point.decimals if point.decimals is not None else 0)
-            ET.SubElement(root, f"{{{payload.taxonomy_namespace}}}{local_name}", attrs).text = str(point.value)
+            fact_specs.append((f"{{{payload.taxonomy_namespace}}}{local_name}", attrs, str(point.value)))
 
         for unit_name, unit_id in unit_ids.items():
             unit = ET.SubElement(root, "{http://www.xbrl.org/2003/instance}unit", {"id": unit_id})
             measure_text = XBRLI_QUALIFIED_MEASURES.get(unit_name, unit_name)
             ET.SubElement(unit, "{http://www.xbrl.org/2003/instance}measure").text = measure_text
+
+        for tag, attrs, text in fact_specs:
+            ET.SubElement(root, tag, attrs).text = text
 
         return ET.tostring(root, encoding="unicode", xml_declaration=True)
 
