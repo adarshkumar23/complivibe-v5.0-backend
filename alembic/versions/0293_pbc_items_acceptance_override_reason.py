@@ -1,7 +1,7 @@
 """add pbc_items.acceptance_override_reason to require evidence-or-override on accept
 
-Revision ID: 0200_pbc_items_acceptance_override_reason
-Revises: 0199_audit_engagement_source_schedule_link
+Revision ID: 0293_pbc_items_acceptance_override_reason
+Revises: 0292_ot_ics_finding_risk_cascade
 Create Date: 2026-07-09 00:00:00.000000
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0200_pbc_items_acceptance_override_reason"
-down_revision: str | None = "0199_audit_engagement_source_schedule_link"
+revision: str = "0293_pbc_items_acceptance_override_reason"
+down_revision: str | None = "0292_ot_ics_finding_risk_cascade"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
