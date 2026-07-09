@@ -114,7 +114,8 @@ GOVERNANCE_SIGNAL_SEVERITY_PATTERN = "^(info|warning|critical)$"
 GOVERNANCE_SIGNAL_STATUS_PATTERN = "^(open|resolved|dismissed|archived)$"
 GOVERNANCE_SIGNAL_PRIORITY_BAND_PATTERN = "^(low|medium|high|urgent)$"
 GOVERNANCE_CANDIDATE_ACTION_TYPE_PATTERN = (
-    "^(create_record|update_record|review_record|attach_evidence|resolve_issue|create_snapshot|refresh_signals|prepare_draft)$"
+    "^(create_record|update_record|review_record|attach_evidence|resolve_issue|create_snapshot|refresh_signals|"
+    "prepare_draft|send_reminder)$"
 )
 GOVERNANCE_RECOMMENDATION_SCOPE_TYPE_PATTERN = "^(organization|ai_system|risk_assessment)$"
 GOVERNANCE_RECOMMENDATION_SOURCE_TYPE_PATTERN = "^(candidate_actions)$"

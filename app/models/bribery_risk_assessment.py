@@ -51,6 +51,7 @@ class BriberyRiskAssessment(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwn
             name="ck_bribery_risk_assessments_risk_tier",
         ),
         Index("ix_bribery_risk_assessments_org_vendor_computed", "organization_id", "vendor_id", "computed_at"),
+        Index("ix_bribery_risk_assessments_org_risk", "organization_id", "risk_id"),
     )
 
     vendor_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("vendors.id", ondelete="CASCADE"), nullable=False)
@@ -64,3 +65,9 @@ class BriberyRiskAssessment(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwn
     scoring_breakdown_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     computed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # Set once a "high" finding inconsistent with the vendor's overall risk_tier has
+    # actually been escalated into the risk register (see
+    # BriberyRiskScoringService.escalate_inconsistent_high_risk), mirroring
+    # VendorConcentrationRiskDetection.risk_id's idempotency pattern so a repeat
+    # compute for the same vendor never creates a duplicate Risk record.
+    risk_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("risks.id", ondelete="SET NULL"), nullable=True)

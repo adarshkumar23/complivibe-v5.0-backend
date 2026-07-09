@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from app.models.bribery_risk_assessment import BriberyRiskAssessment
 from app.models.organization import Organization
 from app.models.vendor import Vendor
+from app.services.audit_service import AuditService
+from app.services.risk_service import RiskService
 
 # Grounded scoring methodology (documented at model definition too):
 #   - UK Bribery Act 2010 s.7 "adequate procedures" guidance (gov.uk MoJ) --
@@ -83,6 +85,18 @@ _REVIEW_CADENCE_DAYS_BY_TIER = {"high": 180, "medium": 365, "low": 545}
 # consecutive assessments of the same vendor is treated as material enough
 # to flag for review (new information, not routine noise).
 _MATERIAL_SCORE_SHIFT = 0.2
+
+# The vendor-level risk_tier a "high" bribery finding escalates an under-tiered
+# vendor to. This mirrors the tier language BriberyRiskAssessment.risk_tier
+# itself uses ("high"), rather than jumping straight to "critical" the way a
+# confirmed sanctions match does (see SANCTIONS_ESCALATED_RISK_TIER in
+# sanctions_screening.py) -- a bribery *risk factor* finding is a strong
+# indicator, not a confirmed adverse-media/sanctions hit.
+BRIBERY_ESCALATED_RISK_TIER = "high"
+# Tiers the escalation should override -- the same set the inconsistency flag
+# in build_assessment_context already checks (vendor.risk_tier in this set is
+# what makes a "high" bribery finding "inconsistent_with_vendor_overall_risk_tier").
+BRIBERY_ESCALATION_ELIGIBLE_VENDOR_TIERS = ("low", "not_assessed")
 
 
 def _industry_risk(industry_category: str | None) -> float:
@@ -317,6 +331,121 @@ class BriberyRiskScoringService:
             "score_delta_from_previous": score_delta,
             "context_flags": sorted(set(flags)),
         }
+
+    def apply_high_risk_escalation(
+        self,
+        organization: Organization,
+        vendor: Vendor,
+        row: BriberyRiskAssessment,
+        context: dict[str, Any],
+        *,
+        actor_user_id=None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> dict[str, Any]:
+        """Act on the 'inconsistent_with_vendor_overall_risk_tier' context flag.
+
+        BUG: build_assessment_context correctly *flags* a "high" bribery finding
+        that is inconsistent with the vendor's own (lower) risk_tier, but nothing
+        ever acted on that flag -- an under-tiered vendor with a confirmed high
+        bribery-risk factor score stayed under-tiered forever. This follows the
+        same escalate + risk-register-entry pattern already used elsewhere in
+        this codebase for a positive-finding risk cascade (see
+        screen_vendor_and_apply_effects in sanctions_screening.py, which
+        escalates vendor.risk_tier and, via VendorConcentrationRiskService,
+        creates/links a Risk record) rather than a routine recompute path (see
+        VendorRiskService.create_risk_score, which guards a *manually*-set
+        risk_tier behind confirm_override) -- a bribery risk-factor finding this
+        severe is a compliance-relevant escalation, not a routine score refresh.
+
+        Idempotent: once escalated, vendor.risk_tier is no longer in
+        BRIBERY_ESCALATION_ELIGIBLE_VENDOR_TIERS, so the inconsistency flag (and
+        this method) naturally stop firing for the same vendor without needing
+        extra bookkeeping.
+        """
+        flag_present = any(
+            flag.startswith("inconsistent_with_vendor_overall_risk_tier") for flag in context.get("context_flags", [])
+        )
+        if not flag_present:
+            return {"risk_tier_escalated": False, "risk_created": False, "risk_id": None}
+        if vendor.status == "archived":
+            return {"risk_tier_escalated": False, "risk_created": False, "risk_id": None}
+        if row.risk_tier != "high" or vendor.risk_tier not in BRIBERY_ESCALATION_ELIGIBLE_VENDOR_TIERS:
+            return {"risk_tier_escalated": False, "risk_created": False, "risk_id": None}
+
+        audit = AuditService(self.db)
+        before_tier = vendor.risk_tier
+        before_tier_source = vendor.risk_tier_source
+        vendor.risk_tier = BRIBERY_ESCALATED_RISK_TIER
+        vendor.risk_tier_source = "computed"
+        self.db.flush()
+        audit.write_audit_log(
+            action="vendor.risk_tier_escalated",
+            entity_type="vendor",
+            entity_id=vendor.id,
+            organization_id=organization.id,
+            actor_user_id=actor_user_id,
+            before_json={"risk_tier": before_tier, "risk_tier_source": before_tier_source},
+            after_json={
+                "risk_tier": vendor.risk_tier,
+                "risk_tier_source": vendor.risk_tier_source,
+                "reason": "bribery_risk_high_inconsistent_with_vendor_tier",
+                "bribery_risk_assessment_id": str(row.id),
+            },
+            metadata_json={"source": "tprm_intelligence_satellite"},
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+
+        risk = RiskService(self.db).create_risk_from_service(
+            organization_id=organization.id,
+            title=f"High anti-bribery risk inconsistent with vendor tier: {vendor.name}",
+            description=(
+                f"Vendor '{vendor.name}' scored a 'high' anti-bribery/corruption risk tier "
+                f"(risk_score={row.risk_score:.2f}, jurisdiction={row.jurisdiction}, "
+                f"pep_exposure={row.pep_exposure}) but the vendor's overall risk_tier was only "
+                f"'{before_tier}'. Per UK Bribery Act 2010 s.7 (adequate procedures -- risk "
+                "assessment and monitoring/review), this inconsistency has been escalated: "
+                f"the vendor's risk_tier was raised to '{BRIBERY_ESCALATED_RISK_TIER}' and this "
+                "risk register entry created for tracking and remediation."
+            ),
+            category="vendor",
+            likelihood=4,
+            impact=4,
+            treatment_strategy="mitigate",
+            risk_context_external=(
+                "FCPA-aligned third-party risk factors (DOJ/SEC FCPA Resource Guide) and UK "
+                "Bribery Act 2010 s.7 adequate-procedures guidance (gov.uk MoJ)."
+            ),
+            metadata_json={
+                "source": "bribery_risk_scoring",
+                "bribery_risk_assessment_id": str(row.id),
+                "vendor_id": str(vendor.id),
+                "bribery_risk_score": row.risk_score,
+                "pre_escalation_vendor_risk_tier": before_tier,
+            },
+            created_by_user_id=actor_user_id,
+            audit_source="bribery_risk_scoring",
+        )
+        row.risk_id = risk.id
+        self.db.flush()
+        audit.write_audit_log(
+            action="risk.created_from_bribery_escalation",
+            entity_type="risk",
+            entity_id=risk.id,
+            organization_id=organization.id,
+            actor_user_id=actor_user_id,
+            after_json={
+                "vendor_id": str(vendor.id),
+                "bribery_risk_assessment_id": str(row.id),
+                "risk_id": str(risk.id),
+            },
+            metadata_json={"source": "tprm_intelligence_satellite"},
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+
+        return {"risk_tier_escalated": True, "risk_created": True, "risk_id": str(risk.id)}
 
     def list_assessments(self, organization_id, vendor_id) -> list[BriberyRiskAssessment]:
         return list(

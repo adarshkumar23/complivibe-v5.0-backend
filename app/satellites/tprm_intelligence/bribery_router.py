@@ -105,6 +105,21 @@ def compute_vendor_bribery_risk(
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
+
+    # Act on the inconsistent_with_vendor_overall_risk_tier flag rather than
+    # letting it sit inert: escalate the under-tiered vendor and create a
+    # linked Risk register entry.
+    escalation = service.apply_high_risk_escalation(
+        organization,
+        vendor,
+        row,
+        context,
+        actor_user_id=current_user.id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    context = {**context, **escalation}
+
     db.commit()
     db.refresh(row)
     return _result_payload(row, context)

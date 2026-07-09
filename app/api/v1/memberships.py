@@ -25,6 +25,7 @@ from app.schemas.membership import (
 )
 from app.services.activation_token_service import ActivationTokenService
 from app.services.audit_service import AuditService
+from app.services.non_human_identity_service import NonHumanIdentityService
 from app.services.rbac_service import RBACService
 
 router = APIRouter(prefix="/memberships", tags=["memberships"])
@@ -264,11 +265,28 @@ def deactivate_membership(
         user_agent=request.headers.get("user-agent"),
     )
 
+    # BUG (NHI orphan detection never fires via real offboarding): flag_orphaned_identities
+    # (NonHumanIdentityService) is logically correct in isolation -- it joins each
+    # NonHumanIdentity.owner_user_id to its User and flags the identity as orphaned once
+    # that owner is no longer active -- but nothing in the real offboarding path ever
+    # invoked it, so a deactivated member's service accounts/API keys/NHIs were only ever
+    # discovered by someone separately hitting the orphan-scan endpoint, if ever. Run the
+    # scan for this organization as part of the same deactivation transaction so an
+    # offboarded member's orphaned NHIs are detected and flagged immediately, not silently.
+    nhi_scan_result = NonHumanIdentityService(db).flag_orphaned_identities(
+        organization_id=organization.id,
+        actor_user_id=current_user.id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+
     db.commit()
     return MembershipDeactivateResponse(
         membership_id=membership.id,
         status=membership.status,
         detail="Membership deactivated",
+        non_human_identities_scanned=nhi_scan_result["identities_scanned"],
+        non_human_identities_orphaned_flagged=nhi_scan_result["orphaned_flagged"],
     )
 
 
