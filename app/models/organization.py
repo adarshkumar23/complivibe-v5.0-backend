@@ -14,6 +14,7 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
     slug: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True, index=True)
+    trust_center_slug_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_significant_data_fiduciary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     sdf_category: Mapped[str | None] = mapped_column(String(100), nullable=True)

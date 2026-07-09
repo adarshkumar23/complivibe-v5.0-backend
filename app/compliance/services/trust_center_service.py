@@ -230,10 +230,14 @@ class TrustCenterService:
         # The slug is the org's public trust-center URL (/trust-center/{slug}). Any
         # org-admin could otherwise silently change it, breaking every existing
         # bookmarked link, embedded widget, or partner integration pointing at the
-        # old URL with zero warning. Require an explicit confirm=true to change an
-        # already-set, different slug; setting one for the first time (org.slug is
-        # None) needs no confirmation since nothing can break yet.
-        if org.slug is not None and org.slug != slug and not confirm:
+        # old URL with zero warning. Require an explicit confirm=true to change it
+        # once it's been explicitly set via THIS endpoint before. `org.slug` alone
+        # isn't the right signal: every org already has one auto-generated from its
+        # name at registration (used for SSO routing), so gating on "org.slug is not
+        # None" would demand confirm=true on every org's first real trust-center
+        # customization too. `trust_center_slug_confirmed_at` tracks only deliberate
+        # sets through this endpoint.
+        if org.trust_center_slug_confirmed_at is not None and org.slug != slug and not confirm:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
@@ -254,6 +258,7 @@ class TrustCenterService:
 
         before = {"slug": org.slug}
         org.slug = slug
+        org.trust_center_slug_confirmed_at = datetime.now(UTC)
         self.db.flush()
 
         AuditService(self.db).write_audit_log(
