@@ -94,8 +94,8 @@ class EmailConfigService:
         from app.platform.services.ses_service import SESService
 
         ses = SESService()
-        access_key_enc = ses.encrypt_credential(payload["aws_access_key_id"])
-        secret_key_enc = ses.encrypt_credential(payload["aws_secret_access_key"])
+        access_key_enc = ses.encrypt_credential(payload["aws_access_key_id"], db=self.db, organization_id=org_id)
+        secret_key_enc = ses.encrypt_credential(payload["aws_secret_access_key"], db=self.db, organization_id=org_id)
 
         action = "org_email_config.created"
         if row is None:

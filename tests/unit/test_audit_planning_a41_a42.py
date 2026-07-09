@@ -535,6 +535,10 @@ def test_a42_pbc_item_overdue_relative_to_fieldwork_deadline(client):
         json={"evidence_id": None},
     )
     assert accept_resp.status_code == 200
-    accepted = client.post(f"{PBC_BASE}/{item['id']}/accept", headers=org["org_headers"])
+    accepted = client.post(
+        f"{PBC_BASE}/{item['id']}/accept",
+        headers=org["org_headers"],
+        json={"override_reason": "No formal evidence available; accepted based on requester's direct verification."},
+    )
     assert accepted.status_code == 200
     assert accepted.json()["overdue_relative_to_fieldwork_deadline"] is False

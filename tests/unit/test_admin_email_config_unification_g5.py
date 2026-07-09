@@ -65,8 +65,9 @@ def test_admin_email_config_upsert_is_honored_by_the_real_send_path(mock_boto_cl
     assert cfg.from_email == "org-admin-sender@example.com"
 
     ses = SESService()
-    assert ses.decrypt_credential(cfg.aws_access_key_id_enc) == "org_admin_key"
-    assert ses.decrypt_credential(cfg.aws_secret_key_enc) == "org_admin_secret"
+    org_id = uuid.UUID(org["organization_id"])
+    assert ses.decrypt_credential(cfg.aws_access_key_id_enc, db=db_session, organization_id=org_id) == "org_admin_key"
+    assert ses.decrypt_credential(cfg.aws_secret_key_enc, db=db_session, organization_id=org_id) == "org_admin_secret"
 
     # The real resolver must select the org's custom sender/credentials, not
     # the platform default, given only the config set via the admin endpoint.

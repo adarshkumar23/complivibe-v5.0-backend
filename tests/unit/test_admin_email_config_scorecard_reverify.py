@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from cryptography.fernet import Fernet
@@ -138,10 +138,14 @@ def test_admin_email_config_test_send_and_non_admin_forbidden(client, db_session
         },
     )
 
-    with patch(
-        "app.compliance.services.email_delivery_service.SESEmailDeliveryService.send",
-        return_value=True,
-    ):
+    # Admin Email Config's test-send now goes through the real send path
+    # (SESService.send_email, the same one every other outbound email uses),
+    # not a bespoke email_delivery_service sender -- mock the boto3 client it
+    # actually calls, same as test_admin_email_config_unification_g5.py.
+    with patch("app.platform.services.ses_service.boto3.client") as mock_boto_client:
+        mock_client = MagicMock()
+        mock_client.send_email.return_value = {"MessageId": "test-message-id"}
+        mock_boto_client.return_value = mock_client
         test_resp = client.post(
             f"{ADMIN_EMAIL_CONFIG_BASE}/test",
             headers=org["org_headers"],

@@ -433,15 +433,21 @@ def test_phase91_audit_coverage_and_cancel_requires_reason(client, db_session):
 def test_g6_assigned_non_owner_approver_can_decide_own_request(client, db_session):
     """Regression test for the G6 bug: approve/reject required the blanket
     compliance_policies:approve permission via require_permission(), which only
-    "owner" (and "admin") roles carry. A "reviewer" or "auditor" explicitly
-    assigned as approver_user_id on a specific request got a bare 403
-    ("Missing required permission: compliance_policies:approve") even though
-    they were the named, correct decision-maker for that exact request.
+    "owner" (and "admin") roles carry. An "auditor" explicitly assigned as
+    approver_user_id on a specific request got a bare 403 ("Missing required
+    permission: compliance_policies:approve") even though they were the named,
+    correct decision-maker for that exact request.
 
     Being the assigned approver on a request must be sufficient authorization
     for THAT request regardless of the assignee's role's blanket grant. A
     different user who is neither the assignee nor an owner/admin must still
     be rejected.
+
+    Uses "auditor" (not "reviewer") for both users: reviewer was given a real
+    compliance_policies:approve grant as part of the G7 fix that made the
+    "reviewer" role name actually able to review things, so it no longer
+    demonstrates the assignee-specific bypass this test targets. "auditor"
+    still legitimately lacks that blanket permission.
     """
     org = bootstrap_org_user(client, email_prefix="p91-g6-assignee")
     owner_headers = org["org_headers"]
@@ -450,13 +456,13 @@ def test_g6_assigned_non_owner_approver_can_decide_own_request(client, db_sessio
         db_session,
         org_id=org["organization_id"],
         email="p91-g6-reviewer@example.com",
-        role_name="reviewer",
+        role_name="auditor",
     )
     other_reviewer = _create_user_with_role(
         db_session,
         org_id=org["organization_id"],
         email="p91-g6-other-reviewer@example.com",
-        role_name="reviewer",
+        role_name="auditor",
     )
     reviewer_token = login_user(client, reviewer.email)
     reviewer_headers = org_headers(reviewer_token, org["organization_id"])

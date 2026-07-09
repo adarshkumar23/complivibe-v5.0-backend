@@ -5,24 +5,64 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
-from app.models.ai_risk_assessment import AIRiskAssessment
+from app.models.ai_risk_assessment_question import AIRiskAssessmentQuestion
+from app.models.ai_risk_assessment_response import AIRiskAssessmentResponse
+from app.models.ai_system_risk_assessment import AISystemRiskAssessment
 from app.models.audit_log import AuditLog
 from app.models.task import Task
 from tests.helpers.auth_org import bootstrap_org_user
-from tests.unit.test_signals_recs_diagnostics_a67_a68_a69 import RECOMMENDATIONS_BASE, SYSTEMS_BASE, _create_system
+from tests.unit.test_signals_recs_diagnostics_a67_a68_a69 import RECOMMENDATIONS_BASE, RISK_ASSESS_BASE, SYSTEMS_BASE, _create_system
 
 
-def _complete_assessment(db_session, assessment_id: str, *, bias_risk_rating: str = "high") -> AIRiskAssessment:
-    row = db_session.execute(
-        select(AIRiskAssessment).where(AIRiskAssessment.id == uuid.UUID(assessment_id))
-    ).scalar_one()
-    row.status = "completed"
-    row.bias_risk_rating = bias_risk_rating
-    row.completed_at = datetime.now(UTC)
-    row.updated_at = datetime.now(UTC)
-    db_session.add(row)
-    db_session.commit()
-    return row
+def _complete_assessment(
+    client, org_headers: dict[str, str], db_session, assessment_id: str, system_id: str, *, bias_risk_rating: str = "high"
+) -> AISystemRiskAssessment:
+    """Complete a guided AI risk-assessment through the real submit/complete API
+    (not a direct DB write to the legacy table), so the completion is mirrored
+    onto ai_system_risk_assessments the same way production traffic is -- the
+    recommendation engine reads only from that table.
+
+    Completion mirrors onto a *new* ai_system_risk_assessments row (its own id,
+    not the questionnaire's id) -- see
+    AIRiskAssessmentService._sync_completion_to_system_assessment -- so the
+    mirrored row is looked up by (ai_system_id, status=completed), matching how
+    the recommendation engine itself resolves the latest completed assessment.
+    """
+    assessment_uuid = uuid.UUID(assessment_id)
+    response_rows = (
+        db_session.query(AIRiskAssessmentResponse, AIRiskAssessmentQuestion)
+        .join(AIRiskAssessmentQuestion, AIRiskAssessmentQuestion.id == AIRiskAssessmentResponse.question_id)
+        .filter(AIRiskAssessmentResponse.assessment_id == assessment_uuid)
+        .all()
+    )
+    payload = {
+        "responses": [
+            {
+                "question_id": str(resp.question_id),
+                "response": "high_risk" if question.risk_dimension == "bias" else "low_risk",
+            }
+            for resp, question in response_rows
+        ]
+    }
+    submitted = client.post(f"{RISK_ASSESS_BASE}/{assessment_id}/submit-responses", headers=org_headers, json=payload)
+    assert submitted.status_code == 200
+
+    completed = client.post(f"{RISK_ASSESS_BASE}/{assessment_id}/complete", headers=org_headers)
+    assert completed.status_code == 200
+    assert completed.json()["bias_risk_rating"] == bias_risk_rating
+
+    return (
+        db_session.execute(
+            select(AISystemRiskAssessment)
+            .where(
+                AISystemRiskAssessment.ai_system_id == uuid.UUID(system_id),
+                AISystemRiskAssessment.status == "completed",
+            )
+            .order_by(AISystemRiskAssessment.completed_at.desc(), AISystemRiskAssessment.created_at.desc())
+        )
+        .scalars()
+        .first()
+    )
 
 
 def test_phase93_recommendation_payload_context_and_apply_flow(client, db_session):
@@ -31,7 +71,7 @@ def test_phase93_recommendation_payload_context_and_apply_flow(client, db_sessio
 
     created_assessment = client.post(f"{SYSTEMS_BASE}/{system_id}/risk-assessments", headers=org["org_headers"])
     assert created_assessment.status_code == 201
-    _complete_assessment(db_session, created_assessment.json()["id"])
+    _complete_assessment(client, org["org_headers"], db_session, created_assessment.json()["id"], system_id)
 
     generated = client.post(f"{SYSTEMS_BASE}/{system_id}/generate-recommendations", headers=org["org_headers"])
     assert generated.status_code == 200
@@ -46,7 +86,7 @@ def test_phase93_recommendation_payload_context_and_apply_flow(client, db_sessio
 
     rec_id = first["id"]
     rec_row = db_session.execute(
-        select(AIRiskAssessment).where(AIRiskAssessment.id == uuid.UUID(first["source_ref_id"]))
+        select(AISystemRiskAssessment).where(AISystemRiskAssessment.id == uuid.UUID(first["source_ref_id"]))
     ).scalar_one()
     rec_row.completed_at = datetime.now(UTC) - timedelta(days=45)
     rec_row.updated_at = datetime.now(UTC) + timedelta(minutes=5)
@@ -96,7 +136,7 @@ def test_phase93_recommendation_edge_state_guards(client, db_session):
 
     created_assessment = client.post(f"{SYSTEMS_BASE}/{system_id}/risk-assessments", headers=org["org_headers"])
     assert created_assessment.status_code == 201
-    _complete_assessment(db_session, created_assessment.json()["id"])
+    _complete_assessment(client, org["org_headers"], db_session, created_assessment.json()["id"], system_id)
 
     generated = client.post(f"{SYSTEMS_BASE}/{system_id}/generate-recommendations", headers=org["org_headers"])
     assert generated.status_code == 200
