@@ -20,8 +20,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0280_task_escalation_tier"
-down_revision: str | None = "0279_bia_last_reviewed_at_nullable"
+revision: str = "0281_task_escalation_tier"
+down_revision: str | None = "0280_control_last_reviewed_at"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
