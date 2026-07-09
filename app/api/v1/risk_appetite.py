@@ -101,6 +101,13 @@ def create_threshold(
     )
 
     db.commit()
+
+    # Retroactively re-evaluate all existing risks in this category/scope against the
+    # newly created threshold, so pre-existing non-compliant risks are flagged immediately
+    # rather than only on their next unrelated write.
+    service.reevaluate_existing_risks(org_id=organization.id, threshold=row, actor_user_id=current_user.id)
+    db.commit()
+
     db.refresh(row)
     return _threshold_read(row)
 
@@ -314,7 +321,13 @@ def update_threshold(
     )
 
     if row.max_acceptable_score > before["max_acceptable_score"]:
+        # Threshold was relaxed -- auto-resolve any open alerts that no longer apply.
         service.resync_alerts_for_threshold(org_id=organization.id, threshold_id=row.id, threshold=row)
+    elif row.max_acceptable_score < before["max_acceptable_score"] and row.is_active:
+        # Threshold was tightened -- retroactively re-scan existing risks in this category/
+        # scope so pre-existing risks that now breach are flagged immediately, not just on
+        # their next unrelated write.
+        service.reevaluate_existing_risks(org_id=organization.id, threshold=row, actor_user_id=current_user.id)
 
     db.commit()
     db.refresh(row)

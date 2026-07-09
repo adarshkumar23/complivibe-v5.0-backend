@@ -96,7 +96,24 @@ RESTRICTED_DESTINATIONS: frozenset[str] = frozenset(
 # license requirements to most destinations outside close US allies per the
 # Commerce Country Chart (e.g. 9x5xx = "encryption"/munitions-adjacent items,
 # 3A/5A = electronics/telecom items with NS or SI control reasons).
-LICENSE_REQUIRING_ECCN_PREFIXES: frozenset[str] = frozenset({"9A", "9B", "9C", "9D", "9E", "3A", "5A"})
+#
+# Category 5 covers Telecommunications (Part 1) AND Information Security (Part
+# 2, i.e. encryption). Both parts share the same five product-group letters
+# (A=Systems/Equipment/Components, B=Test/Inspection/Production Equipment,
+# C=Materials, D=Software, E=Technology) under the standard CCL scheme, so an
+# ECCN like 5D002 (encryption software) or 5E002 (encryption technology) is
+# just as license-relevant as 5A002 (encryption hardware/systems) -- omitting
+# 5B/5D/5E here silently waved through export-controlled encryption software
+# and technology (and 5B test/inspection equipment) while still flagging the
+# equivalent hardware. Per BIS Category 5 Part 2 (Information Security):
+# 5A002/5A004 (equipment), 5B002 (test/inspection equipment), 5D002 (software
+# for 5A002-type items), and 5E002 (technology) are all license-required to
+# virtually all destinations outside Canada under License Exception ENC
+# eligibility analysis (15 CFR 742.15 / Supp. No. 1 to Part 774, Category 5
+# Part 2).
+LICENSE_REQUIRING_ECCN_PREFIXES: frozenset[str] = frozenset(
+    {"9A", "9B", "9C", "9D", "9E", "3A", "5A", "5B", "5D", "5E"}
+)
 
 DENIED_PARTY_MATCH_THRESHOLD = 0.85
 
