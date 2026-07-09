@@ -61,11 +61,15 @@ class DashboardService:
         current_score_grade = score_snapshot["grade"] if score_snapshot else None
         current_score_calculated_at = score_snapshot["calculated_at"] if score_snapshot else None
 
+        # NOTE: matches ComplianceDashboardService.posture_summary()'s
+        # controls.total / vendors.total, which count every row for the org
+        # regardless of archive status. Filtering out archived rows here
+        # (as an earlier version did) made this endpoint silently undercount
+        # vs. posture-summary and vs. a direct DB count for the same org.
         total_controls = int(
             self.db.execute(
                 select(func.count(Control.id)).where(
                     Control.organization_id == organization_id,
-                    Control.status != "archived",
                 )
             ).scalar_one()
         )
@@ -73,7 +77,6 @@ class DashboardService:
             self.db.execute(
                 select(func.count(Vendor.id)).where(
                     Vendor.organization_id == organization_id,
-                    Vendor.archived_at.is_(None),
                 )
             ).scalar_one()
         )
@@ -81,7 +84,6 @@ class DashboardService:
             self.db.execute(
                 select(func.count(CompliancePolicy.id)).where(
                     CompliancePolicy.organization_id == organization_id,
-                    CompliancePolicy.status != "archived",
                 )
             ).scalar_one()
         )
