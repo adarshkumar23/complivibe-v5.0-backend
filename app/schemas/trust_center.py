@@ -44,6 +44,13 @@ class TrustCenterConfigurationRead(BaseModel):
 
 class TrustCenterSetSlugRequest(BaseModel):
     slug: str = Field(pattern="^[a-z0-9][a-z0-9-]{1,98}[a-z0-9]$")
+    # Required (and must be true) to change a slug that's already set to something
+    # else -- the slug is the org's public trust-center URL, so changing it silently
+    # breaks any link/bookmark/integration already pointing at the old one. Left
+    # False/omitted, set_org_slug() rejects the change with a warning instead of
+    # applying it. Not required when setting a slug for the first time (previous
+    # value None).
+    confirm: bool = False
 
 
 class TrustCenterSetSlugResponse(BaseModel):

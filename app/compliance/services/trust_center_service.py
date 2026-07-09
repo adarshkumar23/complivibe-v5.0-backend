@@ -218,7 +218,7 @@ class TrustCenterService:
         )
         return row
 
-    def set_org_slug(self, org_id: uuid.UUID, slug: str, user_id: uuid.UUID) -> Organization:
+    def set_org_slug(self, org_id: uuid.UUID, slug: str, user_id: uuid.UUID, confirm: bool = False) -> Organization:
         if not SLUG_PATTERN.fullmatch(slug):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -226,6 +226,23 @@ class TrustCenterService:
             )
 
         org = self._require_org(org_id)
+
+        # The slug is the org's public trust-center URL (/trust-center/{slug}). Any
+        # org-admin could otherwise silently change it, breaking every existing
+        # bookmarked link, embedded widget, or partner integration pointing at the
+        # old URL with zero warning. Require an explicit confirm=true to change an
+        # already-set, different slug; setting one for the first time (org.slug is
+        # None) needs no confirmation since nothing can break yet.
+        if org.slug is not None and org.slug != slug and not confirm:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Organization already has a public trust-center slug ('{org.slug}'). "
+                    "Changing it will break any existing links to the current trust-center "
+                    "URL. Resend the request with confirm: true to proceed."
+                ),
+            )
+
         existing = self.db.execute(
             select(Organization).where(
                 Organization.slug == slug,

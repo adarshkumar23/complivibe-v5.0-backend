@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.business_unit import BusinessUnit
@@ -20,6 +20,7 @@ from app.models.compliance_policy import CompliancePolicy
 from app.models.control import Control
 from app.models.evidence_item import EvidenceItem
 from app.models.import_job import ImportJob
+from app.models.membership import Membership
 from app.models.organization import Organization
 from app.models.user import User
 from app.core.config import get_settings
@@ -47,7 +48,20 @@ _RECOGNIZED_CSV_COLUMN_ALIASES = {
     "evidence_type", "artifact_type", "kind",
     "collected_at", "captured_at", "observed_at", "updated_at",
     "original_created_at", "created_at", "uploaded_at",
+    "status", "control_status",
+    "owner", "owner_email", "owner_user_id",
+    "criticality", "priority",
+    "last_reviewed", "last_reviewed_at", "reviewed_at",
 }
+
+# Controls only accept these status/criticality values (see Control model +
+# ControlUpdate schema patterns). An imported value outside this set is not
+# an error -- it's treated as unrecognized and the field is left at its
+# default rather than persisting an invalid value.
+_CONTROL_STATUS_VALUES = {
+    "not_started", "in_progress", "implemented", "needs_review", "failed", "not_applicable", "archived",
+}
+_CONTROL_CRITICALITY_VALUES = {"low", "medium", "high", "critical"}
 
 
 def run_import_job_validation(job_id: str) -> None:
@@ -766,6 +780,10 @@ class ImportJobService:
             "evidence_type": from_columns("evidence_type", "artifact_type", "kind") or "other",
             "collected_at": from_columns("collected_at", "captured_at", "observed_at", "updated_at"),
             "original_created_at": from_columns("original_created_at", "created_at", "uploaded_at"),
+            "status": from_columns("status", "control_status"),
+            "owner": from_columns("owner", "owner_email", "owner_user_id"),
+            "criticality": from_columns("criticality", "priority"),
+            "last_reviewed": from_columns("last_reviewed", "last_reviewed_at", "reviewed_at"),
         }
 
         if source_tool in {"sprinto", "scrut"}:
@@ -830,6 +848,9 @@ class ImportJobService:
             row_errors.append({"row": row_number, "error": "Missing title/name"})
             return
 
+        raw_status = str(raw.get("status") or "").strip().lower()
+        raw_criticality = str(raw.get("criticality") or "").strip().lower()
+
         parsed_rows.append(
             {
                 "row_number": row_number,
@@ -841,6 +862,10 @@ class ImportJobService:
                 "evidence_type": str(raw.get("evidence_type") or "other").strip(),
                 "collected_at": raw.get("collected_at"),
                 "original_created_at": raw.get("original_created_at") or raw.get("created_at"),
+                "status": raw_status if raw_status in _CONTROL_STATUS_VALUES else None,
+                "owner": str(raw.get("owner") or "").strip() or None,
+                "criticality": raw_criticality if raw_criticality in _CONTROL_CRITICALITY_VALUES else None,
+                "last_reviewed": raw.get("last_reviewed") or raw.get("last_reviewed_at"),
             }
         )
 
@@ -906,8 +931,43 @@ class ImportJobService:
         self.db.flush()
         return existing, "updated"
 
+    def _resolve_owner_user_id(self, organization_id: uuid.UUID, owner: str | None) -> uuid.UUID | None:
+        """Resolve an imported "owner" cell to a user id.
+
+        Accepts either a literal user UUID or an email address, and only
+        returns a user who actually has an active membership in this org --
+        matching an arbitrary email from a CSV to a user in a different org
+        would be a cross-tenant data leak.
+        """
+        if not owner:
+            return None
+        try:
+            candidate_id = uuid.UUID(owner)
+        except ValueError:
+            candidate_id = None
+
+        if candidate_id is not None:
+            user = self.db.execute(
+                select(User)
+                .join(Membership, Membership.user_id == User.id)
+                .where(User.id == candidate_id, Membership.organization_id == organization_id)
+            ).scalar_one_or_none()
+            return user.id if user is not None else None
+
+        user = self.db.execute(
+            select(User)
+            .join(Membership, Membership.user_id == User.id)
+            .where(func.lower(User.email) == owner.strip().lower(), Membership.organization_id == organization_id)
+        ).scalar_one_or_none()
+        return user.id if user is not None else None
+
     def _upsert_control(self, job: ImportJob, row: dict[str, Any], actor_user_id: uuid.UUID | None) -> tuple[Control | None, str]:
         existing = self._find_existing(job.organization_id, row)
+        status_value = row.get("status") or "not_started"
+        criticality_value = row.get("criticality") or "medium"
+        owner_user_id = self._resolve_owner_user_id(job.organization_id, row.get("owner"))
+        last_reviewed_at = self._parse_optional_datetime(row.get("last_reviewed"))
+
         if existing is None:
             item = Control(
                 organization_id=job.organization_id,
@@ -915,9 +975,11 @@ class ImportJobService:
                 title=row["title"],
                 description=row["description"],
                 source="imported",
-                status="not_started",
+                status=status_value,
                 control_type="process",
-                criticality="medium",
+                criticality=criticality_value,
+                owner_user_id=owner_user_id,
+                last_reviewed_at=last_reviewed_at,
                 source_import_tool=job.source_tool,
                 created_by_user_id=actor_user_id,
             )
@@ -928,6 +990,14 @@ class ImportJobService:
             return existing, "skipped"
         existing.title = row["title"]
         existing.description = row["description"]
+        if row.get("status"):
+            existing.status = status_value
+        if row.get("criticality"):
+            existing.criticality = criticality_value
+        if owner_user_id is not None:
+            existing.owner_user_id = owner_user_id
+        if last_reviewed_at is not None:
+            existing.last_reviewed_at = last_reviewed_at
         existing.source_import_tool = job.source_tool
         self.db.flush()
         return existing, "updated"

@@ -58,8 +58,16 @@ def test_import_job_create_preview_and_row_level_parse_errors(client, db_session
 
 
 def test_import_csv_surfaces_unmapped_columns_in_preview_and_commit(client, db_session):
-    """G9 item 6: unrecognized CSV columns (status/owner/last_reviewed) must be
-    surfaced as a warning, not silently dropped without the user knowing."""
+    """G9 item 6: unrecognized CSV columns must be surfaced as a warning, not
+    silently dropped without the user knowing.
+
+    NOTE (G4 item 2 fix): status/owner/last_reviewed/criticality are now
+    *recognized* CSV columns -- they're parsed and actually persisted onto the
+    created/updated control (see test_import_csv_persists_status_owner_criticality_last_reviewed
+    below) -- so they must no longer appear here. This test now uses columns
+    that genuinely have no mapping to prove the "surface as a warning" behavior
+    from G9 item 6 is still intact.
+    """
     org = bootstrap_org_user(client, email_prefix="import-job-unmapped")
 
     create = client.post(
@@ -69,8 +77,8 @@ def test_import_csv_surfaces_unmapped_columns_in_preview_and_commit(client, db_s
             "dry_run": True,
             "conflict_strategy": "skip",
             "csv_content": (
-                "entity_type,title,description,status,owner,last_reviewed\n"
-                "control,Access Control Policy,desc here,active,Jane Doe,2026-01-01\n"
+                "entity_type,title,description,region,cost_center\n"
+                "control,Access Control Policy,desc here,EMEA,CC-100\n"
             ),
         },
     )
@@ -79,11 +87,51 @@ def test_import_csv_surfaces_unmapped_columns_in_preview_and_commit(client, db_s
 
     preview = client.post(f"{BASE}/{job_id}/dry-run-preview", headers=org["org_headers"])
     assert preview.status_code == 200
-    assert sorted(preview.json()["unmapped_columns"]) == ["last_reviewed", "owner", "status"]
+    assert sorted(preview.json()["unmapped_columns"]) == ["cost_center", "region"]
 
     commit = client.post(f"{BASE}/{job_id}/commit", headers=org["org_headers"])
     assert commit.status_code == 200
-    assert sorted(commit.json()["unmapped_columns"]) == ["last_reviewed", "owner", "status"]
+    assert sorted(commit.json()["unmapped_columns"]) == ["cost_center", "region"]
+
+
+def test_import_csv_persists_status_owner_criticality_last_reviewed(client, db_session):
+    """G4 item 2 regression test: importing a control CSV with status/owner/
+    criticality/last_reviewed columns must actually persist those fields onto
+    the created Control, not silently drop them."""
+    org = bootstrap_org_user(client, email_prefix="import-job-control-fields")
+    owner_email = org["email"]
+
+    create = client.post(
+        f"{BASE}/generic",
+        headers=org["org_headers"],
+        json={
+            "dry_run": False,
+            "conflict_strategy": "update",
+            "csv_content": (
+                "entity_type,title,status,owner,criticality,last_reviewed\n"
+                f"control,Imported Field Test Control,implemented,{owner_email},high,2026-06-01T00:00:00Z\n"
+            ),
+        },
+    )
+    assert create.status_code == 201
+    job_id = create.json()["id"]
+
+    preview = client.post(f"{BASE}/{job_id}/dry-run-preview", headers=org["org_headers"])
+    assert preview.status_code == 200
+    assert preview.json()["unmapped_columns"] == []
+
+    commit = client.post(f"{BASE}/{job_id}/commit", headers=org["org_headers"])
+    assert commit.status_code == 200
+    assert commit.json()["created"] == {"control": 1}
+    assert commit.json()["unmapped_columns"] == []
+
+    control = db_session.execute(
+        select(Control).where(Control.title == "Imported Field Test Control")
+    ).scalar_one()
+    assert control.status == "implemented"
+    assert control.criticality == "high"
+    assert control.owner_user_id is not None
+    assert control.last_reviewed_at is not None
 
 
 def test_import_csv_no_unmapped_columns_when_all_recognized(client, db_session):

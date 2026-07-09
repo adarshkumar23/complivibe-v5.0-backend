@@ -42,6 +42,7 @@ class ControlRead(BaseModel):
     status: str
     criticality: str
     owner_user_id: UUID | None = None
+    last_reviewed_at: datetime | None = None
     testing_procedure: str | None = None
     implementation_notes: str | None = None
     source: str
