@@ -103,7 +103,11 @@ def test_phase101_webhook_retry_is_deduped_by_idempotency_key(client, db_session
     assert rule_row.last_matched_at is not None
 
 
-def test_phase101_ingest_without_idempotency_key_path_still_creates_each_time(client, db_session):
+def test_phase101_ingest_without_idempotency_key_path_still_dedupes_by_content(client, db_session):
+    """Even when a rule has no idempotency_key_path configured, byte-identical
+    resubmissions of the same payload must not silently create disconnected evidence
+    rows: create_evidence_item's checksum-based dedup (fingerprinted from the payload
+    when the source doesn't supply an explicit checksum) is the fallback safety net."""
     token = _register(client, "p101-owner-nokey@example.com", "P101 NoKey Org")
     org_id = _org_id(client, token)
 
@@ -122,9 +126,16 @@ def test_phase101_ingest_without_idempotency_key_path_still_creates_each_time(cl
     first = client.post("/api/v1/evidence-automation/inbound/form-submit", headers=_headers(token, org_id), json=payload)
     second = client.post("/api/v1/evidence-automation/inbound/form-submit", headers=_headers(token, org_id), json=payload)
     assert first.json()["created_count"] == 1
-    assert second.json()["created_count"] == 1
-    assert second.json()["duplicate_count"] == 0
+    assert second.json()["created_count"] == 0
+    assert second.json()["duplicate_count"] == 1
 
+    evidence_rows = db_session.query(EvidenceItem).filter(EvidenceItem.organization_id == uuid.UUID(org_id)).all()
+    assert len(evidence_rows) == 1
+
+    # A genuinely different payload (different content) is not deduped.
+    other_payload = {"payload": {"name": "annual-review"}}
+    third = client.post("/api/v1/evidence-automation/inbound/form-submit", headers=_headers(token, org_id), json=other_payload)
+    assert third.json()["created_count"] == 1
     evidence_rows = db_session.query(EvidenceItem).filter(EvidenceItem.organization_id == uuid.UUID(org_id)).all()
     assert len(evidence_rows) == 2
 
