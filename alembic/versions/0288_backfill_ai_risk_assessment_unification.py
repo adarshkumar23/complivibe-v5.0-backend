@@ -15,8 +15,8 @@ fixed to mirror new completions onto `ai_system_risk_assessments` going
 forward; this migration backfills previously-completed questionnaire rows
 so historical completions aren't silently lost.
 
-Revision ID: 0200_backfill_ai_risk_assessment_unification
-Revises: 0199_audit_engagement_source_schedule_link
+Revision ID: 0288_backfill_ai_risk_assessment_unification
+Revises: 0287_policy_attestation_record_declined_status
 Create Date: 2026-07-09 00:00:00.000000
 """
 
@@ -25,8 +25,8 @@ from collections.abc import Sequence
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0200_backfill_ai_risk_assessment_unification"
-down_revision: str | None = "0199_audit_engagement_source_schedule_link"
+revision: str = "0288_backfill_ai_risk_assessment_unification"
+down_revision: str | None = "0287_policy_attestation_record_declined_status"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -22,8 +22,8 @@ with the same scheme `SESService` uses for `aws_access_key_id_enc` /
 `aws_secret_key_enc`, so those orgs' previously-inert configuration becomes
 live without requiring anyone to re-enter credentials.
 
-Revision ID: 0201_backfill_admin_email_config_unification
-Revises: 0200_backfill_ai_risk_assessment_unification
+Revision ID: 0289_backfill_admin_email_config_unification
+Revises: 0288_backfill_ai_risk_assessment_unification
 Create Date: 2026-07-09 00:05:00.000000
 """
 
@@ -37,8 +37,8 @@ from alembic import op
 from cryptography.fernet import Fernet
 
 # revision identifiers, used by Alembic.
-revision: str = "0201_backfill_admin_email_config_unification"
-down_revision: str | None = "0200_backfill_ai_risk_assessment_unification"
+revision: str = "0289_backfill_admin_email_config_unification"
+down_revision: str | None = "0288_backfill_ai_risk_assessment_unification"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
