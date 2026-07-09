@@ -6193,7 +6193,7 @@ def list_governance_candidate_actions(
     priority_band: str | None = Query(default=None, pattern="^(low|medium|high|urgent)$"),
     action_type: str | None = Query(
         default=None,
-        pattern="^(create_record|update_record|review_record|attach_evidence|resolve_issue|create_snapshot|refresh_signals|prepare_draft)$",
+        pattern="^(create_record|update_record|review_record|attach_evidence|resolve_issue|create_snapshot|refresh_signals|prepare_draft|send_reminder)$",
     ),
     reason_code: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),

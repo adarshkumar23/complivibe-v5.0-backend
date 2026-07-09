@@ -201,8 +201,25 @@ class PAMSessionService:
             stmt = stmt.where(PAMSessionRecord.target_system == target_system)
         return self.db.execute(stmt.order_by(PAMSessionRecord.started_at.desc()).limit(max(1, min(limit, 500)))).scalars().all()
 
+    # Statuses that represent an *unapproved* privileged session signal for
+    # governance purposes. BUG: this view used to filter on approval_status ==
+    # "missing" only, which silently excluded "denied" sessions -- a session
+    # whose approval was actively denied is at least as strong a governance
+    # signal as one that simply lacks approval evidence, not something to hide
+    # from this view.
+    UNAPPROVED_RISK_APPROVAL_STATUSES = ("missing", "denied")
+
     def list_unapproved_risks(self, org_id: uuid.UUID, *, limit: int = 100) -> dict[str, Any]:
-        rows = self.list_sessions(org_id, approval_status="missing", limit=limit)
+        stmt = (
+            select(PAMSessionRecord)
+            .where(
+                PAMSessionRecord.organization_id == org_id,
+                PAMSessionRecord.approval_status.in_(self.UNAPPROVED_RISK_APPROVAL_STATUSES),
+            )
+            .order_by(PAMSessionRecord.started_at.desc())
+            .limit(max(1, min(limit, 500)))
+        )
+        rows = self.db.execute(stmt).scalars().all()
         return {
             "total_unapproved_sessions": len(rows),
             "open_risk_sessions": sum(1 for row in rows if row.risk_status == "open"),
@@ -215,7 +232,13 @@ class PAMSessionService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Approved PAM sessions cannot be flagged as unapproved")
 
         before = self._snapshot(row)
-        row.approval_status = "missing"
+        # BUG: this used to unconditionally set approval_status = "missing", which
+        # overwrote (and destroyed) an existing "denied" status with the weaker/less
+        # specific "missing" value. A denied session's signal must be preserved, not
+        # downgraded, when it gets flagged -- only sessions that don't already carry
+        # a "denied" status get normalized to "missing" here.
+        if row.approval_status != "denied":
+            row.approval_status = "missing"
         row.risk_status = "open"
         row.risk_reason = "Privileged session has no approval evidence"
         row.flagged_by = actor_user_id

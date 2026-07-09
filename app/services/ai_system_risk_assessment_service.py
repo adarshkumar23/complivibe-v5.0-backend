@@ -665,6 +665,59 @@ GOVERNANCE_CANDIDATE_ACTION_TEMPLATES: tuple[dict[str, Any], ...] = (
         "human_approval_required": True,
         "automation_allowed": False,
     },
+    # The three templates below are the only candidate-action sources for the
+    # real-execution action_types (refresh_signals, attach_evidence via the
+    # flag_stale_evidence action_key, send_reminder via the send_reminder action_key).
+    # AUTOPILOT_CAPABILITY_MATRIX and the runners in _auto_execute_candidate_action
+    # have supported these action_types/action_keys since Phase 7.1, but until these
+    # templates existed no candidate-generation path ever emitted a signal whose
+    # reason_code mapped to them -- so no real user had any discoverable way to
+    # reach a real-execution action. Trigger conditions reuse this module's existing
+    # staleness threshold (GOVERNANCE_SIGNAL_ASSESSMENT_STALE_THRESHOLD_DAYS, already
+    # used for stale_assessment_context elsewhere in this file) so "stale" means the
+    # same thing everywhere in this domain.
+    {
+        "action_key": "refresh_stale_signals",
+        "title": "Refresh stale signal metadata",
+        "description": "Refresh this assessment's signal metadata; its signals have not been refreshed recently.",
+        "action_type": "refresh_signals",
+        "source_reason_codes": ["assessment_signals_stale"],
+        "default_priority_band": "medium",
+        "recommended_owner_type": "risk_owner",
+        "target_entity_type": "risk_assessment",
+        "target_route_hint": "/api/v1/ai-governance/ai-risk/assessments/{assessment_id}/refresh-classification-signals",
+        "human_approval_required": True,
+        "automation_allowed": False,
+    },
+    {
+        "action_key": "flag_stale_evidence",
+        "title": "Flag stale mitigation evidence",
+        "description": (
+            "Flag this high/critical-risk assessment's mitigation evidence as stale for manual review; "
+            "no mitigation summary is on file."
+        ),
+        "action_type": "attach_evidence",
+        "source_reason_codes": ["assessment_missing_mitigation_evidence"],
+        "default_priority_band": "high",
+        "recommended_owner_type": "risk_owner",
+        "target_entity_type": "risk_assessment",
+        "target_route_hint": "/api/v1/ai-governance/autopilot/execution-intents",
+        "human_approval_required": True,
+        "automation_allowed": False,
+    },
+    {
+        "action_key": "send_reminder",
+        "title": "Send reminder to assessment owner",
+        "description": "Remind the assigned owner that this assessment has been awaiting action past the staleness threshold.",
+        "action_type": "send_reminder",
+        "source_reason_codes": ["assessment_owner_reminder_due"],
+        "default_priority_band": "medium",
+        "recommended_owner_type": "risk_owner",
+        "target_entity_type": "risk_assessment",
+        "target_route_hint": "/api/v1/ai-governance/autopilot/execution-intents",
+        "human_approval_required": True,
+        "automation_allowed": False,
+    },
 )
 
 
@@ -3119,7 +3172,132 @@ class AISystemRiskAssessmentService:
                     }
                 )
 
+        candidates.extend(self._build_real_execution_signal_candidates(assessment=assessment))
+
         candidates.sort(key=lambda item: (item["reason_code"], item["entity_type"], item["entity_id"]))
+        return candidates
+
+    def _build_real_execution_signal_candidates(
+        self,
+        *,
+        assessment: AISystemRiskAssessment,
+    ) -> list[dict]:
+        """Signals that back the three real-execution candidate actions.
+
+        BUG (real-execution actions unreachable): refresh_signals, attach_evidence
+        (via the flag_stale_evidence action_key) and send_reminder are genuine,
+        executable action types (see AUTOPILOT_CAPABILITY_MATRIX and
+        _auto_execute_candidate_action), but no candidate-generation logic ever
+        emitted a signal/reason_code that mapped to them via
+        GOVERNANCE_CANDIDATE_ACTION_TEMPLATES -- so no real user had any
+        discoverable path to trigger one. These three checks follow this method's
+        existing pattern (deterministic structural/staleness checks on the
+        assessment) and reuse GOVERNANCE_SIGNAL_ASSESSMENT_STALE_THRESHOLD_DAYS,
+        the staleness threshold already used elsewhere in this file, so "stale"
+        means the same thing across the whole domain.
+        """
+        if assessment.archived_at is not None:
+            return []
+
+        candidates: list[dict] = []
+        now = self.now()
+
+        # refresh_signals: warranted once this assessment's signal metadata has
+        # never been refreshed, or the last autopilot refresh is older than the
+        # domain's staleness threshold.
+        risk_factors = assessment.risk_factors_json if isinstance(assessment.risk_factors_json, dict) else {}
+        last_refresh_raw = risk_factors.get("autopilot_last_refresh_at") if isinstance(risk_factors, dict) else None
+        last_refresh_at: datetime | None = None
+        if last_refresh_raw:
+            try:
+                last_refresh_at = datetime.fromisoformat(str(last_refresh_raw))
+            except ValueError:
+                last_refresh_at = None
+        signal_reference_at = self.as_utc(last_refresh_at) or self.as_utc(assessment.updated_at) or self.as_utc(assessment.created_at)
+        signal_age_days = (now - signal_reference_at).days if signal_reference_at is not None else None
+        if signal_age_days is None or signal_age_days >= GOVERNANCE_SIGNAL_ASSESSMENT_STALE_THRESHOLD_DAYS:
+            candidates.append(
+                {
+                    "entity_type": "risk_assessment",
+                    "entity_id": str(assessment.id),
+                    "signal_type": "assessment_signals_stale",
+                    "reason_code": "assessment_signals_stale",
+                    "severity": "warning",
+                    "title": "Assessment signal metadata is stale",
+                    "message": (
+                        "Assessment signal metadata has not been refreshed within "
+                        f"{GOVERNANCE_SIGNAL_ASSESSMENT_STALE_THRESHOLD_DAYS} days."
+                    ),
+                    "source_json": {
+                        "risk_assessment_id": str(assessment.id),
+                        "rule": "signals_stale",
+                        "last_refresh_at": last_refresh_at.isoformat() if last_refresh_at else None,
+                        "signal_age_days": signal_age_days,
+                        "stale_threshold_days": GOVERNANCE_SIGNAL_ASSESSMENT_STALE_THRESHOLD_DAYS,
+                        "caveat": AI_RISK_GOVERNANCE_SIGNAL_CAVEAT,
+                    },
+                    "related_ai_system_id": str(assessment.ai_system_id),
+                    "related_risk_assessment_id": str(assessment.id),
+                }
+            )
+
+        # attach_evidence (flag_stale_evidence): warranted when a high/critical-risk
+        # assessment has no mitigation evidence on file at all.
+        if str(assessment.risk_level) in {"high", "critical"} and not (
+            assessment.mitigation_summary and assessment.mitigation_summary.strip()
+        ):
+            candidates.append(
+                {
+                    "entity_type": "risk_assessment",
+                    "entity_id": str(assessment.id),
+                    "signal_type": "assessment_missing_mitigation_evidence",
+                    "reason_code": "assessment_missing_mitigation_evidence",
+                    "severity": "critical" if assessment.risk_level == "critical" else "warning",
+                    "title": "High-risk assessment missing mitigation evidence",
+                    "message": "Assessment risk_level is high/critical but no mitigation_summary evidence is on file.",
+                    "source_json": {
+                        "risk_assessment_id": str(assessment.id),
+                        "risk_level": assessment.risk_level,
+                        "rule": "missing_mitigation_evidence",
+                        "caveat": AI_RISK_GOVERNANCE_SIGNAL_CAVEAT,
+                    },
+                    "related_ai_system_id": str(assessment.ai_system_id),
+                    "related_risk_assessment_id": str(assessment.id),
+                }
+            )
+
+        # send_reminder: warranted when an assigned owner has left the assessment
+        # in an unfinished status past the staleness threshold -- the assessment
+        # equivalent of an overdue assignee task/attestation.
+        if assessment.owner_user_id is not None and str(assessment.status) not in {"completed", "archived"}:
+            owner_reference_at = self.as_utc(assessment.updated_at) or self.as_utc(assessment.created_at)
+            owner_age_days = (now - owner_reference_at).days if owner_reference_at is not None else None
+            if owner_age_days is not None and owner_age_days >= GOVERNANCE_SIGNAL_ASSESSMENT_STALE_THRESHOLD_DAYS:
+                candidates.append(
+                    {
+                        "entity_type": "risk_assessment",
+                        "entity_id": str(assessment.id),
+                        "signal_type": "assessment_owner_reminder_due",
+                        "reason_code": "assessment_owner_reminder_due",
+                        "severity": "warning",
+                        "title": "Assessment owner reminder due",
+                        "message": (
+                            f"Assessment status has been '{assessment.status}' for at least "
+                            f"{GOVERNANCE_SIGNAL_ASSESSMENT_STALE_THRESHOLD_DAYS} days with an owner assigned."
+                        ),
+                        "source_json": {
+                            "risk_assessment_id": str(assessment.id),
+                            "owner_user_id": str(assessment.owner_user_id),
+                            "status": assessment.status,
+                            "owner_age_days": owner_age_days,
+                            "rule": "owner_reminder_due",
+                            "caveat": AI_RISK_GOVERNANCE_SIGNAL_CAVEAT,
+                        },
+                        "related_ai_system_id": str(assessment.ai_system_id),
+                        "related_risk_assessment_id": str(assessment.id),
+                    }
+                )
+
         return candidates
 
     def _governance_signal_query(
