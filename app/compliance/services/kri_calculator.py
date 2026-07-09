@@ -23,6 +23,18 @@ class KRICalculator:
     # callers as stale rather than silently shown as current.
     STALE_AFTER = timedelta(hours=24)
 
+    # Rate-type metrics express a proportion. Scale convention: ALL rate metrics
+    # (numerator/denominator style KRIs) are reported and thresholded on a 0-100
+    # percentage scale -- NOT a 0-1 fraction -- to match how compliance officers
+    # actually enter thresholds (e.g. "flag when overdue-task rate exceeds 80%"
+    # is entered as 80, not 0.8). Every rate calculator below multiplies its raw
+    # fraction by 100 before returning, and RiskIndicatorCreate enforces that
+    # target_value/warning_threshold/critical_threshold for these metric_types
+    # stay within [0, 100]. Count-type metrics (vendor_high_risk_count,
+    # open_alert_count, policy_overdue_review) are raw counts and are NOT
+    # subject to this convention.
+    RATE_METRIC_TYPES = {"control_expiry_rate", "evidence_gap_rate", "overdue_task_rate"}
+
     @staticmethod
     def utcnow() -> datetime:
         return datetime.now(UTC)
@@ -78,7 +90,7 @@ class KRICalculator:
                 )
             ).scalar_one()
         )
-        return KRICalculator._to_float((numerator / denominator) if denominator else 0.0)
+        return KRICalculator._to_float((numerator / denominator) * 100.0 if denominator else 0.0)
 
     @staticmethod
     def calculate_evidence_gap_rate(org_id: uuid.UUID, db: Session) -> float:
@@ -110,7 +122,7 @@ class KRICalculator:
                 )
             ).scalar_one()
         )
-        return KRICalculator._to_float((numerator / denominator) if denominator else 0.0)
+        return KRICalculator._to_float((numerator / denominator) * 100.0 if denominator else 0.0)
 
     @staticmethod
     def calculate_overdue_task_rate(org_id: uuid.UUID, db: Session) -> float:
@@ -133,7 +145,7 @@ class KRICalculator:
                 )
             ).scalar_one()
         )
-        return KRICalculator._to_float((numerator / denominator) if denominator else 0.0)
+        return KRICalculator._to_float((numerator / denominator) * 100.0 if denominator else 0.0)
 
     @staticmethod
     def calculate_vendor_high_risk_count(org_id: uuid.UUID, db: Session) -> float:

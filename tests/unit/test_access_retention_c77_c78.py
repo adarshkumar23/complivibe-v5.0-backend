@@ -442,7 +442,13 @@ def test_c78_retention_policy_enforcement(client, db_session):
     assert summary.status_code == 200
     body = summary.json()
     assert body["total_assets_with_policy"] == 3
-    assert body["expired_count"] >= 2
+    # asset_1 was resolved above: resolving must push retention_review_date out to
+    # today + retention_days (G3 fix), not leave it (or reset it to) today/the old
+    # overdue date -- otherwise it would immediately be re-flagged as still
+    # "expired" by the very next sweep/summary, an infinite reflagging loop. Only
+    # asset_3 (waived, not resolved -- its date is intentionally untouched) is
+    # still expired here.
+    assert body["expired_count"] == 1
     assert 0.0 <= float(body["compliance_rate"]) <= 100.0
 
     # Org isolation.

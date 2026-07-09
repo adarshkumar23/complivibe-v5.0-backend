@@ -18,6 +18,135 @@ from app.core.validation import validate_choice
 ALLOWED_COUNTERPARTY_TYPES = {"processor", "sub_processor", "joint_controller", "controller"}
 ALLOWED_STATUSES = {"pending", "active", "expired", "under_review", "terminated"}
 ALLOWED_HIPAA_ENTITY_TYPES = {"covered_entity", "business_associate", "subcontractor"}
+
+# GDPR Art. 4(1) "personal data" is any information relating to an identified or
+# identifiable natural person -- not just a literal "personal_data" tag. This set
+# recognizes the realistic taxonomy of data-category tags an org actually stores on
+# a ProcessingActivity: direct/online identifiers (Art. 4(1)/Recital 30) and the
+# special categories of Art. 9(1) (health, biometric, genetic, racial/ethnic origin,
+# religious/philosophical belief, political opinion, trade-union membership, sex
+# life/sexual orientation), plus Art. 10 criminal-conviction data. Financial
+# identifiers (bank account, payment card, tax ID) also relate to an identifiable
+# person and are treated as personal data for coverage purposes.
+GDPR_PERSONAL_DATA_CATEGORIES = frozenset(
+    {
+        # generic / umbrella tags
+        "personal_data",
+        "pii",
+        "personally_identifiable_information",
+        "sensitive_personal_data",
+        "special_category_data",
+        "special_categories",
+        # direct identifiers
+        "name",
+        "full_name",
+        "first_name",
+        "last_name",
+        "email",
+        "email_address",
+        "phone",
+        "phone_number",
+        "mobile_number",
+        "address",
+        "postal_address",
+        "home_address",
+        "date_of_birth",
+        "dob",
+        "gender",
+        "nationality",
+        "photo",
+        "signature",
+        # online / device identifiers (Recital 30)
+        "ip_address",
+        "device_id",
+        "device_identifier",
+        "cookie_id",
+        "cookie",
+        "advertising_id",
+        "mac_address",
+        "geolocation",
+        "location",
+        "location_data",
+        "username",
+        "user_id",
+        "account_id",
+        "customer_id",
+        # government / national identifiers
+        "ssn",
+        "social_security_number",
+        "national_id",
+        "national_identifier",
+        "passport_number",
+        "passport",
+        "government_id",
+        "drivers_license",
+        "tax_id",
+        "tax_identification_number",
+        # financial identifiers
+        "financial_data",
+        "financial",
+        "bank_account",
+        "bank_account_number",
+        "iban",
+        "credit_card",
+        "credit_card_number",
+        "payment_card",
+        "payment_data",
+        "salary",
+        "income",
+        "billing_address",
+        # employment / education
+        "employment_data",
+        "employee_id",
+        "education_data",
+        # Art. 9(1) special categories
+        "health_data",
+        "health",
+        "medical",
+        "medical_condition",
+        "medical_record",
+        "biometric",
+        "biometric_data",
+        "genetic",
+        "genetic_data",
+        "race",
+        "ethnicity",
+        "racial_or_ethnic_origin",
+        "religion",
+        "religious_belief",
+        "philosophical_belief",
+        "political_opinion",
+        "trade_union_membership",
+        "sex_life",
+        "sexual_orientation",
+        # Art. 10 criminal data
+        "criminal_record",
+        "criminal_conviction",
+        "criminal_data",
+    }
+)
+
+
+def _normalize_data_category(value: object) -> str:
+    return str(value).strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def is_gdpr_personal_data_category(value: object) -> bool:
+    """True if a ProcessingActivity data_categories tag denotes GDPR personal data.
+
+    Matches against the realistic taxonomy in GDPR_PERSONAL_DATA_CATEGORIES both
+    exactly and as a substring/keyword (so e.g. "user_email_address" or
+    "customer_ssn" still match "email"/"ssn"), rather than only the literal
+    string "personal_data".
+    """
+    normalized = _normalize_data_category(value)
+    if not normalized:
+        return False
+    if normalized in GDPR_PERSONAL_DATA_CATEGORIES:
+        return True
+    return any(keyword in normalized for keyword in GDPR_PERSONAL_DATA_CATEGORIES)
+
+
 STATUS_TRANSITIONS: dict[str, set[str]] = {
     "pending": {"active", "terminated"},
     "active": {"under_review", "expired", "terminated"},
@@ -469,7 +598,7 @@ class DPAService:
         personal_data_activity_ids = {
             str(row.id)
             for row in activities
-            if any(str(item).lower() == "personal_data" for item in (row.data_categories or []))
+            if any(is_gdpr_personal_data_category(item) for item in (row.data_categories or []))
         }
 
         covered_ids: set[str] = set()

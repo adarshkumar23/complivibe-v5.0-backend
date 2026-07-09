@@ -261,11 +261,11 @@ def test_a11_recalculate_control_expiry_rate_formula(client, db_session):
         owner_user_id=str(owner.id),
         name="Control Expiry Rate",
         metric_type="control_expiry_rate",
-        warning_threshold=0.2,
-        critical_threshold=0.5,
+        warning_threshold=20,
+        critical_threshold=50,
     )
     recalculated = _recalculate(client, org["org_headers"], indicator["id"])
-    assert abs(recalculated["current_value"] - (1 / 3)) < 0.0002
+    assert abs(recalculated["current_value"] - (100 / 3)) < 0.02
     assert recalculated["status"] == "amber"
 
 
@@ -299,11 +299,11 @@ def test_a11_recalculate_evidence_gap_rate_formula(client, db_session):
         owner_user_id=str(owner.id),
         name="Evidence Gap Rate",
         metric_type="evidence_gap_rate",
-        warning_threshold=0.2,
-        critical_threshold=0.5,
+        warning_threshold=20,
+        critical_threshold=50,
     )
     recalculated = _recalculate(client, org["org_headers"], indicator["id"])
-    assert abs(recalculated["current_value"] - (1 / 3)) < 0.0002
+    assert abs(recalculated["current_value"] - (100 / 3)) < 0.02
     assert recalculated["status"] == "amber"
 
 
@@ -329,11 +329,11 @@ def test_a11_recalculate_overdue_task_rate_formula(client, db_session):
         owner_user_id=str(owner.id),
         name="Overdue Task Rate",
         metric_type="overdue_task_rate",
-        warning_threshold=0.5,
-        critical_threshold=0.7,
+        warning_threshold=50,
+        critical_threshold=70,
     )
     recalculated = _recalculate(client, org["org_headers"], indicator["id"])
-    assert abs(recalculated["current_value"] - (2 / 3)) < 0.0002
+    assert abs(recalculated["current_value"] - (200 / 3)) < 0.02
     assert recalculated["status"] == "amber"
 
 

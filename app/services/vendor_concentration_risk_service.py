@@ -135,8 +135,20 @@ class VendorConcentrationRiskService:
                 continue
             if sub_vendor.status != "active":
                 continue
-            exposures.append(sub_vendor.id)
+            # dependency_count reflects every qualifying critical-vendor dependency
+            # link, regardless of the sub-vendor's own tier -- that's a real,
+            # separate signal (how many critical dependency relationships exist).
             dependency_count += 1
+            # But the HHI exposure weighting must dedupe by vendor IDENTITY: if
+            # sub_vendor is ALSO independently a critical/high vendor, it already
+            # has exactly one entry in `exposures` from `critical_vendor_ids` above.
+            # Appending it again here would double-count the same vendor's identity
+            # (inflating its concentration share purely because it happens to be
+            # both directly tracked AND someone else's dependency), which silently
+            # distorts the HHI score. Only add a dependency occurrence for vendors
+            # not already counted as directly critical.
+            if sub_vendor.id not in critical_vendor_ids:
+                exposures.append(sub_vendor.id)
 
         exposure_count = len(exposures)
         counts = Counter(exposures)
