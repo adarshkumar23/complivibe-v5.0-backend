@@ -29,6 +29,17 @@ class AIRiskAssessmentRead(BaseModel):
     updated_at: datetime
 
 
+class AIRiskAssessmentQuestionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    risk_dimension: str
+    question_text: str
+    weight: Decimal
+    order_index: int
+    is_active: bool
+
+
 class AIRiskAssessmentResponseSubmitItem(BaseModel):
     question_id: uuid.UUID
     response: str = Field(pattern="^(low_risk|medium_risk|high_risk|critical_risk)$")

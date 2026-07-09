@@ -339,10 +339,16 @@ def test_a42_accept_reject_permissions_and_status(client, db_session):
     )
     assert submit.status_code == 200
 
-    non_requester_accept = client.post(f"{PBC_BASE}/{item['id']}/accept", headers=reviewer_headers)
+    non_requester_accept = client.post(f"{PBC_BASE}/{item['id']}/accept", headers=reviewer_headers, json={})
     assert non_requester_accept.status_code == 403
 
-    accepted = client.post(f"{PBC_BASE}/{item['id']}/accept", headers=org["org_headers"])
+    # Item has no evidence attached (submitted with evidence_id=None above), so
+    # acceptance requires a documented override reason.
+    accepted = client.post(
+        f"{PBC_BASE}/{item['id']}/accept",
+        headers=org["org_headers"],
+        json={"override_reason": "No formal evidence available; accepted based on requester's direct verification."},
+    )
     assert accepted.status_code == 200
     assert accepted.json()["status"] == "accepted"
     assert accepted.json()["accepted_at"] is not None
@@ -401,7 +407,11 @@ def test_a42_mark_overdue_summary_and_soft_delete_rules(client, db_session):
         json={"evidence_id": None},
     )
     assert submit.status_code == 200
-    accept = client.post(f"{PBC_BASE}/{accepted_item['id']}/accept", headers=org["org_headers"])
+    accept = client.post(
+        f"{PBC_BASE}/{accepted_item['id']}/accept",
+        headers=org["org_headers"],
+        json={"override_reason": "No formal evidence available; accepted based on requester's direct verification."},
+    )
     assert accept.status_code == 200
 
     service = PbcService(db_session)

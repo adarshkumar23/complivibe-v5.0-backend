@@ -296,19 +296,22 @@ def test_phase90_audit_events_and_approve_permission_enforcement(client, db_sess
         db_session,
         org_id=org_id,
         email="p90-audit-writer@example.com",
-        role_name="reviewer",
+        role_name="auditor",
     )
 
-    # promote reviewer role for write-only test but keep it without approve
-    reviewer_role = db_session.query(Role).filter(Role.organization_id == uuid.UUID(org_id), Role.name == "reviewer").one()
+    # promote auditor role for write-only test but keep it without approve.
+    # (NB: "reviewer" is not used here anymore -- it now legitimately carries
+    # compliance_policies:approve so reviewers can actually approve policies,
+    # which is what this test is specifically checking is absent.)
+    writer_role = db_session.query(Role).filter(Role.organization_id == uuid.UUID(org_id), Role.name == "auditor").one()
     write_permission = db_session.query(Permission).filter(Permission.key == "compliance_policies:write").one()
     has_write_link = (
         db_session.query(RolePermission)
-        .filter(RolePermission.role_id == reviewer_role.id, RolePermission.permission_id == write_permission.id)
+        .filter(RolePermission.role_id == writer_role.id, RolePermission.permission_id == write_permission.id)
         .one_or_none()
     )
     if has_write_link is None:
-        db_session.add(RolePermission(role_id=reviewer_role.id, permission_id=write_permission.id))
+        db_session.add(RolePermission(role_id=writer_role.id, permission_id=write_permission.id))
         db_session.commit()
 
     writer_token = login_user(client, writer.email)

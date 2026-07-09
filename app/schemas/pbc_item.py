@@ -30,6 +30,12 @@ class PbcRejectRequest(BaseModel):
     rejection_reason: str = Field(min_length=1)
 
 
+class PbcAcceptRequest(BaseModel):
+    # Required only when the item has no evidence attached; the service enforces
+    # that at least one of (evidence present, override_reason) holds.
+    override_reason: str | None = Field(default=None, min_length=1)
+
+
 class PbcItemRead(UUIDTimestampSchema):
     organization_id: UUID
     audit_engagement_id: UUID
@@ -44,6 +50,7 @@ class PbcItemRead(UUIDTimestampSchema):
     accepted_at: datetime | None = None
     rejected_at: datetime | None = None
     rejection_reason: str | None = None
+    acceptance_override_reason: str | None = None
 
 
 class PbcSummary(BaseModel):
