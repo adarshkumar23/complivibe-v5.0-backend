@@ -25,13 +25,29 @@ def _catalog_read(row: ConnectorCatalogEntry) -> ConnectorCatalogRead:
     return ConnectorCatalogRead.model_validate(row)
 
 
+def _redact_sensitive_config(connector: ConnectorCatalogEntry, config_values: dict | None) -> dict | None:
+    """Never echo credential values back through the API -- config_values_json for
+    token/secret/password/key-shaped fields is encrypted at rest; API responses show a
+    fixed redaction marker for those fields instead of the ciphertext."""
+    if not config_values:
+        return config_values
+    sensitive = ConnectorMarketplaceService.sensitive_field_names(connector.config_schema)
+    if not sensitive:
+        return config_values
+    redacted = dict(config_values)
+    for field in sensitive:
+        if redacted.get(field):
+            redacted[field] = "••••••••"
+    return redacted
+
+
 def _enablement_read(row: ConnectorOrgEnablement, connector: ConnectorCatalogEntry) -> ConnectorOrgEnablementRead:
     return ConnectorOrgEnablementRead(
         id=row.id,
         organization_id=row.organization_id,
         connector_id=row.connector_id,
         enabled=row.enabled,
-        config_values_json=row.config_values_json,
+        config_values_json=_redact_sensitive_config(connector, row.config_values_json),
         connection_status=row.connection_status,
         connection_checked_at=row.connection_checked_at,
         connection_error=row.connection_error,
@@ -165,10 +181,12 @@ def test_connector_connection(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("connectors:write")),
 ) -> ConnectorOrgEnablementRead:
-    """Re-validate the organization's stored config for this connector against its config_schema.
+    """Re-validate the organization's stored config for this connector.
 
-    This checks configuration completeness/shape only; it does not perform a live network call
-    to the underlying third-party system.
+    Checks configuration completeness/shape first, then -- when the connector's config_schema
+    declares a network-target field (base_url/instance_url/org_url/etc.) -- performs a genuine
+    outbound HTTP request to that target with a bounded timeout, reporting connection failures
+    (DNS, refused, timeout) honestly rather than always returning "validated".
     """
     service = ConnectorMarketplaceService(db)
     row = service.test_connection(organization.id, connector_id, current_user.id)
