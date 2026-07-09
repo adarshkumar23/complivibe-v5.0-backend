@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, Index, String, Text, Uuid
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -26,6 +27,7 @@ class Control(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedMixin, Base)
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
         "owner_id", Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    last_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     testing_procedure: Mapped[str | None] = mapped_column(Text, nullable=True)
     implementation_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="custom")

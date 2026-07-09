@@ -48,6 +48,7 @@ def _control_read(control: Control, *, owner_membership_active: bool | None = No
         status=control.status,
         criticality=control.criticality,
         owner_user_id=control.owner_user_id,
+        last_reviewed_at=control.last_reviewed_at,
         testing_procedure=control.testing_procedure,
         implementation_notes=control.implementation_notes,
         source=control.source,
