@@ -18,8 +18,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0271_legal_matter_evidence_control_links"
-down_revision: str | None = "0270_carbon_accounting_api_key"
+revision: str = "0278_legal_matter_evidence_control_links"
+down_revision: str | None = "0277_carbon_accounting_api_key"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

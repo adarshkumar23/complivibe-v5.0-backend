@@ -19,8 +19,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0270_carbon_accounting_api_key"
-down_revision: str | None = "0269_attestation_token_revocation"
+revision: str = "0277_carbon_accounting_api_key"
+down_revision: str | None = "0276_vendor_annual_spend_amount"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
