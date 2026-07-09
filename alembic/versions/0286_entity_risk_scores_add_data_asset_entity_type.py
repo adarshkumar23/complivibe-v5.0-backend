@@ -7,8 +7,8 @@ DB CHECK constraint created in 0095_entity_level_risk_scoring.py only allowed
 call therefore passed schema validation and then hit an unhandled IntegrityError
 (500) on INSERT. This migration widens the CHECK constraint to match the schema.
 
-Revision ID: 0285_entity_risk_scores_add_data_asset_entity_type
-Revises: 0284_trust_center_slug_confirmed_at
+Revision ID: 0286_entity_risk_scores_add_data_asset_entity_type
+Revises: 0285_bribery_risk_assessment_escalation
 Create Date: 2026-07-09 00:00:00.000000
 """
 
@@ -17,8 +17,8 @@ from collections.abc import Sequence
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0285_entity_risk_scores_add_data_asset_entity_type"
-down_revision: str | None = "0284_trust_center_slug_confirmed_at"
+revision: str = "0286_entity_risk_scores_add_data_asset_entity_type"
+down_revision: str | None = "0285_bribery_risk_assessment_escalation"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
