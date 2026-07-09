@@ -1172,6 +1172,12 @@ def list_framework_obligations(
     stmt = select(Obligation).where(Obligation.framework_id == framework_id)
     if status_filter:
         stmt = stmt.where(Obligation.status == status_filter)
+    else:
+        # Default view excludes inactive obligations (e.g. retired placeholder rows -- see
+        # SeedService.ensure_pci_dss_framework) so they don't clutter the default browse
+        # experience. Callers that explicitly want to audit/inspect inactive rows can still
+        # pass ?status=inactive.
+        stmt = stmt.where(Obligation.status != "inactive")
     if jurisdiction:
         stmt = stmt.where(Obligation.jurisdiction == jurisdiction)
     if search:
