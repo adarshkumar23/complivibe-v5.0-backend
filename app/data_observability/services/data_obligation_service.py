@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import UTC, datetime
 
@@ -5,6 +6,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.compliance.services.subprocessor_service import SubprocessorService
+from app.core.geo import region_overlaps
 from app.models.data_asset import DataAsset
 from app.models.data_asset_obligation_link import DataAssetObligationLink
 from app.models.data_obligation_suggestion import DataObligationSuggestion
@@ -14,6 +17,15 @@ from app.services.audit_service import AuditService
 from app.core.validation import validate_choice
 
 ALLOWED_LINK_TYPES = {"governed_by", "subject_to", "exempted_from"}
+
+EEA_COUNTRIES = set(SubprocessorService.EEA_COUNTRIES)
+GLOBAL_JURISDICTIONS = {"global", "international", "worldwide"}
+# Matches concise jurisdiction codes like "IN", "US", "US-CA", "EU" -- as
+# opposed to free-text jurisdiction labels like "European Union" that some
+# frameworks (e.g. hand-authored/test fixtures) may still carry. Only
+# code-shaped jurisdictions are strict-filtered by org footprint; free-text
+# ones are treated as unrestricted since we can't parse a region out of them.
+_JURISDICTION_CODE_RE = re.compile(r"^[A-Z]{2}(-[A-Z]{2,3})?$")
 
 
 class DataObligationService:
@@ -242,6 +254,51 @@ class DataObligationService:
             "by_framework": by_framework,
         }
 
+    def _org_location_footprint(self, org_id: uuid.UUID) -> set[str]:
+        """All distinct geographic_locations recorded across the org's active
+        data assets -- used as a proxy for the org's actual data-residency
+        footprint, so obligation suggestions can be filtered to frameworks
+        whose jurisdiction is actually relevant (e.g. don't suggest CCPA for
+        an org with no data anywhere in the US)."""
+        rows = self.db.execute(
+            select(DataAsset.geographic_locations).where(
+                DataAsset.organization_id == org_id,
+                DataAsset.deleted_at.is_(None),
+            )
+        ).scalars().all()
+        footprint: set[str] = set()
+        for locations in rows:
+            for loc in locations or []:
+                if loc:
+                    footprint.add(str(loc).upper())
+        return footprint
+
+    @staticmethod
+    def _framework_applies_to_footprint(framework: Framework, footprint: set[str]) -> bool:
+        """True if `framework`'s jurisdiction is relevant to the org's data
+        footprint. Frameworks with a "global"/blank jurisdiction, or a
+        free-text (non-code) jurisdiction label we can't reliably parse into
+        a region code, are always considered relevant. Code-shaped
+        jurisdictions (e.g. "US", "US-CA", "EU", "IN") are only relevant if
+        they hierarchically overlap a location in the org's footprint.
+        """
+        jurisdiction = (framework.jurisdiction or "").strip()
+        if not jurisdiction or jurisdiction.lower() in GLOBAL_JURISDICTIONS:
+            return True
+        if not _JURISDICTION_CODE_RE.match(jurisdiction.upper()):
+            # Free-text jurisdiction (e.g. "European Union") -- can't parse a
+            # region code out of it, so don't filter it out.
+            return True
+        if not footprint:
+            # No recorded data-location footprint at all: be conservative and
+            # only surface jurisdiction-agnostic frameworks.
+            return False
+
+        code = jurisdiction.upper()
+        if code == "EU":
+            return any(loc.split("-", 1)[0] in EEA_COUNTRIES for loc in footprint)
+        return any(region_overlaps(code, loc) for loc in footprint)
+
     def suggest_obligations(self, org_id: uuid.UUID, data_asset_id: uuid.UUID) -> list[dict]:
         asset = self._require_asset(org_id, data_asset_id)
         classification = asset.classification_type
@@ -251,6 +308,13 @@ class DataObligationService:
         if classification == "personal_data":
             framework_patterns = ["GDPR", "DPDP", "CCPA"]
             reason = "Asset classified as personal_data"
+        elif classification == "sensitive_personal_data":
+            # Sensitive personal data is a strict superset of personal_data's
+            # risk profile (special-category / high-harm data), so it must
+            # get at least the same obligation coverage as personal_data --
+            # never fewer suggestions.
+            framework_patterns = ["GDPR", "DPDP", "CCPA"]
+            reason = "Asset classified as sensitive_personal_data"
         elif classification == "health_data":
             framework_patterns = ["HIPAA"]
             reason = "Asset classified as health_data"
@@ -275,6 +339,8 @@ class DataObligationService:
             stmt = stmt.where(or_(*conditions))
         rows = self.db.execute(stmt).all()
 
+        footprint = self._org_location_footprint(org_id)
+
         suggestions: list[dict] = []
         for obligation, framework in rows:
             match = False
@@ -283,6 +349,8 @@ class DataObligationService:
                     match = True
                     break
             if not match:
+                continue
+            if not self._framework_applies_to_footprint(framework, footprint):
                 continue
             suggestions.append(
                 {

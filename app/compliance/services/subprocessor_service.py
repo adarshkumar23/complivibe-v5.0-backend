@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.geo import location_in_countries
 from app.models.email_outbox import EmailOutbox
 from app.models.subprocessor import Subprocessor
 from app.models.subprocessor_data_transfer import SubprocessorDataTransfer
@@ -104,7 +105,7 @@ class SubprocessorService:
             missing.append("geographic_locations")
         mechanism = effective("data_transfer_mechanism")
         if locations:
-            non_eea = [loc for loc in locations if loc not in self.EEA_COUNTRIES]
+            non_eea = [loc for loc in locations if not location_in_countries(loc, self.EEA_COUNTRIES)]
             if non_eea and not mechanism:
                 missing.append("data_transfer_mechanism (required for non-EEA transfers)")
         if missing:
@@ -454,7 +455,9 @@ class SubprocessorService:
             ).scalars().all()
         )
         subprocessor_ids_with_non_eea_locations = {
-            row.id for row in rows if set(row.geographic_locations or []) - self.EEA_COUNTRIES
+            row.id
+            for row in rows
+            if any(not location_in_countries(loc, self.EEA_COUNTRIES) for loc in (row.geographic_locations or []))
         }
         transfers_outside_eea = len(subprocessor_ids_with_explicit_transfer | subprocessor_ids_with_non_eea_locations)
 
