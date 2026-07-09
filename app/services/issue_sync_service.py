@@ -54,6 +54,23 @@ class IssueSyncService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Issue sync connection not found")
         return row
 
+    def resolve_connection_org_id(self, connection_id: uuid.UUID) -> uuid.UUID:
+        """Look up which organization a connection belongs to from the connection_id
+        alone. Used by the inbound webhook endpoints, which real Jira/Linear traffic
+        hits directly with no way to present an internal Bearer JWT or know an
+        X-Organization-ID -- those endpoints authenticate purely via the connection's
+        own webhook_secret/HMAC signature (see `_verify_shared_secret` /
+        `_verify_hmac_signature`), the same signature-only pattern the Razorpay
+        billing webhook uses, so the org must be resolved from the (globally unique)
+        connection_id in the URL rather than from a caller-supplied org header.
+        """
+        org_id = self.db.execute(
+            select(ExternalSyncConnection.organization_id).where(ExternalSyncConnection.id == connection_id)
+        ).scalar_one_or_none()
+        if org_id is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Issue sync connection not found")
+        return org_id
+
     def _require_issue(self, org_id: uuid.UUID, issue_id: uuid.UUID) -> Issue:
         return IssueService(self.db).get_issue(org_id, issue_id)
 
@@ -816,7 +833,25 @@ class IssueSyncService:
         # back to `id`/`eventId` is kept only for backward compatibility with any
         # already-configured non-standard senders, but `webhookId` is the real,
         # immutable, per-delivery key and must be preferred.
+        #
+        # Not every Linear webhook configuration populates `webhookId` (older
+        # integrations, some self-hosted proxies, or any non-standard sender never
+        # set it). Without a fallback, `event_id` ends up None whenever it's
+        # missing, `_process_inbound_common` can't detect a retried delivery for
+        # that event, and Linear's automatic retry-on-timeout/5xx creates a
+        # duplicate inbound comment/event every time. Build a stable composite key
+        # from fields Linear always sends on a real delivery -- `action` + `type` +
+        # the affected entity id + the resource's own `updatedAt` (falling back to
+        # `webhookTimestamp`) -- so a fallback collision requires all of those to
+        # coincide, not just one field.
         event_id = str(payload.get("webhookId") or payload.get("id") or payload.get("eventId") or "") or None
+        if event_id is None:
+            action = payload.get("action")
+            resource_type = payload.get("type")
+            entity_id = external_comment_id or external_issue_id
+            resource_updated_at = data.get("updatedAt") or payload.get("webhookTimestamp")
+            if action or resource_type or entity_id or resource_updated_at:
+                event_id = f"{action}:{resource_type}:{entity_id}:{resource_updated_at}"
         return self._process_inbound_common(
             org_id=org_id,
             connection=connection,
