@@ -121,7 +121,7 @@ def set_org_slug(
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("audit:write")),
 ) -> TrustCenterSetSlugResponse:
-    row = TrustCenterService(db).set_org_slug(organization.id, payload.slug, current_user.id)
+    row = TrustCenterService(db).set_org_slug(organization.id, payload.slug, current_user.id, confirm=payload.confirm)
     db.commit()
     db.refresh(row)
     return TrustCenterSetSlugResponse(organization_id=row.id, slug=row.slug or "")
