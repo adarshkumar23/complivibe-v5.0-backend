@@ -1,7 +1,7 @@
 """add confidence field + nullable score to vendor security rating / threat intel
 
-Revision ID: 0285_vendor_intel_score_confidence
-Revises: 0284_trust_center_slug_confirmed_at
+Revision ID: 0290_vendor_intel_score_confidence
+Revises: 0289_backfill_admin_email_config_unification
 Create Date: 2026-07-09 00:00:00.000000
 
 Root-cause fix for G6 item 1: vendor security-rating / threat-intelligence scores pull
@@ -27,8 +27,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0285_vendor_intel_score_confidence"
-down_revision: str | None = "0284_trust_center_slug_confirmed_at"
+revision: str = "0290_vendor_intel_score_confidence"
+down_revision: str | None = "0289_backfill_admin_email_config_unification"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

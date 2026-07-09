@@ -1,7 +1,7 @@
 """OT/ICS finding + segment-concentration -> risk-register cascade
 
-Revision ID: 0287_ot_ics_finding_risk_cascade
-Revises: 0286_geopolitical_risk_vendor_cascade
+Revision ID: 0292_ot_ics_finding_risk_cascade
+Revises: 0291_geopolitical_risk_vendor_cascade
 Create Date: 2026-07-09 00:00:00.000000
 
 Root-cause fix for G6 item 4: OT/ICS convergence-monitoring findings -- even
@@ -24,8 +24,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0287_ot_ics_finding_risk_cascade"
-down_revision: str | None = "0286_geopolitical_risk_vendor_cascade"
+revision: str = "0292_ot_ics_finding_risk_cascade"
+down_revision: str | None = "0291_geopolitical_risk_vendor_cascade"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

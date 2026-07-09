@@ -1,7 +1,7 @@
 """geopolitical risk -> vendor risk_tier / risk-register cascade
 
-Revision ID: 0286_geopolitical_risk_vendor_cascade
-Revises: 0285_vendor_intel_score_confidence
+Revision ID: 0291_geopolitical_risk_vendor_cascade
+Revises: 0290_vendor_intel_score_confidence
 Create Date: 2026-07-09 00:00:00.000000
 
 Root-cause fix for G6 item 3: Geopolitical Risk Monitoring generated real
@@ -22,8 +22,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0286_geopolitical_risk_vendor_cascade"
-down_revision: str | None = "0285_vendor_intel_score_confidence"
+revision: str = "0291_geopolitical_risk_vendor_cascade"
+down_revision: str | None = "0290_vendor_intel_score_confidence"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
