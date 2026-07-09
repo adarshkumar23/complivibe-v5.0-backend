@@ -12,8 +12,8 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = "0270_risk_dependencies"
-down_revision: str | None = "0269_attestation_token_revocation"
+revision: str = "0273_risk_dependencies"
+down_revision: str | None = "0272_draft_requests_truncated_flag"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
