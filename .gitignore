@@ -20,3 +20,5 @@ alembic/versions/*.pyc
 # Downloaded OpenSanctions/OFAC dataset snapshots (runtime-refreshed, not committed --
 # see app/satellites/tprm_intelligence/sanctions_screening.py)
 /data/opensanctions/
+.env.walkthrough*
+.env.*
