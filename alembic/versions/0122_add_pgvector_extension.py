@@ -22,8 +22,18 @@ def upgrade() -> None:
     available = bind.execute(
         sa.text("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'")
     ).scalar()
-    if available:
-        op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    if not available:
+        return
+    # The DB role may lack CREATE EXTENSION privilege (e.g. managed Postgres
+    # where only a DBA/superuser can install extensions). Scope the attempt to
+    # a savepoint so a permission failure doesn't abort the whole migration
+    # transaction -- this stays a graceful no-op, matching the fallback
+    # (embedding_json text column) used everywhere the vector type isn't live.
+    try:
+        with bind.begin_nested():
+            op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    except Exception:
+        pass
 
 
 def downgrade() -> None:

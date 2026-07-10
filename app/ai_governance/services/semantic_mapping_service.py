@@ -28,6 +28,16 @@ class SemanticSearchStatus:
         return round((self.total_embedded / self.total_obligations) * 100.0, 2)
 
 
+# Overlap-coefficient scores (fallback keyword search) and cosine-similarity scores
+# (real pgvector search) live on different scales for the same underlying model of
+# "match quality" -- see the calibration notes on each search path below. A single
+# min_score threshold tuned for one silently zeroes out the other, so callers that
+# don't pass an explicit min_score get whichever default matches the path actually
+# taken at runtime.
+FALLBACK_DEFAULT_MIN_SCORE = 0.70
+PGVECTOR_DEFAULT_MIN_SCORE = 0.35
+
+
 class SemanticMappingService:
     def __init__(self) -> None:
         self.pgvector_available = self._check_pgvector()
@@ -69,7 +79,7 @@ class SemanticMappingService:
         obligation_id: uuid.UUID,
         db: Session,
         top_k: int = 10,
-        min_score: float = 0.70,
+        min_score: float | None = None,
         exclude_same_framework: bool = True,
         target_framework_id: uuid.UUID | None = None,
     ) -> list[dict[str, object]]:
@@ -85,7 +95,7 @@ class SemanticMappingService:
                     db=db,
                     source_embedding_text=source_embedding_text,
                     top_k=top_k,
-                    min_score=min_score,
+                    min_score=min_score if min_score is not None else PGVECTOR_DEFAULT_MIN_SCORE,
                     exclude_same_framework=exclude_same_framework,
                     target_framework_id=target_framework_id,
                 )
@@ -94,7 +104,7 @@ class SemanticMappingService:
             source=source,
             db=db,
             top_k=top_k,
-            min_score=min_score,
+            min_score=min_score if min_score is not None else FALLBACK_DEFAULT_MIN_SCORE,
             exclude_same_framework=exclude_same_framework,
             target_framework_id=target_framework_id,
         )
@@ -285,9 +295,15 @@ class SemanticMappingService:
         source_framework_id: uuid.UUID,
         target_framework_id: uuid.UUID,
         db: Session,
-        min_score: float = 0.75,
+        min_score: float | None = None,
         mapping_type_label: str = "semantic",
     ) -> dict[str, object]:
+        if min_score is None:
+            min_score = (
+                PGVECTOR_DEFAULT_MIN_SCORE
+                if self.pgvector_available and self._has_embedding_column(db)
+                else FALLBACK_DEFAULT_MIN_SCORE
+            )
         source_obligations = db.execute(
             select(Obligation).where(
                 Obligation.framework_id == source_framework_id,

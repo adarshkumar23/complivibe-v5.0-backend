@@ -26,6 +26,21 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    # Whether the `pgvector` Python package imports is independent of whether
+    # the `vector` Postgres extension is actually installed+privileged on this
+    # connection's database (e.g. package installed but CREATE EXTENSION was
+    # denied for a non-superuser role). Decide the column type from the real
+    # DB state, not from Python import success, or this silently produces a
+    # VECTOR(384) column on a database that has no vector type at all.
+    bind = op.get_bind()
+    has_vector_extension = False
+    if bind.dialect.name == "postgresql":
+        has_vector_extension = (
+            bind.execute(sa.text("SELECT 1 FROM pg_extension WHERE extname = 'vector'")).fetchone()
+            is not None
+        )
+    embedding_column_type = Vector(384) if has_vector_extension else sa.Text()
+
     op.create_table(
         "ai_governance_events",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, server_default=sa.text("gen_random_uuid()")),
@@ -66,7 +81,7 @@ def upgrade() -> None:
     op.add_column("ai_systems", sa.Column("purpose", sa.Text(), nullable=True))
     op.add_column("ai_systems", sa.Column("affected_population", sa.Text(), nullable=True))
     op.add_column("ai_systems", sa.Column("geographic_scope", postgresql.JSONB(astext_type=sa.Text()), nullable=True))
-    op.add_column("ai_systems", sa.Column("description_embedding", Vector(384), nullable=True))
+    op.add_column("ai_systems", sa.Column("description_embedding", embedding_column_type, nullable=True))
     op.add_column("ai_systems", sa.Column("created_by", postgresql.UUID(as_uuid=True), nullable=True))
     op.add_column("ai_systems", sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True))
     op.create_foreign_key("fk_ai_systems_owner_id_users", "ai_systems", "users", ["owner_id"], ["id"], ondelete="SET NULL")

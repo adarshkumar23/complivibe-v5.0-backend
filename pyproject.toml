@@ -34,6 +34,12 @@ dependencies = [
   "hvac>=2.3.0,<3.0.0",
   "pymc==5.25.1",
   "meilisearch>=0.31.0,<1.0.0",
+  "pgvector>=0.4.0,<1.0.0",
+  # See requirements.txt for why transformers/huggingface-hub are capped below
+  # their newest majors (click version conflict with deepeval).
+  "sentence-transformers==5.6.0",
+  "transformers<5",
+  "huggingface-hub<1.0",
   # giskard 2.19.1 requires scipy<1.12 and numpy<2; PyMC 6 pulls
   # pytensor>=3, which requires numpy>=2. PyMC 5.25.1 is the newest
   # compatible line for this combined risk/observability stack.
