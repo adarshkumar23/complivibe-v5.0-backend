@@ -7,6 +7,7 @@ from app.core.deps import get_db
 from app.integrations.cloud_connectors.connector_service import CloudConnectorService
 from app.integrations.cloud_connectors.ingest_pipeline import ingest_normalized_finding
 from app.integrations.cloud_connectors.parsers.github_parser import parse_github_webhook_payload, require_event_type
+from app.integrations.cloud_connectors.request_limits import enforce_max_body_size, enforce_max_body_size_from_content_length
 from app.integrations.cloud_connectors.signature_verification import verify_hmac_sha256
 
 router = APIRouter(prefix="/cloud-connectors/ingest/github", tags=["cloud-evidence-connectors-ingest"])
@@ -21,10 +22,12 @@ async def ingest_github_webhook(
     x_github_event: str | None = Header(default=None, alias="X-GitHub-Event"),
     x_github_delivery: str | None = Header(default=None, alias="X-GitHub-Delivery"),
 ) -> dict:
+    enforce_max_body_size_from_content_length(request)
     connector_service = CloudConnectorService(db)
     connector = connector_service.get_by_webhook_token("github", webhook_token)
 
     raw_body = await request.body()
+    enforce_max_body_size(raw_body)
     secret = connector_service.decrypt_signing_secret(connector)
     if secret is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Connector has no signing secret configured")

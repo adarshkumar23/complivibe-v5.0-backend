@@ -29,6 +29,12 @@ class ConnectorRead(BaseModel):
     updated_at: datetime
 
 
+class ConnectorSecretRotateResponse(BaseModel):
+    connector: ConnectorRead
+    signing_secret: str
+    signing_secret_note: str = "Shown once at rotation only. The previous secret stops working immediately."
+
+
 class ConnectorCreateResponse(BaseModel):
     connector: ConnectorRead
     signing_secret: str | None = None

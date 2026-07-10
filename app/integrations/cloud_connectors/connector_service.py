@@ -139,6 +139,37 @@ class CloudConnectorService:
             connector.signing_secret_ciphertext, secret_name=SECRET_NAME, entity_id=connector.id
         )
 
+    def rotate_secret(self, org_id: uuid.UUID, connector_id: uuid.UUID, actor_user_id: uuid.UUID | None) -> tuple[CloudEvidenceConnector, str]:
+        """Mint a new signing secret and overwrite the stored ciphertext -- the old
+        secret stops verifying immediately (verify_hmac_sha256/verify_shared_secret
+        always decrypt and compare against the currently-stored ciphertext, never a
+        cached/previous value)."""
+        row = self._require_connector(org_id, connector_id)
+        if row.connector_type == "gcp":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="GCP connectors authenticate via Google-signed OIDC bearer tokens, not a shared secret -- there is nothing to rotate",
+            )
+
+        new_secret = secrets.token_urlsafe(32)
+        row.signing_secret_ciphertext = SecretsService(
+            self.db, organization_id=org_id, actor_user_id=actor_user_id
+        ).encrypt(new_secret, secret_name=SECRET_NAME, entity_id=row.id)
+        row.secret_revealed_at = self.utcnow()
+        row.updated_at = self.utcnow()
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="cloud_connector.secret_rotated",
+            entity_type="cloud_evidence_connector",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=actor_user_id,
+            after_json={"connector_type": row.connector_type, "rotated_at": row.secret_revealed_at.isoformat()},
+            metadata_json={"source": "api"},
+        )
+        return row, new_secret
+
     def activate_connector(self, org_id: uuid.UUID, connector_id: uuid.UUID, actor_user_id: uuid.UUID | None) -> CloudEvidenceConnector:
         row = self._require_connector(org_id, connector_id)
         row.status = "active"

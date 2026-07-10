@@ -11,6 +11,7 @@ from app.integrations.cloud_connectors.schemas import (
     ConnectorCreateResponse,
     ConnectorHealthRead,
     ConnectorRead,
+    ConnectorSecretRotateResponse,
     ConnectorSetupRead,
     DismissSuggestionRequest,
     FindingSuggestionRead,
@@ -100,6 +101,20 @@ def activate_connector(
     db.commit()
     db.refresh(row)
     return ConnectorRead.model_validate(row)
+
+
+@router.post("/{connector_id}/rotate-secret", response_model=ConnectorSecretRotateResponse)
+def rotate_connector_secret(
+    connector_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("connectors:write")),
+) -> ConnectorSecretRotateResponse:
+    row, new_secret = CloudConnectorService(db).rotate_secret(organization.id, connector_id, current_user.id)
+    db.commit()
+    db.refresh(row)
+    return ConnectorSecretRotateResponse(connector=ConnectorRead.model_validate(row), signing_secret=new_secret)
 
 
 @router.post("/{connector_id}/disable", response_model=ConnectorRead)

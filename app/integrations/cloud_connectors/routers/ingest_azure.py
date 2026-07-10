@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+import json
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_db
@@ -8,20 +10,31 @@ from app.integrations.cloud_connectors.parsers.azure_parser import (
     is_subscription_validation_event,
     parse_azure_event_grid_payload,
 )
+from app.integrations.cloud_connectors.request_limits import enforce_max_body_size, enforce_max_body_size_from_content_length
 from app.integrations.cloud_connectors.signature_verification import verify_shared_secret
 
 router = APIRouter(prefix="/cloud-connectors/ingest/azure", tags=["cloud-evidence-connectors-ingest"])
 
 
 @router.post("/{webhook_token}")
-def ingest_azure_policy_events(
+async def ingest_azure_policy_events(
     webhook_token: str,
-    events: list[dict],
+    request: Request,
     db: Session = Depends(get_db),
     x_complivibe_shared_secret: str | None = Header(default=None, alias="X-CompliVibe-Shared-Secret"),
 ) -> dict | list[dict]:
+    enforce_max_body_size_from_content_length(request)
     connector_service = CloudConnectorService(db)
     connector = connector_service.get_by_webhook_token("azure", webhook_token)
+
+    raw_body = await request.body()
+    enforce_max_body_size(raw_body)
+    try:
+        events = json.loads(raw_body)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload") from exc
+    if not isinstance(events, list):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payload must be a JSON array of events")
 
     # Event Grid requires a one-time validation handshake before it starts delivering
     # real events; it does not sign this request, so no secret check applies to it.
