@@ -1,10 +1,13 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+import json
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_db
 from app.integrations.cloud_connectors.connector_service import CloudConnectorService
 from app.integrations.cloud_connectors.ingest_pipeline import ingest_normalized_finding
 from app.integrations.cloud_connectors.parsers.okta_parser import parse_okta_event_hook_payload
+from app.integrations.cloud_connectors.request_limits import enforce_max_body_size, enforce_max_body_size_from_content_length
 from app.integrations.cloud_connectors.signature_verification import verify_shared_secret
 
 router = APIRouter(prefix="/cloud-connectors/ingest/okta", tags=["cloud-evidence-connectors-ingest"])
@@ -25,12 +28,13 @@ def verify_okta_event_hook(
 
 
 @router.post("/{webhook_token}", status_code=status.HTTP_202_ACCEPTED)
-def ingest_okta_event_hook(
+async def ingest_okta_event_hook(
     webhook_token: str,
-    payload: dict,
+    request: Request,
     db: Session = Depends(get_db),
     authorization: str | None = Header(default=None),
 ) -> dict:
+    enforce_max_body_size_from_content_length(request)
     connector_service = CloudConnectorService(db)
     connector = connector_service.get_by_webhook_token("okta", webhook_token)
 
@@ -40,6 +44,13 @@ def ingest_okta_event_hook(
     # Okta's own model: a static shared value in a configured header (here, Authorization),
     # not a computed signature.
     verify_shared_secret(secret=secret, provided_secret=authorization)
+
+    raw_body = await request.body()
+    enforce_max_body_size(raw_body)
+    try:
+        payload = json.loads(raw_body)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload") from exc
 
     findings = parse_okta_event_hook_payload(payload)
     processed = 0
