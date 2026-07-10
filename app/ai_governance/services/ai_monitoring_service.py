@@ -3,6 +3,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pandas as pd
 from fastapi import HTTPException, status
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session
@@ -13,6 +14,8 @@ from app.models.ai_monitoring_config import AIMonitoringConfig
 from app.models.ai_monitoring_reading import AIMonitoringReading
 from app.models.ai_system import AISystem
 from app.models.control_monitoring_alert import ControlMonitoringAlert
+from app.satellites.llm_observability.drift_adapters import DistributionDriftDetector
+from app.satellites.llm_observability.ingest_client import decimal_from_float
 from app.services.audit_service import AuditService
 from app.core.validation import validate_choice
 
@@ -508,8 +511,68 @@ class AIMonitoringService:
 
     # A reading further than this percentage from the recorded baseline is
     # treated as drift worth surfacing on the dashboard, independent of
-    # whether it also breaches the hard alert threshold.
+    # whether it also breaches the hard alert threshold. This scalar
+    # percent-from-baseline check is used for every metric_type EXCEPT
+    # "output_drift", where enough history exists -- see
+    # _statistical_output_drift below for why that one metric gets a real
+    # statistical drift test instead of a point-to-point percent diff.
     DRIFT_PCT_THRESHOLD = Decimal("20")
+
+    # Minimum readings needed on each side (reference vs current) before a
+    # real distributional drift test is statistically meaningful. Below
+    # this, _statistical_output_drift falls back to the same
+    # percent-from-baseline calculation used for every other metric type
+    # rather than pretending a 1-2 sample "distribution" comparison means
+    # anything.
+    DRIFT_TEST_WINDOW_SIZE = 5
+
+    def _statistical_output_drift(self, config: AIMonitoringConfig) -> tuple[Decimal, bool] | None:
+        """Real statistical distribution-drift check for `output_drift` configs.
+
+        `output_drift` is the one metric_type that actually means "has the
+        distribution of model outputs shifted" -- a question a single
+        latest-value-vs-baseline percent diff can't answer (two point values
+        say nothing about distributional shape/spread). Instead this treats
+        the reading history itself as two samples: the oldest
+        DRIFT_TEST_WINDOW_SIZE readings ("reference", roughly the period the
+        system was first monitored) vs the newest DRIFT_TEST_WINDOW_SIZE
+        readings ("current"), and runs them through the same statistical
+        drift detector already used by the LLM observability satellite
+        (app/satellites/llm_observability/drift_adapters.py) rather than a
+        second, different integration.
+
+        Returns None (caller falls back to the percent-from-baseline
+        calculation) when there isn't enough history for a meaningful test,
+        or when the two windows overlap (too few total readings).
+        """
+        readings = self.db.execute(
+            select(AIMonitoringReading.value, AIMonitoringReading.created_at)
+            .where(
+                AIMonitoringReading.organization_id == config.organization_id,
+                AIMonitoringReading.config_id == config.id,
+            )
+            .order_by(AIMonitoringReading.created_at.asc(), AIMonitoringReading.id.asc())
+        ).all()
+
+        window = self.DRIFT_TEST_WINDOW_SIZE
+        if len(readings) < 2 * window:
+            return None
+
+        reference_values = [float(value) for value, _ in readings[:window]]
+        current_values = [float(value) for value, _ in readings[-window:]]
+
+        reference_df = pd.DataFrame({"value": reference_values})
+        current_df = pd.DataFrame({"value": current_values})
+
+        # detect_data_drift always returns [drift_share_result, drifted_columns_result]
+        # in that fixed order (see drift_adapters.py) -- indexed rather than
+        # matched by metric_type string to avoid the vendor-specific name.
+        drift_share_result = DistributionDriftDetector().detect_data_drift(
+            reference_data=reference_df, current_data=current_df, numerical_columns=["value"]
+        )[0]
+        dataset_drift = bool(drift_share_result.details.get("dataset_drift"))
+        drift_pct = decimal_from_float(float(drift_share_result.value) * 100.0)
+        return drift_pct, dataset_drift
 
     def get_monitoring_dashboard(self, org_id: uuid.UUID, system_id: uuid.UUID) -> dict:
         ai_system = self._require_ai_system(org_id, system_id)
@@ -548,7 +611,10 @@ class AIMonitoringService:
 
             drift_pct = None
             drift_detected = False
-            if cfg.baseline_value is not None and cfg.last_reading_value is not None and cfg.baseline_value != 0:
+            statistical_result = self._statistical_output_drift(cfg) if cfg.metric_type == "output_drift" else None
+            if statistical_result is not None:
+                drift_pct, drift_detected = statistical_result
+            elif cfg.baseline_value is not None and cfg.last_reading_value is not None and cfg.baseline_value != 0:
                 drift_pct = abs(cfg.last_reading_value - cfg.baseline_value) / abs(cfg.baseline_value) * Decimal("100")
                 drift_detected = drift_pct > self.DRIFT_PCT_THRESHOLD
 
