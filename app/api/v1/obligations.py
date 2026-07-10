@@ -362,7 +362,9 @@ def list_obligation_data_assets(
 def list_semantic_similar_obligations(
     obligation_id: uuid.UUID,
     top_k: int = Query(default=10, ge=1, le=50),
-    min_score: float = Query(default=0.70, ge=0.0, le=1.0),
+    # None lets SemanticMappingService pick a threshold calibrated to whichever
+    # search path (pgvector cosine vs. keyword-overlap fallback) actually runs.
+    min_score: float | None = Query(default=None, ge=0.0, le=1.0),
     db: Session = Depends(get_db),
     _: Membership = Depends(require_permission("compliance:read")),
 ) -> list[dict]:

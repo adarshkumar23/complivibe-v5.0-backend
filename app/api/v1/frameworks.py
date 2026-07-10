@@ -81,7 +81,9 @@ def _as_utc(value: datetime | None) -> datetime | None:
 
 class SemanticDiscoverRequest(BaseModel):
     target_framework_id: uuid.UUID
-    min_score: float = Field(default=0.75, ge=0.0, le=1.0)
+    # None lets SemanticMappingService pick a threshold calibrated to whichever
+    # search path (pgvector cosine vs. keyword-overlap fallback) actually runs.
+    min_score: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 def _framework_read(framework: Framework) -> FrameworkRead:

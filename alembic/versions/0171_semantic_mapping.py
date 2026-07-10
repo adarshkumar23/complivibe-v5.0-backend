@@ -41,7 +41,14 @@ def _pgvector_available(bind: sa.Connection) -> bool:
         available = bind.execute(sa.text("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'"))
         if available.fetchone() is None:
             return False
-        op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        # Scoped to a savepoint: if the role lacks CREATE EXTENSION privilege,
+        # this rolls back cleanly instead of aborting the whole migration
+        # transaction (and every migration after it in the same run).
+        try:
+            with bind.begin_nested():
+                op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        except Exception:
+            pass
         result = bind.execute(sa.text("SELECT 1 FROM pg_extension WHERE extname = 'vector'"))
         return result.fetchone() is not None
     except Exception:
