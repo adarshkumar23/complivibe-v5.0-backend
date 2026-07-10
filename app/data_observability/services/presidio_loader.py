@@ -19,6 +19,10 @@ def get_presidio() -> Any | None:
                     return None
                 try:
                     _engine = AnalyzerEngine()
+                    from app.data_observability.services.indian_pii_patterns import get_custom_recognizers
+
+                    for recognizer in get_custom_recognizers():
+                        _engine.registry.add_recognizer(recognizer)
                 except Exception:
                     # Presidio not available — return None, callers handle.
                     return None

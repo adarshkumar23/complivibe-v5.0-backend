@@ -190,6 +190,8 @@ def transition_status(
         current_user.id,
         notes=payload.notes,
         refusal_reason=payload.refusal_reason,
+        override_retention_conflict=payload.override_retention_conflict,
+        override_reason=payload.override_reason,
     )
     db.commit()
     db.refresh(row)

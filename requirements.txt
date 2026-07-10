@@ -41,3 +41,4 @@ aif360==0.6.1
 fairlearn==0.14.0
 evidently==0.7.21
 nannyml==0.13.1
+mcp==1.28.1

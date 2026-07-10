@@ -13,6 +13,10 @@ class DataSubjectRequestCreate(BaseModel):
     regulatory_framework: str = "gdpr"
     assigned_handler_id: uuid.UUID | None = None
     deadline_days: int | None = Field(default=None, ge=1, le=365)
+    request_subtype: str | None = None
+    data_categories: list[str] = Field(default_factory=list)
+    submitted_by_nominee_id: uuid.UUID | None = None
+    relationship_end_date: date | None = None
 
 
 class PublicDSRSubmit(BaseModel):
@@ -43,6 +47,13 @@ class DataSubjectRequestRead(BaseModel):
     description: str | None
     status: str
     regulatory_framework: str
+    request_subtype: str | None = None
+    data_categories: list[str] = []
+    retention_conflict_json: dict | None = None
+    retention_conflict_overridden_at: datetime | None = None
+    retention_conflict_override_reason: str | None = None
+    submitted_by_nominee_id: uuid.UUID | None = None
+    relationship_end_date: date | None = None
     response_deadline: datetime
     deadline_days: int
     extension_granted: bool
@@ -71,6 +82,8 @@ class DSRTransitionRequest(BaseModel):
     new_status: str
     notes: str | None = None
     refusal_reason: str | None = None
+    override_retention_conflict: bool = False
+    override_reason: str | None = None
 
 
 class DSRAssignRequest(BaseModel):

@@ -193,6 +193,7 @@ from app.models.organization_governance_manifest_verification_event import Organ
 from app.models.organization_governance_setting_history import OrganizationGovernanceSettingHistory
 from app.models.organization_internal_signing_key import OrganizationInternalSigningKey
 from app.models.organization import Organization
+from app.models.sdf_designation_suggestion import SDFDesignationSuggestion
 from app.models.organization_ai_configuration import OrganizationAIConfiguration
 from app.models.subscription_plan import SubscriptionPlan
 from app.models.usage_billing_snapshot import UsageBillingSnapshot
@@ -387,6 +388,7 @@ from app.models.dsr_sla_tracking import DSRSLATracking
 from app.models.privacy_notice import PrivacyNotice
 from app.models.notice_user_acknowledgement import NoticeUserAcknowledgement
 from app.models.consent_record import ConsentRecord
+from app.models.data_principal_nomination import DataPrincipalNomination
 from app.models.google_consent_mode_event import GoogleConsentModeEvent
 from app.models.cookie_registry import CookieRegistry
 from app.models.consent_banner_config import ConsentBannerConfig
@@ -426,6 +428,7 @@ from app.models.training_completion_record import TrainingCompletionRecord
 
 __all__ = [
     "Organization",
+    "SDFDesignationSuggestion",
     "User",
     "Membership",
     "MembershipActivationToken",
@@ -722,6 +725,7 @@ __all__ = [
     "PrivacyNotice",
     "NoticeUserAcknowledgement",
     "ConsentRecord",
+    "DataPrincipalNomination",
     "GoogleConsentModeEvent",
     "CookieRegistry",
     "ConsentBannerConfig",

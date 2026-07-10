@@ -19,6 +19,16 @@ class ConsentRecord(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
         Index("ix_consent_records_org_subject_hash", "organization_id", "subject_identifier_hash"),
         Index("ix_consent_records_org_granted_activity", "organization_id", "granted", "processing_activity_id"),
         Index("ix_consent_records_expiry_granted", "expiry_date", "granted"),
+        Index("ix_consent_records_org_minor_guardian", "organization_id", "is_minor_or_guardian_managed"),
+        CheckConstraint(
+            "guardian_relationship IS NULL OR guardian_relationship IN ('parent', 'lawful_guardian_disability')",
+            name="ck_consent_records_guardian_relationship",
+        ),
+        CheckConstraint(
+            "guardian_verification_method IS NULL OR guardian_verification_method IN "
+            "('government_id_token', 'digilocker', 'existing_reliable_id', 'court_authority_appointment')",
+            name="ck_consent_records_guardian_verification_method",
+        ),
     )
 
     processing_activity_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("processing_activities.id", ondelete="CASCADE"), nullable=False)
@@ -37,3 +47,11 @@ class ConsentRecord(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
     metadata_json: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    # DPDP Act 2023 Section 9: processing a child's or a person-with-disability's personal
+    # data requires verifiable consent of the parent/lawful guardian.
+    is_minor_or_guardian_managed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    guardian_relationship: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    guardian_identity_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    guardian_verification_method: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    guardian_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

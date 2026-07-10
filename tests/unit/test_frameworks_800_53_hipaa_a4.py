@@ -101,7 +101,7 @@ def test_phase1_framework_quick_win_seed_counts_and_idempotency(client, db_sessi
     dpdp_rows = db_session.execute(
         select(Obligation).where(Obligation.framework_id == dpdp.id, Obligation.status == "active")
     ).scalars().all()
-    assert len(dpdp_rows) == 18
+    assert len(dpdp_rows) == 21  # DPDP-SDF-1/2/3 split from DPDP-S10-SDF, plus DPDP-RULE-ACCOUNTABILITY (ported from the retired india_dpdp_starter.json pack)
     assert any(row.reference_code == "DPDP-RULE-BREACH" and "without delay" in (row.description or "") for row in dpdp_rows)
     assert all(row.reference_code != "DPDP-S16-2" for row in dpdp_rows)
 

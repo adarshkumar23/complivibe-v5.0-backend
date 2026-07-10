@@ -50,7 +50,6 @@ from app.services.framework_seed_data_stream_a5 import (
     CCPA_QUESTIONS,
     CCPA_SECTIONS,
     DPDP_GDPR_MAPPINGS,
-    DPDP_OBLIGATIONS,
     DPDP_QUESTIONS,
     DPDP_SECTIONS,
 )

@@ -153,6 +153,13 @@ DPDP_SECTIONS: list[dict[str, int | str]] = [
     {"code": "DPDP-XBDR", "title": "Cross-Border Data Restrictions", "order": 4},
 ]
 
+
+# NOTE: DPDP_OBLIGATIONS is retained only because historical migration
+# alembic/versions/0156_india_dpdp_complete.py imports it to replay its one-time data
+# seed byte-for-byte. The live/idempotent seeder (SeedService.ensure_dpdp_framework)
+# no longer uses this list — it uses the consolidated, more current DPDP_2025_RULES_OBLIGATIONS
+# in app/services/framework_seed_data_phase1.py instead. Do not add new callers of this list;
+# do not delete it without first rewriting migration 0156 to inline its own snapshot of this data.
 DPDP_OBLIGATIONS: list[tuple[str, str, str, str, list[str]]] = [
     (
         "DPDP-S4",

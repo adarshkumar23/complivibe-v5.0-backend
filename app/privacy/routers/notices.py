@@ -58,6 +58,16 @@ def get_active_notice(
     return PrivacyNoticeRead.model_validate(row)
 
 
+@router.get("/active/languages", response_model=list[PrivacyNoticeRead])
+def list_active_notice_languages(
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("privacy:read")),
+) -> list[PrivacyNoticeRead]:
+    rows = NoticeService(db).list_active_notice_languages(organization.id)
+    return [PrivacyNoticeRead.model_validate(row) for row in rows]
+
+
 @router.get("/{notice_id}", response_model=PrivacyNoticeRead)
 def get_notice(
     notice_id: uuid.UUID,

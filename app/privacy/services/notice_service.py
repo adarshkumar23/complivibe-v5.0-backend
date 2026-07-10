@@ -161,6 +161,19 @@ class NoticeService:
             )
         ).scalar_one_or_none()
 
+    def list_active_notice_languages(self, org_id: uuid.UUID) -> list[PrivacyNotice]:
+        """Return the currently-published notice for every language the org has published
+        in, so a consent flow can offer the Data Principal a choice of language (DPDP Act
+        2023 plain-language notice requirement; the Act is intended to extend to all
+        languages in the Eighth Schedule of the Constitution, starting with Hindi and
+        English)."""
+        return self.db.execute(
+            select(PrivacyNotice).where(
+                PrivacyNotice.organization_id == org_id,
+                PrivacyNotice.status == "published",
+            )
+        ).scalars().all()
+
     def list_notices(self, org_id: uuid.UUID, status_filter: str | None = None, language: str | None = None) -> list[PrivacyNotice]:
         stmt = select(PrivacyNotice).where(PrivacyNotice.organization_id == org_id)
         if status_filter is not None:

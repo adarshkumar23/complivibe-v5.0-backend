@@ -19,6 +19,10 @@ class ConsentRecordCreate(BaseModel):
     user_agent: str | None = None
     expiry_date: date | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    is_minor_or_guardian_managed: bool = False
+    guardian_relationship: str | None = Field(default=None, max_length=30)
+    guardian_identity_reference: str | None = Field(default=None, max_length=255)
+    guardian_verification_method: str | None = Field(default=None, max_length=50)
 
 
 class ConsentInboundEvent(ConsentRecordCreate):
@@ -55,6 +59,11 @@ class ConsentRecordRead(BaseModel):
     user_agent: str | None
     expiry_date: date | None
     metadata_json: dict
+    is_minor_or_guardian_managed: bool = False
+    guardian_relationship: str | None = None
+    guardian_identity_reference: str | None = None
+    guardian_verification_method: str | None = None
+    guardian_verified_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     age_days: int = 0

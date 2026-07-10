@@ -16,6 +16,9 @@ CLASSIFICATION_RULES = {
             "ssn",
             "passport",
             "national_id",
+            "aadhaar",
+            "aadhar",
+            "uidai",
             "mobile",
             "firstname",
             "lastname",
@@ -68,6 +71,8 @@ CLASSIFICATION_RULES = {
             "routing",
             "swift",
             "pan",
+            "pan_number",
+            "pan_card",
             "cvv",
             "financial",
         ],
@@ -178,7 +183,7 @@ def classify_metadata(name: str, description: str | None, column_names: list[str
 def _map_entities_to_class(entity_types: list[str]) -> str:
     if any(entity in entity_types for entity in ["MEDICAL_LICENSE", "US_HEALTHCARE_NPI"]):
         return "health_data"
-    if any(entity in entity_types for entity in ["CREDIT_CARD", "IBAN_CODE", "US_BANK_NUMBER", "US_ITIN"]):
+    if any(entity in entity_types for entity in ["CREDIT_CARD", "IBAN_CODE", "US_BANK_NUMBER", "US_ITIN", "IN_PAN"]):
         return "financial_data"
     if any(
         entity in entity_types
@@ -192,6 +197,8 @@ def _map_entities_to_class(entity_types: list[str]) -> str:
             "DATE_TIME",
             "LOCATION",
             "NRP",
+            "IN_AADHAAR",
+            "IN_PHONE_NUMBER",
         ]
     ):
         return "personal_data"

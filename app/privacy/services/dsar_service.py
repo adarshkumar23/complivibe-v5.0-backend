@@ -6,6 +6,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.data_principal_nomination import DataPrincipalNomination
 from app.models.data_subject_request import DataSubjectRequest
 from app.models.dsr_fulfillment_step import DSRFulfillmentStep
 from app.models.dsr_sla_tracking import DSRSLATracking
@@ -13,8 +14,12 @@ from app.models.email_outbox import EmailOutbox
 from app.models.membership import Membership
 from app.models.role import Role
 from app.models.user import User
+from app.privacy.services.retention_conflict_service import check_retention_conflict
 from app.services.audit_service import AuditService
 from app.core.validation import validate_choice
+
+ALLOWED_REQUEST_SUBTYPES = {"rights_request", "grievance"}
+GRIEVANCE_DEADLINE_DAYS = 90  # DPDP Rules 2025, Rule 14(3)
 
 ALLOWED_REQUEST_TYPES = {
     "access",
@@ -112,9 +117,13 @@ class DSARService:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="User is not an active organization member")
         return row
 
-    def _compute_deadline_days(self, regulatory_framework: str, requested_days: int | None = None) -> int:
+    def _compute_deadline_days(
+        self, regulatory_framework: str, requested_days: int | None = None, request_subtype: str | None = None
+    ) -> int:
         if requested_days is not None:
             return int(requested_days)
+        if request_subtype == "grievance":
+            return GRIEVANCE_DEADLINE_DAYS
         if regulatory_framework == "ccpa":
             return 45
         return 30
@@ -287,6 +296,8 @@ class DSARService:
             context_flags.append("sla_breach_recorded")
         if total_steps == 0 and row.status in {"in_progress", "on_hold"}:
             context_flags.append("no_fulfillment_steps")
+        if row.retention_conflict_json is not None and row.retention_conflict_overridden_at is None:
+            context_flags.append("retention_conflict_present")
 
         return {
             "age_days": age_days,
@@ -342,6 +353,13 @@ class DSARService:
             "description": row.description,
             "status": row.status,
             "regulatory_framework": row.regulatory_framework,
+            "request_subtype": row.request_subtype,
+            "data_categories": row.data_categories,
+            "retention_conflict_json": row.retention_conflict_json,
+            "retention_conflict_overridden_at": row.retention_conflict_overridden_at,
+            "retention_conflict_override_reason": row.retention_conflict_override_reason,
+            "submitted_by_nominee_id": row.submitted_by_nominee_id,
+            "relationship_end_date": row.relationship_end_date,
             "response_deadline": row.response_deadline,
             "deadline_days": row.deadline_days,
             "extension_granted": row.extension_granted,
@@ -388,13 +406,19 @@ class DSARService:
         if payload.get("regulatory_framework", "gdpr") not in ALLOWED_FRAMEWORKS:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid regulatory_framework")
 
+        request_subtype = payload.get("request_subtype")
+        if request_subtype is not None:
+            request_subtype = validate_choice(request_subtype, ALLOWED_REQUEST_SUBTYPES, "request_subtype")
+
         if payload.get("request_type") == "know":
             payload["request_type"] = "access"
         elif payload.get("request_type") == "correct":
             payload["request_type"] = "rectification"
 
         regulatory_framework = payload.get("regulatory_framework", "gdpr")
-        deadline_days = self._compute_deadline_days(regulatory_framework, payload.get("deadline_days"))
+        deadline_days = self._compute_deadline_days(
+            regulatory_framework, payload.get("deadline_days"), request_subtype=request_subtype
+        )
         received_at = self.utcnow()
         response_deadline = received_at + timedelta(days=deadline_days)
 
@@ -402,6 +426,33 @@ class DSARService:
         assigned_handler: User | None = None
         if assigned_handler_id is not None:
             assigned_handler = self._require_user_membership(org_id, assigned_handler_id)
+
+        submitted_by_nominee_id = payload.get("submitted_by_nominee_id")
+        if submitted_by_nominee_id is not None:
+            nominee_subject = payload.get("subject_identifier")
+            if not nominee_subject:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="subject_identifier is required when submitting on behalf of a nominee",
+                )
+            from app.privacy.services.consent_service import ConsentService
+
+            nomination = self.db.execute(
+                select(DataPrincipalNomination).where(
+                    DataPrincipalNomination.organization_id == org_id,
+                    DataPrincipalNomination.id == submitted_by_nominee_id,
+                )
+            ).scalar_one_or_none()
+            if nomination is None or nomination.status != "activated":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Nomination must exist and be activated (death/incapacity confirmed) to submit on the Data Principal's behalf",
+                )
+            if nomination.subject_identifier_hash != ConsentService.hash_subject_identifier(nominee_subject):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Nomination does not match the given subject_identifier",
+                )
 
         year = received_at.year
         base_ref = self._next_request_ref(org_id, year)
@@ -419,6 +470,10 @@ class DSARService:
                 description=payload.get("description"),
                 status="received",
                 regulatory_framework=regulatory_framework,
+                request_subtype=request_subtype,
+                data_categories=payload.get("data_categories") or [],
+                relationship_end_date=payload.get("relationship_end_date"),
+                submitted_by_nominee_id=submitted_by_nominee_id,
                 response_deadline=response_deadline,
                 deadline_days=deadline_days,
                 extension_granted=False,
@@ -542,6 +597,8 @@ class DSARService:
         user_id: uuid.UUID,
         notes: str | None = None,
         refusal_reason: str | None = None,
+        override_retention_conflict: bool = False,
+        override_reason: str | None = None,
     ) -> DataSubjectRequest:
         row = self._require_request(org_id, request_id)
         new_status = validate_choice(new_status, ALLOWED_STATUS, "new_status")
@@ -551,6 +608,31 @@ class DSARService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Invalid status transition from {row.status} to {new_status}",
             )
+
+        if row.request_type == "erasure" and new_status == "fulfilled":
+            conflict = check_retention_conflict(
+                self.db, org_id, row.data_categories or [], relationship_end_date=row.relationship_end_date
+            )
+            if conflict is not None and not override_retention_conflict:
+                row.retention_conflict_json = conflict
+                self.db.flush()
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "message": "Erasure blocked by legal-retention conflict — never silently erase. "
+                        "Resolve or explicitly override with a reason.",
+                        "conflict": conflict,
+                    },
+                )
+            if conflict is not None and override_retention_conflict:
+                if not override_reason:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="override_reason is required to override a retention conflict",
+                    )
+                row.retention_conflict_json = conflict
+                row.retention_conflict_overridden_at = self.utcnow()
+                row.retention_conflict_override_reason = override_reason
 
         row.status = new_status
         if notes:

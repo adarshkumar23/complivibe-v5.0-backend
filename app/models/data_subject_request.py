@@ -1,7 +1,7 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -22,6 +22,10 @@ class DataSubjectRequest(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
         CheckConstraint(
             "regulatory_framework IN ('gdpr', 'ccpa', 'dpdp', 'lgpd', 'custom')",
             name="ck_data_subject_requests_framework",
+        ),
+        CheckConstraint(
+            "request_subtype IS NULL OR request_subtype IN ('rights_request', 'grievance')",
+            name="ck_dsr_request_subtype",
         ),
         Index("ix_data_subject_requests_org_status", "organization_id", "status"),
         Index("ix_data_subject_requests_org_type", "organization_id", "request_type"),
@@ -55,3 +59,21 @@ class DataSubjectRequest(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # DPDP Rules 2025 Rule 14(3): grievances get a distinct 90-day SLA ceiling, separate
+    # from the general rights-request deadline.
+    request_subtype: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Data categories this request touches (e.g. "kyc_identity_documents",
+    # "transaction_records"), used to look up legal-retention conflicts before erasure.
+    data_categories: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    retention_conflict_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    retention_conflict_overridden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retention_conflict_override_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # DPDP Act 2023 Section 10: a nominee with an activated nomination may submit rights
+    # requests on the Data Principal's behalf.
+    submitted_by_nominee_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("data_principal_nominations.id", ondelete="SET NULL"), nullable=True
+    )
+    # Anchor date (e.g. account/relationship closure) the RBI-DPDP reconciliation engine
+    # needs to compute an exact retention-floor expiry for this request's data categories.
+    relationship_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)

@@ -68,6 +68,8 @@ from app.privacy.routers import lawful_basis as privacy_lawful_basis
 from app.privacy.routers import dpa as privacy_dpa
 from app.privacy.routers import notification_preferences as privacy_notification_preferences
 from app.privacy.routers import digest as privacy_digest
+from app.privacy.routers import nominations as privacy_nominations
+from app.privacy.routers import sdf_designation as privacy_sdf_designation
 from app.satellites.tprm_intelligence import router as tprm_intelligence_router
 from app.satellites.tprm_intelligence import sanctions_router as tprm_sanctions_router
 from app.satellites.tprm_intelligence import bribery_router as tprm_bribery_router
@@ -242,6 +244,8 @@ api_router.include_router(privacy_lawful_basis.router)
 api_router.include_router(privacy_dpa.router)
 api_router.include_router(privacy_notification_preferences.router)
 api_router.include_router(privacy_digest.router)
+api_router.include_router(privacy_nominations.router)
+api_router.include_router(privacy_sdf_designation.router)
 api_router.include_router(ai_governance_risk_assessments.systems_router)
 api_router.include_router(ai_governance_risk_assessments.router)
 api_router.include_router(ai_governance.router)

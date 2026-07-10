@@ -28,6 +28,17 @@ ALLOWED_CONSENT_MECHANISMS = {
 
 GCM_V2_STATES = {"granted", "denied"}
 
+# DPDP Act 2023 Section 9: processing a child's personal data requires verifiable
+# consent of a parent, and processing a person-with-disability's data requires
+# verifiable consent of a lawful guardian appointed by a court/designated authority.
+ALLOWED_GUARDIAN_RELATIONSHIPS = {"parent", "lawful_guardian_disability"}
+ALLOWED_GUARDIAN_VERIFICATION_METHODS = {
+    "government_id_token",
+    "digilocker",
+    "existing_reliable_id",
+    "court_authority_appointment",
+}
+
 # ISO 3166-1 alpha-2 codes for the jurisdictions where Google requires all four
 # Consent Mode v2 signals to default to "denied" until the visitor interacts
 # with a consent banner: the 27 EU/EEA member states, the additional EEA states
@@ -140,6 +151,11 @@ class ConsentService:
             "user_agent": row.user_agent,
             "expiry_date": row.expiry_date,
             "metadata_json": row.metadata_json,
+            "is_minor_or_guardian_managed": row.is_minor_or_guardian_managed,
+            "guardian_relationship": row.guardian_relationship,
+            "guardian_identity_reference": row.guardian_identity_reference,
+            "guardian_verification_method": row.guardian_verification_method,
+            "guardian_verified_at": row.guardian_verified_at,
             "created_at": row.created_at,
             "updated_at": row.updated_at,
             "age_days": context["age_days"],
@@ -254,6 +270,25 @@ class ConsentService:
 
         mechanism = payload.get("consent_mechanism")
         mechanism = validate_choice(mechanism, ALLOWED_CONSENT_MECHANISMS, "consent_mechanism")
+
+        is_guardian_managed = bool(payload.get("is_minor_or_guardian_managed", False))
+        guardian_relationship = payload.get("guardian_relationship")
+        guardian_verification_method = payload.get("guardian_verification_method")
+        if is_guardian_managed:
+            if not guardian_relationship or not guardian_verification_method:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="guardian_relationship and guardian_verification_method are required when "
+                    "is_minor_or_guardian_managed is true (DPDP Act 2023 Section 9 verifiable consent)",
+                )
+            guardian_relationship = validate_choice(guardian_relationship, ALLOWED_GUARDIAN_RELATIONSHIPS, "guardian_relationship")
+            guardian_verification_method = validate_choice(
+                guardian_verification_method, ALLOWED_GUARDIAN_VERIFICATION_METHODS, "guardian_verification_method"
+            )
+        else:
+            guardian_relationship = None
+            guardian_verification_method = None
+
         subject_identifier = payload["subject_identifier"]
         subject_hash = self.hash_subject_identifier(subject_identifier)
         stored_identifier = subject_hash
@@ -292,6 +327,11 @@ class ConsentService:
                 user_agent=payload.get("user_agent"),
                 expiry_date=expiry_date,
                 metadata_json=payload.get("metadata") or {},
+                is_minor_or_guardian_managed=is_guardian_managed,
+                guardian_relationship=guardian_relationship,
+                guardian_identity_reference=payload.get("guardian_identity_reference") if is_guardian_managed else None,
+                guardian_verification_method=guardian_verification_method,
+                guardian_verified_at=now if is_guardian_managed else None,
                 created_at=now,
                 updated_at=now,
             )
@@ -312,6 +352,12 @@ class ConsentService:
             row.expiry_date = payload.get("expiry_date", row.expiry_date)
             if payload.get("metadata") is not None:
                 row.metadata_json = payload.get("metadata") or {}
+            if "is_minor_or_guardian_managed" in payload:
+                row.is_minor_or_guardian_managed = is_guardian_managed
+                row.guardian_relationship = guardian_relationship
+                row.guardian_identity_reference = payload.get("guardian_identity_reference") if is_guardian_managed else None
+                row.guardian_verification_method = guardian_verification_method
+                row.guardian_verified_at = now if is_guardian_managed else None
             row.updated_at = now
 
         self.db.flush()

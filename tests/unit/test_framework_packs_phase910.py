@@ -9,7 +9,11 @@ PACK_MIN_COUNTS = {
     "gdpr_starter": 15,
     "nist_ai_rmf_starter": 15,
     "eu_ai_act_starter": 10,
-    "india_dpdp_starter": 10,
+    # india_dpdp_starter retired: its obligation content was a strict subset of
+    # SeedService.ensure_dpdp_framework's DPDP_2025_RULES_OBLIGATIONS at coarser grain,
+    # except for one gap (accountability record-keeping) which was ported forward as
+    # DPDP-RULE-ACCOUNTABILITY. Keeping both was a duplicate-seeding-path risk (see
+    # 2026-07-10 DPDP Phase 2 build notes).
 }
 
 REQUIRED_CAVEAT = (
