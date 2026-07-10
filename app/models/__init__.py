@@ -145,6 +145,8 @@ from app.models.auditor import Auditor
 from app.models.auditor_engagement import AuditorEngagement
 from app.models.evidence_item import EvidenceItem
 from app.models.evidence_automation_rule import EvidenceAutomationIngestEvent, EvidenceAutomationRule
+from app.models.cloud_evidence_connector import CloudEvidenceConnector, CloudEvidenceConnectorEvent
+from app.models.finding_control_suggestion import CloudFindingControlMappingRule, FindingControlSuggestion
 from app.models.external_sync_connection import ExternalSyncConnection
 from app.models.external_sync_event import ExternalSyncEvent
 from app.models.external_sync_link import ExternalSyncLink
@@ -560,6 +562,10 @@ __all__ = [
     "EvidenceControlLink",
     "ControlObligationMapping",
     "EvidenceItem",
+    "CloudEvidenceConnector",
+    "CloudEvidenceConnectorEvent",
+    "CloudFindingControlMappingRule",
+    "FindingControlSuggestion",
     "EvidenceAutomationRule",
     "EvidenceAutomationIngestEvent",
     "Risk",

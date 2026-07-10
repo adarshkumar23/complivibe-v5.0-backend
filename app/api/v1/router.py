@@ -70,6 +70,12 @@ from app.privacy.routers import notification_preferences as privacy_notification
 from app.privacy.routers import digest as privacy_digest
 from app.privacy.routers import nominations as privacy_nominations
 from app.privacy.routers import sdf_designation as privacy_sdf_designation
+from app.integrations.cloud_connectors.routers import connectors as cloud_connectors_router
+from app.integrations.cloud_connectors.routers import ingest_aws as cloud_connectors_ingest_aws
+from app.integrations.cloud_connectors.routers import ingest_gcp as cloud_connectors_ingest_gcp
+from app.integrations.cloud_connectors.routers import ingest_azure as cloud_connectors_ingest_azure
+from app.integrations.cloud_connectors.routers import ingest_okta as cloud_connectors_ingest_okta
+from app.integrations.cloud_connectors.routers import ingest_github as cloud_connectors_ingest_github
 from app.satellites.tprm_intelligence import router as tprm_intelligence_router
 from app.satellites.tprm_intelligence import sanctions_router as tprm_sanctions_router
 from app.satellites.tprm_intelligence import bribery_router as tprm_bribery_router
@@ -246,6 +252,12 @@ api_router.include_router(privacy_notification_preferences.router)
 api_router.include_router(privacy_digest.router)
 api_router.include_router(privacy_nominations.router)
 api_router.include_router(privacy_sdf_designation.router)
+api_router.include_router(cloud_connectors_router.router)
+api_router.include_router(cloud_connectors_ingest_aws.router)
+api_router.include_router(cloud_connectors_ingest_gcp.router)
+api_router.include_router(cloud_connectors_ingest_azure.router)
+api_router.include_router(cloud_connectors_ingest_okta.router)
+api_router.include_router(cloud_connectors_ingest_github.router)
 api_router.include_router(ai_governance_risk_assessments.systems_router)
 api_router.include_router(ai_governance_risk_assessments.router)
 api_router.include_router(ai_governance.router)

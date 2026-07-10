@@ -15,7 +15,7 @@ from app.models.membership import Membership
 from app.models.user import User
 from app.core.validation import validate_choice
 
-ALLOWED_TEST_TYPES = {"manual_attestation", "internal_metadata_check", "evidence_review_check"}
+ALLOWED_TEST_TYPES = {"manual_attestation", "internal_metadata_check", "evidence_review_check", "automated_ingest"}
 ALLOWED_CHECK_KEYS = {
     "manual_attestation",
     "control_status_implemented",
@@ -23,6 +23,7 @@ ALLOWED_CHECK_KEYS = {
     "has_any_active_evidence",
     "no_expired_verified_evidence",
     "has_active_obligation_mapping",
+    "cloud_finding_severity",
 }
 ALLOWED_RESULTS = {"passed", "failed", "needs_review", "not_applicable"}
 ALLOWED_CADENCE = {"none", "weekly", "monthly", "quarterly", "annual"}
