@@ -76,3 +76,31 @@ class FindingSuggestionRead(BaseModel):
 
 class DismissSuggestionRequest(BaseModel):
     reason: str = Field(min_length=1)
+
+
+class MappingRuleCreate(BaseModel):
+    finding_category: str = Field(min_length=1, max_length=100)
+    target_control_id: uuid.UUID | None = None
+    target_control_common_tag: str | None = Field(default=None, max_length=100)
+    confidence: str = Field(default="deterministic_partial")
+
+
+class MappingRuleUpdate(BaseModel):
+    target_control_id: uuid.UUID | None = None
+    target_control_common_tag: str | None = None
+    confidence: str | None = None
+    is_active: bool | None = None
+
+
+class MappingRuleRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    organization_id: uuid.UUID
+    finding_category: str
+    target_control_id: uuid.UUID | None
+    target_control_common_tag: str | None
+    confidence: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime

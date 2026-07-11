@@ -81,12 +81,16 @@ class NominationService:
         return row
 
     def get_active_nomination(self, org_id: uuid.UUID, subject_identifier: str) -> DataPrincipalNomination | None:
+        """Returns the nomination currently in force -- i.e. one whose death/incapacity
+        trigger has fired via activate_nomination(), which sets status="activated".
+        A merely-created, not-yet-triggered nomination has status="active" and is not
+        yet authoritative for anyone to act on the data principal's behalf."""
         subject_hash = ConsentService.hash_subject_identifier(subject_identifier)
         return self.db.execute(
             select(DataPrincipalNomination).where(
                 DataPrincipalNomination.organization_id == org_id,
                 DataPrincipalNomination.subject_identifier_hash == subject_hash,
-                DataPrincipalNomination.status == "active",
+                DataPrincipalNomination.status == "activated",
             )
         ).scalar_one_or_none()
 

@@ -15,6 +15,9 @@ from app.integrations.cloud_connectors.schemas import (
     ConnectorSetupRead,
     DismissSuggestionRequest,
     FindingSuggestionRead,
+    MappingRuleCreate,
+    MappingRuleRead,
+    MappingRuleUpdate,
 )
 from app.integrations.cloud_connectors.setup_instructions import build_setup_payload
 from app.models.membership import Membership
@@ -52,6 +55,83 @@ def list_connectors(
 ) -> list[ConnectorRead]:
     rows = CloudConnectorService(db).list_connectors(organization.id)
     return [ConnectorRead.model_validate(row) for row in rows]
+
+
+@router.post("/mapping-rules", response_model=MappingRuleRead, status_code=status.HTTP_201_CREATED)
+def create_mapping_rule(
+    payload: MappingRuleCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("connectors:write")),
+) -> MappingRuleRead:
+    rule = FindingControlMappingService(db).create_mapping_rule(
+        organization.id,
+        payload.finding_category,
+        payload.target_control_id,
+        payload.target_control_common_tag,
+        payload.confidence,
+        current_user.id,
+    )
+    db.commit()
+    db.refresh(rule)
+    return MappingRuleRead.model_validate(rule)
+
+
+@router.get("/mapping-rules", response_model=list[MappingRuleRead])
+def list_mapping_rules(
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("connectors:read")),
+) -> list[MappingRuleRead]:
+    rows = FindingControlMappingService(db).list_mapping_rules(organization.id)
+    return [MappingRuleRead.model_validate(row) for row in rows]
+
+
+@router.get("/mapping-rules/{rule_id}", response_model=MappingRuleRead)
+def get_mapping_rule(
+    rule_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("connectors:read")),
+) -> MappingRuleRead:
+    rule = FindingControlMappingService(db).get_mapping_rule(organization.id, rule_id)
+    return MappingRuleRead.model_validate(rule)
+
+
+@router.patch("/mapping-rules/{rule_id}", response_model=MappingRuleRead)
+def update_mapping_rule(
+    rule_id: uuid.UUID,
+    payload: MappingRuleUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("connectors:write")),
+) -> MappingRuleRead:
+    rule = FindingControlMappingService(db).update_mapping_rule(
+        organization.id,
+        rule_id,
+        payload.target_control_id,
+        payload.target_control_common_tag,
+        payload.confidence,
+        payload.is_active,
+        current_user.id,
+    )
+    db.commit()
+    db.refresh(rule)
+    return MappingRuleRead.model_validate(rule)
+
+
+@router.delete("/mapping-rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_mapping_rule(
+    rule_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("connectors:write")),
+) -> None:
+    FindingControlMappingService(db).delete_mapping_rule(organization.id, rule_id, current_user.id)
+    db.commit()
 
 
 @router.get("/{connector_id}", response_model=ConnectorRead)

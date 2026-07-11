@@ -19,6 +19,144 @@ class FindingControlMappingService:
     def utcnow() -> datetime:
         return datetime.now(UTC)
 
+    def create_mapping_rule(
+        self,
+        org_id: uuid.UUID,
+        finding_category: str,
+        target_control_id: uuid.UUID | None,
+        target_control_common_tag: str | None,
+        confidence: str,
+        actor_user_id: uuid.UUID | None,
+    ) -> CloudFindingControlMappingRule:
+        if target_control_id is None and not target_control_common_tag:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Either target_control_id or target_control_common_tag is required",
+            )
+        if target_control_id is not None:
+            control = self.db.execute(
+                select(Control).where(Control.id == target_control_id, Control.organization_id == org_id)
+            ).scalar_one_or_none()
+            if control is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target control not found")
+
+        now = self.utcnow()
+        rule = CloudFindingControlMappingRule(
+            organization_id=org_id,
+            finding_category=finding_category,
+            target_control_id=target_control_id,
+            target_control_common_tag=target_control_common_tag,
+            confidence=confidence,
+            is_active=True,
+            created_at=now,
+            updated_at=now,
+        )
+        self.db.add(rule)
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="cloud_finding_control_mapping_rule.created",
+            entity_type="cloud_finding_control_mapping_rule",
+            entity_id=rule.id,
+            organization_id=org_id,
+            actor_user_id=actor_user_id,
+            after_json={
+                "finding_category": finding_category,
+                "target_control_id": str(target_control_id) if target_control_id else None,
+                "target_control_common_tag": target_control_common_tag,
+                "confidence": confidence,
+            },
+            metadata_json={"source": "api"},
+        )
+        return rule
+
+    def list_mapping_rules(self, org_id: uuid.UUID) -> list[CloudFindingControlMappingRule]:
+        return list(
+            self.db.execute(
+                select(CloudFindingControlMappingRule)
+                .where(CloudFindingControlMappingRule.organization_id == org_id)
+                .order_by(CloudFindingControlMappingRule.finding_category)
+            ).scalars().all()
+        )
+
+    def get_mapping_rule(self, org_id: uuid.UUID, rule_id: uuid.UUID) -> CloudFindingControlMappingRule:
+        rule = self.db.execute(
+            select(CloudFindingControlMappingRule).where(
+                CloudFindingControlMappingRule.organization_id == org_id,
+                CloudFindingControlMappingRule.id == rule_id,
+            )
+        ).scalar_one_or_none()
+        if rule is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mapping rule not found")
+        return rule
+
+    def update_mapping_rule(
+        self,
+        org_id: uuid.UUID,
+        rule_id: uuid.UUID,
+        target_control_id: uuid.UUID | None,
+        target_control_common_tag: str | None,
+        confidence: str | None,
+        is_active: bool | None,
+        actor_user_id: uuid.UUID | None,
+    ) -> CloudFindingControlMappingRule:
+        rule = self.get_mapping_rule(org_id, rule_id)
+        before = {
+            "target_control_id": str(rule.target_control_id) if rule.target_control_id else None,
+            "target_control_common_tag": rule.target_control_common_tag,
+            "confidence": rule.confidence,
+            "is_active": rule.is_active,
+        }
+
+        if target_control_id is not None:
+            control = self.db.execute(
+                select(Control).where(Control.id == target_control_id, Control.organization_id == org_id)
+            ).scalar_one_or_none()
+            if control is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target control not found")
+            rule.target_control_id = target_control_id
+            rule.target_control_common_tag = None
+        elif target_control_common_tag is not None:
+            rule.target_control_common_tag = target_control_common_tag
+            rule.target_control_id = None
+        if confidence is not None:
+            rule.confidence = confidence
+        if is_active is not None:
+            rule.is_active = is_active
+        rule.updated_at = self.utcnow()
+        self.db.flush()
+
+        AuditService(self.db).write_audit_log(
+            action="cloud_finding_control_mapping_rule.updated",
+            entity_type="cloud_finding_control_mapping_rule",
+            entity_id=rule.id,
+            organization_id=org_id,
+            actor_user_id=actor_user_id,
+            before_json=before,
+            after_json={
+                "target_control_id": str(rule.target_control_id) if rule.target_control_id else None,
+                "target_control_common_tag": rule.target_control_common_tag,
+                "confidence": rule.confidence,
+                "is_active": rule.is_active,
+            },
+            metadata_json={"source": "api"},
+        )
+        return rule
+
+    def delete_mapping_rule(self, org_id: uuid.UUID, rule_id: uuid.UUID, actor_user_id: uuid.UUID | None) -> None:
+        rule = self.get_mapping_rule(org_id, rule_id)
+        AuditService(self.db).write_audit_log(
+            action="cloud_finding_control_mapping_rule.deleted",
+            entity_type="cloud_finding_control_mapping_rule",
+            entity_id=rule.id,
+            organization_id=org_id,
+            actor_user_id=actor_user_id,
+            before_json={"finding_category": rule.finding_category},
+            metadata_json={"source": "api"},
+        )
+        self.db.delete(rule)
+        self.db.flush()
+
     def _find_matching_rule(self, org_id: uuid.UUID, finding_category: str) -> CloudFindingControlMappingRule | None:
         return self.db.execute(
             select(CloudFindingControlMappingRule).where(

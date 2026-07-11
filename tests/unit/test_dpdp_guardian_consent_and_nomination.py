@@ -65,9 +65,10 @@ def test_nomination_create_activate_revoke_lifecycle(db_session):
     assert nomination.status == "active"
     assert nomination.subject_identifier_hash == subject_hash
 
-    active = service.get_active_nomination(org, "subject-nom-1")
-    assert active is not None
-    assert active.id == nomination.id
+    # get_active_nomination finds the nomination currently in force (i.e. activated via
+    # its death/incapacity trigger), not a merely-created, not-yet-triggered one.
+    not_yet_activated = service.get_active_nomination(org, "subject-nom-1")
+    assert not_yet_activated is None
 
     activated = service.activate_nomination(org, nomination.id, actor_user_id=creator)
     assert activated.status == "activated"
@@ -75,6 +76,10 @@ def test_nomination_create_activate_revoke_lifecycle(db_session):
 
     row = db_session.get(DataPrincipalNomination, nomination.id)
     assert row.status == "activated"
+
+    active = service.get_active_nomination(org, "subject-nom-1")
+    assert active is not None
+    assert active.id == nomination.id
 
 
 def test_nomination_revoke(db_session):
