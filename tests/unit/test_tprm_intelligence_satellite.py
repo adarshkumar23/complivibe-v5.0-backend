@@ -125,9 +125,9 @@ def test_t1_1_security_rating_cross_org_blocked(client, monkeypatch):
     vendor = _create_vendor(client, org_a)
 
     blocked = client.post(f"{SATELLITE_BASE}/{vendor['id']}/security-rating/compute", headers=org_b["org_headers"])
-    # A vendor that exists, but belongs to a different org, is denied with 403
-    # (matching every other entity's cross-tenant check), not 404.
-    assert blocked.status_code == 403
+    # A vendor that exists, but belongs to a different org, is denied with a plain 404,
+    # matching every other entity's cross-tenant check.
+    assert blocked.status_code == 404
 
 
 def test_t1_2_vendor_threat_intelligence_persists_skips_and_audits(client, db_session, monkeypatch):
@@ -454,9 +454,9 @@ def test_t4_5_vendor_kyb_check_cross_org_blocked(client):
     org_b = bootstrap_org_user(client, email_prefix="t4-kyb-cross-b")
     vendor = _create_vendor(client, org_a)
     resp = client.post(f"{SATELLITE_BASE}/{vendor['id']}/kyb-check/compute", headers=org_b["org_headers"])
-    # A vendor that exists, but belongs to a different org, is denied with 403
-    # (matching every other entity's cross-tenant check), not 404.
-    assert resp.status_code == 403, resp.text
+    # A vendor that exists, but belongs to a different org, is denied with a plain 404,
+    # matching every other entity's cross-tenant check.
+    assert resp.status_code == 404, resp.text
 
 
 def test_t4_5_vendor_kyb_check_malformed_vendor_id(client):
@@ -652,9 +652,9 @@ def test_t4_6_vendor_sanctions_screen_cross_org_blocked(client, db_session):
     _seed_sberbank_entity(db_session)
 
     blocked = client.post(f"{SATELLITE_BASE}/{vendor['id']}/sanctions-screen/compute", headers=org_b["org_headers"])
-    # A vendor that exists, but belongs to a different org, is denied with 403
-    # (matching every other entity's cross-tenant check), not 404.
-    assert blocked.status_code == 403
+    # A vendor that exists, but belongs to a different org, is denied with a plain 404,
+    # matching every other entity's cross-tenant check.
+    assert blocked.status_code == 404
 
 
 def test_t4_6_organization_sanctions_threshold_is_configurable_and_audited(client, db_session):

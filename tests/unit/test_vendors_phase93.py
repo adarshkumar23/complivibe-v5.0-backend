@@ -128,11 +128,12 @@ def test_phase93_tenant_isolation(client, db_session):
     assert [row["name"] for row in list1.json()] == ["Org1 Vendor"]
     assert list2.json() == []
 
-    # A vendor that exists, but belongs to a different org, is denied with 403
-    # (matching every other entity's cross-tenant check) -- not 404, which is
-    # reserved for a vendor_id that doesn't exist anywhere.
+    # A vendor that exists, but belongs to a different org, is denied with a plain 404,
+    # matching every other entity's cross-tenant check -- indistinguishable from a
+    # vendor_id that doesn't exist anywhere, so the status code can't be used to confirm
+    # cross-tenant resource existence.
     cross_detail = client.get(f"{BASE}/{v1['id']}", headers=org2["org_headers"])
-    assert cross_detail.status_code == 403
+    assert cross_detail.status_code == 404
 
     missing_detail = client.get(f"{BASE}/00000000-0000-0000-0000-000000000000", headers=org2["org_headers"])
     assert missing_detail.status_code == 404

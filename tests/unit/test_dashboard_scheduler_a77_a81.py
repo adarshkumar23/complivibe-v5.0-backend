@@ -28,6 +28,9 @@ def test_a77_ai_governance_dashboard_shape_and_permissions(client):
     assert payload["monitoring_alerts_by_system"] == []
     assert payload["_pillar2_status"] == "not_yet_activated"
 
+    # `client` carries a session cookie set by an earlier register() call -- clear it to
+    # actually test the fully-unauthenticated case.
+    client.cookies.clear()
     no_auth = client.get("/api/v1/ai-governance/dashboard", headers={"X-Organization-ID": org["organization_id"]})
     assert no_auth.status_code == 401
 

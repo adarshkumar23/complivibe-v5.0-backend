@@ -168,7 +168,13 @@ class FindingControlMappingService:
 
     def _resolve_target_control(self, org_id: uuid.UUID, rule: CloudFindingControlMappingRule) -> Control | None:
         if rule.target_control_id is not None:
-            return self.db.get(Control, rule.target_control_id)
+            # Defensive org filter: target_control_id is already validated against the
+            # rule's own org at create/update time, so this is currently unreachable with
+            # a cross-org id, but resolving by bare PK here would be a live cross-tenant
+            # mutation vector the moment that invariant is ever loosened elsewhere.
+            return self.db.execute(
+                select(Control).where(Control.id == rule.target_control_id, Control.organization_id == org_id)
+            ).scalar_one_or_none()
         if rule.target_control_common_tag:
             return self.db.execute(
                 select(Control).where(

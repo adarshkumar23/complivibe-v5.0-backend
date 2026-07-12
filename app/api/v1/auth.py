@@ -2,15 +2,21 @@ import re
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.deps import get_current_active_user, get_current_organization, get_db
+from app.core.deps import (
+    CSRF_COOKIE_NAME,
+    SESSION_COOKIE_NAME,
+    get_current_active_user,
+    get_current_organization,
+    get_db,
+)
 from app.core.password_validation import PasswordValidationError, validate_password_strength
 from app.core.rate_limiter import rate_limiter
-from app.core.security import create_access_token, get_password_hash, verify_password
+from app.core.security import create_access_token, create_csrf_token, decode_access_token, get_password_hash, verify_password
 from app.models.membership import Membership
 from app.models.organization import Organization
 from app.models.user import User
@@ -25,6 +31,38 @@ from app.services.rbac_service import RBACService
 from app.services.seed_service import SeedService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _set_auth_cookies(response: Response, *, access_token: str, csrf_token: str) -> None:
+    """Issue the browser-facing session as an httpOnly cookie plus a readable
+    double-submit CSRF cookie. Bearer-header auth (API clients, tests) is untouched
+    and keeps working off the `access_token` returned in the JSON body."""
+    settings = get_settings()
+    secure = settings.APP_ENV == "production"
+    max_age = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=access_token,
+        httponly=True,
+        secure=secure,
+        samesite="strict",
+        path="/",
+        max_age=max_age,
+    )
+    response.set_cookie(
+        key=CSRF_COOKIE_NAME,
+        value=csrf_token,
+        httponly=False,
+        secure=secure,
+        samesite="strict",
+        path="/",
+        max_age=max_age,
+    )
+
+
+def _clear_auth_cookies(response: Response) -> None:
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    response.delete_cookie(CSRF_COOKIE_NAME, path="/")
 
 
 def _slugify(value: str) -> str:
@@ -44,7 +82,7 @@ def _generate_org_slug(db: Session, organization_name: str) -> str:
 
 @router.post("/register", response_model=Token)
 @rate_limiter.limiter.limit("10/minute")
-def register(payload: RegisterRequest, request: Request, db: Session = Depends(get_db)) -> Token:
+def register(payload: RegisterRequest, request: Request, response: Response, db: Session = Depends(get_db)) -> Token:
     try:
         validate_password_strength(payload.password)
     except PasswordValidationError as exc:
@@ -119,12 +157,15 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
 
     db.commit()
 
-    return Token(access_token=create_access_token(subject=user.id))
+    csrf_token = create_csrf_token()
+    access_token = create_access_token(subject=user.id, extra={"csrf": csrf_token})
+    _set_auth_cookies(response, access_token=access_token, csrf_token=csrf_token)
+    return Token(access_token=access_token)
 
 
 @router.post("/login", response_model=Token)
 @rate_limiter.limiter.limit("10/minute")
-def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> Token:
+def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)) -> Token:
     user = db.execute(select(User).where(User.email == payload.email)).scalar_one_or_none()
     if user is None or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
@@ -140,16 +181,20 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         except ValueError:
             requested_org_id = None
 
+    csrf_token = create_csrf_token()
+
     session_service = SessionService(db)
     session_org_id = session_service.resolve_login_org_id(user.id, requested_org_id)
     if session_org_id is None:
         # Keep compatibility for users with no active membership by issuing a legacy stateless token.
-        return Token(access_token=create_access_token(subject=user.id))
+        access_token = create_access_token(subject=user.id, extra={"csrf": csrf_token})
+        _set_auth_cookies(response, access_token=access_token, csrf_token=csrf_token)
+        return Token(access_token=access_token)
 
     token_id = str(uuid.uuid4())
     settings = get_settings()
     expires_at = datetime.now(UTC) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(subject=user.id, extra={"jti": token_id})
+    access_token = create_access_token(subject=user.id, extra={"jti": token_id, "csrf": csrf_token})
     session_service.create_session(
         org_id=session_org_id,
         user_id=user.id,
@@ -162,7 +207,31 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         expires_at=expires_at,
     )
     db.commit()
+    _set_auth_cookies(response, access_token=access_token, csrf_token=csrf_token)
     return Token(access_token=access_token)
+
+
+@router.post("/logout")
+@rate_limiter.limiter.limit("30/minute")
+def logout(request: Request, response: Response, db: Session = Depends(get_db)) -> dict[str, str]:
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:].strip()
+
+    if token:
+        try:
+            payload = decode_access_token(token)
+        except ValueError:
+            payload = {}
+        token_id = payload.get("jti")
+        if isinstance(token_id, str) and token_id:
+            SessionService(db).revoke_session_by_token_id(token_id)
+            db.commit()
+
+    _clear_auth_cookies(response)
+    return {"message": "Logged out"}
 
 
 @router.post("/activate-invite", response_model=ActivateInviteResponse)

@@ -233,6 +233,9 @@ def test_permission_gate_and_archived_system_are_rejected(client):
     org = bootstrap_org_user(client, email_prefix="llmobs-perm")
     system_id = _create_system(client, org["org_headers"], org["user_id"], "Perm System")
 
+    # `client` carries a session cookie set by an earlier register() call -- clear it to
+    # actually test the fully-unauthenticated case.
+    client.cookies.clear()
     no_auth_headers = {"X-Organization-ID": org["organization_id"]}
     resp = client.post(
         f"{LLM_OBS_BASE}/systems/{system_id}/cost-readings",

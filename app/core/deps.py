@@ -1,9 +1,11 @@
+import secrets
 import uuid
 from collections.abc import Callable, Generator
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
+from fastapi.security.utils import get_authorization_scheme_param
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -16,14 +18,50 @@ from app.platform.services.ip_allowlist_service import IPAllowlistService
 from app.platform.services.session_service import SessionService
 from app.services.rbac_service import RBACService
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+SESSION_COOKIE_NAME = "cv_session"
+CSRF_COOKIE_NAME = "cv_csrf"
+CSRF_HEADER_NAME = "X-CSRF-Token"
+CSRF_PROTECTED_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+class BearerOrSessionCookie(OAuth2PasswordBearer):
+    """Same as OAuth2PasswordBearer, but also accepts the httpOnly session cookie.
+
+    Kept as an OAuth2PasswordBearer subclass (rather than a bare function) so it still
+    shows up correctly as a security scheme in the generated OpenAPI docs, and so the
+    dependency keeps the exact same "raise 401 immediately if nothing is provided"
+    behavior plain `Depends(oauth2_scheme)` always had -- the cookie is just a second
+    acceptable credential source alongside the Authorization header.
+    """
+
+    async def __call__(self, request: Request) -> str | None:
+        authorization = request.headers.get("Authorization")
+        scheme, param = get_authorization_scheme_param(authorization)
+        if authorization and scheme.lower() == "bearer":
+            return param
+        cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
+        if cookie_token:
+            return cookie_token
+        if self.auto_error:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+        return None
+
+
+oauth2_scheme = BearerOrSessionCookie(tokenUrl="/api/v1/auth/login")
 
 
 def get_db() -> Generator[Session, None, None]:
     yield from get_db_session()
 
 
-def get_current_user(db: Annotated[Session, Depends(get_db)], token: Annotated[str, Depends(oauth2_scheme)]) -> User:
+def get_current_user(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    token: Annotated[str, Depends(oauth2_scheme)],
+) -> User:
+    # Bearer header takes priority in the scheme's own __call__ above; whatever's left
+    # here that isn't from an Authorization header must have come from the cookie.
+    from_cookie = not request.headers.get("Authorization")
     try:
         payload = decode_access_token(token)
         subject = payload.get("sub")
@@ -33,6 +71,17 @@ def get_current_user(db: Annotated[Session, Depends(get_db)], token: Annotated[s
         token_id = payload.get("jti")
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials") from exc
+
+    # Bearer-header auth isn't automatically attached by browsers, so it carries no
+    # CSRF risk. Cookie auth is ambient, so mutating requests must also present a
+    # matching CSRF token (double-submit, bound to this specific session via the
+    # signed "csrf" claim) proving the caller can read non-httpOnly response data,
+    # i.e. isn't a blind cross-site form/fetch.
+    if from_cookie and request.method in CSRF_PROTECTED_METHODS:
+        csrf_header = request.headers.get(CSRF_HEADER_NAME)
+        csrf_claim = payload.get("csrf")
+        if not csrf_header or not csrf_claim or not secrets.compare_digest(csrf_header, csrf_claim):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing or invalid CSRF token")
 
     if isinstance(token_id, str) and token_id:
         if not SessionService(db).validate_and_touch_session(token_id):

@@ -1,10 +1,13 @@
-"""Confirmation coverage for the remaining two G1 items, both already fixed by prior merged
-work (pulled into this branch via a fast-forward merge of `main`) before this task began:
+"""Confirmation coverage for the remaining two G1 items:
 
   - Item 2: deactivating a custom role now revokes live permissions immediately for members
     still assigned to it (RBACService.get_user_permissions joins Role.is_active).
-  - Item 4: a spoofed-header cross-tenant vendor lookup now returns 403, consistent with the
-    established tenant-isolation pattern (VendorService.require_vendor_in_org).
+  - Item 4: a spoofed-header cross-tenant vendor lookup returns a plain 404, matching the
+    tenant-isolation pattern used by every other entity type in this codebase
+    (VendorService.require_vendor_in_org). An earlier version of this fix used 403 instead,
+    reasoning it was "the established pattern" -- a broader cross-entity adversarial review
+    found the opposite was true (404 is what every other entity does; vendor was the outlier),
+    and that a distinct 403 leaks cross-tenant resource existence via the status code itself.
 
 These tests exist to give the G1 task real, current-branch evidence for both items rather than
 relying on inspection alone.
@@ -67,7 +70,7 @@ def test_deactivating_custom_role_immediately_revokes_permissions_for_assigned_m
     assert risks_after.status_code == 200
 
 
-def test_cross_tenant_vendor_access_returns_403_not_404(client):
+def test_cross_tenant_vendor_access_returns_404(client):
     token_a = _register(client, "g1-vendor-a@example.com", org_name="G1 Vendor Org A")
     token_b = _register(client, "g1-vendor-b@example.com", org_name="G1 Vendor Org B")
     org_a = _org_id(client, token_a)
@@ -83,4 +86,4 @@ def test_cross_tenant_vendor_access_returns_403_not_404(client):
     vendor_id = vendor.json()["id"]
 
     cross = client.get(f"/api/v1/compliance/vendors/{vendor_id}", headers=_headers(token_b, org_b))
-    assert cross.status_code == 403, cross.text
+    assert cross.status_code == 404, cross.text

@@ -79,6 +79,10 @@ def test_set_org_limit_and_my_limits(client, db_session):
     assert my_limits.status_code == 200
     assert my_limits.json()["limits"]
 
+    # `client` carries a session cookie set by the register() calls above (auth now
+    # also works via an httpOnly cookie, not just the Authorization header) -- clear it
+    # to actually test the fully-unauthenticated case, not a stale-cookie one.
+    client.cookies.clear()
     my_limits_no_jwt = client.get("/api/v1/rate-limits/my-limits")
     assert my_limits_no_jwt.status_code == 401
 

@@ -249,6 +249,9 @@ def test_fides_import_idempotent_and_status(client, db_session):
     assert analytics_db.classification_type == "operational_data"
     assert user_db.classification_confirmed is False
 
+    # `client` carries a session cookie set by an earlier register() call -- clear it to
+    # actually test the fully-unauthenticated case.
+    client.cookies.clear()
     no_jwt = client.post("/api/v1/privacy/import/fides", json=_fides_manifest())
     assert no_jwt.status_code == 401
 

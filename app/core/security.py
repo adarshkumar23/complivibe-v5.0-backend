@@ -1,3 +1,4 @@
+import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -9,6 +10,10 @@ from app.core.config import get_settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 ALGORITHM = "HS256"
+
+
+def create_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

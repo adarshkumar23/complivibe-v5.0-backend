@@ -59,6 +59,9 @@ def test_report_sharing_end_to_end(client, db_session):
 def test_report_sharing_expiry_views_password_verify_revoke_and_audit(client, db_session):
     org = bootstrap_org_user(client, email_prefix="share-sec")
 
+    # `client` carries a session cookie set by an earlier register() call -- clear it to
+    # actually test the fully-unauthenticated case.
+    client.cookies.clear()
     no_jwt = client.post("/api/v1/reports/share", json={"report_type": "risk_register"})
     assert no_jwt.status_code == 401
 

@@ -98,6 +98,14 @@ class SessionService:
         row.last_active_at = now
         self.db.flush()
 
+    def revoke_session_by_token_id(self, token_id: str) -> None:
+        row = self._get_by_token_id(token_id)
+        if row is None or row.status != "active":
+            return
+        row.status = "revoked"
+        row.revoked_at = self.utcnow()
+        self.db.flush()
+
     def revoke_session(self, *, org_id: uuid.UUID, session_id: uuid.UUID, revoked_by: uuid.UUID) -> UserSession:
         row = self.db.execute(
             select(UserSession).where(
