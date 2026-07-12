@@ -33,6 +33,7 @@ from app.core.telemetry import instrument_app
 from app.core.validation import InvalidChoiceError
 from app.db.session import get_session_maker
 from app.platform.routers.billing import webhook_router as billing_webhook_router
+from app.services.secrets_service import SecretsBackendError
 
 # Many schema fields restrict values to a fixed set via Field(pattern="^(a|b|c)$") rather
 # than a real enum/Literal type. Pydantic's default error for these only reports the raw
@@ -217,6 +218,19 @@ def create_application() -> FastAPI:
                 "field": exc.field,
                 "value": exc.value,
                 "valid_options": exc.allowed,
+            },
+        )
+
+    @app.exception_handler(SecretsBackendError)
+    async def secrets_backend_error_handler(request: Request, exc: SecretsBackendError) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": (
+                    "Secrets backend unavailable: the vault/OpenBao service is not configured "
+                    "or unreachable, so this operation cannot store or read encrypted credentials. "
+                    f"({exc})"
+                ),
             },
         )
 

@@ -52,7 +52,7 @@ def test_phase85_noop_runner_client_field_docs_route_ordering_static_before_dyna
 def test_phase85_noop_runner_client_field_docs_and_safety(client, db_session):
     org = bootstrap_org_user(client, email_prefix="p85-fielddocs")
     headers = org["org_headers"]
-    _seed_phase81_events(client, headers)
+    _seed_phase81_events(client, headers, db_session=db_session, organization_id=org["organization_id"])
 
     org_id = uuid.UUID(org["organization_id"])
     before_rows = int(

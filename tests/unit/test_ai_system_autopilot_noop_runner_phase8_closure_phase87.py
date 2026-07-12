@@ -58,7 +58,7 @@ def test_phase87_route_ordering_and_docs_freeze_markers():
 def test_phase87_closure_flags_versions_and_read_only_safety(client, db_session):
     org = bootstrap_org_user(client, email_prefix="p87-closure")
     headers = org["org_headers"]
-    _seed_phase81_events(client, headers)
+    _seed_phase81_events(client, headers, db_session=db_session, organization_id=org["organization_id"])
     org_id = uuid.UUID(org["organization_id"])
 
     reports_dir = Path("reports")

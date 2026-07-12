@@ -21,8 +21,17 @@ from tests.unit.test_ai_system_autopilot_policies_phase70 import _seed
 RUNNER_SESSIONS = "/api/v1/ai-governance/autopilot/runner-sessions"
 
 
-def _create_admitted_admission(client, headers: dict[str, str], *, assessment_id: str, ai_system_id: str) -> dict:
-    sim = _create_ready_simulation(client, headers, assessment_id=assessment_id, ai_system_id=ai_system_id)
+def _create_admitted_admission(
+    client, headers: dict[str, str], *, assessment_id: str, ai_system_id: str, db_session, organization_id: str
+) -> dict:
+    sim = _create_ready_simulation(
+        client,
+        headers,
+        assessment_id=assessment_id,
+        ai_system_id=ai_system_id,
+        db_session=db_session,
+        organization_id=organization_id,
+    )
     created = client.post(f"{RUNNER_SIMS}/{sim['simulation_id']}/admissions", headers=headers, json={})
     assert created.status_code == 201
     body = created.json()
@@ -35,7 +44,14 @@ def test_phase76_runner_session_preview_no_write_no_audit_and_token_validation(c
     org = bootstrap_org_user(client, email_prefix="p76-preview")
     headers = org["org_headers"]
     ai, assessment, _ = _seed(client, headers, name="P76-Preview")
-    admission = _create_admitted_admission(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    admission = _create_admitted_admission(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=org["organization_id"],
+    )
 
     before_rows = int(db_session.execute(select(func.count(GovernanceAutopilotRunnerSession.id))).scalar_one())
     before_audit = int(db_session.execute(select(func.count(AuditLog.id))).scalar_one())
@@ -72,7 +88,14 @@ def test_phase76_runner_session_create_detail_and_create_guards(client, db_sessi
     org = bootstrap_org_user(client, email_prefix="p76-create")
     headers = org["org_headers"]
     ai, assessment, _ = _seed(client, headers, name="P76-Create")
-    admission = _create_admitted_admission(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    admission = _create_admitted_admission(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=org["organization_id"],
+    )
 
     created = client.post(
         f"{RUNNER_ADMISSIONS}/{admission['admission_id']}/sessions",
@@ -124,7 +147,14 @@ def test_phase76_runner_session_verify_attempt_lock_expiry_revoke_archive(client
     org2 = bootstrap_org_user(client, email_prefix="p76-verify-2")
     headers = org1["org_headers"]
     ai, assessment, _ = _seed(client, headers, name="P76-Verify")
-    admission = _create_admitted_admission(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    admission = _create_admitted_admission(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=org1["organization_id"],
+    )
 
     created = client.post(
         f"{RUNNER_ADMISSIONS}/{admission['admission_id']}/sessions",
@@ -234,7 +264,14 @@ def test_phase76_runner_sessions_expire_summary_contract_and_audit_boundaries(cl
     org = bootstrap_org_user(client, email_prefix="p76-summary")
     headers = org["org_headers"]
     ai, assessment, _ = _seed(client, headers, name="P76-Summary")
-    admission = _create_admitted_admission(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    admission = _create_admitted_admission(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=org["organization_id"],
+    )
 
     before_signals = {
         row.id: row.status

@@ -23,8 +23,17 @@ RUNNER_HANDSHAKE_CONTRACT = "/api/v1/ai-governance/autopilot/runner-handshake/co
 RUNNER_HANDSHAKES = "/api/v1/ai-governance/autopilot/runner-handshakes"
 
 
-def _create_session(client, headers: dict[str, str], *, assessment_id: str, ai_system_id: str) -> dict:
-    admission = _create_admitted_admission(client, headers, assessment_id=assessment_id, ai_system_id=ai_system_id)
+def _create_session(
+    client, headers: dict[str, str], *, assessment_id: str, ai_system_id: str, db_session, organization_id: str
+) -> dict:
+    admission = _create_admitted_admission(
+        client,
+        headers,
+        assessment_id=assessment_id,
+        ai_system_id=ai_system_id,
+        db_session=db_session,
+        organization_id=organization_id,
+    )
     created = client.post(
         f"/api/v1/ai-governance/autopilot/runner-admissions/{admission['admission_id']}/sessions",
         headers=headers,
@@ -41,7 +50,14 @@ def test_phase77_handshake_contract_preview_read_only_no_audit_no_write(client, 
     org = bootstrap_org_user(client, email_prefix="p77-contract")
     headers = org["org_headers"]
     ai, assessment, _ = _seed(client, headers, name="P77-Contract")
-    seeded = _create_session(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    seeded = _create_session(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=org["organization_id"],
+    )
 
     contract = client.get(RUNNER_HANDSHAKE_CONTRACT, headers=headers)
     assert contract.status_code == 200
@@ -79,7 +95,14 @@ def test_phase77_handshake_create_verify_idempotency_and_tenant_scope(client, db
     org2 = bootstrap_org_user(client, email_prefix="p77-create-2")
     headers = org1["org_headers"]
     ai, assessment, _ = _seed(client, headers, name="P77-Create")
-    seeded = _create_session(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    seeded = _create_session(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=org1["organization_id"],
+    )
     session_id = seeded["session"]["session_id"]
     session_token = seeded["session"]["session_token"]
 
@@ -159,7 +182,14 @@ def test_phase77_handshake_create_blocked_guards_and_revoke_archive_summary(clie
     headers = org["org_headers"]
     ai, assessment, _ = _seed(client, headers, name="P77-Guards")
 
-    expired_seed = _create_session(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    expired_seed = _create_session(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=org["organization_id"],
+    )
     expired_session_id = expired_seed["session"]["session_id"]
     expired_row = db_session.get(GovernanceAutopilotRunnerSession, uuid.UUID(expired_session_id))
     expired_row.expires_at = datetime.now(UTC) - timedelta(minutes=1)
@@ -172,7 +202,14 @@ def test_phase77_handshake_create_blocked_guards_and_revoke_archive_summary(clie
     )
     assert expired_create.status_code == 400
 
-    revoked_session_seed = _create_session(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    revoked_session_seed = _create_session(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=org["organization_id"],
+    )
     revoked_session_id = revoked_session_seed["session"]["session_id"]
     revoked_session_resp = client.post(
         f"{RUNNER_SESSIONS}/{revoked_session_id}/revoke",
@@ -188,7 +225,14 @@ def test_phase77_handshake_create_blocked_guards_and_revoke_archive_summary(clie
     )
     assert revoked_session_create.status_code == 400
 
-    revoked_admission_seed = _create_session(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    revoked_admission_seed = _create_session(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=org["organization_id"],
+    )
     revoked_admission_id = revoked_admission_seed["admission"]["admission_id"]
     revoke_adm = client.post(
         f"/api/v1/ai-governance/autopilot/runner-admissions/{revoked_admission_id}/revoke",
@@ -204,7 +248,14 @@ def test_phase77_handshake_create_blocked_guards_and_revoke_archive_summary(clie
     )
     assert revoked_admission_create.status_code == 400
 
-    ok_seed = _create_session(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    ok_seed = _create_session(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=org["organization_id"],
+    )
     created = client.post(
         f"{RUNNER_SESSIONS}/{ok_seed['session']['session_id']}/handshakes",
         headers=headers,
@@ -249,7 +300,14 @@ def test_phase77_handshake_audit_boundaries_contract_group_and_no_mutation(clien
     org = bootstrap_org_user(client, email_prefix="p77-audit")
     headers = org["org_headers"]
     ai, assessment, _ = _seed(client, headers, name="P77-Audit")
-    seeded = _create_session(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    seeded = _create_session(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=org["organization_id"],
+    )
 
     before_signals = {
         row.id: row.status

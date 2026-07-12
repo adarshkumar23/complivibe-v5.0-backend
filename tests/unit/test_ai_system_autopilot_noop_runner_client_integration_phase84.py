@@ -39,7 +39,7 @@ def test_phase84_noop_runner_client_integration_route_ordering_static_before_dyn
 def test_phase84_noop_runner_client_integration_contracts_and_safety(client, db_session):
     org = bootstrap_org_user(client, email_prefix="p84-client")
     headers = org["org_headers"]
-    _seed_phase81_events(client, headers)
+    _seed_phase81_events(client, headers, db_session=db_session, organization_id=org["organization_id"])
 
     before_rows = int(
         db_session.execute(
