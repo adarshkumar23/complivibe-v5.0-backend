@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from itertools import count
 from typing import Any, TypedDict
 
@@ -80,6 +81,53 @@ def bootstrap_admin_org(
         password=password,
         organization_name=organization_name,
     )
+
+
+def add_org_member(
+    db_session,
+    client,
+    organization_id: str,
+    email: str,
+    role_name: str = "admin",
+    password: str = "Pass1234!@",
+) -> dict[str, str]:
+    """Create a second active user in an existing org and return their org-scoped headers.
+
+    Used to obtain a distinct approver in tests, since approval endpoints correctly
+    reject a requester approving their own request.
+    """
+    from app.core.security import get_password_hash
+    from app.models.membership import Membership
+    from app.models.role import Role
+    from app.models.user import User
+
+    user = User(
+        email=email,
+        full_name=email.split("@")[0],
+        hashed_password=get_password_hash(password),
+        status="active",
+        is_active=True,
+        is_superuser=False,
+    )
+    db_session.add(user)
+    db_session.flush()
+
+    role = (
+        db_session.query(Role)
+        .filter(Role.organization_id == uuid.UUID(organization_id), Role.name == role_name)
+        .one()
+    )
+    membership = Membership(
+        organization_id=uuid.UUID(organization_id),
+        user_id=user.id,
+        role_id=role.id,
+        status="active",
+    )
+    db_session.add(membership)
+    db_session.commit()
+
+    token = login_user(client, email, password=password)
+    return org_headers(token, organization_id)
 
 
 def bootstrap_governance_manifest(client, organization_headers: dict[str, str]) -> dict[str, Any]:

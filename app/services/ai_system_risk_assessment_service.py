@@ -11558,7 +11558,6 @@ class AISystemRiskAssessmentService:
             vote_reason=decision_reason,
             vote_note=approval_note,
             actor_user_id=actor_user_id,
-            enforce_requester_self_block=False,
         )
         if approval_note is not None:
             row.approval_note = approval_note
@@ -11658,7 +11657,6 @@ class AISystemRiskAssessmentService:
         vote_reason: str | None,
         vote_note: str | None,
         actor_user_id: uuid.UUID | None,
-        enforce_requester_self_block: bool = True,
     ) -> GovernanceAutopilotExecutionApproval:
         row = self.require_execution_approval(organization_id=organization_id, approval_id=approval_id)
         self._require_requested_approval(row=row)
@@ -11674,8 +11672,7 @@ class AISystemRiskAssessmentService:
         )
         voter_user_id = self._resolve_voter_user_id(approval_row=row, actor_user_id=actor_user_id)
         if (
-            enforce_requester_self_block
-            and bool(approval_policy.get("block_requester_self_approval", True))
+            bool(approval_policy.get("block_requester_self_approval", True))
             and voter_user_id is not None
         ):
             if row.requested_by_user_id == voter_user_id:

@@ -360,9 +360,16 @@ def test_phase73_rejection_threshold_and_compatibility_old_endpoints(client, db_
     )
     approval2 = _request_approval(client, headers, intent2["intent_id"])
 
-    old_approve = client.post(
+    self_approve = client.post(
         f"{APPROVALS_BASE}/{approval2['approval_id']}/approve",
         headers=headers,
+        json={"decision_reason": "requester self-approval attempt"},
+    )
+    assert self_approve.status_code == 400
+
+    old_approve = client.post(
+        f"{APPROVALS_BASE}/{approval2['approval_id']}/approve",
+        headers=headers2,
         json={"decision_reason": "legacy approve endpoint"},
     )
     assert old_approve.status_code == 200

@@ -7,7 +7,7 @@ from app.models.audit_log import AuditLog
 from app.models.governance_autopilot_runner_simulation import GovernanceAutopilotRunnerSimulation
 from app.models.governance_signal import GovernanceSignal
 from app.models.task import Task
-from tests.helpers.auth_org import bootstrap_org_user
+from tests.helpers.auth_org import add_org_member, bootstrap_org_user
 from tests.unit.test_ai_system_autopilot_execution_approvals_phase72 import _candidate
 from tests.unit.test_ai_system_autopilot_policies_phase70 import POLICY_BASE, _seed
 
@@ -128,9 +128,10 @@ def test_phase74_create_runner_simulation_idempotency_and_archive(client, db_ses
     request_approval = client.post(f"{INTENTS_BASE}/{intent['intent_id']}/approval-requests", headers=headers, json={})
     assert request_approval.status_code == 201
     approval_id = request_approval.json()["approval_id"]
+    approver_headers = add_org_member(db_session, client, org["organization_id"], "p74-approver@example.com")
     approve = client.post(
         f"{APPROVALS_BASE}/{approval_id}/approve",
-        headers=headers,
+        headers=approver_headers,
         json={"decision_reason": "approve for ready state"},
     )
     assert approve.status_code == 200

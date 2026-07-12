@@ -9,7 +9,7 @@ from app.models.governance_autopilot_execution_approval import GovernanceAutopil
 from app.models.governance_autopilot_execution_intent import GovernanceAutopilotExecutionIntent
 from app.models.governance_signal import GovernanceSignal
 from app.models.task import Task
-from tests.helpers.auth_org import bootstrap_org_user
+from tests.helpers.auth_org import add_org_member, bootstrap_org_user
 from tests.unit.test_ai_system_autopilot_policies_phase70 import (
     POLICY_BASE,
     _create_recommendation_snapshot,
@@ -108,9 +108,10 @@ def test_phase72_approval_requirements_request_and_readiness_flow(client, db_ses
     assert readiness_before.status_code == 200
     assert readiness_before.json()["ready_for_runner"] is False
 
+    approver_headers = add_org_member(db_session, client, org["organization_id"], "p72-approver@example.com")
     approve = client.post(
         f"{APPROVALS_BASE}/{approval['approval_id']}/approve",
-        headers=headers,
+        headers=approver_headers,
         json={"decision_reason": "manual authorize"},
     )
     assert approve.status_code == 200

@@ -27,9 +27,16 @@ NOOP_BOUNDED_EXPORT = "/api/v1/ai-governance/autopilot/noop-runner/reports/bound
 NOOP_CHECKSUM = "/api/v1/ai-governance/autopilot/noop-runner/reports/checksum"
 
 
-def _seed_phase81_events(client, headers: dict[str, str]) -> dict:
+def _seed_phase81_events(client, headers: dict[str, str], *, db_session, organization_id: str) -> dict:
     ai, assessment, _ = _seed(client, headers, name="P81-Seed")
-    ready = _create_handshake(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    ready = _create_handshake(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=organization_id,
+    )
     ready_handshake_id = ready["handshake"]["handshake_id"]
 
     logged = client.post(
@@ -61,7 +68,14 @@ def _seed_phase81_events(client, headers: dict[str, str]) -> dict:
     assert second_dup.status_code == 201
     assert second_dup.json()["event_id"] != dup_event_id
 
-    blocked_seed = _create_handshake(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    blocked_seed = _create_handshake(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=organization_id,
+    )
     blocked_handshake_id = blocked_seed["handshake"]["handshake_id"]
     revoked = client.post(
         f"{RUNNER_HANDSHAKES}/{blocked_handshake_id}/revoke",
@@ -122,11 +136,20 @@ def test_phase81_noop_runner_observability_reports_and_boundaries(client, db_ses
     org1 = bootstrap_org_user(client, email_prefix="p81-observe-1")
     org2 = bootstrap_org_user(client, email_prefix="p81-observe-2")
     headers = org1["org_headers"]
-    seeded = _seed_phase81_events(client, headers)
+    seeded = _seed_phase81_events(
+        client, headers, db_session=db_session, organization_id=org1["organization_id"]
+    )
 
     # Another tenant event to ensure tenant scoping.
     ai2, assessment2, _ = _seed(client, org2["org_headers"], name="P81-Tenant2")
-    hs2 = _create_handshake(client, org2["org_headers"], assessment_id=assessment2["id"], ai_system_id=ai2["id"])
+    hs2 = _create_handshake(
+        client,
+        org2["org_headers"],
+        assessment_id=assessment2["id"],
+        ai_system_id=ai2["id"],
+        db_session=db_session,
+        organization_id=org2["organization_id"],
+    )
     tenant2_created = client.post(
         f"{RUNNER_HANDSHAKES}/{hs2['handshake']['handshake_id']}/noop-runner/events",
         headers=org2["org_headers"],

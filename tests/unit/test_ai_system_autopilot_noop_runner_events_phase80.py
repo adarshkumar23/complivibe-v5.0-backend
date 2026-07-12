@@ -46,8 +46,17 @@ def _phase8_router_paths_in_order() -> list[str]:
     return paths
 
 
-def _create_handshake(client, headers: dict[str, str], *, assessment_id: str, ai_system_id: str) -> dict:
-    seeded = _create_session(client, headers, assessment_id=assessment_id, ai_system_id=ai_system_id)
+def _create_handshake(
+    client, headers: dict[str, str], *, assessment_id: str, ai_system_id: str, db_session, organization_id: str
+) -> dict:
+    seeded = _create_session(
+        client,
+        headers,
+        assessment_id=assessment_id,
+        ai_system_id=ai_system_id,
+        db_session=db_session,
+        organization_id=organization_id,
+    )
     created = client.post(
         f"/api/v1/ai-governance/autopilot/runner-sessions/{seeded['session']['session_id']}/handshakes",
         headers=headers,
@@ -74,7 +83,14 @@ def test_phase80_noop_runner_contract_and_preview_are_read_only(client, db_sessi
     org = bootstrap_org_user(client, email_prefix="p80-contract")
     headers = org["org_headers"]
     ai, assessment, _ = _seed(client, headers, name="P80-Contract")
-    seeded = _create_handshake(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    seeded = _create_handshake(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=org["organization_id"],
+    )
 
     phase8 = client.get(PHASE8_CONTRACT, headers=headers)
     assert phase8.status_code == 200
@@ -125,7 +141,14 @@ def test_phase80_noop_runner_event_create_idempotency_verify_and_tenant_scope(cl
     org2 = bootstrap_org_user(client, email_prefix="p80-create-2")
     headers = org1["org_headers"]
     ai, assessment, _ = _seed(client, headers, name="P80-Create")
-    seeded = _create_handshake(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    seeded = _create_handshake(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=org1["organization_id"],
+    )
     handshake_id = seeded["handshake"]["handshake_id"]
 
     created = client.post(
@@ -204,7 +227,14 @@ def test_phase80_noop_runner_event_blocked_archive_summary_and_audit_boundaries(
     org = bootstrap_org_user(client, email_prefix="p80-boundary")
     headers = org["org_headers"]
     ai, assessment, _ = _seed(client, headers, name="P80-Boundary")
-    seeded = _create_handshake(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    seeded = _create_handshake(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=org["organization_id"],
+    )
     handshake_id = seeded["handshake"]["handshake_id"]
 
     before_signals = {

@@ -8,7 +8,7 @@ from app.models.audit_log import AuditLog
 from app.models.governance_autopilot_runner_admission import GovernanceAutopilotRunnerAdmission
 from app.models.governance_signal import GovernanceSignal
 from app.models.task import Task
-from tests.helpers.auth_org import bootstrap_org_user
+from tests.helpers.auth_org import add_org_member, bootstrap_org_user
 from tests.unit.test_ai_system_autopilot_execution_approvals_phase72 import _candidate
 from tests.unit.test_ai_system_autopilot_runner_simulations_phase74 import _create_require_approval_policy
 from tests.unit.test_ai_system_autopilot_policies_phase70 import _seed
@@ -25,7 +25,9 @@ def _create_intent(client, headers: dict[str, str], payload: dict) -> dict:
     return resp.json()
 
 
-def _create_ready_simulation(client, headers: dict[str, str], *, assessment_id: str, ai_system_id: str) -> dict:
+def _create_ready_simulation(
+    client, headers: dict[str, str], *, assessment_id: str, ai_system_id: str, db_session, organization_id: str
+) -> dict:
     policy_id = _create_require_approval_policy(client, headers)
     intent = _create_intent(
         client,
@@ -44,9 +46,12 @@ def _create_ready_simulation(client, headers: dict[str, str], *, assessment_id: 
     approval = client.post(f"{INTENTS_BASE}/{intent['intent_id']}/approval-requests", headers=headers, json={})
     assert approval.status_code == 201
     approval_id = approval.json()["approval_id"]
+    approver_headers = add_org_member(
+        db_session, client, organization_id, f"p75-approver-{approval_id}@example.com"
+    )
     approve = client.post(
         f"{APPROVALS_BASE}/{approval_id}/approve",
-        headers=headers,
+        headers=approver_headers,
         json={"decision_reason": "ready for runner dry-run"},
     )
     assert approve.status_code == 200
@@ -87,6 +92,8 @@ def test_phase75_runner_admission_preview_read_only_and_tenant_scoped(client, db
         org1["org_headers"],
         assessment_id=assessment["id"],
         ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=org1["organization_id"],
     )
 
     before_rows = int(db_session.execute(select(func.count(GovernanceAutopilotRunnerAdmission.id))).scalar_one())
@@ -121,7 +128,14 @@ def test_phase75_runner_admission_create_token_idempotency_and_verify(client, db
     org = bootstrap_org_user(client, email_prefix="p75-create")
     headers = org["org_headers"]
     ai, assessment, _ = _seed(client, headers, name="P75-Create")
-    sim = _create_ready_simulation(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    sim = _create_ready_simulation(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=org["organization_id"],
+    )
 
     created = client.post(f"{RUNNER_SIMS}/{sim['simulation_id']}/admissions", headers=headers, json={})
     assert created.status_code == 201
@@ -243,7 +257,14 @@ def test_phase75_runner_admissions_no_execution_or_source_mutation_and_audit_bou
     org = bootstrap_org_user(client, email_prefix="p75-safety")
     headers = org["org_headers"]
     ai, assessment, _ = _seed(client, headers, name="P75-Safety")
-    sim = _create_ready_simulation(client, headers, assessment_id=assessment["id"], ai_system_id=ai["id"])
+    sim = _create_ready_simulation(
+        client,
+        headers,
+        assessment_id=assessment["id"],
+        ai_system_id=ai["id"],
+        db_session=db_session,
+        organization_id=org["organization_id"],
+    )
 
     before_signals = {
         row.id: row.status

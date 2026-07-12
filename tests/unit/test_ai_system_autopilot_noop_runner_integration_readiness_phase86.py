@@ -94,7 +94,7 @@ def test_phase86_noop_runner_endpoint_inventory_and_route_ordering():
 def test_phase86_noop_runner_integration_readiness_lint_and_boundaries(client, db_session):
     org = bootstrap_org_user(client, email_prefix="p86-readiness")
     headers = org["org_headers"]
-    seeded = _seed_phase81_events(client, headers)
+    seeded = _seed_phase81_events(client, headers, db_session=db_session, organization_id=org["organization_id"])
 
     org_id = uuid.UUID(org["organization_id"])
 
