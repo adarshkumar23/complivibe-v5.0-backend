@@ -1,7 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.compliance.schemas.pbc_audit_findings import (
     PBCBulkCreateRequest,
@@ -10,67 +9,47 @@ from app.compliance.schemas.pbc_audit_findings import (
     PBCRequestResponse,
     PBCSubmitRequest,
 )
-from app.compliance.services.pbc_request_service import PBCRequestService
-from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
-from app.models.membership import Membership
-from app.models.organization import Organization
-from app.models.user import User
 
 router = APIRouter(prefix="/compliance", tags=["pbc_requests_v2"])
 
+# --------------------------------------------------------------------------
+# Deprecation notice
+# --------------------------------------------------------------------------
+#
+# This surface was built on the ``pbc_requests`` table, a second, parallel PBC
+# (Provided-By-Client) model alongside ``pbc_items``  -- the same "two
+# disconnected data stores silently disagreeing" bug pattern already fixed
+# once for policy-issue-links (see app/api/v1/policy_issue_links.py) and for
+# the common-controls/obligations mapping split. Only ``pbc_items`` has a real
+# dashboard summary endpoint, soft-delete, and an acceptance-override-reason
+# field, and the frontend's Audit Pack dashboard already reads exclusively
+# from it -- so any PBC request created through this ``pbc_requests`` surface
+# was real data that never showed up anywhere a user could see it.
+#
+# Migration 0301_pbc_requests_backfill_into_pbc_items backfilled every
+# existing ``pbc_requests`` row into ``pbc_items`` (preserving original
+# timestamps and status) the one time this ran. Rather than leave this
+# surface live to silently diverge again, every endpoint below now returns a
+# clear 410 Gone pointing callers at the ``/compliance/pbc-items`` (tag
+# ``pbc-items``, app/api/v1/pbc_items.py) equivalent to use instead.
 
-def _read(row, context: dict | None = None) -> PBCRequestResponse:
-    ctx = context or {}
-    return PBCRequestResponse(
-        id=row.id,
-        organization_id=row.organization_id,
-        audit_id=row.audit_id,
-        item_description=row.item_description,
-        assigned_to=row.assigned_to,
-        status=row.status,
-        due_date=row.due_date,
-        evidence_id=row.evidence_id,
-        submitted_at=row.submitted_at,
-        accepted_at=row.accepted_at,
-        rejected_at=row.rejected_at,
-        rejection_reason=row.rejection_reason,
-        days_overdue=ctx.get("days_overdue", 0),
-        fieldwork_deadline=ctx.get("fieldwork_deadline"),
-        overdue_relative_to_fieldwork_deadline=bool(ctx.get("overdue_relative_to_fieldwork_deadline", False)),
-        days_past_fieldwork_deadline=ctx.get("days_past_fieldwork_deadline", 0),
-        created_by=row.created_by,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
+_DEPRECATION_DETAIL = (
+    "This pbc_requests_v2 endpoint is deprecated and no longer usable: it wrote to a second, "
+    "parallel PBC model that the dashboard and reporting surfaces never read from. All existing "
+    "pbc_requests data was backfilled into pbc_items (migration 0301). Use {replacement} instead."
+)
+
+
+def _deprecated(replacement: str) -> None:
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=_DEPRECATION_DETAIL.format(replacement=replacement),
     )
-
-
-def _read_one(row, service: PBCRequestService, org_id: uuid.UUID) -> PBCRequestResponse:
-    return _read(row, service.build_context(org_id, [row]).get(row.id))
-
-
-def _read_many(rows: list, service: PBCRequestService, org_id: uuid.UUID) -> list[PBCRequestResponse]:
-    context = service.build_context(org_id, rows) if rows else {}
-    return [_read(row, context.get(row.id)) for row in rows]
 
 
 @router.post("/audits/{audit_id}/pbc-requests/bulk", response_model=PBCBulkCreateResponse, status_code=status.HTTP_201_CREATED)
-def bulk_create_pbc_requests(
-    audit_id: uuid.UUID,
-    payload: PBCBulkCreateRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("audit:write")),
-) -> PBCBulkCreateResponse:
-    service = PBCRequestService(db)
-    rows = service.bulk_create(
-        organization.id,
-        audit_id,
-        items=[item.model_dump() for item in payload.items],
-        created_by=current_user.id,
-    )
-    db.commit()
-    return PBCBulkCreateResponse(items=_read_many(rows, service, organization.id), count=len(rows))
+def bulk_create_pbc_requests(audit_id: uuid.UUID, payload: PBCBulkCreateRequest) -> PBCBulkCreateResponse:
+    _deprecated("POST /compliance/pbc-items (once per item; there is no bulk-create on pbc-items)")
 
 
 @router.get("/audits/{audit_id}/pbc-requests", response_model=list[PBCRequestResponse])
@@ -80,83 +59,25 @@ def list_pbc_requests_for_audit(
     assigned_to: uuid.UUID | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
-    db: Session = Depends(get_db),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("audit:read")),
 ) -> list[PBCRequestResponse]:
-    service = PBCRequestService(db)
-    rows = service.list_requests(
-        organization.id,
-        audit_id=audit_id,
-        status_value=status_value,
-        assigned_to=assigned_to,
-        page=page,
-        page_size=page_size,
-    )
-    return _read_many(rows, service, organization.id)
+    _deprecated("GET /compliance/pbc-items/engagement/{engagement_id}")
 
 
 @router.get("/pbc-requests/{request_id}", response_model=PBCRequestResponse)
-def get_pbc_request(
-    request_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("audit:read")),
-) -> PBCRequestResponse:
-    service = PBCRequestService(db)
-    row = service.require_request(organization.id, request_id)
-    return _read_one(row, service, organization.id)
+def get_pbc_request(request_id: uuid.UUID) -> PBCRequestResponse:
+    _deprecated("GET /compliance/pbc-items/{item_id}")
 
 
 @router.post("/pbc-requests/{request_id}/submit", response_model=PBCRequestResponse)
-def submit_pbc_request(
-    request_id: uuid.UUID,
-    payload: PBCSubmitRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("audit:write")),
-) -> PBCRequestResponse:
-    service = PBCRequestService(db)
-    row = service.submit(
-        organization.id,
-        request_id,
-        submitted_by=current_user.id,
-        evidence_id=payload.evidence_id,
-    )
-    db.commit()
-    return _read_one(row, service, organization.id)
+def submit_pbc_request(request_id: uuid.UUID, payload: PBCSubmitRequest) -> PBCRequestResponse:
+    _deprecated("POST /compliance/pbc-items/{item_id}/submit")
 
 
 @router.post("/pbc-requests/{request_id}/accept", response_model=PBCRequestResponse)
-def accept_pbc_request(
-    request_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("audit:write")),
-) -> PBCRequestResponse:
-    service = PBCRequestService(db)
-    row = service.accept(organization.id, request_id, accepted_by=current_user.id)
-    db.commit()
-    return _read_one(row, service, organization.id)
+def accept_pbc_request(request_id: uuid.UUID) -> PBCRequestResponse:
+    _deprecated("POST /compliance/pbc-items/{item_id}/accept")
 
 
 @router.post("/pbc-requests/{request_id}/reject", response_model=PBCRequestResponse)
-def reject_pbc_request(
-    request_id: uuid.UUID,
-    payload: PBCRejectRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
-    organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("audit:write")),
-) -> PBCRequestResponse:
-    service = PBCRequestService(db)
-    row = service.reject(
-        organization.id,
-        request_id,
-        rejected_by=current_user.id,
-        rejection_reason=payload.rejection_reason,
-    )
-    db.commit()
-    return _read_one(row, service, organization.id)
+def reject_pbc_request(request_id: uuid.UUID, payload: PBCRejectRequest) -> PBCRequestResponse:
+    _deprecated("POST /compliance/pbc-items/{item_id}/reject")

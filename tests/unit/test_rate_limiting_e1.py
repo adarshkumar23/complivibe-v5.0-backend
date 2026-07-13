@@ -31,7 +31,7 @@ def test_rate_limit_config_defaults_and_table_exists(client, db_session):
     assert len(rows) == 7
 
     by_group = {row.endpoint_group: row for row in rows}
-    assert by_group["api_general"].requests_per_minute == 60
+    assert by_group["api_general"].requests_per_minute == 300
     assert by_group["auth"].requests_per_minute == 10
     assert by_group["ingest"].requests_per_minute == 30
     assert by_group["public"].requests_per_minute == 120

@@ -16,7 +16,15 @@ from app.models.rate_limit_config import RateLimitConfig
 
 
 ENDPOINT_GROUP_DEFAULTS: dict[str, str] = {
-    "api_general": "60/minute",
+    # A single dashboard page load fires 4-8 parallel queries against this group,
+    # and normal navigation through several pages within a minute is completely
+    # legitimate usage -- 60/minute measurably tripped on real multi-page
+    # navigation in live verification passes, degrading every widget on the next
+    # page to an "Unable to load" error for a real, non-abusive user. 300/minute
+    # comfortably covers real usage (~40+ page loads/minute) while a genuine
+    # abuse pattern (rapid identical requests, hundreds within seconds) still
+    # exceeds it well within the same window.
+    "api_general": "300/minute",
     "ingest": "30/minute",
     "auth": "10/minute",
     "reports": "20/minute",

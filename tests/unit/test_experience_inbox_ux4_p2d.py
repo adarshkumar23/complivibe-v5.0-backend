@@ -10,7 +10,7 @@ from app.models.compliance_policy_version import CompliancePolicyVersion
 from app.models.control import Control
 from app.models.control_exception import ControlException
 from app.models.control_exception_approval import ControlExceptionApproval
-from app.models.pbc_request import PBCRequest
+from app.models.pbc_item import PbcItem
 from app.models.policy_attestation_campaign import PolicyAttestationCampaign
 from app.models.policy_attestation_record import PolicyAttestationRecord
 from app.models.task import Task
@@ -103,16 +103,16 @@ def _seed_inbox_records(db_session, org_id: uuid.UUID, user_id: uuid.UUID, prefi
     db_session.add(engagement)
     db_session.flush()
 
-    pbc_request = PBCRequest(
+    pbc_item = PbcItem(
         organization_id=org_id,
-        audit_id=engagement.id,
-        item_description=f"{prefix} Upload evidence package",
-        assigned_to=user_id,
-        status="open",
+        audit_engagement_id=engagement.id,
+        title=f"{prefix} Upload evidence package",
+        requester_id=user_id,
+        assignee_id=user_id,
+        status="pending",
         due_date=date.today() + timedelta(days=2),
-        created_by=user_id,
     )
-    db_session.add(pbc_request)
+    db_session.add(pbc_item)
 
     control = Control(
         organization_id=org_id,

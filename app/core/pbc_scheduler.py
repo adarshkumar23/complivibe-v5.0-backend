@@ -16,7 +16,6 @@ from app.compliance.services.breach_notification_service import run_daily_breach
 from app.compliance.services.vendor_mitigation_service import run_daily_vendor_mitigation_overdue_action_sweep
 from app.services.vendor_assessment_service import run_daily_vendor_assessment_staleness_sweep
 from app.compliance.services.pbc_service import run_daily_pbc_overdue_sweep
-from app.compliance.services.pbc_request_service import run_daily_pbc_request_overdue_sweep
 from app.compliance.services.control_exception_service import run_daily_control_exception_expiry_sweep
 from app.compliance.services.subprocessor_service import run_daily_subprocessor_dpa_expiry_sweep
 from app.compliance.services.sla_service import run_hourly_issue_sla_breach_check
@@ -46,7 +45,6 @@ logger = logging.getLogger(__name__)
 
 SCHEDULER_JOB_IDS: list[str] = [
     "pbc_overdue_daily_sweep",
-    "pbc_request_overdue_sweep",
     "audit_schedule_reminder_sweep",
     "audit_schedule_auto_create_sweep",
     "subprocessor_dpa_expiry_sweep",
@@ -113,27 +111,6 @@ def _run_sweep_job() -> None:
     SchedulerJobLogger.run_logged(
         job_name="pbc_overdue_daily_sweep",
         job_fn=_run_sweep_job_internal,
-        db_session_factory=get_session_maker(),
-    )
-
-
-def _run_pbc_request_sweep_job_internal(*, db) -> dict:
-    try:
-        marked = run_daily_pbc_request_overdue_sweep(db)
-        db.commit()
-        logger.info("PBC request overdue sweep complete", extra={"items_marked": marked})
-        return {"items_marked": marked, "records_processed": marked}
-    except Exception as exc:
-        db.rollback()
-        _capture_scheduler_exception(exc)
-        logger.exception("PBC request overdue sweep failed")
-        raise
-
-
-def _run_pbc_request_sweep_job() -> None:
-    SchedulerJobLogger.run_logged(
-        job_name="pbc_request_overdue_sweep",
-        job_fn=_run_pbc_request_sweep_job_internal,
         db_session_factory=get_session_maker(),
     )
 
@@ -863,13 +840,6 @@ def register_pbc_scheduler(app: FastAPI) -> None:
         _run_commitment_trigger_sweep_job,
         trigger=CronTrigger(hour=0, minute=40),
         id="commitment_trigger_sweep",
-        replace_existing=True,
-        coalesce=True,
-    )
-    scheduler.add_job(
-        _run_pbc_request_sweep_job,
-        trigger=CronTrigger(hour=0, minute=45),
-        id="pbc_request_overdue_sweep",
         replace_existing=True,
         coalesce=True,
     )

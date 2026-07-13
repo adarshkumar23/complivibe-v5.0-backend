@@ -1,10 +1,8 @@
 import uuid
 from datetime import UTC, date, datetime, timedelta
 
-from app.compliance.services.pbc_request_service import PBCRequestService
 from app.models.audit_log import AuditLog
 from app.models.audit_finding import AuditFinding
-from app.models.pbc_request import PBCRequest
 from app.models.risk import Risk
 from tests.helpers.auth_org import bootstrap_org_user
 
@@ -64,101 +62,41 @@ def _create_finding(client, headers: dict[str, str], audit_id: str, *, control_i
     return response.json()
 
 
-def test_s3_p4_pbc_request_lifecycle_and_overdue(client, db_session):
+def test_s3_p4_pbc_requests_v2_endpoints_are_deprecated(client):
+    """pbc_requests_v2 was a second, parallel PBC model that the dashboard never
+    read from -- deprecated in favor of pbc_items (migration 0301 backfilled
+    existing data). Every endpoint on this surface should now fail closed with
+    410 Gone rather than silently accepting writes nobody will ever see."""
     org = bootstrap_org_user(client, email_prefix="s3p4-pbc")
     audit = _create_audit(client, org["org_headers"])
-    evidence = _create_evidence(client, org["org_headers"])
+    fake_id = str(uuid.uuid4())
 
     bulk = client.post(
         f"/api/v1/compliance/audits/{audit['id']}/pbc-requests/bulk",
         headers=org["org_headers"],
-        json={
-            "items": [
-                {
-                    "item_description": "Provide policy index",
-                    "assigned_to": org["user_id"],
-                    "due_date": (date.today() + timedelta(days=5)).isoformat(),
-                },
-                {
-                    "item_description": "Provide risk register extract",
-                    "assigned_to": org["user_id"],
-                    "due_date": (date.today() + timedelta(days=5)).isoformat(),
-                },
-                {
-                    "item_description": "Overdue open item",
-                    "assigned_to": org["user_id"],
-                    "due_date": (date.today() - timedelta(days=2)).isoformat(),
-                },
-                {
-                    "item_description": "Future open item",
-                    "assigned_to": org["user_id"],
-                    "due_date": (date.today() + timedelta(days=30)).isoformat(),
-                },
-            ]
-        },
+        json={"items": [{"item_description": "Provide policy index", "assigned_to": org["user_id"]}]},
     )
-    assert bulk.status_code == 201
-    payload = bulk.json()
-    assert payload["count"] == 4
-    assert all(item["status"] == "open" for item in payload["items"])
+    assert bulk.status_code == 410
+    assert "pbc-items" in bulk.json()["detail"]
 
-    request_submit_accept = payload["items"][0]["id"]
-    request_submit_reject = payload["items"][1]["id"]
-    request_overdue = payload["items"][2]["id"]
-    request_future = payload["items"][3]["id"]
+    listed = client.get(f"/api/v1/compliance/audits/{audit['id']}/pbc-requests", headers=org["org_headers"])
+    assert listed.status_code == 410
 
-    submitted = client.post(
-        f"/api/v1/compliance/pbc-requests/{request_submit_accept}/submit",
+    get_one = client.get(f"/api/v1/compliance/pbc-requests/{fake_id}", headers=org["org_headers"])
+    assert get_one.status_code == 410
+
+    submit = client.post(f"/api/v1/compliance/pbc-requests/{fake_id}/submit", headers=org["org_headers"], json={})
+    assert submit.status_code == 410
+
+    accept = client.post(f"/api/v1/compliance/pbc-requests/{fake_id}/accept", headers=org["org_headers"], json={})
+    assert accept.status_code == 410
+
+    reject = client.post(
+        f"/api/v1/compliance/pbc-requests/{fake_id}/reject",
         headers=org["org_headers"],
-        json={"evidence_id": evidence["id"]},
+        json={"rejection_reason": "n/a"},
     )
-    assert submitted.status_code == 200
-    assert submitted.json()["status"] == "submitted"
-    assert submitted.json()["evidence_id"] == evidence["id"]
-
-    accepted = client.post(
-        f"/api/v1/compliance/pbc-requests/{request_submit_accept}/accept",
-        headers=org["org_headers"],
-        json={},
-    )
-    assert accepted.status_code == 200
-    assert accepted.json()["status"] == "accepted"
-
-    submitted2 = client.post(
-        f"/api/v1/compliance/pbc-requests/{request_submit_reject}/submit",
-        headers=org["org_headers"],
-        json={},
-    )
-    assert submitted2.status_code == 200
-    rejected = client.post(
-        f"/api/v1/compliance/pbc-requests/{request_submit_reject}/reject",
-        headers=org["org_headers"],
-        json={"rejection_reason": "Insufficient evidence detail"},
-    )
-    assert rejected.status_code == 200
-    assert rejected.json()["status"] == "rejected"
-    assert rejected.json()["rejection_reason"] == "Insufficient evidence detail"
-
-    overdue_count = PBCRequestService(db_session).mark_overdue(uuid.UUID(org["organization_id"]))
-    db_session.commit()
-    assert overdue_count == 1
-
-    overdue_row = db_session.query(PBCRequest).filter(PBCRequest.id == uuid.UUID(request_overdue)).one()
-    future_row = db_session.query(PBCRequest).filter(PBCRequest.id == uuid.UUID(request_future)).one()
-    assert overdue_row.status == "overdue"
-    assert future_row.status == "open"
-
-    actions = {
-        row.action
-        for row in db_session.query(AuditLog)
-        .filter(AuditLog.organization_id == uuid.UUID(org["organization_id"]))
-        .all()
-    }
-    assert "pbc.requests_bulk_created" in actions
-    assert "pbc.request_submitted" in actions
-    assert "pbc.request_accepted" in actions
-    assert "pbc.request_rejected" in actions
-    assert "pbc.request_overdue" in actions
+    assert reject.status_code == 410
 
 
 def test_s3_p4_audit_finding_lifecycle_risk_and_control_health(client, db_session):
@@ -274,12 +212,15 @@ def test_s3_p4_cross_org_guards(client):
     audit_a = _create_audit(client, org_a["org_headers"], title="Org A Audit")
     finding_a = _create_finding(client, org_a["org_headers"], audit_a["id"], title="Org A Finding")
 
+    # pbc-requests/bulk is deprecated (410 Gone) and no longer does any org lookup at
+    # all, so it fails closed before any cross-org check would even run -- see
+    # test_s3_p4_pbc_requests_v2_endpoints_are_deprecated for the real coverage.
     forbidden_bulk = client.post(
         f"/api/v1/compliance/audits/{audit_a['id']}/pbc-requests/bulk",
         headers=org_b["org_headers"],
         json={"items": [{"item_description": "Cross org", "assigned_to": org_b["user_id"]}]},
     )
-    assert forbidden_bulk.status_code == 404
+    assert forbidden_bulk.status_code == 410
 
     forbidden_finding = client.get(
         f"/api/v1/compliance/audit-findings/{finding_a['id']}",

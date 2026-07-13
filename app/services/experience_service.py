@@ -18,7 +18,7 @@ from app.models.control_test_run import ControlTestRun
 from app.models.evidence_item import EvidenceItem
 from app.models.issue import Issue
 from app.models.obligation import Obligation
-from app.models.pbc_request import PBCRequest
+from app.models.pbc_item import PbcItem
 from app.models.policy_attestation_campaign import PolicyAttestationCampaign
 from app.models.policy_attestation_record import PolicyAttestationRecord
 from app.models.risk import Risk
@@ -493,39 +493,37 @@ class CommandPaletteService:
             )
 
         pbc_rows = self.db.execute(
-            select(PBCRequest).where(
+            select(PbcItem).where(
                 and_(
-                    PBCRequest.organization_id == organization_id,
-                    PBCRequest.assigned_to == user_id,
-                    PBCRequest.status.in_(["open", "overdue"]),
+                    PbcItem.organization_id == organization_id,
+                    PbcItem.assignee_id == user_id,
+                    PbcItem.status.in_(["pending", "overdue"]),
+                    PbcItem.deleted_at.is_(None),
                 )
             )
         ).scalars().all()
         for row in pbc_rows:
-            due_at = None
+            due_at = datetime.combine(row.due_date, dt_time.min, tzinfo=UTC)
             score_bump = 0
-            reason = "No due date set"
-            if row.due_date is not None:
-                due_at = datetime.combine(row.due_date, dt_time.min, tzinfo=UTC)
-                if due_at < now:
-                    score_bump = 18
-                    overdue_days = max(0, int((now - due_at).total_seconds() // 86400))
-                    reason = f"{overdue_days} day{'s' if overdue_days != 1 else ''} overdue"
-                else:
-                    days_to_due = max(0, int((due_at - now).total_seconds() // 86400))
-                    reason = f"Due in {days_to_due} day{'s' if days_to_due != 1 else ''}"
+            if due_at < now:
+                score_bump = 18
+                overdue_days = max(0, int((now - due_at).total_seconds() // 86400))
+                reason = f"{overdue_days} day{'s' if overdue_days != 1 else ''} overdue"
+            else:
+                days_to_due = max(0, int((due_at - now).total_seconds() // 86400))
+                reason = f"Due in {days_to_due} day{'s' if days_to_due != 1 else ''}"
             priority_score = 120 + score_bump
             items.append(
                 ComplianceInboxItem(
                     item_key=f"evidence_request:{row.id}",
                     item_type="evidence_request",
-                    title=row.item_description[:140],
+                    title=row.title[:140],
                     detail="Evidence request assigned to you",
                     reason=reason,
                     priority_score=priority_score,
                     due_at=due_at,
                     navigate_path=f"/audits/pbc/{row.id}",
-                    metadata={"status": row.status, "audit_id": str(row.audit_id)},
+                    metadata={"status": row.status, "audit_id": str(row.audit_engagement_id)},
                 )
             )
 

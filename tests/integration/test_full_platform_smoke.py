@@ -978,7 +978,6 @@ def test_e_digest_config(client):
 def test_e_apscheduler_jobs():
     required_jobs = {
         "pbc_overdue_daily_sweep",
-        "pbc_request_overdue_sweep",
         "audit_schedule_reminder_sweep",
         "audit_schedule_auto_create_sweep",
         "subprocessor_dpa_expiry_sweep",

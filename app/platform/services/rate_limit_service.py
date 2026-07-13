@@ -11,7 +11,13 @@ from app.services.audit_service import AuditService
 
 
 DEFAULT_CONFIGS: list[dict] = [
-    {"endpoint_group": "api_general", "requests_per_minute": 60, "requests_per_hour": 1000, "requests_per_day": 10000},
+    # 300/minute (was 60): a single dashboard page fires 4-8 parallel queries, and
+    # normal multi-page navigation within a minute is legitimate usage that
+    # measurably tripped the old 60/minute ceiling in live verification -- see
+    # app/core/rate_limiter.py's ENDPOINT_GROUP_DEFAULTS, which this platform-default
+    # DB row takes priority over for any authenticated request (get_org_limit falls
+    # back to that dict only when no DB row exists at all).
+    {"endpoint_group": "api_general", "requests_per_minute": 300, "requests_per_hour": 5000, "requests_per_day": 50000},
     {"endpoint_group": "ingest", "requests_per_minute": 30, "requests_per_hour": 500, "requests_per_day": 5000},
     {"endpoint_group": "auth", "requests_per_minute": 10, "requests_per_hour": 100, "requests_per_day": 500},
     {"endpoint_group": "reports", "requests_per_minute": 20, "requests_per_hour": 200, "requests_per_day": 2000},
