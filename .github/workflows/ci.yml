@@ -1,0 +1,104 @@
+name: Backend CI
+
+# Fail-closed gate: this workflow is the single source of truth for whether
+# backend code is deployable. It must pass (all jobs green) before any
+# deploy workflow is allowed to run against it. See docs/runbooks/deploy.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: complivibe_ci
+          POSTGRES_PASSWORD: complivibe_ci
+          POSTGRES_DB: complivibe_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U complivibe_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+psycopg://complivibe_ci:complivibe_ci@localhost:5432/complivibe_ci
+      SECRET_KEY: ci-only-test-secret-key-not-for-production
+      RATE_LIMIT_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Confirm single alembic head (migration safety gate)
+        run: |
+          heads=$(alembic heads | wc -l)
+          echo "Detected $heads alembic head(s):"
+          alembic heads
+          if [ "$heads" -ne 1 ]; then
+            echo "::error::Multiple (or zero) alembic heads detected. Refusing to proceed — a branched migration graph must never reach production. Merge/resolve the heads before this branch can deploy."
+            exit 1
+          fi
+
+      - name: Run migrations against ephemeral CI database
+        run: alembic upgrade head
+
+      - name: Run test suite
+        run: pytest -q
+
+  typecheck-and-lint:
+    name: static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Byte-compile all source (catches syntax errors fast)
+        run: python -m compileall -q app
+
+  # This job is the deploy gate. Any deploy workflow must declare
+  # `needs: [test, typecheck-and-lint]` (or require this workflow's
+  # conclusion via a required status check in branch protection) so that a
+  # red run here makes a deploy structurally impossible, not just discouraged.
+  ci-gate:
+    name: CI gate (required for deploy)
+    runs-on: ubuntu-latest
+    needs: [test, typecheck-and-lint]
+    if: always()
+    steps:
+      - name: Fail if any dependency job failed
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ] || [ "${{ needs.typecheck-and-lint.result }}" != "success" ]; then
+            echo "::error::One or more required checks failed. Deploy is blocked."
+            exit 1
+          fi
+          echo "All required checks passed. Safe to deploy."

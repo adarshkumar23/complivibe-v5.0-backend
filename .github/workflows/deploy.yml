@@ -1,0 +1,106 @@
+name: Backend Deploy (production)
+
+# This workflow is intentionally inert until a human wires in the real
+# target (server/PaaS, SSH or API credentials, production DATABASE_URL,
+# production VAULT_ADDR/VAULT_TOKEN). See docs/runbooks/deploy.md for the
+# exact steps required to activate it.
+#
+# Fail-closed contract:
+#   1. This workflow only runs on manual dispatch — no auto-deploy on push.
+#   2. It always waits on the `Backend CI` workflow's ci-gate job for the
+#      exact commit being deployed. If CI hasn't passed for that SHA, the
+#      job fails before touching any infrastructure.
+#   3. The migration-safety gate (single alembic head) is re-checked here,
+#      independently of CI, immediately before any `alembic upgrade head`
+#      would run against a real database. Two independent checks, not one.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_production:
+        description: 'Type "deploy" to confirm you intend to deploy to production'
+        required: true
+
+concurrency:
+  group: backend-deploy-production
+  cancel-in-progress: false
+
+jobs:
+  require-explicit-confirmation:
+    name: Require explicit confirmation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check confirmation input
+        run: |
+          if [ "${{ github.event.inputs.confirm_production }}" != "deploy" ]; then
+            echo "::error::Production deploy not confirmed. Re-run and type 'deploy' exactly."
+            exit 1
+          fi
+
+  wait-for-ci:
+    name: Verify CI is green for this SHA
+    runs-on: ubuntu-latest
+    needs: [require-explicit-confirmation]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check latest Backend CI run for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          sha="${{ github.sha }}"
+          status=$(gh run list --workflow=ci.yml --commit "$sha" --json conclusion,status --jq '.[0]')
+          echo "Latest CI run for $sha: $status"
+          conclusion=$(echo "$status" | jq -r '.conclusion // "missing"')
+          run_status=$(echo "$status" | jq -r '.status // "missing"')
+          if [ "$run_status" != "completed" ] || [ "$conclusion" != "success" ]; then
+            echo "::error::Backend CI has not passed for commit $sha (status=$run_status, conclusion=$conclusion). Refusing to deploy."
+            exit 1
+          fi
+
+  migration-safety-gate:
+    name: Re-verify single alembic head before any DB touch
+    runs-on: ubuntu-latest
+    needs: [wait-for-ci]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: alembic heads must be exactly one
+        run: |
+          heads=$(alembic heads | wc -l)
+          alembic heads
+          if [ "$heads" -ne 1 ]; then
+            echo "::error::Multiple/zero alembic heads. This is a hard stop — never run 'alembic upgrade head' against production with an ambiguous graph."
+            exit 1
+          fi
+
+  deploy:
+    name: Deploy (NOT YET CONFIGURED)
+    runs-on: ubuntu-latest
+    needs: [migration-safety-gate]
+    environment: production  # requires a GitHub "production" Environment with required reviewers, configured by a human — see runbook
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy target not configured
+        run: |
+          echo "::error::No production deploy target is configured yet."
+          echo "This job intentionally fails until a human completes the steps in docs/runbooks/deploy.md:"
+          echo "  - choose/confirm the hosting target for the backend"
+          echo "  - add the required repository/environment secrets"
+          echo "  - replace this step with the real deploy command"
+          exit 1
+        # Example of what this step becomes once a target is chosen (illustrative only):
+        #
+        #   - name: Run production migration
+        #     env:
+        #       DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        #     run: alembic upgrade head
+        #
+        #   - name: Deploy release
+        #     env:
+        #       DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
+        #       DEPLOY_SSH_KEY: ${{ secrets.PRODUCTION_DEPLOY_SSH_KEY }}
+        #     run: ./scripts/deploy_backend.sh
