@@ -23,3 +23,8 @@ alembic/versions/*.pyc
 /data/opensanctions/
 .env.walkthrough*
 .env.*
+
+# Dev-log/notes files have a history of live credentials getting pasted in during
+# development (DEVELOPMENT_LOG_V5.md incident, 2026-07-13) -- keep these local-only.
+DEVELOPMENT_LOG*.md
+*.devlog.md
