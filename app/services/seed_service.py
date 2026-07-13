@@ -4375,20 +4375,32 @@ class SeedService:
             db.add(framework)
             db.flush()
         section_map = SeedService._ensure_framework_sections(db, framework=framework, section_seeds=NIST_CSF_SECTIONS)
-        obligation_rows = _pad_obligations(
-            NIST_CSF_BASE_OBLIGATIONS,
-            target_count=108,
-            section_code="RC",
-            ref_prefix="CSF-EXT-",
-            title_prefix="Additional NIST CSF subcategory requirement",
-        )
+        # NIST_CSF_BASE_OBLIGATIONS already covers all 93 real NIST CSF 2.0 subcategories
+        # implemented in this seed. No padding: unlike a framework where the real content
+        # is genuinely incomplete, inventing more "Additional NIST CSF subcategory
+        # requirement N" rows here would just be placeholder text indistinguishable from
+        # real subcategories in list views, obligation counts, and coverage/gap reports.
         SeedService._ensure_framework_obligations(
             db,
             framework=framework,
             section_map=section_map,
-            obligation_rows=obligation_rows,
+            obligation_rows=NIST_CSF_BASE_OBLIGATIONS,
             jurisdiction="US",
             version="2.0",
+        )
+        # Retire legacy CSF-EXT-01..15 placeholder rows from before this fix (same
+        # mechanism used to retire PCI DSS's REQ-EXT-* rows above) -- _ensure_framework_
+        # obligations only upserts rows present in obligation_rows and never deactivates
+        # rows removed from the seed list, so pre-existing environments would otherwise
+        # keep these fake rows active (and counted) forever.
+        db.execute(
+            update(Obligation)
+            .where(
+                Obligation.framework_id == framework.id,
+                Obligation.reference_code.like("CSF-EXT-%"),
+                Obligation.status != "inactive",
+            )
+            .values(status="inactive")
         )
         SeedService._ensure_framework_questions(db, framework=framework, question_rows=NIST_CSF_QUESTIONS)
         return framework

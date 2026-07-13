@@ -32,13 +32,22 @@ def _require_org_admin(db: Session, membership: Membership) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Org admin role required")
 
 
-def _endpoint_read(row: WebhookEndpoint) -> WebhookEndpointRead:
+def _mask_secret(secret: str) -> str:
+    """Show only the last 4 characters, so an org member with read access can confirm
+    which secret is configured without being able to exfiltrate the full HMAC signing
+    value from a GET response."""
+    if len(secret) <= 4:
+        return "*" * len(secret)
+    return f"{'*' * (len(secret) - 4)}{secret[-4:]}"
+
+
+def _endpoint_read(row: WebhookEndpoint, *, reveal_secret: bool = False) -> WebhookEndpointRead:
     return WebhookEndpointRead(
         id=row.id,
         organization_id=row.organization_id,
         url=row.url,
         name=row.name,
-        secret=row.secret,
+        secret=row.secret if reveal_secret else _mask_secret(row.secret),
         event_types=list(row.event_types or []),
         is_active=row.is_active,
         created_by=row.created_by,
@@ -78,7 +87,7 @@ def create_endpoint(
     row = WebhookService(db).create_endpoint(organization.id, payload, current_user.id)
     db.commit()
     db.refresh(row)
-    return _endpoint_read(row)
+    return _endpoint_read(row, reveal_secret=True)
 
 
 @router.get("", response_model=list[WebhookEndpointRead])

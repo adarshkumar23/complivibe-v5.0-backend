@@ -135,7 +135,7 @@ def test_phase1_checkpoint_and_endpoints(client, db_session):
     assert len(frameworks) >= 17
 
     assert _obligation_count(db_session, "PCI DSS") == 78
-    assert _obligation_count(db_session, "NIST CSF") == 108
+    assert _obligation_count(db_session, "NIST CSF") == 93
     assert _obligation_count(db_session, "CIS Controls") == 153
 
     nist_800_53 = _framework(db_session, "NIST SP 800-53")

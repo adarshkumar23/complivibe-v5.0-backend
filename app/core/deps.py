@@ -9,6 +9,7 @@ from fastapi.security.utils import get_authorization_scheme_param
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.security import decode_access_token
 from app.db.session import get_db as get_db_session
 from app.models.membership import Membership
@@ -32,12 +33,24 @@ class BearerOrSessionCookie(OAuth2PasswordBearer):
     dependency keeps the exact same "raise 401 immediately if nothing is provided"
     behavior plain `Depends(oauth2_scheme)` always had -- the cookie is just a second
     acceptable credential source alongside the Authorization header.
+
+    The raw `Authorization: Bearer <token>` path is only honored outside of
+    production. `/auth/login` and `/auth/register` return the same token both as the
+    httpOnly session cookie and in the JSON body (kept for tests/API clients), and
+    every token embeds the CSRF claim needed to satisfy `get_current_user`'s CSRF
+    check. Anyone who ever observes that JSON body (logs, a HAR export, a support
+    screenshot) could otherwise replay the token as a bare Bearer header and skip the
+    CSRF check entirely, since Bearer auth is intentionally CSRF-exempt (a real
+    cross-site attacker can't set that header blindly). Disabling the Bearer path in
+    production removes that replay surface for the actual browser-facing deployment,
+    where the frontend only ever uses the cookie; dev/test keep Bearer working
+    unchanged since the whole test suite authenticates that way.
     """
 
     async def __call__(self, request: Request) -> str | None:
         authorization = request.headers.get("Authorization")
         scheme, param = get_authorization_scheme_param(authorization)
-        if authorization and scheme.lower() == "bearer":
+        if authorization and scheme.lower() == "bearer" and get_settings().APP_ENV != "production":
             return param
         cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
         if cookie_token:
@@ -59,9 +72,15 @@ def get_current_user(
     db: Annotated[Session, Depends(get_db)],
     token: Annotated[str, Depends(oauth2_scheme)],
 ) -> User:
-    # Bearer header takes priority in the scheme's own __call__ above; whatever's left
-    # here that isn't from an Authorization header must have come from the cookie.
-    from_cookie = not request.headers.get("Authorization")
+    # Bearer header takes priority in the scheme's own __call__ above, but only outside
+    # production; recompute the same condition here rather than trusting header
+    # presence alone, so a production request carrying a stray/leaked Authorization
+    # header (which the scheme above ignored) still gets treated as cookie-sourced
+    # and doesn't skip the CSRF check below.
+    authorization = request.headers.get("Authorization")
+    _scheme, _param = get_authorization_scheme_param(authorization)
+    bearer_accepted = bool(authorization) and _scheme.lower() == "bearer" and get_settings().APP_ENV != "production"
+    from_cookie = not bearer_accepted
     try:
         payload = decode_access_token(token)
         subject = payload.get("sub")

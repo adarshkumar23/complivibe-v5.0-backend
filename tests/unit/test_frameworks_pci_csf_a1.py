@@ -51,7 +51,7 @@ def test_nist_csf_framework_seed_counts(db_session):
         select(FrameworkSection).where(FrameworkSection.framework_id == nist.id)
     ).scalars().all()
 
-    assert len(obligations) == 108
+    assert len(obligations) == 93
     assert len(sections) == 6
 
 
@@ -106,7 +106,7 @@ def test_seed_idempotent_no_duplicate_framework_or_obligation_rows(db_session):
     ).scalars().all()
 
     assert len(pci_count) == 78
-    assert len(nist_count) == 108
+    assert len(nist_count) == 93
 
 
 def test_org_isolation_framework_activation(client, db_session):

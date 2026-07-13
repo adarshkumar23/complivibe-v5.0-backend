@@ -3,7 +3,7 @@ import re
 from contextlib import asynccontextmanager
 
 import sentry_sdk
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +13,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+from sqlalchemy import text
 
 try:
     from prometheus_fastapi_instrumentator import Instrumentator
@@ -250,7 +251,16 @@ def create_application() -> FastAPI:
         }
 
     @app.get("/health", summary="System health")
-    def health() -> dict[str, str]:
+    def health(response: Response) -> dict[str, str]:
+        try:
+            db = get_session_maker()()
+            try:
+                db.execute(text("SELECT 1"))
+            finally:
+                db.close()
+        except Exception as exc:  # noqa: BLE001 - report any DB failure as unhealthy
+            response.status_code = 503
+            return {"status": "error", "service": settings.APP_NAME, "detail": f"database unavailable: {exc}"}
         return {"status": "ok", "service": settings.APP_NAME}
 
     app.include_router(api_router, prefix=settings.API_V1_PREFIX)
