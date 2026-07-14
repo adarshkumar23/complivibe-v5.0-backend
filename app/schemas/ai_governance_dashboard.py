@@ -19,4 +19,7 @@ class AIGovernanceDashboardRead(BaseModel):
     shadow_ai_detected_count: int
     high_risk_systems_without_approval: int
     monitoring_alerts_by_system: list[dict]
+    # Metric keys whose aggregation query failed; their numeric value above is a
+    # placeholder to be rendered as "unavailable", not a real zero.
+    unavailable_metrics: list[str] = []
     pillar2_status: str = Field(alias="_pillar2_status")

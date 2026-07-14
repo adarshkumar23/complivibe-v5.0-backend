@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import secrets
 import uuid
 from datetime import UTC, datetime
@@ -14,6 +15,8 @@ from app.models.role import Role
 from app.models.user import User
 from app.services.audit_service import AuditService
 from app.services.seed_service import SeedService
+
+logger = logging.getLogger(__name__)
 
 
 class SCIMService:
@@ -179,6 +182,12 @@ class SCIMService:
         user, membership = self._get_org_user_with_membership(org_id, user_id, db)
         self._set_membership_active(user, membership, False, db)
 
+        # The deactivation above is the security-critical part of deprovisioning and
+        # must persist even if the (secondary) offboarding automation fails. But a
+        # failed offboarding must be recorded honestly -- never masked behind a clean
+        # "deprovisioned" audit log -- so the trail cannot assert success that did not
+        # happen.
+        offboarding_status = "not_applicable"
         try:
             successor_id = self._find_successor(org_id, user_id, db)
             if successor_id is not None:
@@ -188,8 +197,22 @@ class SCIMService:
                     successor_id=successor_id,
                     executed_by=user_id,
                 )
-        except Exception:
-            pass
+                offboarding_status = "completed"
+        except Exception as exc:  # noqa: BLE001 - deactivation must persist; failure is recorded, not swallowed
+            offboarding_status = "failed"
+            logger.exception(
+                "SCIM offboarding automation failed for user %s in org %s after deactivation",
+                user_id,
+                org_id,
+            )
+            AuditService(db).write_audit_log(
+                action="user.scim_offboarding_failed",
+                entity_type="users",
+                organization_id=org_id,
+                actor_user_id=user_id,
+                entity_id=user_id,
+                metadata_json={"source": "scim", "error": str(exc)},
+            )
 
         AuditService(db).write_audit_log(
             action="user.deprovisioned_via_scim",
@@ -197,7 +220,7 @@ class SCIMService:
             organization_id=org_id,
             actor_user_id=user_id,
             entity_id=user_id,
-            metadata_json={"source": "scim"},
+            metadata_json={"source": "scim", "offboarding_status": offboarding_status},
         )
         db.flush()
 
