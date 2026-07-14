@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -14,6 +15,8 @@ from app.models.organization import Organization
 from app.models.user import User
 from app.services.audit_service import AuditService
 from app.core.validation import validate_choice
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_ASSET_TYPES = {
     "database",
@@ -370,8 +373,19 @@ class DataAssetService:
         if should_reclassify:
             try:
                 self._run_tier1_classification(row)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - surface, don't leave a stale classification behind a 2xx
+                logger.exception(
+                    "Tier-1 reclassification failed for data asset %s in org %s during update",
+                    asset_id,
+                    org_id,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=(
+                        "Data asset reclassification failed; update aborted to avoid "
+                        "persisting a stale classification."
+                    ),
+                ) from exc
         row.permitted_regions = self.suggest_residency_policy(org_id, row.classification_type, row.permitted_regions)
 
         row.updated_at = self.utcnow()

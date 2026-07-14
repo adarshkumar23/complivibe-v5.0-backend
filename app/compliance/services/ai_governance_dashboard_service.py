@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -13,6 +14,8 @@ from app.models.ai_system import AISystem
 from app.models.ai_system_risk_link import AISystemRiskLink
 from app.models.risk_control_link import RiskControlLink
 from app.models.shadow_ai_detection import ShadowAIDetection
+
+logger = logging.getLogger(__name__)
 
 
 class AIGovernanceDashboardService:
@@ -33,8 +36,19 @@ class AIGovernanceDashboardService:
             "shadow_ai_detected_count": 0,
             "high_risk_systems_without_approval": 0,
             "monitoring_alerts_by_system": [],
+            # Metrics whose aggregation query failed. A metric listed here carries its
+            # default value only as a placeholder -- the real value is UNKNOWN, not the
+            # zero shown. Consumers must render these as "unavailable", never as a real 0,
+            # so a query regression can't masquerade as a healthy empty dashboard.
+            "unavailable_metrics": [],
             "_pillar2_status": "not_yet_activated",
         }
+
+        def _metric_failed(metric: str, exc: Exception) -> None:
+            logger.exception(
+                "AI-governance dashboard metric %r failed for org %s", metric, org_id
+            )
+            result["unavailable_metrics"].append(metric)
 
         try:
             rows = self.db.execute(
@@ -50,8 +64,8 @@ class AIGovernanceDashboardService:
                 if bucket not in result["ai_systems_by_tier"]:
                     result["ai_systems_by_tier"][bucket] = 0
                 result["ai_systems_by_tier"][bucket] += int(count)
-        except Exception:
-            pass
+        except Exception as exc:
+            _metric_failed("ai_systems_by_tier", exc)
 
         try:
             # Governance coverage: % of assessed (non-unassessed) AI systems that have
@@ -102,8 +116,8 @@ class AIGovernanceDashboardService:
             total_in_scope = self.db.execute(select(in_scope)).scalar_one()
             if total_in_scope > 0:
                 result["governance_coverage_pct"] = round((int(covered_count or 0) / total_in_scope) * 100, 2)
-        except Exception:
-            pass
+        except Exception as exc:
+            _metric_failed("governance_coverage_pct", exc)
 
         try:
             # Future: outstanding periodic governance reviews query.
@@ -115,8 +129,8 @@ class AIGovernanceDashboardService:
                 )
             ).scalar_one()
             result["outstanding_reviews_count"] = int(count or 0)
-        except Exception:
-            pass
+        except Exception as exc:
+            _metric_failed("outstanding_reviews_count", exc)
 
         try:
             # Policy violations: count recent AI guardrail violation/blocked events.
@@ -141,8 +155,8 @@ class AIGovernanceDashboardService:
                     )
                 ).scalar_one()
                 result["policy_violations_count"] = int(proxy_count or 0)
-        except Exception:
-            pass
+        except Exception as exc:
+            _metric_failed("policy_violations_count", exc)
 
         try:
             count = self.db.execute(
@@ -152,8 +166,8 @@ class AIGovernanceDashboardService:
                 )
             ).scalar_one()
             result["shadow_ai_detected_count"] = int(count or 0)
-        except Exception:
-            pass
+        except Exception as exc:
+            _metric_failed("shadow_ai_detected_count", exc)
 
         try:
             approved_systems_subq = (
@@ -173,8 +187,8 @@ class AIGovernanceDashboardService:
                 )
             ).scalar_one()
             result["high_risk_systems_without_approval"] = int(count or 0)
-        except Exception:
-            pass
+        except Exception as exc:
+            _metric_failed("high_risk_systems_without_approval", exc)
 
         try:
             since = datetime.now(UTC) - timedelta(days=30)
@@ -221,7 +235,7 @@ class AIGovernanceDashboardService:
                 }
                 for system_id, system_name, breach_count in rows
             ]
-        except Exception:
-            pass
+        except Exception as exc:
+            _metric_failed("monitoring_alerts_by_system", exc)
 
         return result
