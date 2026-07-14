@@ -33,6 +33,7 @@ from app.core.startup import register_event_listeners
 from app.core.telemetry import instrument_app
 from app.core.validation import InvalidChoiceError
 from app.db.session import get_session_maker
+from app.services.search_indexing_service import ensure_indexes_ready
 from app.platform.routers.billing import webhook_router as billing_webhook_router
 from app.services.secrets_service import SecretsBackendError
 
@@ -141,6 +142,15 @@ def create_application() -> FastAPI:
             result = startup_handler()
             if inspect.isawaitable(result):
                 await result
+        # Bootstrap the Meilisearch indexes (creates them + sets organization_id as
+        # a filterable attribute) so live writes become searchable. ensure_indexes_ready
+        # is non-raising and gated by APP_ENV/MEILISEARCH, so this is a safe no-op when
+        # search is disabled or in the test env.
+        _bootstrap_db = get_session_maker()()
+        try:
+            ensure_indexes_ready(_bootstrap_db)
+        finally:
+            _bootstrap_db.close()
         try:
             yield
         finally:
