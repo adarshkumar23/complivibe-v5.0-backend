@@ -23,6 +23,10 @@ class CookieService:
     def utcnow() -> datetime:
         return datetime.now(UTC)
 
+    def get_cookie(self, org_id: uuid.UUID, cookie_id: uuid.UUID) -> CookieRegistry:
+        """Org-scoped single-cookie fetch (404 if not found in this org)."""
+        return self._require_cookie(org_id, cookie_id)
+
     def _require_cookie(self, org_id: uuid.UUID, cookie_id: uuid.UUID) -> CookieRegistry:
         row = self.db.execute(
             select(CookieRegistry).where(

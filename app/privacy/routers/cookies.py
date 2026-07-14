@@ -75,6 +75,17 @@ def list_cookies(
     return [CookieRead.model_validate(row) for row in rows]
 
 
+@router.get("/cookies/{cookie_id}", response_model=CookieRead)
+def get_cookie(
+    cookie_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("privacy:read")),
+) -> CookieRead:
+    row = CookieService(db).get_cookie(organization.id, cookie_id)
+    return CookieRead.model_validate(row)
+
+
 @router.patch("/cookies/{cookie_id}", response_model=CookieRead)
 def update_cookie(
     cookie_id: uuid.UUID,
