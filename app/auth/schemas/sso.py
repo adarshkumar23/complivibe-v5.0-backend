@@ -2,7 +2,21 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+# Must match the DB check constraint ck_sso_configs_default_role (see
+# app/models/sso_config.py). Validating here turns an out-of-range role into a
+# clean 422 instead of a 500 IntegrityError at insert time.
+ALLOWED_DEFAULT_ROLES = ("member", "reviewer", "compliance_manager", "admin", "owner", "auditor")
+
+
+def _validate_default_role(value: str | None) -> str | None:
+    if value is None:
+        return value
+    if value not in ALLOWED_DEFAULT_ROLES:
+        raise ValueError(f"default_role must be one of: {', '.join(ALLOWED_DEFAULT_ROLES)}")
+    return value
 
 
 class SSOConfigCreate(BaseModel):
@@ -22,6 +36,11 @@ class SSOConfigCreate(BaseModel):
     jit_provisioning: bool = True
     default_role: str = "member"
 
+    @field_validator("default_role")
+    @classmethod
+    def validate_default_role(cls, value: str) -> str:
+        return _validate_default_role(value)
+
 
 class SSOConfigUpdate(BaseModel):
     provider: str | None = None
@@ -32,6 +51,11 @@ class SSOConfigUpdate(BaseModel):
     attribute_mapping: dict[str, Any] | None = None
     jit_provisioning: bool | None = None
     default_role: str | None = None
+
+    @field_validator("default_role")
+    @classmethod
+    def validate_default_role(cls, value: str | None) -> str | None:
+        return _validate_default_role(value)
 
 
 class SSOConfigResponse(BaseModel):
