@@ -119,3 +119,36 @@ go-live:
 - Did not provision a production Postgres or OpenBao instance.
 - Did not create or rotate any real secret value.
 - Did not merge this branch to `main`, and did not push it anywhere.
+
+## Update 2026-07-14: demo.adarshkumar.app promoted to real production infra
+
+A later pass (this one) took a different path than "provision a brand-new,
+separate production stack" above: the user explicitly asked to harden the
+existing `demo.adarshkumar.app` deployment on this VPS (`complivibe-v3-0-1`)
+into genuinely durable infrastructure instead, same domain, same DB. What
+changed:
+
+- Backend, frontend, and Vault now run as real systemd services
+  (`complivibe-backend`, `complivibe-frontend`, `complivibe-vault`), not
+  manually-started terminal processes. All three proved to auto-restart after
+  a `SIGKILL`.
+- Vault/OpenBao is now persistent (`file` storage backend, `complivibe-vault.service`,
+  `127.0.0.1:8230`) with an `ExecStartPost` auto-unseal script reading key
+  shares from a root-only file (`/etc/complivibe-vault/unseal.keys`) — replaces
+  the old in-memory dev-mode instance on `127.0.0.1:8220` (left running,
+  untouched, as a scratch/dev target only).
+- Daily DB backups (`complivibe-backup.timer` → `scripts/backup_demo_db.sh`)
+  and a 5-minute stack health check (`complivibe-health-monitor.timer` →
+  `scripts/monitor_stack_health.sh`) both actually pass now — the previous
+  versions of these systemd units pointed at a stale `/home/ubuntu/complivibe`
+  (pre-v4.0) codebase and had been silently failing.
+- `RATE_LIMIT_ENABLED=true` and `APP_ENV=production` were already correct in
+  the live environment; carried forward into `/etc/complivibe/backend.env`.
+
+**Still not wired (deferred, needs a human with real credentials):**
+`SENTRY_DSN`, `RAZORPAY_KEY_ID`/`RAZORPAY_KEY_SECRET`/`RAZORPAY_WEBHOOK_SECRET`,
+`AWS_SES_ACCESS_KEY_ID`/`AWS_SES_SECRET_ACCESS_KEY` — all present as empty
+placeholders in `.env.example` and `/etc/complivibe/backend.env`. Dropping in
+real values later is a one-line edit + `sudo systemctl restart complivibe-backend`,
+no code change. The Razorpay/AWS values specifically must be **freshly-rotated**
+per the exposure finding above, not the old ones.

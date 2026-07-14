@@ -78,29 +78,23 @@ jobs:
           fi
 
   deploy:
-    name: Deploy (NOT YET CONFIGURED)
+    name: Deploy to demo.adarshkumar.app
     runs-on: ubuntu-latest
     needs: [migration-safety-gate]
     environment: production  # requires a GitHub "production" Environment with required reviewers, configured by a human — see runbook
     steps:
-      - uses: actions/checkout@v4
-      - name: Deploy target not configured
+      - name: Deploy over SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.PRODUCTION_DEPLOY_SSH_KEY }}
         run: |
-          echo "::error::No production deploy target is configured yet."
-          echo "This job intentionally fails until a human completes the steps in docs/runbooks/deploy.md:"
-          echo "  - choose/confirm the hosting target for the backend"
-          echo "  - add the required repository/environment secrets"
-          echo "  - replace this step with the real deploy command"
-          exit 1
-        # Example of what this step becomes once a target is chosen (illustrative only):
-        #
-        #   - name: Run production migration
-        #     env:
-        #       DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
-        #     run: alembic upgrade head
-        #
-        #   - name: Deploy release
-        #     env:
-        #       DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
-        #       DEPLOY_SSH_KEY: ${{ secrets.PRODUCTION_DEPLOY_SSH_KEY }}
-        #     run: ./scripts/deploy_backend.sh
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          # The remote authorized_keys entry for this key is a forced command
+          # (see scripts/deploy.sh / docs/runbooks/deploy.md) -- it can only
+          # ever run that one script on the server, regardless of what's
+          # passed here.
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes ubuntu@"$DEPLOY_HOST" "true"
