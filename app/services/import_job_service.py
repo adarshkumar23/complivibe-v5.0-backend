@@ -1051,6 +1051,9 @@ class ImportJobService:
                 collected_at=collected_at,
                 original_created_at=import_fallback_created_at,
                 actor_user_id=actor_user_id,
+                # This bulk-import loop writes its own import.evidence.* audit row
+                # per item; opt out of the service-level audit to avoid duplication.
+                write_audit=False,
             )
             return item, "created"
         if job.conflict_strategy != "update":

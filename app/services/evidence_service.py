@@ -213,6 +213,7 @@ class EvidenceService:
         collected_at: datetime | None,
         original_created_at: datetime | None,
         actor_user_id: uuid.UUID | None,
+        write_audit: bool = True,
     ) -> EvidenceItem:
         row = EvidenceItem(
             organization_id=organization_id,
@@ -231,6 +232,26 @@ class EvidenceService:
         )
         self.db.add(row)
         self.db.flush()
+
+        # Every imported-evidence creation gets an audit trail. The cloud-connector
+        # ingest path relies on this (it writes no audit of its own). Bulk import
+        # already logs an import.evidence.* row per item, so it opts out via
+        # write_audit=False to avoid a duplicate.
+        if write_audit:
+            AuditService(self.db).write_audit_log(
+                action="evidence.imported",
+                entity_type="evidence_item",
+                entity_id=row.id,
+                organization_id=organization_id,
+                actor_user_id=actor_user_id,
+                after_json={
+                    "title": row.title,
+                    "status": row.status,
+                    "source": "imported",
+                    "source_import_tool": source_import_tool,
+                },
+                metadata_json={"source": "imported", "source_import_tool": source_import_tool},
+            )
         return row
 
     @staticmethod
