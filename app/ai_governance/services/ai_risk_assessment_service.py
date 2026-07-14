@@ -224,6 +224,17 @@ class AIRiskAssessmentService:
     def submit_responses(self, org_id: uuid.UUID, assessment_id: uuid.UUID, responses: list[dict], user_id: uuid.UUID) -> AIRiskAssessment:
         assessment = self._require_assessment(org_id, assessment_id)
 
+        # A completed assessment is immutable via submit-responses: scoring happens
+        # only in complete_assessment (which also mints a linked Risk), so silently
+        # overwriting responses here would leave overall_risk_score/dimension ratings
+        # (and the linked Risk) contradicting the persisted answers. Reject instead;
+        # changing a completed assessment requires a new assessment version.
+        if assessment.status == "completed":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Assessment is completed and cannot be edited; create a new assessment version to change responses.",
+            )
+
         resp_by_question = {
             row.question_id: row
             for row in self.db.execute(
