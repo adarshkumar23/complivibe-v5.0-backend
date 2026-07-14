@@ -7,7 +7,25 @@ class BuiltInPolicyEngine:
     def evaluate(self, guardrail, action_context: dict) -> dict:
         if guardrail.guardrail_type == "financial_limit":
             max_usd = guardrail.constraint_value.get("max_usd", float("inf"))
-            amount = action_context.get("estimated_value", 0)
+            # Fail CLOSED: a financial guardrail must never treat a missing/mis-named
+            # or non-numeric amount as a $0 transaction (which would silently permit
+            # any spend). An unquantifiable amount is blocked explicitly.
+            if "estimated_value" not in action_context:
+                return {
+                    "decision": "block",
+                    "violations": [
+                        "financial_limit guardrail requires a numeric 'estimated_value' in the "
+                        "action context; refusing to permit an unquantified transaction",
+                    ],
+                }
+            amount = action_context["estimated_value"]
+            if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+                return {
+                    "decision": "block",
+                    "violations": [
+                        f"financial_limit guardrail received a non-numeric 'estimated_value': {amount!r}",
+                    ],
+                }
             if amount > max_usd:
                 return {
                     "decision": "block",
