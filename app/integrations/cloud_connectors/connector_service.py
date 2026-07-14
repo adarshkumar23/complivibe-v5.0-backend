@@ -203,6 +203,32 @@ class CloudConnectorService:
         )
         return row
 
+    def update_connector(
+        self,
+        org_id: uuid.UUID,
+        connector_id: uuid.UUID,
+        changes: dict,
+        actor_user_id: uuid.UUID | None,
+    ) -> CloudEvidenceConnector:
+        row = self._require_connector(org_id, connector_id)
+        applied: dict = {}
+        for field in ("display_name", "auto_apply_deterministic_mappings", "expected_event_interval_hours"):
+            if field in changes and changes[field] is not None:
+                setattr(row, field, changes[field])
+                applied[field] = changes[field]
+        row.updated_at = self.utcnow()
+        self.db.flush()
+        AuditService(self.db).write_audit_log(
+            action="cloud_connector.updated",
+            entity_type="cloud_evidence_connector",
+            entity_id=row.id,
+            organization_id=org_id,
+            actor_user_id=actor_user_id,
+            after_json=applied,
+            metadata_json={"source": "api"},
+        )
+        return row
+
     def list_connectors(self, org_id: uuid.UUID) -> list[CloudEvidenceConnector]:
         return self.db.execute(
             select(CloudEvidenceConnector).where(CloudEvidenceConnector.organization_id == org_id).order_by(CloudEvidenceConnector.created_at.desc())

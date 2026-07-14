@@ -13,6 +13,7 @@ from app.integrations.cloud_connectors.schemas import (
     ConnectorRead,
     ConnectorSecretRotateResponse,
     ConnectorSetupRead,
+    ConnectorUpdate,
     DismissSuggestionRequest,
     FindingSuggestionRead,
     MappingRuleCreate,
@@ -142,6 +143,23 @@ def get_connector(
     _: Membership = Depends(require_permission("connectors:read")),
 ) -> ConnectorRead:
     row = CloudConnectorService(db).get_connector(organization.id, connector_id)
+    return ConnectorRead.model_validate(row)
+
+
+@router.patch("/{connector_id}", response_model=ConnectorRead)
+def update_connector(
+    connector_id: uuid.UUID,
+    payload: ConnectorUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("connectors:write")),
+) -> ConnectorRead:
+    row = CloudConnectorService(db).update_connector(
+        organization.id, connector_id, payload.model_dump(exclude_unset=True), current_user.id
+    )
+    db.commit()
+    db.refresh(row)
     return ConnectorRead.model_validate(row)
 
 

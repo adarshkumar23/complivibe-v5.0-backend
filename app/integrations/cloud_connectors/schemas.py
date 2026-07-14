@@ -10,6 +10,12 @@ class ConnectorCreate(BaseModel):
     provider_config_json: dict = Field(default_factory=dict)
 
 
+class ConnectorUpdate(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=255)
+    auto_apply_deterministic_mappings: bool | None = None
+    expected_event_interval_hours: int | None = Field(default=None, ge=1)
+
+
 class ConnectorRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
