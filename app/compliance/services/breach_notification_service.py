@@ -29,8 +29,23 @@ class BreachNotificationService:
     def __init__(self, db: Session) -> None:
         self.db = db
 
+    # Per-framework header + legal citation for the breach-notification draft, so a
+    # DPDP (India), HIPAA, etc. breach is not mislabelled as a GDPR Article 33 notice.
+    _FRAMEWORK_BREACH_LABELS: dict[str, tuple[str, str]] = {
+        "gdpr": ("GDPR Article 33 Notification Draft", "GDPR Article 33"),
+        "dpdp": ("DPDP Personal Data Breach Notification Draft", "the DPDP Act (Data Protection Board of India)"),
+        "hipaa": ("HIPAA Breach Notification Draft", "the HIPAA Breach Notification Rule"),
+        "ccpa": ("CCPA/CPRA Data Breach Notification Draft", "the CCPA/CPRA breach-notification requirements"),
+        "dora": ("DORA Major ICT-Related Incident Notification Draft", "the DORA incident-reporting requirements"),
+        "nis2": ("NIS2 Significant Incident Notification Draft", "the NIS2 incident-reporting requirements"),
+    }
+
+    def _breach_labels(self, row: BreachNotification) -> tuple[str, str]:
+        framework = (row.regulatory_framework or "gdpr").lower()
+        return self._FRAMEWORK_BREACH_LABELS.get(framework, self._FRAMEWORK_BREACH_LABELS["gdpr"])
+
     ARTICLE33_TEMPLATE = (
-        "GDPR Article 33 Notification Draft\n\n"
+        "{header}\n\n"
         "To: {supervisory_authority}\n"
         "Re: Personal Data Breach Notification\n\n"
         "We hereby notify you of a personal data breach that occurred. "
@@ -345,7 +360,9 @@ class BreachNotificationService:
 
     def _deterministic_article33_draft(self, row: BreachNotification, issue: Issue) -> str:
         special_category_note = "Special category data involved" if row.special_category_data_involved else "No special category data involved"
+        header, _citation = self._breach_labels(row)
         return self.ARTICLE33_TEMPLATE.format(
+            header=header,
             supervisory_authority=row.supervisory_authority or "Supervisory Authority",
             breach_type=row.breach_type,
             data_subjects_affected_count=row.data_subjects_affected_count or row.estimated_affected_count or "unknown",
@@ -369,12 +386,13 @@ class BreachNotificationService:
         if ai_enabled is not None:
             try:
                 drafting = AIDraftingService(db)
+                _header, citation = self._breach_labels(row)
                 system_prompt = (
-                    "You are a compliance documentation assistant drafting GDPR Article 33 breach notifications. "
+                    f"You are a compliance documentation assistant drafting breach notifications under {citation}. "
                     "Provide a concise, regulator-ready narrative. This is a draft for human review only."
                 )
                 user_prompt = (
-                    f"Draft GDPR Article 33 notification for breach '{issue.title}'. "
+                    f"Draft a breach notification under {citation} for breach '{issue.title}'. "
                     f"Supervisory authority: {row.supervisory_authority or 'Supervisory Authority'}. "
                     f"Breach type: {row.breach_type}. "
                     f"Affected count: {row.data_subjects_affected_count or row.estimated_affected_count or 'unknown'}. "
