@@ -53,6 +53,7 @@ class ControlService:
         previous_status: str,
         new_status: str,
         triggered_by: str = "user_action",
+        triggered_by_user_id: uuid.UUID | None = None,
     ) -> None:
         if previous_status == new_status:
             return
@@ -67,6 +68,7 @@ class ControlService:
                 new_value=new_status,
                 triggered_by=triggered_by,
                 db=db,
+                triggered_by_user_id=triggered_by_user_id,
             ),
         )
 
@@ -97,6 +99,7 @@ class ControlService:
         control_id: uuid.UUID,
         new_status: str,
         triggered_by: str = "service",
+        triggered_by_user_id: uuid.UUID | None = None,
     ) -> Control:
         control = db.execute(
             select(Control).where(
@@ -117,6 +120,7 @@ class ControlService:
             previous_status=previous_status,
             new_status=new_status,
             triggered_by=triggered_by,
+            triggered_by_user_id=triggered_by_user_id,
         )
         return control
 

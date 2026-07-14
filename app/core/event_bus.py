@@ -1,6 +1,7 @@
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, Callable, ClassVar
 
 from sqlalchemy.orm import Session
@@ -26,6 +27,13 @@ class EventPayload:
     new_value: Any
     triggered_by: str
     db: Session
+    # Extended fields (all defaulted so existing call sites still construct
+    # positionally/by-keyword unchanged). `db` is the live session shared with
+    # the publisher's transaction and is NEVER persisted; everything below is.
+    payload: dict = field(default_factory=dict)
+    occurred_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    triggered_by_user_id: uuid.UUID | None = None
+    correlation_id: uuid.UUID = field(default_factory=uuid.uuid4)
 
 
 class EventBus:
@@ -52,13 +60,54 @@ class EventBus:
             return
         listeners.append(listener)
 
+    def _persist_event(self, event_type: str, payload: EventPayload) -> None:
+        """Write the durable domain_events row for this publish, in the
+        publisher's transaction, BEFORE any listener runs. Imported lazily to
+        avoid a core->models import cycle at startup. If this flush fails, the
+        exception propagates and the publish fails loudly -- events are never
+        silently dropped.
+        """
+        from app.models.domain_event import DomainEvent
+
+        event = DomainEvent(
+            organization_id=payload.org_id,
+            event_type=event_type,
+            entity_type=payload.entity_type,
+            entity_id=payload.entity_id,
+            payload_json=dict(payload.payload) if payload.payload else {},
+            previous_value=payload.previous_value,
+            new_value=payload.new_value,
+            occurred_at=payload.occurred_at,
+            triggered_by=payload.triggered_by,
+            triggered_by_user_id=payload.triggered_by_user_id,
+            correlation_id=payload.correlation_id,
+        )
+        payload.db.add(event)
+        payload.db.flush()
+
     def emit(self, event_type: str, payload: EventPayload) -> None:
-        listeners = self._listeners.get(event_type, [])
-        for listener in listeners:
+        # Persist first (fails loudly on write error), then dispatch.
+        self._persist_event(event_type, payload)
+
+        for listener in self._listeners.get(event_type, []):
             try:
-                listener(payload)
+                # SAVEPOINT-per-handler isolation: a handler that raises --
+                # including a DB error such as IntegrityError, which would
+                # otherwise leave the shared Session in a pending-rollback
+                # state -- rolls back ONLY its own writes. The session stays
+                # usable so every sibling listener still runs, and the
+                # publisher's own transaction is untouched. Commit ownership
+                # sits with the caller (endpoint/scheduler), not the listener.
+                with payload.db.begin_nested():
+                    listener(payload)
             except Exception:
-                logger.exception("Event listener failed for event_type=%s", event_type)
+                logger.exception(
+                    "Event listener failed for event_type=%s organization_id=%s entity=%s:%s",
+                    event_type,
+                    payload.org_id,
+                    payload.entity_type,
+                    payload.entity_id,
+                )
 
     def clear_listeners(self) -> None:
         self._listeners.clear()

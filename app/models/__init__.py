@@ -154,6 +154,7 @@ from app.models.email_delivery_event import EmailDeliveryEvent
 from app.models.email_outbox import EmailOutbox
 from app.models.email_template import EmailTemplate
 from app.models.digest_config import DigestConfig
+from app.models.domain_event import DomainEvent
 from app.models.evidence_recertification_policy import EvidenceRecertificationPolicy
 from app.models.framework import Framework
 from app.models.framework_content_import import FrameworkContentImport
@@ -714,6 +715,7 @@ __all__ = [
     "DataRetentionPolicy",
     "DataRetentionReview",
     "DataIncident",
+    "DomainEvent",
     "DataAssetObligationLink",
     "DataObligationSuggestion",
     "DataResidencyPolicy",

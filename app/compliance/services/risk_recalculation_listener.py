@@ -155,10 +155,18 @@ class RiskRecalculationListener:
                         new_value=new_score,
                         triggered_by="system",
                         db=db,
+                        # Propagate the originating cascade context so the whole
+                        # chain of related events shares one correlation_id and
+                        # the same originating user (if any) for tracing.
+                        triggered_by_user_id=payload.triggered_by_user_id,
+                        correlation_id=payload.correlation_id,
                     ),
                 )
+        # NOTE: listener is flush-only by contract. The publisher's endpoint /
+        # scheduler owns the single commit after emit() returns; committing here
+        # would break the SAVEPOINT-per-handler isolation in EventBus.emit().
         if changed:
-            db.commit()
+            db.flush()
 
     def register(self, bus: EventBus) -> None:
         bus.subscribe(EventType.CONTROL_STATUS_CHANGED, self.handle)

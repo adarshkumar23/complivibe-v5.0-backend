@@ -47,8 +47,11 @@ class EntityScoreInvalidationListener:
                 db=payload.db,
             )
 
+        # Listener is flush-only by contract: the publisher's endpoint /
+        # scheduler owns the single commit after EventBus.emit() returns.
+        # Committing here would break the SAVEPOINT-per-handler isolation.
         if distinct_targets:
-            payload.db.commit()
+            payload.db.flush()
 
     def register(self, bus: EventBus) -> None:
         bus.subscribe(EventType.RISK_SCORE_UPDATED, self.handle)

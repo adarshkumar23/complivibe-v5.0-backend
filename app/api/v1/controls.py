@@ -379,6 +379,7 @@ def update_control(
         previous_status=before["status"],
         new_status=control.status,
         triggered_by="user_action",
+        triggered_by_user_id=current_user.id,
     )
     # emit_control_status_changed may have queued webhook deliveries (e.g. for a
     # transition into "failed"); the commit above ran before that call, so commit
@@ -423,7 +424,13 @@ def archive_control(
         previous_status=before_status,
         new_status=control.status,
         triggered_by="user_action",
+        triggered_by_user_id=current_user.id,
     )
+    # Event listeners (e.g. risk recalculation) are now flush-only, so the
+    # publisher owns the commit that persists the domain_events row and any
+    # downstream listener writes. Without this, archiving a control that
+    # cascades into a risk-score recalc would silently drop the recalc.
+    db.commit()
     db.refresh(control)
     return _control_read_with_owner_status(db, organization.id, control)
 

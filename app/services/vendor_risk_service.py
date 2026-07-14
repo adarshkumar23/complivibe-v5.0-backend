@@ -184,6 +184,7 @@ class VendorRiskService:
                 new_value=row.inherent_risk_score,
                 triggered_by=triggered_by,
                 db=self.db,
+                triggered_by_user_id=scored_by_user_id,
             ),
         )
 

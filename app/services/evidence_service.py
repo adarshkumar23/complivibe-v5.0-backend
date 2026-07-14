@@ -86,6 +86,7 @@ class EvidenceService:
                     new_value=evidence.review_status,
                     triggered_by=triggered_by,
                     db=self.db,
+                    triggered_by_user_id=reviewed_by_user_id,
                 ),
             )
 
