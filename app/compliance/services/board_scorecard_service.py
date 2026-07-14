@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime, time
 from decimal import Decimal
 
 from fastapi import HTTPException, status
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session
 
@@ -568,7 +569,11 @@ class BoardScorecardService:
             generated_by=generated_by,
             snapshot_label=snapshot_label,
             overall_compliance_score=Decimal(str(overall_score)),
-            snapshot_data=snapshot_data,
+            # snapshot_data is persisted to a JSONB column; nested sub-builders
+            # (e.g. framework_readiness -> last_score_snapshot.calculated_at) can
+            # carry raw datetime/Decimal values that psycopg cannot JSON-encode.
+            # Coerce to JSON-safe primitives before persisting.
+            snapshot_data=jsonable_encoder(snapshot_data),
         )
         self.db.add(row)
         self.db.flush()
