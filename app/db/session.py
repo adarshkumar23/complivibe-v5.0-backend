@@ -14,7 +14,16 @@ def get_engine() -> Engine:
     connect_args: dict[str, object] = {}
     if settings.DATABASE_URL.startswith("sqlite"):
         connect_args = {"check_same_thread": False}
-    return create_engine(settings.DATABASE_URL, pool_pre_ping=True, connect_args=connect_args)
+        # SQLite (tests) uses a non-QueuePool; pool sizing args don't apply.
+        return create_engine(settings.DATABASE_URL, pool_pre_ping=True, connect_args=connect_args)
+    return create_engine(
+        settings.DATABASE_URL,
+        pool_pre_ping=True,
+        pool_size=settings.DB_POOL_SIZE,
+        max_overflow=settings.DB_MAX_OVERFLOW,
+        pool_timeout=settings.DB_POOL_TIMEOUT,
+        connect_args=connect_args,
+    )
 
 
 @lru_cache(maxsize=1)

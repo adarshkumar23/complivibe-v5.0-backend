@@ -12,6 +12,13 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     API_V1_PREFIX: str = "/api/v1"
     DATABASE_URL: str = "postgresql+psycopg://complivibe_user:change_me@localhost:5432/complivibe"
+    # SQLAlchemy connection-pool sizing (per process). The library defaults
+    # (pool_size=5, max_overflow=10 -> 15) saturate under concurrent load and
+    # cascade into 30s QueuePool timeouts. Sized so 2 gunicorn workers stay well
+    # under Postgres max_connections (100). Override via env for other topologies.
+    DB_POOL_SIZE: int = 20
+    DB_MAX_OVERFLOW: int = 20
+    DB_POOL_TIMEOUT: int = 30
     SECRET_KEY: str = Field(min_length=16)
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     BASE_URL: str = "http://localhost:8000"
