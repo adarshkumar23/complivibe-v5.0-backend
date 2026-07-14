@@ -548,16 +548,12 @@ class EUActWorkflowService:
         return row
 
     def get_post_market_plan(self, org_id: uuid.UUID, system_id: uuid.UUID) -> EUActPostMarketPlan:
+        # A read must never enforce activation-grade completeness -- doing so 422s
+        # every draft and makes GET/PATCH/activate all unreachable (the plan can
+        # never be edited out of 'draft'). Completeness is gated in activate_plan.
         row = self._plan_for_system(org_id, system_id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post-market plan not found")
-        if row.status == "archived":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Archived post-market plan cannot be activated")
-        if not list(row.monitoring_metrics or []):
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Monitoring metrics are required")
-        if not self._has_text(row.reporting_frequency):
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Reporting frequency is required")
-        self._validate_user_exists(row.responsible_person_id, "Responsible person not found")
         return row
 
     def update_post_market_plan(self, org_id: uuid.UUID, plan_id: uuid.UUID, data, actor_id: uuid.UUID) -> EUActPostMarketPlan:
@@ -602,6 +598,15 @@ class EUActWorkflowService:
         ).scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post-market plan not found")
+
+        # Activation-grade completeness gates (moved off the read path).
+        if row.status == "archived":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Archived post-market plan cannot be activated")
+        if not list(row.monitoring_metrics or []):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Monitoring metrics are required")
+        if not self._has_text(row.reporting_frequency):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Reporting frequency is required")
+        self._validate_user_exists(row.responsible_person_id, "Responsible person not found")
 
         row.status = "active"
         row.updated_at = self.utcnow()
