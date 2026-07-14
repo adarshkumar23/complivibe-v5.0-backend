@@ -9,3 +9,14 @@ def register_event_listeners() -> None:
 
     RiskRecalculationListener().register(bus)
     EntityScoreInvalidationListener().register(bus)
+
+    # Phase 1 Step 3 -- cross-domain point-to-point connections migrated onto the bus.
+    from app.compliance.services.dora_risk_register_listener import DORARiskRegisterListener
+    from app.compliance.services.vendor_staleness_listener import VendorStalenessListener
+    from app.compliance.services.geopolitical_vendor_risk_listener import GeopoliticalVendorRiskListener
+    from app.compliance.services.ot_ics_risk_register_listener import OtIcsRiskRegisterListener
+
+    DORARiskRegisterListener().register(bus)
+    VendorStalenessListener().register(bus)
+    GeopoliticalVendorRiskListener().register(bus)
+    OtIcsRiskRegisterListener().register(bus)

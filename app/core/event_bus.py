@@ -15,6 +15,11 @@ class EventType:
     EVIDENCE_EXPIRED = "evidence.expired"
     VENDOR_SCORE_UPDATED = "vendor_risk.score_updated"
     RISK_SCORE_UPDATED = "risk.score_updated"
+    # Phase 1 Step 3 -- cross-domain point-to-point connections migrated onto the bus.
+    DORA_REGISTER_GAP_DETECTED = "dora.register_gap_detected"
+    VENDOR_ASSESSMENT_STALE = "vendor.assessment_stale"
+    GEOPOLITICAL_SIGNAL_CRITICAL = "geopolitical.signal_critical"
+    OT_ICS_FINDING_INGESTED = "ot_ics.finding_ingested"
 
 
 @dataclass(slots=True)

@@ -55,6 +55,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.event_bus import EventBus, EventPayload, EventType
 from app.models.audit_log import AuditLog
 from app.models.business_unit import BusinessUnit
 from app.models.geopolitical_risk_signal import GeopoliticalRiskSignal
@@ -329,95 +330,37 @@ class GeopoliticalRiskService:
         created_rows: list[GeopoliticalRiskSignal],
         actor_id: uuid.UUID | None,
     ) -> None:
-        """Escalate risk_tier and create a Risk register entry for every vendor
-        exposed to a region that just received a critical geopolitical signal.
-
-        Follows the same cascade convention as KYB/AML risk-tier escalation
-        (``compute_vendor_kyb_check_and_apply_effects`` in
-        ``app/satellites/tprm_intelligence/router.py``): escalate risk_tier only if
-        the vendor is currently under-tiered relative to the signal severity, ranked
-        via a not_assessed < low < medium < high < critical ordering. A Risk register
-        entry is created once per vendor/region exposure (tracked via
-        ``VendorGeopoliticalExposure.cascaded_risk_id``) so repeated critical signals
-        for a region an org is already tracking as a risk don't spam duplicate rows --
-        this mirrors ``VendorConcentrationRiskService.recompute``'s "create once, keep
-        risk_id" pattern.
+        """Detect that a critical geopolitical signal landed for a region and PUBLISH
+        `geopolitical.signal_critical` onto the event bus, carrying the worst signal
+        and the region. GeopoliticalVendorRiskListener then escalates each exposed
+        vendor's risk_tier and creates the Risk register entries -- see
+        docs/event_bus_design.md (Interconnection Phase 1). Behavior is identical to
+        the former inline cascade; only the wiring changed from a direct call to
+        publish/subscribe.
         """
         critical_rows = [row for row in created_rows if row.severity == CASCADE_SEVERITY]
         if not critical_rows:
             return
 
-        exposures = self.db.execute(
-            select(VendorGeopoliticalExposure).where(
-                VendorGeopoliticalExposure.organization_id == org_id,
-                VendorGeopoliticalExposure.region == region_query,
-                VendorGeopoliticalExposure.deleted_at.is_(None),
-            )
-        ).scalars().all()
-        if not exposures:
-            return
-
         # Multiple critical articles can land in one ingest; the vendor only cares
         # about the worst headline, not one Risk per article.
         worst = max(critical_rows, key=lambda row: (row.detected_at or self.utcnow()))
-        audit = AuditService(self.db)
 
-        for exposure in exposures:
-            vendor = self.db.get(Vendor, exposure.vendor_id)
-            if vendor is None or vendor.status == "archived":
-                continue
-
-            if _VENDOR_RISK_TIER_RANK.get(CASCADE_SEVERITY, 0) > _VENDOR_RISK_TIER_RANK.get(vendor.risk_tier, 0):
-                before_tier = vendor.risk_tier
-                vendor.risk_tier = CASCADE_SEVERITY
-                self.db.flush()
-                audit.write_audit_log(
-                    action="vendor.risk_tier_escalated",
-                    entity_type="vendor",
-                    entity_id=vendor.id,
-                    organization_id=org_id,
-                    actor_user_id=actor_id,
-                    before_json={"risk_tier": before_tier},
-                    after_json={"risk_tier": CASCADE_SEVERITY, "reason": "geopolitical_critical_signal"},
-                    metadata_json={
-                        "source": "geopolitical_risk",
-                        "region": region_query,
-                        "signal_id": str(worst.id),
-                    },
-                )
-
-            exposure.last_cascaded_severity = CASCADE_SEVERITY
-            exposure.last_cascaded_at = self.utcnow()
-
-            if exposure.cascaded_risk_id is None:
-                description = (
-                    f"A critical geopolitical signal was detected for {region_query!r}, a region "
-                    f"{vendor.name} is exposed to: {worst.headline or 'no headline available'!r} "
-                    f"(category: {worst.category})."
-                )
-                risk = RiskService(self.db).create_risk_from_service(
-                    organization_id=org_id,
-                    title=f"Critical geopolitical exposure: {vendor.name} in {region_query}",
-                    description=description,
-                    category="vendor",
-                    likelihood=4,
-                    impact=5,
-                    treatment_strategy="mitigate",
-                    risk_context_external=(
-                        f"Source: GDELT DOC 2.0 API. Signal id {worst.id}, category "
-                        f"{worst.category}, detected_at {worst.detected_at.isoformat() if worst.detected_at else None}."
-                    ),
-                    metadata_json={
-                        "source": "geopolitical_risk",
-                        "vendor_id": str(vendor.id),
-                        "region": region_query,
-                        "geopolitical_signal_id": str(worst.id),
-                    },
-                    created_by_user_id=actor_id,
-                    audit_source="geopolitical_risk",
-                )
-                exposure.cascaded_risk_id = risk.id
-            self.db.flush()
+        EventBus.get_instance().emit(
+            EventType.GEOPOLITICAL_SIGNAL_CRITICAL,
+            EventPayload(
+                org_id=org_id,
+                entity_type="geopolitical_signal",
+                entity_id=worst.id,
+                event_type=EventType.GEOPOLITICAL_SIGNAL_CRITICAL,
+                previous_value=None,
+                new_value=CASCADE_SEVERITY,
+                triggered_by="user_action" if actor_id else "system",
+                db=self.db,
+                triggered_by_user_id=actor_id,
+                payload={"region": region_query},
+            ),
+        )
 
     # ------------------------------------------------------------------
     # Signals

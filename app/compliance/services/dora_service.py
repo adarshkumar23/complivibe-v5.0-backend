@@ -6,16 +6,12 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.compliance.services.issue_service import IssueService
-from app.models.control_monitoring_alert import ControlMonitoringAlert
+from app.core.event_bus import EventBus, EventPayload, EventType
 from app.models.dora_ict_register import DORAICTRegister
-from app.models.issue import Issue
 from app.models.membership import Membership
 from app.models.user import User
 from app.models.vendor import Vendor
-from app.schemas.issue import IssueCreate
 from app.services.audit_service import AuditService
-from app.services.risk_service import RiskService
 
 DORA_ASSESSMENT_OVERDUE_DAYS = 365
 
@@ -46,117 +42,36 @@ class DORAService:
         return False, ""
 
     def _sync_risk_register(self, org_id: uuid.UUID, row: DORAICTRegister, *, actor_user_id: uuid.UUID | None) -> None:
-        """Create a Risk register entry the first time a critical ICT provider is found
-        with a DORA Art. 28 gap (no exit strategy, or assessment lapsed past the
-        recurring cadence). Without this, get_ict_register_report's aggregate counts
-        were the only place these findings surfaced -- nothing actually landed in the
-        risk register a compliance officer works from day to day, and nothing paged
-        anyone when a previously-compliant entry drifted into gap state.
+        """Detect a DORA Art. 28 register gap (no exit strategy, or assessment lapsed
+        past the recurring cadence) on a critical ICT provider and PUBLISH it onto the
+        event bus. The downstream Risk register entry, ControlMonitoringAlert, Issue,
+        and `dora.ict_entry_risk_linked` audit log are created by
+        DORARiskRegisterListener -- see docs/event_bus_design.md (Interconnection
+        Phase 1). Behavior is identical to the former inline cascade; only the wiring
+        changed from a direct call to publish/subscribe.
 
-        Mirrors the generic vendor-assessment staleness cascade
-        (VendorAssessmentService.sync_staleness) which lands the same finding in a Risk,
-        a real ControlMonitoringAlert (surfaced via /compliance/monitoring/alerts), AND
-        an Issue. This path used to stop at Risk + Issue and skip the alert, which meant
-        a DORA-critical ICT gap silently never showed up on the monitoring-alerts board
-        that the equivalent generic vendor-assessment gap does.
-
-        Idempotent per entry (guarded by DORAICTRegister.risk_id) so repeated writes
-        to an already-flagged entry don't spawn duplicate risks; once a human is
-        tracking the risk, we don't want to spam the register on every unrelated edit.
+        Idempotent per entry (guarded by DORAICTRegister.risk_id): an already-flagged
+        entry emits nothing, so repeated writes don't spawn duplicate risks.
         """
         now = self.utcnow()
         is_gap, reason = self._is_register_gap(row, now=now)
         if not is_gap or row.risk_id is not None:
             return
 
-        if reason == "missing_exit_strategy":
-            description = (
-                f"Critical ICT third-party '{row.counterparty_name}' (DORA {row.dora_article}) has no "
-                "documented exit strategy. Art. 28 requires a documented exit strategy for critical/"
-                "important function providers so the relationship can be unwound without disrupting "
-                "operations."
-            )
-        else:
-            description = (
-                f"Critical ICT third-party '{row.counterparty_name}' (DORA {row.dora_article}) has not "
-                f"been reassessed in over {DORA_ASSESSMENT_OVERDUE_DAYS} days "
-                f"(last assessed {row.last_assessed_at.isoformat() if row.last_assessed_at else 'never'})."
-            )
-
-        created_by = actor_user_id or row.created_by
-        risk = RiskService(self.db).create_risk_from_service(
-            organization_id=org_id,
-            title=f"DORA ICT register gap: {row.counterparty_name}",
-            description=description,
-            category="third_party",
-            likelihood=4,
-            impact=4,
-            treatment_strategy="mitigate",
-            risk_context_external=(
-                "Regulation (EU) 2022/2554 (DORA) Article 28 - management of ICT third-party risk, "
-                "critical/important function exit strategy and periodic reassessment requirements."
+        EventBus.get_instance().emit(
+            EventType.DORA_REGISTER_GAP_DETECTED,
+            EventPayload(
+                org_id=org_id,
+                entity_type="dora_ict_register",
+                entity_id=row.id,
+                event_type=EventType.DORA_REGISTER_GAP_DETECTED,
+                previous_value=None,
+                new_value=reason,
+                triggered_by="user_action" if actor_user_id else "system",
+                db=self.db,
+                triggered_by_user_id=actor_user_id,
+                payload={"reason": reason},
             ),
-            metadata_json={
-                "source": "dora_ict_register",
-                "dora_ict_register_id": str(row.id),
-                "reason": reason,
-            },
-            created_by_user_id=created_by,
-            audit_source="dora_ict_register",
-        )
-        row.risk_id = risk.id
-
-        alert = ControlMonitoringAlert(
-            organization_id=org_id,
-            alert_type="dora_ict_register_gap",
-            severity="high" if reason == "missing_exit_strategy" else "medium",
-            status="open",
-            title=f"DORA ICT register gap: {row.counterparty_name}",
-            description=description,
-            alert_context_json={
-                "dora_ict_register_id": str(row.id),
-                "vendor_id": str(row.vendor_id) if row.vendor_id else None,
-                "risk_id": str(risk.id),
-                "reason": reason,
-                "event": "dora_ict_register_gap",
-            },
-            assigned_to_user_id=row.owner_id,
-        )
-        self.db.add(alert)
-        self.db.flush()
-
-        existing_issue = self.db.execute(
-            select(Issue).where(
-                Issue.organization_id == org_id,
-                Issue.source_type == "risk_assessment",
-                Issue.source_id == row.id,
-                Issue.deleted_at.is_(None),
-            )
-        ).scalar_one_or_none()
-        if existing_issue is None:
-            IssueService(self.db).create_issue(
-                org_id,
-                IssueCreate(
-                    title=f"DORA ICT register gap: {row.counterparty_name}",
-                    description=f"{description}\n\nLinked risk ID: {risk.id}",
-                    issue_type="vendor_failure",
-                    severity="high" if reason == "missing_exit_strategy" else "medium",
-                    source_type="risk_assessment",
-                    source_id=row.id,
-                    owner_id=row.owner_id,
-                    assigned_to=row.owner_id,
-                ),
-                created_by=created_by,
-            )
-        self.db.flush()
-        AuditService(self.db).write_audit_log(
-            action="dora.ict_entry_risk_linked",
-            entity_type="dora_ict_register",
-            entity_id=row.id,
-            organization_id=org_id,
-            actor_user_id=actor_user_id,
-            after_json={"risk_id": str(risk.id), "alert_id": str(alert.id), "reason": reason},
-            metadata_json={"source": "dora_ict_register"},
         )
 
     def _require_org_user(self, org_id: uuid.UUID, user_id: uuid.UUID, field_name: str) -> None:

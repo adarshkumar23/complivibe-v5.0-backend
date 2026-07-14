@@ -5,13 +5,12 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.control_monitoring_alert import ControlMonitoringAlert
+from app.core.event_bus import EventBus, EventPayload, EventType
 from app.models.membership import Membership
 from app.models.user import User
 from app.models.vendor import Vendor
 from app.models.vendor_assessment import VendorAssessment
 from app.models.vendor_assessment_question import VendorAssessmentQuestion
-from app.services.audit_service import AuditService
 
 # Statuses in which an assessment is still "in flight" -- a completed or
 # cancelled assessment is never stale regardless of its due_date.
@@ -135,79 +134,33 @@ class VendorAssessmentService:
         *,
         actor_user_id: uuid.UUID | None,
     ) -> None:
-        """Cascade an overdue vendor assessment into the same 3 places the DORA
-        ICT-register staleness path already lands in (dora_service._sync_risk_register):
-        (1) a Risk register entry, (2) a real ControlMonitoringAlert (surfaced via
-        /compliance/monitoring/alerts), and (3) an audit log entry linking them.
-        Idempotent per assessment (guarded by VendorAssessment.risk_id), so repeated
-        syncs on an already-flagged assessment don't spawn duplicate risks/alerts.
+        """Detect an overdue vendor assessment and PUBLISH `vendor.assessment_stale`
+        onto the event bus. The downstream Risk register entry, ControlMonitoringAlert,
+        and `vendor_assessment.risk_linked` audit log are created by
+        VendorStalenessListener -- see docs/event_bus_design.md (Interconnection
+        Phase 1). Behavior is identical to the former inline cascade; only the wiring
+        changed from a direct call to publish/subscribe. Idempotent per assessment
+        (guarded by VendorAssessment.risk_id): an already-flagged assessment emits
+        nothing. The listener runs synchronously in-process, so assessment.risk_id is
+        already set when this returns (the sweep still counts flagged rows correctly).
         """
-        from app.services.risk_service import RiskService
-
         if not self.is_overdue(assessment) or assessment.risk_id is not None:
             return
 
-        description = (
-            f"Vendor assessment '{assessment.title}' for vendor '{vendor.name}' is overdue: "
-            f"due date {assessment.due_date.isoformat()} has passed and the assessment is still "
-            f"'{assessment.status}'. An overdue vendor assessment means the vendor's risk posture "
-            "has not been re-verified on schedule."
-        )
-
-        created_by = actor_user_id or assessment.created_by_user_id
-        risk = RiskService(self.db).create_risk_from_service(
-            organization_id=organization_id,
-            title=f"Vendor assessment overdue: {vendor.name}",
-            description=description,
-            category="third_party",
-            likelihood=3,
-            impact=3,
-            treatment_strategy="mitigate",
-            risk_context_external=(
-                "Vendor risk assessment past its due date and not completed; vendor risk "
-                "posture has not been re-verified on the required cadence."
+        EventBus.get_instance().emit(
+            EventType.VENDOR_ASSESSMENT_STALE,
+            EventPayload(
+                org_id=organization_id,
+                entity_type="vendor_assessment",
+                entity_id=assessment.id,
+                event_type=EventType.VENDOR_ASSESSMENT_STALE,
+                previous_value=None,
+                new_value="assessment_overdue",
+                triggered_by="user_action" if actor_user_id else "system",
+                db=self.db,
+                triggered_by_user_id=actor_user_id,
+                payload={"reason": "assessment_overdue", "vendor_id": str(vendor.id)},
             ),
-            metadata_json={
-                "source": "vendor_assessment",
-                "vendor_id": str(vendor.id),
-                "vendor_assessment_id": str(assessment.id),
-                "reason": "assessment_overdue",
-            },
-            created_by_user_id=created_by,
-            audit_source="vendor_assessment",
-        )
-        assessment.risk_id = risk.id
-
-        alert = ControlMonitoringAlert(
-            organization_id=organization_id,
-            alert_type="vendor_assessment_overdue",
-            severity="medium",
-            status="open",
-            title=f"Vendor assessment overdue: {vendor.name}",
-            description=description,
-            alert_context_json={
-                "vendor_id": str(vendor.id),
-                "vendor_assessment_id": str(assessment.id),
-                "due_date": assessment.due_date.isoformat(),
-                "risk_id": str(risk.id),
-                "event": "vendor_assessment_overdue",
-            },
-        )
-        self.db.add(alert)
-        self.db.flush()
-
-        AuditService(self.db).write_audit_log(
-            action="vendor_assessment.risk_linked",
-            entity_type="vendor_assessment",
-            entity_id=assessment.id,
-            organization_id=organization_id,
-            actor_user_id=actor_user_id,
-            after_json={
-                "risk_id": str(risk.id),
-                "alert_id": str(alert.id),
-                "reason": "assessment_overdue",
-            },
-            metadata_json={"source": "vendor_assessment"},
         )
 
     def summary(self, organization_id: uuid.UUID, vendor_id: uuid.UUID) -> dict[str, int | dict[str, int]]:

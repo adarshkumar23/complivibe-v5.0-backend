@@ -9,6 +9,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_db
+from app.core.event_bus import EventBus, EventPayload, EventType
 from app.models.data_asset import DataAsset
 from app.models.ot_ics_agent import OtIcsAgent
 from app.models.ot_ics_asset import OtIcsAsset
@@ -401,55 +402,27 @@ class OtIcsFindingService:
             metadata_json={"source": "agent_ingest"},
         )
 
-        self._cascade_finding_to_risk(row, asset)
-        return row
-
-    def _cascade_finding_to_risk(self, finding: OtIcsFinding, asset: OtIcsAsset) -> None:
-        """A high/critical OT/ICS finding is a genuine operational-technology risk, not
-        just monitoring noise -- create a real risk-register entry for it, the same
-        way every other domain's staleness/finding logic in this codebase does
-        (vendor concentration risk, KYB/AML, geopolitical risk). One finding creates
-        at most one Risk (tracked via ``finding.risk_id``).
-        """
-        if finding.severity not in FINDING_RISK_CASCADE_SEVERITIES:
-            return
-
-        description = (
-            f"OT/ICS convergence monitoring detected a {finding.severity}-severity "
-            f"{finding.finding_type.replace('_', ' ')} finding on asset {asset.name!r} "
-            f"({asset.asset_type}, network segment {asset.network_segment or 'unspecified'})."
-        )
-        if finding.description:
-            description += f" {finding.description}"
-
-        risk = RiskService(self.db).create_risk_from_service(
-            organization_id=finding.organization_id,
-            title=f"OT/ICS finding: {finding.finding_type.replace('_', ' ')} on {asset.name}",
-            description=description,
-            category="operational",
-            likelihood=3 if finding.severity == "high" else 4,
-            impact=4 if finding.severity == "high" else 5,
-            treatment_strategy="mitigate",
-            risk_context_external=(
-                f"Source: OT/ICS convergence-monitoring agent ingest. Finding id {finding.id}, "
-                f"asset id {asset.id}, detected_at {finding.detected_at.isoformat()}."
+        # Publish the ingest; OtIcsRiskRegisterListener creates the Risk register
+        # entry for a high/critical finding and recomputes segment concentration --
+        # see docs/event_bus_design.md (Interconnection Phase 1). Behavior is
+        # identical to the former inline _cascade_finding_to_risk; only the wiring
+        # changed from a direct call to publish/subscribe.
+        EventBus.get_instance().emit(
+            EventType.OT_ICS_FINDING_INGESTED,
+            EventPayload(
+                org_id=agent.organization_id,
+                entity_type="ot_ics_finding",
+                entity_id=row.id,
+                event_type=EventType.OT_ICS_FINDING_INGESTED,
+                previous_value=None,
+                new_value=row.severity,
+                triggered_by="system",
+                db=self.db,
+                triggered_by_user_id=None,
+                payload={"severity": row.severity, "asset_id": str(row.asset_id)},
             ),
-            metadata_json={
-                "source": "ot_ics",
-                "finding_id": str(finding.id),
-                "asset_id": str(asset.id),
-                "network_segment": asset.network_segment,
-                "finding_type": finding.finding_type,
-                "severity": finding.severity,
-            },
-            created_by_user_id=None,
-            audit_source="ot_ics_finding_ingest",
         )
-        finding.risk_id = risk.id
-        self.db.flush()
-
-        if asset.network_segment:
-            self._recompute_segment_risk(finding.organization_id, asset.network_segment)
+        return row
 
     def _recompute_segment_risk(self, org_id: uuid.UUID, network_segment: str) -> None:
         """Recompute open high/critical finding concentration for one network segment
