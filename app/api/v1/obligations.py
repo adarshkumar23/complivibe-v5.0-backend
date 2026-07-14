@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
+from app.models.common_control_mapping import CommonControlMapping
 from app.models.control import Control
 from app.models.control_obligation_mapping import ControlObligationMapping
 from app.models.framework import Framework
@@ -1008,15 +1009,28 @@ def list_controls_for_obligation(
     if org_framework is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Framework is not active for organization")
 
-    mappings = db.execute(
-        select(ControlObligationMapping).where(
-            ControlObligationMapping.organization_id == organization.id,
-            ControlObligationMapping.obligation_id == obligation.id,
-            ControlObligationMapping.status == "active",
-        )
-    ).scalars().all()
-
-    control_ids = [m.control_id for m in mappings]
+    # Union BOTH mapping mechanisms so a control mapped via the common-controls
+    # endpoint is not invisible here (the aggregate/coverage view already unions
+    # both; this direct read must match it).
+    standard_control_ids = set(
+        db.execute(
+            select(ControlObligationMapping.control_id).where(
+                ControlObligationMapping.organization_id == organization.id,
+                ControlObligationMapping.obligation_id == obligation.id,
+                ControlObligationMapping.status == "active",
+            )
+        ).scalars().all()
+    )
+    common_control_ids = set(
+        db.execute(
+            select(CommonControlMapping.control_id).where(
+                CommonControlMapping.organization_id == organization.id,
+                CommonControlMapping.obligation_id == obligation.id,
+                CommonControlMapping.status != "inactive",
+            )
+        ).scalars().all()
+    )
+    control_ids = list(standard_control_ids | common_control_ids)
     if not control_ids:
         return []
 

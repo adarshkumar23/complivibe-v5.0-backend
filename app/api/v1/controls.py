@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
+from app.models.common_control_mapping import CommonControlMapping
 from app.models.control import Control
 from app.models.control_obligation_mapping import ControlObligationMapping
 from app.models.evidence_item import EvidenceItem
@@ -195,6 +196,30 @@ def get_control_detail(
         )
         for m in mappings
     ]
+    # Also surface obligations mapped via the common-controls mechanism (which the
+    # aggregate view already unions). For a common-only obligation the standard
+    # mapping fields don't exist, so derive a mapping_type from mapping_strength.
+    _STRENGTH_TO_MAPPING_TYPE = {"full": "satisfies", "partial": "partially_satisfies"}
+    standard_obligation_ids = {m.obligation_id for m in mappings}
+    common_mappings = db.execute(
+        select(CommonControlMapping).where(
+            CommonControlMapping.organization_id == organization.id,
+            CommonControlMapping.control_id == control.id,
+            CommonControlMapping.status != "inactive",
+        )
+    ).scalars().all()
+    for cm in common_mappings:
+        if cm.obligation_id in standard_obligation_ids:
+            continue
+        standard_obligation_ids.add(cm.obligation_id)
+        mapped_summary.append(
+            ControlObligationMapRead(
+                obligation_id=cm.obligation_id,
+                mapping_type=_STRENGTH_TO_MAPPING_TYPE.get(cm.mapping_strength, "supports"),
+                confidence="manual_confirmed" if cm.verified_at is not None else "system_suggested",
+                status="active",
+            )
+        )
 
     evidence_count = ControlService.evidence_count_for_control(db, organization.id, control.id)
     active_exception = ControlExceptionService(db).get_control_exception_status(control.id, organization.id)
