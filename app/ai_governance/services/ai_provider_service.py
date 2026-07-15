@@ -382,11 +382,17 @@ class AIProviderService:
         )
 
     def _call_groq_messages(self, api_key: str, messages: list[dict[str, str]]) -> str:
+        settings = get_settings()
         payload = {
-            "model": "llama-3.3-70b-versatile",
+            # Env-configurable (GROQ_MODEL); default openai/gpt-oss-120b. The
+            # previous hardcoded llama-3.3-70b-versatile is deprecated by Groq.
+            "model": settings.GROQ_MODEL,
             "messages": messages,
             "temperature": 0.2,
-            "max_tokens": 1200,
+            # Reasoning models spend tokens on internal reasoning before the
+            # visible answer, so this must be generous or output truncates to
+            # empty (which would raise below and fall through to Azure).
+            "max_tokens": settings.GROQ_MAX_TOKENS,
         }
         with httpx.Client(timeout=30.0) as client:
             resp = client.post(

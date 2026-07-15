@@ -49,6 +49,16 @@ class Settings(BaseSettings):
     AZURE_OPENAI_DEPLOYMENT: str | None = None
     AZURE_OPENAI_API_VERSION: str | None = None
     GROQ_API_KEY: str = ""
+    # Groq chat model. Env-configurable so a Groq model deprecation is a config
+    # change, not a code change. Default is Groq's current production-tier
+    # reasoning flagship; do NOT point this at preview-only models (e.g. qwen).
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
+    # gpt-oss is a reasoning model: reasoning tokens are consumed from the
+    # completion budget BEFORE the visible answer, so the cap must leave room for
+    # both or the visible text is silently truncated to empty. 8192 gives ample
+    # headroom for reasoning + a policy/risk draft while staying well under the
+    # model's 65,536 max-completion ceiling.
+    GROQ_MAX_TOKENS: int = 8192
     MLOPS_CONFIG_ENCRYPTION_KEY: str | None = None
     OTEL_ENABLED: bool = False
     OTEL_SERVICE_NAME: str = "complivibe-backend"
