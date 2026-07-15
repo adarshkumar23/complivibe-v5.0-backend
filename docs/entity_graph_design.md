@@ -1,12 +1,18 @@
 # Unified Cross-Entity Graph — Design Doc
 
-Status: **Step 1 (design) approved; Step 2 (registry + traversal) BUILT.** Read-only
+Status: **Steps 1–3 BUILT; Phase 2 (Unified Cross-Entity Graph) CLOSED.** Read-only
 layer over existing tables — no migration, `alembic heads` unchanged at `0303_domain_events`.
 Implementation: `app/compliance/services/entity_graph_registry.py` (26 EdgeSpecs, schema-validated)
 + `entity_graph_traversal_service.py` (recursive-CTE traversal, depth-4 ceiling, PG14 CYCLE
-detection, tenant-scoped at every hop, explicit truncation flag). Tests:
-`tests/integration/test_entity_graph_traversal.py` (Postgres-gated). See §6a for the measured
-perf number and "Resolved decisions" for the five design-question resolutions.
+detection, tenant-scoped at every hop, explicit truncation flag). **As-built API (Step 3):**
+`GET /api/v1/graph/traverse` (`app/api/v1/entity_graph.py`) returns the traversal result incl.
+the `truncated` flag; gated by a dedicated new permission **`entity_graph:read`** (owner/admin +
+the four read-capable roles: compliance_manager, reviewer, auditor, readonly); org scope is taken
+from the caller's membership (`membership.organization_id`), never a client-supplied org id, and is
+enforced at every hop. Tests: `tests/integration/test_entity_graph_traversal.py` (Postgres-gated,
+traversal + seams + endpoint) and `tests/unit/test_entity_graph_endpoint_wiring.py` (PG-free
+registration/auth guard). See §6a for the measured perf number, §6b for the concurrency result,
+and "Resolved decisions" for the five design-question resolutions.
 Scope: design a unified graph spanning risks, controls, vendors, AI systems, policies, obligations, incidents — as one connected structure that **extends** existing edges, not a rebuild.
 
 ---
@@ -142,13 +148,35 @@ throwaway perf tables carry *no indexes*; production edge tables all have
 edges/org, roughly 8× this volume) is where real-time CTE would start pushing multi-second
 and the deferred projection (decision #1) earns its keep. Until then, registry-only is fine.
 
+### 6b. Concurrency (Phase 2 checkpoint — real, on real Postgres)
+
+48 concurrent `traverse` calls (12 worker threads, `complivibe_test_user`) across 6 orgs
+that **all share the same vendor node V** — the cross-tenant hazard at scale, matching how
+FastAPI serves sync endpoints (threadpool + one DB session per request):
+
+- **0 errors, 0 deadlocks, 0 cross-request bleed** — every org's traversal returned only its
+  own nodes despite the shared vendor.
+- Per-request under concurrent load: min 66 ms / median 124 ms / max 229 ms; 48 concurrent
+  requests completed in ~540 ms wall.
+
+Confirms the org filter in the recursive term holds under concurrency, not just in isolation.
+
 ---
 
-## 7. Suggested build sequence (after approval — no code yet)
+## 7. Build sequence — as-built status
 
-1. **Edge registry (Part 1)** + a UNION-ALL edge view + recursive-CTE traversal service with all §3 guards + §5 org filtering. Tests: whole-posture query returns correct multi-hop set; matches Python BFS at depth ≤ 2; **cross-tenant anchor cannot reach another org's rows via a shared vendor**; cycle/depth/fan-out guards proven. Zero migration; protected seams read-only.
-2. **`graph_edges` projection (Part 2) + `GraphProjectionListener`** on the bus, only if §6 sizing calls for it — derived, org-scoped, reconciler-backed.
-3. Reconcile the duplicate seams (§1e) *in the registry only* (choose canonical), never by renaming tables.
+1. **✅ DONE — Edge registry (Part 1)** + recursive-CTE traversal service (`all_edges`
+   UNION-ALL inlined in the CTE) with all §3 guards + §5 org filtering, **plus the
+   `GET /api/v1/graph/traverse` endpoint** (`entity_graph:read` permission, membership-scoped).
+   Tests: correct multi-hop set; cross-tenant anchor cannot reach another org's rows via a
+   shared vendor (proven in isolation *and* under 48-way concurrency, §6b); cycle/depth/
+   truncation guards proven; all three reconciled seams proven on real Postgres. Zero
+   migration; protected seams read-only.
+2. **⏳ DEFERRED (future work) — `graph_edges` projection (Part 2) + `GraphProjectionListener`**
+   on the bus, to be built only when §6/§6a sizing calls for it (~100k edges/org) — derived,
+   org-scoped, reconciler-backed. Explicitly out of Phase 2 scope, not forgotten.
+3. **✅ DONE — Reconciled the duplicate seams (§1e)** *in the registry only* (canonical +
+   `deprecated_but_present`), never by renaming tables.
 
 ---
 
