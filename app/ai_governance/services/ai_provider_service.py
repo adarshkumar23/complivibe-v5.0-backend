@@ -327,19 +327,84 @@ class AIProviderService:
             detail=f"AI recommendations parsing failed after retry: {parse_error}",
         )
 
+    # Structured-output schema for the compound-insight narrative (Groq
+    # json_schema strict; strict mode requires all fields required +
+    # additionalProperties false, and is supported on gpt-oss models).
+    COMPOUND_NARRATIVE_SCHEMA = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "compound_insight_narrative",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "headline": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "recommended_actions": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["headline", "summary", "recommended_actions"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+    def generate_compound_narrative(
+        self,
+        *,
+        org_id: uuid.UUID,
+        pattern_payload: dict,
+    ) -> tuple[dict, str, bool]:
+        """Best-effort AI narrative for an ALREADY code-confirmed compound pattern.
+
+        Returns (narrative_dict, provider_used, used_byo). Raises on any failure
+        (no key, timeout, malformed, chain failure) so the caller falls back to
+        the deterministic templated narrative -- a detection is never suppressed
+        by an AI-layer problem. The model is TOLD the severity; it never decides
+        what is risky.
+        """
+        system = (
+            "You explain an already-confirmed compliance exposure to a compliance officer. "
+            "Do NOT assess or re-rank severity -- it is given. Do NOT invent facts beyond the payload. "
+            "Return a short headline, a concise summary (<= 600 chars), and up to 3 recommended actions."
+        )
+        user = (
+            "A deterministic detector has confirmed this compounding exposure. Write the narrative.\n\n"
+            + json.dumps(pattern_payload, default=str, ensure_ascii=False)
+        )
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        text, provider, byo = self._run_provider_chain(
+            org_id=org_id,
+            messages=messages,
+            failure_context="Compound insight narrative unavailable",
+            response_format=self.COMPOUND_NARRATIVE_SCHEMA,
+        )
+        parsed = json.loads(text)  # raises on malformed -> caller falls back
+        headline = str(parsed.get("headline") or "").strip()
+        summary = str(parsed.get("summary") or "").strip()
+        actions_raw = parsed.get("recommended_actions") or []
+        if not headline or not summary or not isinstance(actions_raw, list):
+            raise RuntimeError("Compound narrative failed validation (missing/invalid fields)")
+        actions = [str(a).strip()[:140] for a in actions_raw if str(a).strip()][:3]
+        return (
+            {"headline": headline[:300], "summary": summary[:600], "recommended_actions": actions},
+            provider,
+            byo,
+        )
+
     def _run_provider_chain(
         self,
         *,
         org_id: uuid.UUID,
         messages: list[dict[str, str]],
         failure_context: str,
+        response_format: dict | None = None,
     ) -> tuple[str, str, bool]:
         creds = self.resolve_credentials(org_id)
 
         groq_exc: Exception | None = None
         if creds.groq_api_key:
             try:
-                text = self._call_groq_messages(creds.groq_api_key, messages)
+                text = self._call_groq_messages(creds.groq_api_key, messages, response_format=response_format)
                 return text, "groq", creds.use_byo_credentials
             except Exception as exc:  # noqa: BLE001
                 groq_exc = exc
@@ -352,6 +417,7 @@ class AIProviderService:
                     endpoint=creds.azure_endpoint,
                     deployment_name=creds.azure_deployment_name,
                     messages=messages,
+                    response_format=response_format,
                 )
                 return text, "azure", creds.use_byo_credentials
             except Exception as exc:  # noqa: BLE001
@@ -381,9 +447,14 @@ class AIProviderService:
             ],
         )
 
-    def _call_groq_messages(self, api_key: str, messages: list[dict[str, str]]) -> str:
+    def _call_groq_messages(
+        self,
+        api_key: str,
+        messages: list[dict[str, str]],
+        response_format: dict | None = None,
+    ) -> str:
         settings = get_settings()
-        payload = {
+        payload: dict = {
             # Env-configurable (GROQ_MODEL); default openai/gpt-oss-120b. The
             # previous hardcoded llama-3.3-70b-versatile is deprecated by Groq.
             "model": settings.GROQ_MODEL,
@@ -394,6 +465,9 @@ class AIProviderService:
             # empty (which would raise below and fall through to Azure).
             "max_tokens": settings.GROQ_MAX_TOKENS,
         }
+        if response_format is not None:
+            # Groq Structured Outputs (json_schema strict) -- constrained decoding.
+            payload["response_format"] = response_format
         with httpx.Client(timeout=30.0) as client:
             resp = client.post(
                 self.GROQ_URL,
@@ -441,17 +515,22 @@ class AIProviderService:
         endpoint: str,
         deployment_name: str,
         messages: list[dict[str, str]],
+        response_format: dict | None = None,
     ) -> str:
         client = OpenAI(
             api_key=api_key,
             base_url=endpoint,
             timeout=30.0,
         )
+        extra: dict = {}
+        if response_format is not None:
+            extra["response_format"] = response_format
         resp = client.chat.completions.create(
             model=deployment_name,
             messages=messages,
             temperature=0.2,
             max_tokens=1200,
+            **extra,
         )
         text = None
         if getattr(resp, "choices", None):

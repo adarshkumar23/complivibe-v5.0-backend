@@ -15,6 +15,10 @@ from app.compliance.services.escalation_service import run_daily_escalation_poli
 from app.compliance.services.breach_notification_service import run_daily_breach_notification_deadline_sweep
 from app.compliance.services.vendor_mitigation_service import run_daily_vendor_mitigation_overdue_action_sweep
 from app.services.vendor_assessment_service import run_daily_vendor_assessment_staleness_sweep
+from app.compliance.services.compound_insight_sweep_service import (
+    run_compound_insight_candidate_drain,
+    run_compound_insight_full_sweep,
+)
 from app.compliance.services.pbc_service import run_daily_pbc_overdue_sweep
 from app.compliance.services.control_exception_service import run_daily_control_exception_expiry_sweep
 from app.compliance.services.subprocessor_service import run_daily_subprocessor_dpa_expiry_sweep
@@ -73,6 +77,8 @@ SCHEDULER_JOB_IDS: list[str] = [
     "vendor_kyb_rescreen_sweep",
     "vendor_security_rating_continuous_refresh",
     "vendor_assessment_staleness_sweep",
+    "compound_insight_reactive_drain",
+    "compound_insight_full_sweep",
 ]
 
 
@@ -787,6 +793,48 @@ def _run_regulatory_change_poll_job() -> None:
     )
 
 
+def _run_compound_insight_drain_internal(*, db) -> dict:
+    try:
+        result = run_compound_insight_candidate_drain(db)
+        db.commit()
+        logger.info("Compound insight drain complete", extra=result)
+        return result
+    except Exception as exc:
+        db.rollback()
+        _capture_scheduler_exception(exc)
+        logger.exception("Compound insight drain failed")
+        raise
+
+
+def _run_compound_insight_drain_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="compound_insight_reactive_drain",
+        job_fn=_run_compound_insight_drain_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_compound_insight_full_sweep_internal(*, db) -> dict:
+    try:
+        result = run_compound_insight_full_sweep(db)
+        db.commit()
+        logger.info("Compound insight full sweep complete", extra=result)
+        return result
+    except Exception as exc:
+        db.rollback()
+        _capture_scheduler_exception(exc)
+        logger.exception("Compound insight full sweep failed")
+        raise
+
+
+def _run_compound_insight_full_sweep_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="compound_insight_full_sweep",
+        job_fn=_run_compound_insight_full_sweep_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
 def register_pbc_scheduler(app: FastAPI) -> None:
     settings = get_settings()
     if settings.APP_ENV == "test":
@@ -847,6 +895,20 @@ def register_pbc_scheduler(app: FastAPI) -> None:
         _run_mitigation_overdue_action_sweep_job,
         trigger=CronTrigger(hour=0, minute=50),
         id="mitigation_overdue_action_sweep",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_compound_insight_drain_job,
+        trigger=IntervalTrigger(minutes=5),
+        id="compound_insight_reactive_drain",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_compound_insight_full_sweep_job,
+        trigger=CronTrigger(hour=3, minute=30),
+        id="compound_insight_full_sweep",
         replace_existing=True,
         coalesce=True,
     )

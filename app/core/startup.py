@@ -20,3 +20,9 @@ def register_event_listeners() -> None:
     VendorStalenessListener().register(bus)
     GeopoliticalVendorRiskListener().register(bus)
     OtIcsRiskRegisterListener().register(bus)
+
+    # Phase 3 -- compound-exposure recommendation engine. Flags touched nodes for
+    # a later (out-of-transaction) compound re-check; does no traversal/AI itself.
+    from app.compliance.services.compound_pattern_candidate_listener import CompoundPatternCandidateListener
+
+    CompoundPatternCandidateListener().register(bus)

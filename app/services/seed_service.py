@@ -300,6 +300,7 @@ PERMISSIONS: dict[str, str] = {
     "compliance_inbox:read": "Read a user's prioritized compliance inbox across attestations, evidence requests, approvals, and overdue work",
     "compliance_summary:generate": "Generate public tokenized one-page compliance summary links",
     "entity_graph:read": "Traverse the unified cross-entity graph (multi-hop reachability from an anchor entity)",
+    "compound_insights:read": "Read cross-domain compound-exposure insights on the Proactive Insights page",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {
@@ -314,6 +315,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "evidence:write",
         "risks:read",
         "entity_graph:read",
+        "compound_insights:read",
         "risks:write",
         "tasks:read",
         "tasks:write",
@@ -491,6 +493,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "evidence:write",
         "risks:read",
         "entity_graph:read",
+        "compound_insights:read",
         "risks:write",
         "risk_indicators:write",
         "risk_appetite:write",
@@ -594,6 +597,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "evidence:read",
         "risks:read",
         "entity_graph:read",
+        "compound_insights:read",
         "audit_logs:read",
         "dashboard:read",
         "tasks:read",
@@ -666,6 +670,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "evidence:read",
         "risks:read",
         "entity_graph:read",
+        "compound_insights:read",
         "tasks:read",
         "dashboard:read",
         "org:read",
@@ -1248,6 +1253,23 @@ EMAIL_TEMPLATE_SEEDS: list[dict] = [
             "</body></html>"
         ),
         "allowed_variables_json": ["user_name", "commitment_title", "commitment_status", "due_date"],
+        "status": "active",
+        "version": 1,
+    },
+    {
+        "template_key": "compound_insight_surfaced",
+        "name": "Compound Insight Surfaced",
+        "description": "Notification when a new cross-domain compound exposure is detected.",
+        "subject_template": "New compound exposure detected: {{ insight_title }}",
+        "body_text_template": (
+            "Hello {{ user_name }},\n\n"
+            "A new compounding compliance exposure has been detected (severity: {{ severity }}).\n\n"
+            "{{ insight_title }}\n\n"
+            "{{ narrative }}\n\n"
+            "Review the connected control, vendor, risk, and evidence together in CompliVibe."
+        ),
+        "body_html_template": None,
+        "allowed_variables_json": ["user_name", "insight_title", "severity", "narrative"],
         "status": "active",
         "version": 1,
     },

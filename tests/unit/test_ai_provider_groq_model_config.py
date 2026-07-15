@@ -47,12 +47,19 @@ def test_groq_call_uses_configured_model_and_reasoning_headroom(db_session, monk
 
     assert out == "DRAFTED TEXT"
     payload = captured["json"]
+    settings = get_settings()
     # Deprecated model must be gone; default is the production-tier flagship.
     assert payload["model"] == "openai/gpt-oss-120b"
     assert payload["model"] != "llama-3.3-70b-versatile"
-    # Completion budget raised well above the old 1200 to survive reasoning tokens.
-    assert payload["max_tokens"] == 8192
+    # Payload reflects the CONFIGURED budget (a local .env may override the default,
+    # e.g. 4096 for the free tier), and is always well above the old hardcoded 1200.
+    assert payload["max_tokens"] == settings.GROQ_MAX_TOKENS
     assert payload["max_tokens"] > 1200
+    # The CODE default (independent of any .env override) is 8192.
+    from app.core.config import Settings
+
+    assert Settings.model_fields["GROQ_MAX_TOKENS"].default == 8192
+    assert Settings.model_fields["GROQ_MODEL"].default == "openai/gpt-oss-120b"
     assert captured["url"] == svc.GROQ_URL
     assert captured["headers"]["Authorization"] == "Bearer k"
 

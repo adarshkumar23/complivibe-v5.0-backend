@@ -132,6 +132,7 @@ from app.models.evidence_control_link import EvidenceControlLink
 from app.models.control_obligation_mapping import ControlObligationMapping
 from app.models.cross_framework_obligation_mapping import CrossFrameworkObligationMapping
 from app.models.compliance_risk_recommendation import ComplianceRiskRecommendation
+from app.models.compound_insight import CompoundInsight, CompoundInsightCandidate
 from app.models.billing_event import BillingEvent
 from app.models.competitor_pricing_entry import CompetitorPricingEntry
 from app.models.competitor_pricing_version import CompetitorPricingVersion
@@ -697,6 +698,8 @@ __all__ = [
     "AIRiskSignal",
     "AIRiskRecommendation",
     "ComplianceRiskRecommendation",
+    "CompoundInsight",
+    "CompoundInsightCandidate",
     "CompetitorPricingVersion",
     "CompetitorPricingEntry",
     "CertificationProgram",
