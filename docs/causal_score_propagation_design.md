@@ -1,7 +1,19 @@
 # Causal Score Propagation — Design Doc
 
-Status: **DESIGN ONLY — awaiting review before any code is written** (same gate as Phases 1–3).
-Head at design time: `alembic heads` → `0304_compound_insights` (single head). Branch `main`, commit `87c19b6`.
+Status: **BUILT (Step 2, commit `1b524d3`) — Phase 4 CLOSED at the checkpoint.** Read-only layer,
+**no new migration** — head unchanged at `0304_compound_insights`. Implementation:
+`app/compliance/services/score_explanation_service.py` (Layer 1 exact weighted-delta decomposition
+generalizing `BoardScorecardService._score_change_summary`, recursive for composites; Layer 2
+`domain_events`-window entity-cause enrichment with graceful `underlying_data_changed` fallback; §5.4
+framework legs as a distinctly-typed graph `FrameworkPath` with NO numeric delta) + schema + the
+`score_attribution:read` endpoints. Covers all three diffable families (score_snapshots,
+entity_risk_scores, board_scorecard_snapshots). Evidence: `tests/unit/test_score_explanation_decomposition.py`
++ `tests/integration/test_score_explanation_engine.py`.
+
+**Checkpoint accuracy result (as-built, real `materialize_snapshots` over an 800-control org):** the
+top-level decomposition sums **exactly** to `raw_delta` for all six snapshot types; `rounding_residual`
+across six real snapshot pairs stayed within **[−0.250, +0.237]** (int-rounding of scores, as expected).
+Design-time head was `0304_compound_insights` at commit `87c19b6`.
 
 Goal: make a score **change** traceable to its real cause — e.g. *"your compliance score dropped 4 points
 because Control X failed, which dropped Control-Health's implemented ratio (−3 pts) and, via GDPR's
