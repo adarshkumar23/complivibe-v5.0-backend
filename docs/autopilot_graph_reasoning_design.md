@@ -1,9 +1,19 @@
 # Governance Autopilot — Cross-Domain Graph-Aware Reasoning (Design Doc)
 
-Status: **DESIGN ONLY — awaiting review before any code is written.** Given Autopilot's safety history,
-this design is written to be read more carefully than any prior phase's, and it deliberately recommends
-expanding Autopilot's *reasoning* without expanding its *authority*.
-Head at design time: `alembic heads` → `0304_compound_insights` (single head). Branch `main`, commit `e5df769`.
+Status: **BUILT (Step 2, commit `3b08763`) — Phase 5 CLOSED at the checkpoint; Interconnection roadmap
+complete.** Suggestion-only, as designed: cross-domain candidates always route to human approval. Migration
+`0305_autopilot_graph_reasoning` adds only the independent kill-switch column (default OFF at model + DB
+level). Implementation in `app/services/ai_system_risk_assessment_service.py`
+(`generate_cross_domain_candidate_actions` for the 3 best-effort sources +
+`create_cross_domain_execution_intent`, which has NO auto-execute branch, AST-verified) + endpoint
+`POST /ai-governance/autopilot/graph-candidates/generate` (`ai_systems:write`, no new permission). Evidence:
+`tests/unit/test_autopilot_graph_reasoning.py` (11) + `tests/integration/test_autopilot_graph_reasoning_pg.py` (2).
+
+**Checkpoint re-verification (fresh):** AST no-auto-exec check PASS on all 3 cross-domain methods;
+`create_execution_intent` refuses the cross-domain source_type; the adversarial corroboration invariant holds
+(gate outcome identical with/without corroboration, smuggled confidence discarded to 0.5); 6-way concurrent
+cross-org generation had 0 errors, 0 bleed, and every intent stayed `approval_required`.
+Design-time head was `0304_compound_insights` at commit `e5df769`.
 
 Goal: let Autopilot's candidate-action engine reason across the connected picture (Phase 1 event bus +
 Phase 2 graph + Phase 3 compound insights + Phase 4 causal attribution) instead of domain-local signals alone.
