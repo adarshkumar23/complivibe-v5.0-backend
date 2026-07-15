@@ -1,7 +1,12 @@
 # Unified Cross-Entity Graph — Design Doc
 
-Status: **DRAFT — awaiting review before any code is written.** No code in this phase.
-Head at design time: `alembic heads` → `0303_domain_events` (single head). Branch `main`, commit `5658faa`.
+Status: **Step 1 (design) approved; Step 2 (registry + traversal) BUILT.** Read-only
+layer over existing tables — no migration, `alembic heads` unchanged at `0303_domain_events`.
+Implementation: `app/compliance/services/entity_graph_registry.py` (26 EdgeSpecs, schema-validated)
++ `entity_graph_traversal_service.py` (recursive-CTE traversal, depth-4 ceiling, PG14 CYCLE
+detection, tenant-scoped at every hop, explicit truncation flag). Tests:
+`tests/integration/test_entity_graph_traversal.py` (Postgres-gated). See §6a for the measured
+perf number and "Resolved decisions" for the five design-question resolutions.
 Scope: design a unified graph spanning risks, controls, vendors, AI systems, policies, obligations, incidents — as one connected structure that **extends** existing edges, not a rebuild.
 
 ---
@@ -118,6 +123,25 @@ Assumptions (demo/mid-market scale; to be re-measured on real volumes with the n
 - **Move to precompute when** any of: depth > 4 routinely; "whole-posture blast radius" run interactively per page-load; orgs with >~100k edges; or fan-out caps get hit often. Precompute options, in order: (a) the `graph_edges` projection (already recommended) collapses ~30 UNIONs into one scan; (b) a cached per-anchor neighborhood (short TTL, invalidated by the same bus events); (c) only if truly needed, a materialized reachability/closure table (expensive to maintain — defer hard).
 - The existing depth-2 Python BFS stays as the cheap, always-correct path for the common "one entity's immediate neighborhood" view.
 
+### 6a. Measured number (Step 2 — real, not a guess)
+
+Seeded a single org with **~12.3k edge rows** across 6 edge tables (2k controls, 500
+risks, 300 vendors, 800 obligations, 400 policies, 1.5k evidence, plus a risk cascade)
+on PostgreSQL 16 and timed the depth-4 real-time CTE (`complivibe_test_user`, no
+projection):
+
+| anchor | nodes reached @ depth 4 | median time |
+|---|---|---|
+| vendor | 784 | ~260 ms |
+| control | 960 | ~284 ms |
+| risk | 1,722 | ~616 ms |
+
+Sub-second at ~12k edges/org — and this is a **conservative upper bound**, because the
+throwaway perf tables carry *no indexes*; production edge tables all have
+`(organization_id, …)` indexes. So the §6 "move to precompute" threshold (~100k
+edges/org, roughly 8× this volume) is where real-time CTE would start pushing multi-second
+and the deferred projection (decision #1) earns its keep. Until then, registry-only is fine.
+
 ---
 
 ## 7. Suggested build sequence (after approval — no code yet)
@@ -128,12 +152,55 @@ Assumptions (demo/mid-market scale; to be re-measured on real volumes with the n
 
 ---
 
-## Open questions for review
-1. **Projection in v1?** Registry read-layer only first (recommended), or build the `graph_edges` projection + listener now?
-2. **Depth default** — 4 a good ceiling for the whole-posture query, with a truncation flag beyond it?
-3. **Duplicate seams** — OK to pick `policy_risk_links` (vs `policy_risk_mappings`) and `control_obligation_mappings` (vs `common_control_mappings`) as canonical for traversal, leaving both physical tables intact?
-4. **Node identity** — is `(entity_type, entity_id)` the node key (matching `entity_risk_scores`), and do we enumerate the node types now: risk, control, vendor, ai_system, policy, obligation, incident/issue, evidence, data_asset, legal_matter?
-5. **Incidents** — the goal lists "incidents"; today the closest is `issues` / `data_incidents`. Confirm which is the incident node.
+## Resolved decisions (Step 2 — built)
+
+The five review questions are resolved as follows and are now implemented in
+`app/compliance/services/entity_graph_registry.py` + `entity_graph_traversal_service.py`.
+
+1. **No projection in v1.** Real-time recursive CTE only. The derived `graph_edges`
+   projection + `GraphProjectionListener` (§2 Part 2, §4) is **not built** — it remains
+   a documented **future extension point**: when an org crosses ~100k edges or the
+   whole-posture query is run per page-load, a bus-maintained projection collapses the
+   26-table `UNION ALL` into one indexed scan. The traversal service is written so the
+   only change needed later is swapping the `all_edges` CTE source. See the perf number
+   in §6a for where that threshold actually bites.
+
+2. **Depth ceiling default = 4** (configurable via `max_depth`), enforced in the
+   recursive term (`WHERE depth < :max_depth`), with a truncation flag beyond the
+   node cap.
+
+3. **Duplicate seams — canonical picked by *actual live usage*, the other mapped as
+   `deprecated_but_present` (never dropped, never renamed):**
+   - **control ↔ obligation → canonical `control_obligation_mappings`.** This is the
+     table the live cross-entity graph (`risk_graph_service.build`, line 336) actually
+     joins on today, and the DORA/risk listeners operate on the same control/obligation
+     substrate. `common_control_mappings` is a *different* feature — a 3-way
+     `(control, framework, obligation)` common-control inheritance map owned by
+     `common_controls_service` / OSCAL export — so it can hold control↔obligation pairs
+     the canonical table lacks. We therefore project its control↔obligation edge as a
+     `deprecated_but_present` alias of the same logical `control_satisfies_obligation`
+     edge, so traversal does not silently drop those real edges. Suggestion/recommendation
+     tables (`obligation_control_recommendations`, `*_suggestions`) are *proposals*, not
+     confirmed edges, and are intentionally excluded.
+   - **policy ↔ risk → canonical `policy_risk_links`.** This is the user-facing link
+     table: the `/policies/{id}/risks` router and `PolicyRiskLinkService.list_*` read/write
+     it, and that same service keeps `policy_risk_mappings` in sync as a mitigation-strength
+     derivative. Because `policy_risk_mapping_service` also allows direct mapping creation,
+     the deprecated table can diverge, so it too is mapped as `deprecated_but_present`.
+   - **issue ↔ policy → canonical `issue_policy_links`**, deprecated `policy_issue_links`.
+
+4. **Node key = `(entity_type, entity_id)`** — confirmed, matching `entity_risk_scores`.
+   The 12 node types the registry currently spans: `risk`, `control`, `vendor`,
+   `ai_system`, `policy`, `obligation`, `issue` (incident — see #5), `evidence`,
+   `data_asset`, `legal_matter`, `processing_activity`, `data_lineage_node`.
+
+5. **Incident node = `issues`** (not `data_incidents`), decided by actual usage:
+   `issues` owns the cross-domain edge tables (`issue_control_links`, `issue_policy_links`,
+   `policy_issue_links`) that weave it into the graph, and the Phase 1 DORA listener
+   materialises an operational incident as an `Issue` (`dora_risk_register_listener.py`
+   creates an `Issue` when an ICT-entry risk is linked). A grep confirms `data_incidents`
+   has **zero** edge tables into controls/policies/risks (its only inbound FK is from
+   `data_residency_violation.incident_id`), so it is not a graph node in v1.
 
 ## Sources searched
 - Polymorphic association FK/integrity tradeoffs: [Hashrocket](https://hashrocket.com/blog/posts/modeling-polymorphic-associations-in-a-relational-database), [GitLab Docs](https://docs.gitlab.com/development/database/polymorphic_associations/)
