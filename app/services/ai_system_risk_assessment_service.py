@@ -225,6 +225,24 @@ AUTOPILOT_EXECUTION_INTENT_SOURCE_TYPES: tuple[str, ...] = (
     "candidate_action",
     "recommendation_snapshot",
     "copilot_draft_snapshot",
+    # Phase 5: cross-domain graph-aware candidates. This source_type is created
+    # ONLY via create_cross_domain_execution_intent, which has no auto-execute
+    # branch, and is deliberately NOT accepted by create_execution_intent -- so it
+    # can never enter the auto-execute evaluation path (§2 structural guarantee).
+    "cross_domain_candidate_action",
+)
+# Phase 5 -- the only cross-domain candidate sources and the only action keys they
+# may ever emit. A cross-domain source physically cannot propose anything else
+# (constraint #1); enforced by an assertion in create_cross_domain_execution_intent.
+CROSS_DOMAIN_CANDIDATE_SOURCES: tuple[str, ...] = (
+    "compound_insight",
+    "graph_dependency",
+    "score_attribution",
+)
+CROSS_DOMAIN_ALLOWED_ACTION_KEYS: tuple[str, ...] = (
+    "send_reminder",
+    "flag_stale_evidence",
+    "refresh_signals",
 )
 AUTOPILOT_EXECUTION_INTENT_STATUS_VALUES: tuple[str, ...] = (
     "planned",
@@ -7221,6 +7239,25 @@ class AISystemRiskAssessmentService:
                 "notification_count": notification_count,
             }
         )
+        # Audit-trail gap fix (Phase 5, constraint #7): an auto-execution previously
+        # had no dedicated audit entry. Record it explicitly (unchanged signature).
+        from app.services.audit_service import AuditService
+
+        AuditService(self.db).write_audit_log(
+            action="governance_autopilot_execution.executed",
+            entity_type="governance_autopilot_execution",
+            entity_id=row.id,
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+            after_json={
+                "execution_id": str(row.id),
+                "intent_id": str(intent.id),
+                "action_key": action_key,
+                "risk_tier": row.risk_tier,
+                "execution_status": row.execution_status,
+            },
+            metadata_json={"mode": "auto_execute", "notification_count": notification_count},
+        )
         self._run_autopilot_circuit_breaker(organization_id=organization_id, actor_user_id=actor_user_id)
         return row
 
@@ -7312,18 +7349,32 @@ class AISystemRiskAssessmentService:
         settings.autopilot_auto_execute_enabled = False
         settings.updated_by_user_id = actor_user_id
         self.db.flush()
+        breaker_details = {
+            "reasons": trip_reasons,
+            "total_window": total_window,
+            "reversed_window": reversed_window,
+            "reversal_rate": round(reversal_rate, 6),
+            "current_window_count": current_window_count,
+            "spike_threshold": spike_threshold,
+        }
+        # Audit-trail gap fix (Phase 5, constraint #7): a circuit-breaker trip
+        # previously wrote no audit log -- only flipped the setting + emailed.
+        from app.services.audit_service import AuditService
+
+        AuditService(self.db).write_audit_log(
+            action="governance_autopilot_circuit_breaker.tripped",
+            entity_type="organization_governance_setting",
+            entity_id=settings.id,
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+            after_json={"autopilot_auto_execute_enabled": False, **breaker_details},
+            metadata_json={"control": "autopilot_circuit_breaker"},
+        )
         self._queue_autopilot_notification(
             organization_id=organization_id,
             actor_user_id=actor_user_id,
             subject_title="Autopilot auto-execution disabled by circuit breaker",
-            details_json={
-                "reasons": trip_reasons,
-                "total_window": total_window,
-                "reversed_window": reversed_window,
-                "reversal_rate": round(reversal_rate, 6),
-                "current_window_count": current_window_count,
-                "spike_threshold": spike_threshold,
-            },
+            details_json=breaker_details,
         )
 
     def require_autopilot_execution(
@@ -7468,6 +7519,272 @@ class AISystemRiskAssessmentService:
             "updated_at": row.updated_at,
         }
 
+    # ======================================================================
+    # Phase 5 -- cross-domain graph-aware reasoning (SUGGESTION-ONLY).
+    # New candidate SOURCES (compound insight / graph dependency / score
+    # attribution) enrich WHAT Autopilot proposes; they never expand its
+    # authority. All cross-domain candidates route to human approval, and the
+    # dedicated intent-creation method below has NO auto-execute branch at all.
+    # ======================================================================
+    def generate_cross_domain_candidate_actions(self, *, organization_id: uuid.UUID) -> list[dict[str, Any]]:
+        """Deterministically derive candidate actions from the connected picture.
+
+        Returns [] when the independent graph-reasoning kill-switch is OFF (default),
+        leaving base Autopilot completely unaffected. Every candidate emits ONLY an
+        allow-listed low-risk action (send_reminder / flag_stale_evidence /
+        refresh_signals). Cross-domain corroboration is recorded ONLY in
+        human_review_context -- never in confidence_score or any gating input.
+        """
+        settings = self._governance_settings_for_org(organization_id=organization_id)
+        if not bool(getattr(settings, "autopilot_graph_reasoning_enabled", False)):
+            return []
+
+        # keyed by (action_key, target_type, target_id) so multiple agreeing
+        # sources corroborate into one candidate rather than duplicating.
+        merged: dict[tuple, dict[str, Any]] = {}
+
+        def _add(*, action_key, action_type, priority_band, target_type, target_id,
+                 title, description, reason_code, candidate_source, detail):
+            key = (action_key, str(target_type), str(target_id))
+            entry = merged.get(key)
+            if entry is None:
+                entry = {
+                    "action_key": action_key,
+                    "action_type": action_type,
+                    "priority_band": priority_band,
+                    "source_reason_codes": [reason_code],
+                    "target_entity_type": target_type,
+                    "target_entity_id": str(target_id) if target_id else None,
+                    "title": title,
+                    "description": description,
+                    "automation_allowed": False,
+                    "human_approval_required": True,
+                    "candidate_source": candidate_source,
+                    # Corroboration lives ONLY here (constraint #4). Nothing in the
+                    # auto-execute gate ever reads human_review_context.
+                    "human_review_context": {"corroborating_sources": [], "corroboration_count": 0, "details": []},
+                    "caveat": AI_RISK_GOVERNANCE_CANDIDATE_ACTION_CAVEAT,
+                }
+                merged[key] = entry
+            hrc = entry["human_review_context"]
+            if candidate_source not in hrc["corroborating_sources"]:
+                hrc["corroborating_sources"].append(candidate_source)
+            hrc["corroboration_count"] = len(hrc["corroborating_sources"])
+            hrc["details"].append(detail)
+            if reason_code not in entry["source_reason_codes"]:
+                entry["source_reason_codes"].append(reason_code)
+
+        import logging as _logging
+
+        _logger = _logging.getLogger(__name__)
+
+        # --- Source A: Phase 3 compound insights -> remind the responsible owners.
+        # Each source is best-effort and isolated: one domain's query failing must
+        # not crash the whole generator (and must never affect base Autopilot).
+        try:
+            from app.models.compound_insight import CompoundInsight
+
+            insights = self.db.execute(
+                select(CompoundInsight).where(
+                    CompoundInsight.organization_id == organization_id,
+                    CompoundInsight.status == "surfaced",
+                )
+            ).scalars().all()
+            for ins in insights:
+                nodes = ins.matched_nodes_json if isinstance(ins.matched_nodes_json, dict) else {}
+                anchor = nodes.get("anchor") or {}
+                if not anchor.get("entity_id"):
+                    continue
+                _add(
+                    action_key="send_reminder", action_type="send_reminder",
+                    priority_band="high" if ins.severity in ("high", "critical") else "medium",
+                    target_type=anchor.get("entity_type"), target_id=anchor.get("entity_id"),
+                    title=f"Review compound exposure: {ins.title}",
+                    description=ins.templated_narrative,
+                    reason_code="compound_insight_surfaced", candidate_source="compound_insight",
+                    detail={"compound_insight_id": str(ins.id), "pattern_id": ins.pattern_id, "severity": ins.severity},
+                )
+        except Exception:  # noqa: BLE001
+            _logger.warning("Cross-domain source 'compound_insight' failed", exc_info=True)
+
+        # --- Source B: Phase 2 graph-confirmed stale vendor dependency -> flag it.
+        try:
+            from datetime import date as _date
+
+            from app.compliance.services.entity_graph_traversal_service import EntityGraphTraversalService
+            from app.models.risk import Risk
+            from app.models.vendor_assessment import VendorAssessment
+
+            overdue_vendor_ids = [
+                r[0] for r in self.db.execute(
+                    select(VendorAssessment.vendor_id).where(
+                        VendorAssessment.organization_id == organization_id,
+                        VendorAssessment.status.in_(("draft", "in_progress", "under_review")),
+                        VendorAssessment.due_date.is_not(None),
+                        VendorAssessment.due_date < _date.today(),
+                    )
+                ).all()
+            ]
+            traversal = EntityGraphTraversalService(self.db)
+            for vendor_id in set(overdue_vendor_ids):
+                # org-scoped per-hop traversal (Phase 2 isolation) to an open high/critical risk
+                result = traversal.traverse(anchor_type="vendor", anchor_id=vendor_id,
+                                            organization_id=organization_id, max_depth=2)
+                risk_ids = [n.entity_id for n in result.nodes if n.entity_type == "risk"]
+                if not risk_ids:
+                    continue
+                hot = self.db.execute(
+                    select(Risk.id).where(
+                        Risk.organization_id == organization_id, Risk.id.in_(risk_ids),
+                        Risk.severity.in_(("high", "critical")),
+                        Risk.status.in_(("identified", "assessing", "treatment_planned", "in_treatment", "monitored")),
+                    ).limit(1)
+                ).first()
+                if hot is None:
+                    continue
+                _add(
+                    action_key="flag_stale_evidence", action_type="attach_evidence", priority_band="high",
+                    target_type="vendor", target_id=vendor_id,
+                    title="Stale vendor assessment underpins an open high-severity risk",
+                    description="A vendor with an overdue assessment is graph-connected to an open high/critical risk.",
+                    reason_code="graph_confirmed_stale_vendor_dependency", candidate_source="graph_dependency",
+                    detail={"vendor_id": str(vendor_id), "connected_open_high_risk_id": str(hot[0])},
+                )
+        except Exception:  # noqa: BLE001
+            _logger.warning("Cross-domain source 'graph_dependency' failed", exc_info=True)
+
+        # --- Source C: Phase 4 causal score-drop attribution -> nudge the cause owner.
+        try:
+            from app.compliance.services.score_explanation_service import (
+                LEAF_DECOMPOSITION,
+                ScoreExplanationError,
+                ScoreExplanationService,
+            )
+
+            explainer = ScoreExplanationService(self.db)
+            for snapshot_type in LEAF_DECOMPOSITION:
+                try:
+                    exp = explainer.explain_snapshot_change(org_id=organization_id, snapshot_type=snapshot_type)
+                except ScoreExplanationError:
+                    continue
+                if exp.observed_delta >= 0:  # only nudge on a real drop
+                    continue
+                for contrib in exp.contributions:
+                    for cause in contrib.causes:
+                        if cause.cause_type != "event" or cause.entity_id is None:
+                            continue  # never fabricate: only real event-covered causes
+                        _add(
+                            action_key="send_reminder", action_type="send_reminder", priority_band="medium",
+                            target_type=cause.entity_type, target_id=cause.entity_id,
+                            title=f"{snapshot_type} dropped -- attributed to {cause.entity_type} change",
+                            description=f"{snapshot_type} moved {exp.observed_delta}pts; attributed to a {cause.entity_type} change.",
+                            reason_code="causal_score_drop_attribution", candidate_source="score_attribution",
+                            detail={"snapshot_type": snapshot_type, "component": contrib.component,
+                                    "observed_delta": exp.observed_delta},
+                        )
+        except Exception:  # noqa: BLE001
+            _logger.warning("Cross-domain source 'score_attribution' failed", exc_info=True)
+
+        return list(merged.values())
+
+    def create_cross_domain_execution_intent(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        candidate_action_json: dict[str, Any],
+        actor_user_id: uuid.UUID | None,
+    ) -> GovernanceAutopilotExecutionIntent:
+        """Create a cross-domain candidate as an APPROVAL-REQUIRED intent.
+
+        Structurally suggestion-only: this method NEVER calls
+        _should_auto_execute_action or _auto_execute_candidate_action -- there is
+        no auto-execute branch in its body, so a cross-domain candidate cannot
+        reach auto-execution through any path (constraint #2). Confidence and
+        risk_tier are forced by _validate_candidate_action_shape (reused via the
+        preview), so no cross-domain signal can influence either.
+        """
+        if not isinstance(candidate_action_json, dict):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="candidate_action_json must be an object")
+        candidate_source = str(candidate_action_json.get("candidate_source") or "")
+        action_key = str(candidate_action_json.get("action_key") or "")
+        # Constraint #1: cross-domain sources may only ever emit the 3 allow-listed
+        # low-risk actions. A non-allow-listed action here is a hard stop.
+        if candidate_source not in CROSS_DOMAIN_CANDIDATE_SOURCES:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=f"candidate_source must be one of {list(CROSS_DOMAIN_CANDIDATE_SOURCES)}")
+        if action_key not in CROSS_DOMAIN_ALLOWED_ACTION_KEYS:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail=f"cross-domain sources may only emit {list(CROSS_DOMAIN_ALLOWED_ACTION_KEYS)}")
+
+        human_review_context = candidate_action_json.get("human_review_context")
+        # Reuse the SAME validation/classification as the base path -- this forces
+        # risk_tier (from action_key/type only) and confidence_score (to the fixed
+        # internal default), discarding anything a caller attached.
+        preview = self.preview_execution_intent_candidate_action(
+            organization_id=organization_id, candidate_action_json=candidate_action_json, policy_id=None,
+        )
+        action = preview["plan_payload_json"]["candidate_action"]
+        # Defense in depth: the allow-list guarantees low risk, but assert it.
+        if action.get("risk_tier") != "low":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="cross-domain candidate resolved to a non-low risk tier")
+
+        plan_payload = {
+            **dict(preview["plan_payload_json"]),
+            "candidate_source": candidate_source,
+            "human_review_context": human_review_context,
+            "v1_disposition": "human_approval_only",
+            "auto_execute": {
+                "eligible": False,
+                "reasons": ["cross_domain_source_requires_human_approval"],
+                "structurally_gated": True,
+            },
+        }
+        # ALWAYS approval-required; never blocked/planned/auto for v1.
+        source_hash = str(preview["source_hash"])
+        intent_sha256 = self._autopilot_intent_hash(
+            {
+                "source_type": "cross_domain_candidate_action",
+                "candidate_source": candidate_source,
+                "plan_payload_json": plan_payload,
+                "capability_decisions_json": preview["capability_decisions_json"],
+                "approval_required": True,
+                "blocked": False,
+                "source_hash": source_hash,
+            }
+        )
+        row = GovernanceAutopilotExecutionIntent(
+            organization_id=organization_id,
+            source_type="cross_domain_candidate_action",
+            source_id=None,
+            policy_id=None,
+            intent_status="approval_required",
+            plan_payload_json=self.to_json_compatible(plan_payload),
+            capability_decisions_json=preview["capability_decisions_json"],
+            approval_required=True,
+            blocked=False,
+            blocked_reasons_json=[],
+            source_entities_json=preview["source_entities_json"],
+            source_hash=source_hash,
+            intent_sha256=intent_sha256,
+            created_by_user_id=actor_user_id,
+        )
+        self.db.add(row)
+        self.db.flush()
+        return row
+
+    def generate_and_route_cross_domain_candidates(
+        self, *, organization_id: uuid.UUID, actor_user_id: uuid.UUID | None,
+    ) -> list[GovernanceAutopilotExecutionIntent]:
+        """Generate cross-domain candidates and route every one to human approval."""
+        candidates = self.generate_cross_domain_candidate_actions(organization_id=organization_id)
+        return [
+            self.create_cross_domain_execution_intent(
+                organization_id=organization_id, candidate_action_json=candidate, actor_user_id=actor_user_id,
+            )
+            for candidate in candidates
+        ]
+
     def create_execution_intent(
         self,
         *,
@@ -7479,6 +7796,15 @@ class AISystemRiskAssessmentService:
         actor_user_id: uuid.UUID | None,
     ) -> GovernanceAutopilotExecutionIntent:
         source_type = validate_choice(source_type, AUTOPILOT_EXECUTION_INTENT_SOURCE_TYPES, "source_type", status_code=status.HTTP_400_BAD_REQUEST)
+        # §2 structural guarantee: the auto-execute-capable path REFUSES cross-domain
+        # candidates. They are created only via create_cross_domain_execution_intent,
+        # which has no auto-execute branch -- so a cross-domain candidate cannot reach
+        # the auto-execute evaluation below through any code path.
+        if source_type == "cross_domain_candidate_action":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="cross_domain_candidate_action intents are suggestion-only and must be created via the cross-domain path",
+            )
         if source_type == "candidate_action" and source_id is not None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -11671,18 +11997,23 @@ class AISystemRiskAssessmentService:
             approval_row=row,
         )
         voter_user_id = self._resolve_voter_user_id(approval_row=row, actor_user_id=actor_user_id)
-        if (
-            bool(approval_policy.get("block_requester_self_approval", True))
-            and voter_user_id is not None
-        ):
+        # DEFENSE IN DEPTH (Phase 5, constraint #6): reject an anonymous voter
+        # OUTRIGHT. A None voter would previously *skip* the requester-self-approval
+        # check below -- the exact structural class of the prior self-approval
+        # bypass (enforce_requester_self_block=False). It is currently unreachable
+        # via the authenticated API (which always passes current_user.id), but we
+        # close the gap so the self-block can never be silently skipped by identity.
+        if voter_user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A distinct approver identity is required to vote on an execution approval",
+            )
+        if bool(approval_policy.get("block_requester_self_approval", True)):
             if row.requested_by_user_id == voter_user_id:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Requester cannot self-approve")
 
         existing_votes = self._list_execution_approval_votes(organization_id=organization_id, approval_id=row.id)
-        if voter_user_id is None:
-            if existing_votes:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Distinct voter identity is required")
-        elif any(v.voter_user_id == voter_user_id for v in existing_votes):
+        if any(v.voter_user_id == voter_user_id for v in existing_votes):
             if bool(approval_policy.get("require_distinct_approvers", True)):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Distinct approver required")
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Voter has already voted")

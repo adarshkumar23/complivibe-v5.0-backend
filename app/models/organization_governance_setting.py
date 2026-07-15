@@ -22,6 +22,9 @@ class OrganizationGovernanceSetting(UUIDPrimaryKeyMixin, TimestampMixin, Organiz
     autopilot_auto_execute_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     autopilot_auto_execute_confidence_threshold: Mapped[float] = mapped_column(nullable=False, default=0.95)
     autopilot_auto_execute_reversal_window_hours: Mapped[int] = mapped_column(nullable=False, default=24)
+    # Phase 5 independent kill-switch: enables ONLY cross-domain graph-aware
+    # candidate generation, default OFF, without touching base Autopilot.
+    autopilot_graph_reasoning_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey("users.id", ondelete="SET NULL"),

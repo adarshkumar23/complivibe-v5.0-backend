@@ -1127,6 +1127,45 @@ def create_governance_autopilot_execution_intent(
     return _governance_autopilot_execution_intent_read(service.execution_intent_payload(row))
 
 
+@router.post(
+    "/autopilot/graph-candidates/generate",
+    response_model=list[GovernanceAutopilotExecutionIntentRead],
+    status_code=status.HTTP_201_CREATED,
+)
+def generate_governance_autopilot_graph_candidates(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("ai_systems:write")),
+) -> list[GovernanceAutopilotExecutionIntentRead]:
+    """Phase 5 -- generate cross-domain graph-aware candidate actions and route
+    every one to human approval (SUGGESTION-ONLY). Returns [] when the
+    autopilot_graph_reasoning_enabled kill-switch is off. These candidates can
+    never auto-execute (created via the no-auto-execute cross-domain path)."""
+    service = AISystemRiskAssessmentService(db)
+    rows = service.generate_and_route_cross_domain_candidates(
+        organization_id=organization.id, actor_user_id=current_user.id,
+    )
+    for row in rows:
+        AuditService(db).write_audit_log(
+            action="governance_autopilot_execution_intent.created",
+            entity_type="governance_autopilot_execution_intent",
+            entity_id=row.id,
+            organization_id=organization.id,
+            actor_user_id=current_user.id,
+            after_json={"intent_status": row.intent_status, "source_type": row.source_type},
+            metadata_json={"source": "cross_domain_graph_reasoning"},
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    db.commit()
+    return [
+        _governance_autopilot_execution_intent_read(service.execution_intent_payload(row))
+        for row in rows
+    ]
+
+
 @router.get(
     "/autopilot/executions",
     response_model=list[GovernanceAutopilotExecutionRead],

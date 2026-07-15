@@ -45,6 +45,7 @@ class OrganizationGovernanceSettingsRead(BaseModel):
     autopilot_auto_execute_enabled: bool = False
     autopilot_auto_execute_confidence_threshold: float = Field(default=0.95, ge=0.0, le=1.0)
     autopilot_auto_execute_reversal_window_hours: int = Field(default=24, ge=1, le=168)
+    autopilot_graph_reasoning_enabled: bool = False
     updated_by_user_id: UUID | None = None
     updated_at: datetime | None = None
 
@@ -55,6 +56,7 @@ class OrganizationGovernanceSettingsUpdateRequest(BaseModel):
     autopilot_auto_execute_enabled: bool | None = None
     autopilot_auto_execute_confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     autopilot_auto_execute_reversal_window_hours: int | None = Field(default=None, ge=1, le=168)
+    autopilot_graph_reasoning_enabled: bool | None = None
 
 
 class OrganizationGovernanceApplyToOpenBatchRunsRequest(BaseModel):

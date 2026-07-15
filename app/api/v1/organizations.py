@@ -191,6 +191,7 @@ def _governance_settings_read(
         autopilot_auto_execute_enabled=bool(row.autopilot_auto_execute_enabled),
         autopilot_auto_execute_confidence_threshold=float(row.autopilot_auto_execute_confidence_threshold),
         autopilot_auto_execute_reversal_window_hours=int(row.autopilot_auto_execute_reversal_window_hours),
+        autopilot_graph_reasoning_enabled=bool(getattr(row, "autopilot_graph_reasoning_enabled", False)),
         updated_by_user_id=row.updated_by_user_id,
         updated_at=row.updated_at,
     )
@@ -678,6 +679,7 @@ def update_organization_governance_settings(
         and payload.autopilot_auto_execute_enabled is None
         and payload.autopilot_auto_execute_confidence_threshold is None
         and payload.autopilot_auto_execute_reversal_window_hours is None
+        and payload.autopilot_graph_reasoning_enabled is None
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -729,6 +731,8 @@ def update_organization_governance_settings(
         row.autopilot_auto_execute_confidence_threshold = float(payload.autopilot_auto_execute_confidence_threshold)
     if payload.autopilot_auto_execute_reversal_window_hours is not None:
         row.autopilot_auto_execute_reversal_window_hours = int(payload.autopilot_auto_execute_reversal_window_hours)
+    if payload.autopilot_graph_reasoning_enabled is not None:
+        row.autopilot_graph_reasoning_enabled = bool(payload.autopilot_graph_reasoning_enabled)
     row.updated_by_user_id = current_user.id
     db.flush()
 
