@@ -316,3 +316,154 @@ def test_truncation_flag_and_node_cap(graph_session):
                         max_depth=2, max_nodes=1000)
     assert full.truncated is False
     assert len(full.nodes) == 20
+
+
+@pytest.mark.postgres_smoke
+def test_issue_policy_seam_canonical_and_deprecated_real_rows(graph_session):
+    """Third reconciled seam (issue<->policy): real rows in BOTH canonical
+    issue_policy_links AND deprecated policy_issue_links must be traversed, and
+    the deprecated edge must drop out when include_deprecated=False.
+
+    Completes real-Postgres seam coverage: control<->obligation and policy<->risk
+    are already proven above; this adds issue<->policy so all three reconciled
+    pairs are exercised against real Postgres data.
+    """
+    from datetime import UTC, datetime
+
+    from app.models.issue_policy_link import IssuePolicyLink
+    from app.models.policy_issue_link import PolicyIssueLink
+
+    org_d = uuid.UUID("0d000000-0000-0000-0000-000000000001")
+    issue = uuid.UUID("dd000000-0000-0000-0000-0000000000e0")
+    p_canon = uuid.UUID("dd000000-0000-0000-0000-0000000000c0")  # via canonical issue_policy_links
+    p_dep = uuid.UUID("dd000000-0000-0000-0000-0000000000d0")    # via deprecated policy_issue_links
+
+    graph_session.add(
+        IssuePolicyLink(organization_id=org_d, issue_id=issue, policy_id=p_canon,
+                        link_type="related", status="active", linked_by=USER,
+                        linked_at=datetime.now(UTC))
+    )
+    graph_session.add(
+        PolicyIssueLink(organization_id=org_d, policy_id=p_dep, issue_id=issue)
+    )
+    graph_session.commit()
+
+    svc = EntityGraphTraversalService(graph_session)
+
+    incl = svc.traverse(anchor_type="issue", anchor_id=issue, organization_id=org_d, max_depth=2)
+    incl_ids = {n.entity_id for n in incl.nodes}
+    assert p_canon in incl_ids, "canonical issue_policy_links edge missing"
+    assert p_dep in incl_ids, "deprecated policy_issue_links edge was silently dropped"
+
+    excl = svc.traverse(anchor_type="issue", anchor_id=issue, organization_id=org_d,
+                        max_depth=2, include_deprecated=False)
+    excl_ids = {n.entity_id for n in excl.nodes}
+    assert p_canon in excl_ids     # canonical survives
+    assert p_dep not in excl_ids   # deprecated-only edge correctly excluded
+
+
+# ---------------------------------------------------------------------------
+# API endpoint tests -- real HTTP over real Postgres (standalone app so the CTE
+# runs on Postgres, since the shared app test harness is SQLite-backed).
+# ---------------------------------------------------------------------------
+def _endpoint_client(graph_session, org_id, monkeypatch, *, has_permission: bool = True):
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.v1 import entity_graph as eg
+    from app.core.deps import get_current_active_user, get_db, require_org_membership
+    from app.models.membership import Membership
+    from app.services.rbac_service import RBACService
+
+    app = FastAPI()
+    app.include_router(eg.router, prefix="/api/v1")
+
+    fake_user = SimpleNamespace(id=uuid.uuid4())
+    fake_membership = Membership(organization_id=org_id, user_id=fake_user.id)
+
+    def _db():
+        yield graph_session
+
+    app.dependency_overrides[get_db] = _db
+    app.dependency_overrides[get_current_active_user] = lambda: fake_user
+    app.dependency_overrides[require_org_membership] = lambda: fake_membership
+    # The permission gate is the real require_permission("entity_graph:read");
+    # only the terminal RBAC lookup is stubbed so we exercise the actual gate.
+    monkeypatch.setattr(RBACService, "user_has_permission", lambda *a, **k: has_permission)
+    return TestClient(app)
+
+
+@pytest.mark.postgres_smoke
+def test_endpoint_happy_path(graph_session, monkeypatch):
+    client = _endpoint_client(graph_session, ORG_A, monkeypatch, has_permission=True)
+    resp = client.get(
+        "/api/v1/graph/traverse",
+        params={"entity_type": "vendor", "entity_id": str(V), "max_depth": 4},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["anchor_type"] == "vendor"
+    assert body["organization_id"] == str(ORG_A)
+    assert body["truncated"] is False           # truncated flag is surfaced
+    assert body["cycle_detected"] is True
+    assert body["node_count"] == len(body["nodes"])
+    reached = {(n["entity_type"], n["entity_id"]) for n in body["nodes"]}
+    assert ("control", str(C1)) in reached
+    assert ("risk", str(R1)) in reached
+    assert ("policy", str(P1)) in reached
+
+
+@pytest.mark.postgres_smoke
+def test_endpoint_permission_denied(graph_session, monkeypatch):
+    client = _endpoint_client(graph_session, ORG_A, monkeypatch, has_permission=False)
+    resp = client.get(
+        "/api/v1/graph/traverse",
+        params={"entity_type": "vendor", "entity_id": str(V)},
+    )
+    assert resp.status_code == 403
+    assert "entity_graph:read" in resp.json()["detail"]
+
+
+@pytest.mark.postgres_smoke
+def test_endpoint_org_scope_from_membership_blocks_cross_tenant(graph_session, monkeypatch):
+    """Org scope is taken from the caller's membership, not a client param, so the
+    shared vendor V cannot expose Org-B data to an Org-A caller (and vice-versa)."""
+    client_a = _endpoint_client(graph_session, ORG_A, monkeypatch, has_permission=True)
+    body_a = client_a.get(
+        "/api/v1/graph/traverse", params={"entity_type": "vendor", "entity_id": str(V), "max_depth": 4}
+    ).json()
+    ids_a = {n["entity_id"] for n in body_a["nodes"]}
+    assert str(C_B) not in ids_a and str(R_B) not in ids_a and str(P_B) not in ids_a
+    assert body_a["organization_id"] == str(ORG_A)
+
+    client_b = _endpoint_client(graph_session, ORG_B, monkeypatch, has_permission=True)
+    body_b = client_b.get(
+        "/api/v1/graph/traverse", params={"entity_type": "vendor", "entity_id": str(V), "max_depth": 4}
+    ).json()
+    ids_b = {n["entity_id"] for n in body_b["nodes"]}
+    assert ids_b == {str(C_B), str(R_B), str(P_B)}
+    assert str(C1) not in ids_b
+
+
+@pytest.mark.postgres_smoke
+def test_endpoint_rejects_unknown_entity_type(graph_session, monkeypatch):
+    client = _endpoint_client(graph_session, ORG_A, monkeypatch, has_permission=True)
+    resp = client.get(
+        "/api/v1/graph/traverse",
+        params={"entity_type": "not_a_node_type", "entity_id": str(V)},
+    )
+    assert resp.status_code == 400
+    assert "Unknown entity_type" in resp.json()["detail"]
+
+
+@pytest.mark.postgres_smoke
+def test_endpoint_truncated_flag_surfaces(graph_session, monkeypatch):
+    client = _endpoint_client(graph_session, ORG_A, monkeypatch, has_permission=True)
+    body = client.get(
+        "/api/v1/graph/traverse",
+        params={"entity_type": "vendor", "entity_id": str(V), "max_depth": 4, "max_nodes": 2},
+    ).json()
+    assert body["truncated"] is True
+    assert body["node_count"] == 2

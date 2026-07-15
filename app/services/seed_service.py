@@ -299,6 +299,7 @@ PERMISSIONS: dict[str, str] = {
     "compliance_timeline:read": "Read chronological compliance timeline events across key operational modules",
     "compliance_inbox:read": "Read a user's prioritized compliance inbox across attestations, evidence requests, approvals, and overdue work",
     "compliance_summary:generate": "Generate public tokenized one-page compliance summary links",
+    "entity_graph:read": "Traverse the unified cross-entity graph (multi-hop reachability from an anchor entity)",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {
@@ -312,6 +313,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "evidence:read",
         "evidence:write",
         "risks:read",
+        "entity_graph:read",
         "risks:write",
         "tasks:read",
         "tasks:write",
@@ -488,6 +490,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "evidence:read",
         "evidence:write",
         "risks:read",
+        "entity_graph:read",
         "risks:write",
         "risk_indicators:write",
         "risk_appetite:write",
@@ -590,6 +593,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "controls:read",
         "evidence:read",
         "risks:read",
+        "entity_graph:read",
         "audit_logs:read",
         "dashboard:read",
         "tasks:read",
@@ -661,6 +665,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "controls:read",
         "evidence:read",
         "risks:read",
+        "entity_graph:read",
         "tasks:read",
         "dashboard:read",
         "org:read",

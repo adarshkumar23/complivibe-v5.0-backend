@@ -99,6 +99,7 @@ from app.api.v1 import resilience_testing
 from app.api.v1 import whistleblower
 from app.api.v1 import search as search_api
 from app.api.v1 import experience as experience_api
+from app.api.v1 import entity_graph
 
 from app.api.v1 import (
     admin_email_config,
@@ -359,6 +360,7 @@ api_router.include_router(technical_controls.router)
 api_router.include_router(technical_controls.ingest_router)
 api_router.include_router(oscal.router)
 api_router.include_router(compliance_risks.router)
+api_router.include_router(entity_graph.router)
 api_router.include_router(risk_appetite.router)
 api_router.include_router(risk_indicators.router)
 api_router.include_router(risk_scores.router)
