@@ -3,9 +3,17 @@ from __future__ import annotations
 """
 PostgreSQL migration smoke test (manual/CI gate).
 
+STANDING RULE: Postgres-touching tests MUST use the dedicated test-only role
+`complivibe_test_user` (LOGIN, CREATEDB, non-superuser, test/smoke DBs only) --
+NEVER `complivibe_user` or any role live services authenticate with. Provision
+once locally:
+
+    sudo -u postgres psql -c "CREATE ROLE complivibe_test_user WITH LOGIN \
+        PASSWORD 'complivibe_test_local_only' CREATEDB;"
+
 Run manually before any production deploy:
 
-POSTGRES_TEST_DATABASE_URL=postgresql+psycopg://complivibe_user:PASSWORD@localhost:5432/complivibe_pg_smoke_test \
+POSTGRES_TEST_DATABASE_URL=postgresql+psycopg://complivibe_test_user:complivibe_test_local_only@localhost:5432/complivibe_pg_smoke_test \
 PYTHONPATH=. .venv/bin/pytest \
 tests/integration/test_postgres_migration_smoke.py \
 -m postgres_smoke -v
