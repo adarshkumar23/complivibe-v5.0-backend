@@ -101,6 +101,7 @@ from app.api.v1 import search as search_api
 from app.api.v1 import experience as experience_api
 from app.api.v1 import entity_graph
 from app.api.v1 import compound_insights
+from app.api.v1 import score_explanation
 
 from app.api.v1 import (
     admin_email_config,
@@ -307,6 +308,7 @@ api_router.include_router(compliance_board_scorecard.router)
 api_router.include_router(compliance_copilot_draft.router)
 api_router.include_router(compliance_risk_recommendations.router)
 api_router.include_router(compound_insights.router)
+api_router.include_router(score_explanation.router)
 api_router.include_router(users.router)
 api_router.include_router(memberships.router)
 api_router.include_router(non_human_identities.router)

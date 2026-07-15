@@ -301,6 +301,7 @@ PERMISSIONS: dict[str, str] = {
     "compliance_summary:generate": "Generate public tokenized one-page compliance summary links",
     "entity_graph:read": "Traverse the unified cross-entity graph (multi-hop reachability from an anchor entity)",
     "compound_insights:read": "Read cross-domain compound-exposure insights on the Proactive Insights page",
+    "score_attribution:read": "Explain why a score changed (causal decomposition of score deltas)",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {
@@ -316,6 +317,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "risks:read",
         "entity_graph:read",
         "compound_insights:read",
+        "score_attribution:read",
         "risks:write",
         "tasks:read",
         "tasks:write",
@@ -494,6 +496,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "risks:read",
         "entity_graph:read",
         "compound_insights:read",
+        "score_attribution:read",
         "risks:write",
         "risk_indicators:write",
         "risk_appetite:write",
@@ -598,6 +601,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "risks:read",
         "entity_graph:read",
         "compound_insights:read",
+        "score_attribution:read",
         "audit_logs:read",
         "dashboard:read",
         "tasks:read",
@@ -671,6 +675,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "risks:read",
         "entity_graph:read",
         "compound_insights:read",
+        "score_attribution:read",
         "tasks:read",
         "dashboard:read",
         "org:read",
