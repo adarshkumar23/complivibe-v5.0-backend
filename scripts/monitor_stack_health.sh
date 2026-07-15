@@ -22,6 +22,16 @@ if [[ "$VAULT_STATUS" != *'"sealed": false'* ]]; then
   FAILED="$FAILED vault"
 fi
 
+# Backup freshness: a valid DB backup (>=100KB) must exist from within the last 26h.
+# This catches BOTH a failed backup run and a stopped/misfiring timer -- the failure
+# mode that went unnoticed for ~2 weeks in July 2026 (silent empty dumps). find prints
+# the file only if it is both recent enough and non-trivially sized.
+FRESH_BACKUP="$(find /home/ubuntu/complivibe_backups/db -name 'complivibe_demo_*.sql.gz' \
+  -mmin -1560 -size +100k -print -quit 2>/dev/null)"
+if [ -z "$FRESH_BACKUP" ]; then
+  FAILED="$FAILED backup(stale-or-missing)"
+fi
+
 if [ -n "$FAILED" ]; then
   echo "$(date -u -Iseconds) UNHEALTHY:$FAILED" >> /var/log/complivibe/health-monitor.log
   echo "CompliVibe stack unhealthy:$FAILED" >&2
