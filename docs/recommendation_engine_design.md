@@ -1,7 +1,22 @@
 # Cross-Domain Compound-Exposure Recommendation Engine — Design Doc
 
-Status: **DESIGN ONLY — awaiting review before any code is written** (same gate as Phases 1 & 2).
-Head at design time: `alembic heads` → `0303_domain_events` (single head). Branch `main`, commit `5b7da8e`.
+Status: **BUILT (Step 2, commit `aba007b`) — Phase 3 CLOSED at the checkpoint.** Migration head
+`0304_compound_insights`. Implementation: `compound_pattern_registry.py` (patterns A/B/C only; D/E
+deferred), `compound_insight_detector.py` (traversal + gate + templated-first + AI-upgrade + sha256
+dedup + auto-resolve + a SAVEPOINT concurrency guard on the unique `(org, dedup_key)`),
+`compound_pattern_candidate_listener.py` (flush-only event flag), `compound_insight_sweep_service.py`
++ two APScheduler jobs (5-min drain, nightly sweep), `compound_insight_notification_service.py`
+(reuses `EmailService`, separate from the audit log), and `GET /api/v1/compliance/compound-insights`
+(`compound_insights:read`). Evidence: `tests/integration/test_compound_insight_engine.py` (real PG).
+Design-time head was `0303_domain_events` at commit `5b7da8e`.
+
+**Checkpoint findings (as-built):** at realistic mid-market scale (800 controls / 400 risks / 200
+vendors / 800 evidence / 200 issues) a full sweep produced only **21 insights** (4 A, 16 B, 1 C) in
+~4 s from 67+333+20 anchor candidates — the conservative gate holds, not a flood. Concurrency: two
+racing scheduler runs on the same anchor yield exactly one insight (unique constraint + savepoint).
+Sizing: compound detection adds **traversal read load, not edges**, so it does not move the Phase 2
+~100k-edge/org projection threshold; it is, however, a new heavy traversal consumer that strengthens
+the case for the deferred `graph_edges` projection once an org is near that edge count.
 
 Goal: surface *compounding* exposures — e.g. "this control failed its test **AND** the vendor it
 depends on has a stale assessment **AND** there's an open high-severity risk pointing at both" — as **one
@@ -400,8 +415,12 @@ before/independent of building the recommendation engine.
 
 ---
 
-## 10. Proposed build sequence (after approval — no code yet)
+## 10. Build sequence — as-built status
 
+1. **✅ DONE — Groq model string** (§9): `openai/gpt-oss-120b` + `GROQ_MODEL`/`GROQ_MAX_TOKENS` settings
+   (commits `8910a16`, `aba52a9`; free-tier TPM note in `.env.example`). Structured outputs added on the
+   new narrative path; migrating the *existing* JSON methods remains the documented follow-up.
+   Original (pre-build) note follows:
 1. **Fix the Groq model string** (§9) as a standalone urgent change: `openai/gpt-oss-120b` + `GROQ_MODEL`
    setting + structured outputs on existing JSON methods.
 2. `PatternSpec` registry (patterns A/B/C) + import-time validation against `NODE_TYPES`/ORM columns.

@@ -25,6 +25,7 @@ from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.compliance.services.compound_insight_notification_service import (
@@ -238,13 +239,37 @@ class CompoundInsightDetector:
                 first_detected_at=now,
                 last_detected_at=now,
             )
-            self.db.add(insight)
+            # Concurrency guard: two scheduler runs (reactive drain + nightly
+            # sweep) can race on the same (org, dedup_key). The unique constraint
+            # makes a duplicate impossible; we absorb the loser's IntegrityError
+            # inside a SAVEPOINT and fall through to the dedup path, so the losing
+            # run continues cleanly instead of poisoning its whole batch.
+            try:
+                with self.db.begin_nested():
+                    self.db.add(insight)
+                    self.db.flush()
+            except IntegrityError:
+                try:
+                    self.db.expunge(insight)
+                except Exception:  # noqa: BLE001
+                    pass
+                winner = self.db.execute(
+                    select(CompoundInsight).where(
+                        CompoundInsight.organization_id == org_id,
+                        CompoundInsight.dedup_key == key,
+                    )
+                ).scalar_one()
+                if winner.status != "surfaced":
+                    winner.status = "surfaced"
+                    winner.resolved_at = None
+                winner.detection_count = (winner.detection_count or 0) + 1
+                winner.last_detected_at = now
+                self.db.flush()
+                return winner, False
             created = True
 
-        if created and existing is None:
-            self.db.flush()  # get insight.id before audit
-        elif created:
-            self.db.flush()
+        if created and existing is not None:
+            self.db.flush()  # reopen path already added to session; ensure persisted
 
         # Audit trail (does NOT itself notify a human).
         AuditService(self.db).write_audit_log(

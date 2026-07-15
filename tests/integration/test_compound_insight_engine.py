@@ -414,6 +414,52 @@ def test_event_listener_flags_candidate_without_traversal_or_ai(db, monkeypatch)
 
 
 @pytest.mark.postgres_smoke
+def test_concurrent_drains_cannot_duplicate_insight(pg_sessionmaker, monkeypatch):
+    """Two scheduler runs racing on the same anchor must yield exactly ONE
+    insight -- the (org, dedup_key) unique constraint + savepoint guard hold."""
+    import threading
+
+    _force_ai_fail(monkeypatch)  # offline + deterministic across both threads
+
+    setup = pg_sessionmaker()
+    org, user, control, vendor, risk = _seed_pattern_a(setup)
+    org_id, control_id = org.id, control.id  # capture before the session closes
+    setup.close()
+
+    barrier = threading.Barrier(2)
+    errors: list[Exception] = []
+    results: list[bool] = []
+
+    def worker():
+        s = pg_sessionmaker()
+        try:
+            barrier.wait(timeout=10)
+            _, created = CompoundInsightDetector(s).detect_and_surface(org_id, PATTERN_A, control_id)
+            s.commit()
+            results.append(created)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+            s.rollback()
+        finally:
+            s.close()
+
+    t1, t2 = threading.Thread(target=worker), threading.Thread(target=worker)
+    t1.start(); t2.start(); t1.join(); t2.join()
+
+    assert errors == [], f"concurrent surface raised: {errors}"
+    from app.models.compound_insight import CompoundInsight
+    check = pg_sessionmaker()
+    try:
+        rows = check.execute(sa.select(CompoundInsight).where(CompoundInsight.organization_id == org_id)).scalars().all()
+        assert len(rows) == 1, f"expected exactly 1 insight, got {len(rows)}"
+        assert rows[0].detection_count == 2  # both runs counted, no duplicate row
+    finally:
+        check.close()
+    # exactly one worker created it; the other deduped
+    assert sorted(results) == [False, True]
+
+
+@pytest.mark.postgres_smoke
 def test_pattern_b_expired_evidence_and_pattern_c_incident(db, monkeypatch):
     """Smoke that B and C also detect (not just A)."""
     _force_ai_fail(monkeypatch)
