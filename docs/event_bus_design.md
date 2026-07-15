@@ -201,3 +201,18 @@ Explicitly **not** migrating now: the shape-B inline builders (#10–13) and the
 2. **Listener commit refactor (§5 caveat)** — OK to move commit ownership to the emit/endpoint boundary and make listeners `flush()`-only? This touches the 2 existing listeners.
 3. **Persistence** — confirm we persist every event to `domain_events` (recommended), vs. persist only a subset / stay in-memory.
 4. **`previous_value`/`new_value`** — keep on the dataclass for back-compat (recommended), or fold into `payload` now and update the 2 listeners + 5 call sites?
+
+---
+
+## As-built reconciliation (Phase 1 closed, 2026-07-15)
+
+This section was a pre-build DRAFT; the shipped implementation (commits 28fd74a, 6d196fe) refined it as follows. All deltas are intentional and verified at the closure checkpoint.
+
+- **`previous_value` / `new_value`** — shipped as **dedicated top-level columns** on `domain_events`, not folded into `payload_json` (resolves Open Question #4: keep them first-class). `payload_json` carries only the generic `payload` dict.
+- **`correlation_id`** — shipped **nullable** (`Uuid`, indexed), not `NOT NULL` as in §42. `EventPayload` always defaults it (`uuid4`), so it is never null in practice; the column stays permissive.
+- **Indexes** — shipped **two**: `ix_domain_events_org_type_occurred` on `(organization_id, event_type, occurred_at)` (widened from the designed `(organization_id, event_type)`) and `ix_domain_events_correlation`. The designed `ix_domain_events_org_entity` on `(organization_id, entity_type, entity_id)` was **not** built (add later if an entity-timeline query needs it).
+- **Timestamps** — shipped `created_at` only (no `updated_at`), consistent with the append-only, immutable contract.
+- **`EventType` names** — DORA constant shipped as `dora.register_gap_detected` (not `dora.ict_register_changed`); `vendor.assessment_stale`, `geopolitical.signal_critical`, `ot_ics.finding_ingested` as designed.
+- **JSON column type** — `payload_json`/`previous_value`/`new_value` migration DDL uses `sa.JSON().with_variant(postgresql.JSONB, "postgresql")` (matches the model in §38 → real `jsonb` on Postgres). The §46 note ("`sa.JSON()`") was corrected at the checkpoint to eliminate a model↔migration type drift.
+- **Failure isolation & listener-commit caveat (§5)** — resolved as recommended: listeners are `flush()`-only, commit ownership sits with the caller, each handler runs inside `db.begin_nested()`. Verified under real-Postgres concurrent load (12 simultaneous same-org publishes: no deadlock, no lost update, no cross-request bleed).
+- **Bus inventory** — 6 listeners (2 original + 4 migrated), 9 `EventType`s, each with a matched publisher+subscriber. Migration inventory items #5–#17 (§6) remain intentionally deferred to a later phase.

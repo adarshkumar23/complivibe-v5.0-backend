@@ -209,6 +209,28 @@ def _truncate_all_tables(engine, metadata) -> None:
             conn.exec_driver_sql("PRAGMA foreign_keys=ON")
 
 
+@pytest.fixture(autouse=True)
+def _event_bus_listeners_registered() -> Generator[None, None, None]:
+    """Restore the canonical EventBus listener set before every test.
+
+    The EventBus is a process-global singleton and the app registers its
+    listeners exactly once at startup (session-scoped `_test_app`). Several
+    test modules clear the singleton in their own fixtures' teardown (to
+    isolate custom listeners), which would otherwise leave the bus empty for
+    any later test whose behavior depends on a registered listener -- e.g. the
+    Phase-1-migrated vendor-staleness / DORA / geopolitical / OT-ICS cascades.
+    Re-registering here before each test makes bus state order-independent.
+    register_event_listeners() dedups, so this is idempotent.
+    """
+    from app.core.event_bus import EventBus
+    from app.core.startup import register_event_listeners
+
+    bus = EventBus.get_instance()
+    bus.clear_listeners()
+    register_event_listeners()
+    yield
+
+
 @pytest.fixture
 def db_session(_test_engine, _test_session_factory, _base_metadata) -> Generator[Session, None, None]:
     db = _test_session_factory()

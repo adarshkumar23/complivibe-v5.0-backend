@@ -20,6 +20,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "0303_domain_events"
@@ -36,9 +37,22 @@ def upgrade() -> None:
         sa.Column("event_type", sa.String(length=120), nullable=False),
         sa.Column("entity_type", sa.String(length=120), nullable=False),
         sa.Column("entity_id", sa.Uuid(), nullable=False),
-        sa.Column("payload_json", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
-        sa.Column("previous_value", sa.JSON(), nullable=True),
-        sa.Column("new_value", sa.JSON(), nullable=True),
+        sa.Column(
+            "payload_json",
+            sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql"),
+            nullable=False,
+            server_default=sa.text("'{}'"),
+        ),
+        sa.Column(
+            "previous_value",
+            sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql"),
+            nullable=True,
+        ),
+        sa.Column(
+            "new_value",
+            sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), "postgresql"),
+            nullable=True,
+        ),
         sa.Column("occurred_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.Column("triggered_by", sa.String(length=64), nullable=False),
         sa.Column("triggered_by_user_id", sa.Uuid(), nullable=True),
