@@ -1,5 +1,6 @@
-"""G7 confirmed-bug fixes: Risk Manager (reviewer) permissions, factor-based
-likelihood scoring, risk-to-risk dependency graph, and quantify schema.
+"""G7 confirmed-bug fixes: risk-register permission boundary (reviewer is
+read-only; compliance_manager writes), factor-based likelihood scoring,
+risk-to-risk dependency graph, and quantify schema.
 """
 from __future__ import annotations
 
@@ -36,59 +37,71 @@ def _create_active_user_with_role(db_session, org_id: str, email: str, role_name
     return user
 
 
-def _reviewer_headers(client, db_session, org_id: str, email_prefix: str):
+def _role_headers(client, db_session, org_id: str, email_prefix: str, role_name: str):
     email = f"{email_prefix}@example.com"
-    _create_active_user_with_role(db_session, org_id, email, "reviewer")
+    _create_active_user_with_role(db_session, org_id, email, role_name)
     token = login_user(client, email)
     return org_headers(token, org_id)
 
 
-def test_item1_reviewer_can_create_risk(client, db_session):
+# NOTE: the reviewer role is intentionally read-only for the risk register.
+# General risk write (risks:write / risk_indicators:write / risk_appetite:write)
+# belongs to compliance_manager; the reviewer grants were drift removed by
+# migration 0306_reviewer_role_descope. These tests pin the corrected boundary:
+# reviewer is denied, compliance_manager is allowed.
+def test_item1_reviewer_denied_but_compliance_manager_can_create_risk(client, db_session):
     org = bootstrap_org_user(client, email_prefix="g7-reviewer-risk")
-    headers = _reviewer_headers(client, db_session, org["organization_id"], "g7-reviewer-risk-user")
+    body = {"title": "Risk", "category": "operational", "likelihood": 2, "impact": 3}
 
-    resp = client.post(
-        "/api/v1/risks",
-        headers=headers,
-        json={"title": "Reviewer-created risk", "category": "operational", "likelihood": 2, "impact": 3},
-    )
-    assert resp.status_code == 201, resp.text
+    reviewer = _role_headers(client, db_session, org["organization_id"], "g7-reviewer-risk-user", "reviewer")
+    denied = client.post("/api/v1/risks", headers=reviewer, json=body)
+    assert denied.status_code == 403, denied.text
+
+    manager = _role_headers(client, db_session, org["organization_id"], "g7-cm-risk-user", "compliance_manager")
+    allowed = client.post("/api/v1/risks", headers=manager, json=body)
+    assert allowed.status_code == 201, allowed.text
 
 
-def test_item1_reviewer_can_write_risk_indicator(client, db_session):
+def test_item1_reviewer_denied_but_compliance_manager_can_write_risk_indicator(client, db_session):
     org = bootstrap_org_user(client, email_prefix="g7-reviewer-kri")
-    headers = _reviewer_headers(client, db_session, org["organization_id"], "g7-reviewer-kri-user")
+    body = {
+        "name": "KRI",
+        "metric_type": "custom",
+        "target_value": 10,
+        "warning_threshold": 20,
+        "critical_threshold": 30,
+        "owner_user_id": org["user_id"],
+    }
 
-    resp = client.post(
-        "/api/v1/compliance/risk-indicators",
-        headers=headers,
-        json={
-            "name": "Reviewer KRI",
-            "metric_type": "custom",
-            "target_value": 10,
-            "warning_threshold": 20,
-            "critical_threshold": 30,
-            "owner_user_id": org["user_id"],
-        },
-    )
-    assert resp.status_code == 201, resp.text
+    reviewer = _role_headers(client, db_session, org["organization_id"], "g7-reviewer-kri-user", "reviewer")
+    denied = client.post("/api/v1/compliance/risk-indicators", headers=reviewer, json=body)
+    assert denied.status_code == 403, denied.text
+
+    # risk_indicators:write is admin/owner-only (compliance_manager does not hold it);
+    # after the reviewer de-scope no non-privileged role carries it.
+    admin = _role_headers(client, db_session, org["organization_id"], "g7-admin-kri-user", "admin")
+    allowed = client.post("/api/v1/compliance/risk-indicators", headers=admin, json=body)
+    assert allowed.status_code == 201, allowed.text
 
 
-def test_item1_reviewer_can_write_risk_appetite(client, db_session):
+def test_item1_reviewer_denied_but_compliance_manager_can_write_risk_appetite(client, db_session):
     org = bootstrap_org_user(client, email_prefix="g7-reviewer-appetite")
-    headers = _reviewer_headers(client, db_session, org["organization_id"], "g7-reviewer-appetite-user")
+    body = {
+        "risk_category": "operational",
+        "scope_type": "org",
+        "max_acceptable_score": 15,
+        "escalation_owner_id": org["user_id"],
+    }
 
-    resp = client.post(
-        "/api/v1/compliance/risk-appetite",
-        headers=headers,
-        json={
-            "risk_category": "operational",
-            "scope_type": "org",
-            "max_acceptable_score": 15,
-            "escalation_owner_id": org["user_id"],
-        },
-    )
-    assert resp.status_code == 201, resp.text
+    reviewer = _role_headers(client, db_session, org["organization_id"], "g7-reviewer-appetite-user", "reviewer")
+    denied = client.post("/api/v1/compliance/risk-appetite", headers=reviewer, json=body)
+    assert denied.status_code == 403, denied.text
+
+    # risk_appetite:write is admin/owner-only (compliance_manager does not hold it);
+    # after the reviewer de-scope no non-privileged role carries it.
+    admin = _role_headers(client, db_session, org["organization_id"], "g7-admin-appetite-user", "admin")
+    allowed = client.post("/api/v1/compliance/risk-appetite", headers=admin, json=body)
+    assert allowed.status_code == 201, allowed.text
 
 
 def test_item2_factor_based_residual_score_uses_factor_methodology_not_plain_multiplication(client):

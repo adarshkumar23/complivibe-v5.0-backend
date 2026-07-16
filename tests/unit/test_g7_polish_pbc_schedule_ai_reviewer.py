@@ -264,10 +264,16 @@ def test_reviewer_role_has_review_permissions_and_can_approve_control_exception(
     perms = client.get("/api/v1/auth/permissions", headers=_headers(reviewer_token, org_id))
     assert perms.status_code == 200
     codes = set(perms.json()["permission_codes"])
+    # Retained role/quorum approval grants (no per-assignment fallback exists):
     assert "exceptions:approve" in codes
-    assert "compliance_policies:approve" in codes
     assert "ai_governance:approve" in codes
-    assert "policy_exceptions:manage" in codes
+    assert "governance_override:approve" in codes
+    # Reviewer-appropriate submit verb is kept; broader-control manage is not.
+    assert "policy_exceptions:submit" in codes
+    assert "policy_exceptions:manage" not in codes
+    # De-scoped by migration 0306: reviewer approves a policy only via per-request
+    # assignment (approver_user_id), NOT via a blanket org-wide grant.
+    assert "compliance_policies:approve" not in codes
 
     # Concrete end-to-end proof: reviewer can actually approve a control exception,
     # which was blocked before because the role had no "exceptions:approve" grant.

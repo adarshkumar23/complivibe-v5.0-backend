@@ -300,9 +300,10 @@ def test_phase90_audit_events_and_approve_permission_enforcement(client, db_sess
     )
 
     # promote auditor role for write-only test but keep it without approve.
-    # (NB: "reviewer" is not used here anymore -- it now legitimately carries
-    # compliance_policies:approve so reviewers can actually approve policies,
-    # which is what this test is specifically checking is absent.)
+    # (NB: "reviewer" is not used here -- it does NOT carry the blanket
+    # compliance_policies:approve permission. Reviewers approve a specific
+    # policy only via per-request assignment (approver_user_id), not the
+    # org-wide grant this test checks is absent for a plain writer.)
     writer_role = db_session.query(Role).filter(Role.organization_id == uuid.UUID(org_id), Role.name == "auditor").one()
     write_permission = db_session.query(Permission).filter(Permission.key == "compliance_policies:write").one()
     has_write_link = (

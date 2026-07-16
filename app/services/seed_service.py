@@ -488,20 +488,31 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "compliance_inbox:read",
         "compliance_summary:generate",
     },
+    # reviewer = read-across-the-platform + a curated set of genuinely
+    # review-related actions. It deliberately does NOT carry general
+    # write/manage grants (those belong to compliance_manager).
+    #
+    # Approval permissions are deliberately split:
+    #   - compliance_policies:approve is NOT granted -- that endpoint routes
+    #     approval through per-request assignment (approver_user_id, see
+    #     _require_can_decide_approval_request), so an assigned reviewer can
+    #     still approve a specific policy without an org-wide grant.
+    #   - governance_override:approve / ai_governance:approve /
+    #     exceptions:approve ARE retained: those endpoints are role/quorum
+    #     gated with no per-assignment fallback, so the grant is the actual
+    #     (intended) approval mechanism, not blanket drift.
+    #
+    # Historical drifted write/manage grants (and compliance_policies:approve)
+    # are revoked from existing orgs by migration 0306_reviewer_role_descope.
     "reviewer": {
         "frameworks:read",
         "controls:read",
         "evidence:read",
-        "evidence:write",
         "risks:read",
         "entity_graph:read",
         "compound_insights:read",
         "score_attribution:read",
-        "risks:write",
-        "risk_indicators:write",
-        "risk_appetite:write",
         "tasks:read",
-        "tasks:write",
         "dashboard:read",
         "email:read",
         "automation:read",
@@ -519,13 +530,10 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "exports:run",
         "retention:read",
         "attestations:read",
-        "attestations:write",
-        "attestations:manage",
         "attestations:submit",
         "attestations:view",
         "policy_exceptions:submit",
         "policy_exceptions:view",
-        "policy_exceptions:manage",
         "policy_risks:view",
         "policy_issues:view",
         "audit:read",
@@ -536,14 +544,11 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "framework_review_capacity:read",
         "ai_systems:read",
         "compliance_policies:read",
-        "compliance_policies:approve",
         "compliance:read",
         "vendors:read",
         "vendor_criticality:read",
         "vendor_supply_chain:read",
-        "vendor_supply_chain:manage",
         "vendor_concentration_risk:read",
-        "vendor_concentration_risk:manage",
         "vendor_remediation_portal:read",
         "vendor:read",
         "monitoring:read",
@@ -553,33 +558,21 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "issues:read",
         "escalations:read",
         "ai_governance:read",
-        "llm_observability:read",
         "ai_governance:approve",
         "exceptions:approve",
+        "llm_observability:read",
         "integrations:read",
         "data:read",
         "privacy:read",
-        "technical_controls:manage",
         "technical_controls:view",
         "identity_governance:read",
-        "identity_governance:manage",
         "sod:read",
-        "sod:manage",
         "legal_matters:read",
-        "legal_matters:write",
         "ip_assets:read",
-        "ip_assets:manage",
-        "content_provenance:manage",
-        "training_data_rights:manage",
-        "synthetic_data:manage",
         "geopolitical_risk:read",
-        "geopolitical_risk:manage",
         "ot_ics_assets:read",
-        "ot_ics_assets:manage",
         "ai_usage_policy:read",
-        "ai_usage_policy:write",
         "training_analytics:read",
-        "training_analytics:write",
         "bcm:read",
         "crisis_management:read",
         "financial_risk:read",
