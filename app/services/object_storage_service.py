@@ -95,6 +95,12 @@ class ObjectStorageService:
         client.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type)
         return key
 
+    def download_bytes(self, key: str) -> bytes:
+        """Fetch the stored object's bytes. Raises if unconfigured."""
+        client = self._get_client()
+        obj = client.get_object(Bucket=self.bucket, Key=key)
+        return obj["Body"].read()
+
     def generate_presigned_get_url(self, key: str, *, expires_in: int | None = None) -> str:
         """Short-lived signed GET URL for a single object. Raises if unconfigured."""
         client = self._get_client()

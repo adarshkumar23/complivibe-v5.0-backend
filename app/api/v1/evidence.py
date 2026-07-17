@@ -23,6 +23,7 @@ from app.schemas.evidence import (
     EvidenceControlSummary,
     EvidenceCreate,
     EvidenceDetail,
+    EvidenceAiAssessmentRead,
     EvidenceFileUploadResponse,
     EvidenceFileUrlResponse,
     EvidenceRead,
@@ -743,4 +744,52 @@ def get_evidence_file_url(
         evidence_id=evidence.id,
         url=url,
         expires_in_seconds=get_settings().R2_SIGNED_URL_TTL_SECONDS,
+    )
+
+
+@router.get("/{evidence_id}/ai-assessment", response_model=EvidenceAiAssessmentRead)
+def get_evidence_ai_assessment(
+    evidence_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("evidence:read")),
+) -> EvidenceAiAssessmentRead:
+    """Return the latest AI ASSESSMENT (a suggestion with reasoning, never a
+    verdict) for an evidence item.
+
+    Reuses evidence:read: the assessment is a read-only sub-resource of the
+    evidence item at the same sensitivity tier, so anyone who may read the
+    evidence may read its assessment -- avoiding RBAC scope-creep and a role-grant
+    migration. Org-scoped via _get_evidence_or_404, so org A cannot read org B's
+    assessment. Returns 404 while the async assessment is still pending.
+    """
+    from app.models.evidence_ai_assessment import EvidenceAiAssessment
+
+    evidence = _get_evidence_or_404(db, organization.id, evidence_id)
+    assessment = db.execute(
+        select(EvidenceAiAssessment)
+        .where(
+            EvidenceAiAssessment.evidence_item_id == evidence.id,
+            EvidenceAiAssessment.organization_id == organization.id,
+        )
+        .order_by(EvidenceAiAssessment.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if assessment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No AI assessment is available yet for this evidence item (it may still be processing).",
+        )
+    return EvidenceAiAssessmentRead(
+        evidence_id=evidence.id,
+        ai_assessment_status=assessment.ai_assessment_status,
+        appears_to_be=assessment.appears_to_be,
+        appears_to_cover=assessment.appears_to_cover,
+        missing_or_mismatched=list(assessment.missing_or_mismatched_json or []),
+        explanation=assessment.explanation,
+        linked_control_id=assessment.linked_control_id,
+        content_source=assessment.content_source,
+        provider_used=assessment.provider_used,
+        assessment_version=assessment.assessment_version,
+        created_at=assessment.created_at,
     )

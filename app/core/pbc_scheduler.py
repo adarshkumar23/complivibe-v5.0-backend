@@ -19,6 +19,7 @@ from app.compliance.services.compound_insight_sweep_service import (
     run_compound_insight_candidate_drain,
     run_compound_insight_full_sweep,
 )
+from app.services.evidence_assessment_service import run_evidence_assessment_candidate_drain
 from app.compliance.services.pbc_service import run_daily_pbc_overdue_sweep
 from app.compliance.services.control_exception_service import run_daily_control_exception_expiry_sweep
 from app.compliance.services.subprocessor_service import run_daily_subprocessor_dpa_expiry_sweep
@@ -79,6 +80,7 @@ SCHEDULER_JOB_IDS: list[str] = [
     "vendor_assessment_staleness_sweep",
     "compound_insight_reactive_drain",
     "compound_insight_full_sweep",
+    "evidence_ai_assessment_drain",
 ]
 
 
@@ -835,6 +837,27 @@ def _run_compound_insight_full_sweep_job() -> None:
     )
 
 
+def _run_evidence_ai_assessment_drain_internal(*, db) -> dict:
+    try:
+        result = run_evidence_assessment_candidate_drain(db)
+        db.commit()
+        logger.info("Evidence AI assessment drain complete", extra=result)
+        return result
+    except Exception as exc:
+        db.rollback()
+        _capture_scheduler_exception(exc)
+        logger.exception("Evidence AI assessment drain failed")
+        raise
+
+
+def _run_evidence_ai_assessment_drain_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="evidence_ai_assessment_drain",
+        job_fn=_run_evidence_ai_assessment_drain_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
 def register_pbc_scheduler(app: FastAPI) -> None:
     settings = get_settings()
     if settings.APP_ENV == "test":
@@ -909,6 +932,13 @@ def register_pbc_scheduler(app: FastAPI) -> None:
         _run_compound_insight_full_sweep_job,
         trigger=CronTrigger(hour=3, minute=30),
         id="compound_insight_full_sweep",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_evidence_ai_assessment_drain_job,
+        trigger=IntervalTrigger(minutes=5),
+        id="evidence_ai_assessment_drain",
         replace_existing=True,
         coalesce=True,
     )

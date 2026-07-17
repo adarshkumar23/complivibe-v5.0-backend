@@ -26,3 +26,9 @@ def register_event_listeners() -> None:
     from app.compliance.services.compound_pattern_candidate_listener import CompoundPatternCandidateListener
 
     CompoundPatternCandidateListener().register(bus)
+
+    # Evidence-vault AI-assist -- flags a newly uploaded evidence file for async
+    # assessment (extraction + AI happen in the drain, never in this listener).
+    from app.compliance.services.evidence_assessment_candidate_listener import EvidenceAssessmentCandidateListener
+
+    EvidenceAssessmentCandidateListener().register(bus)

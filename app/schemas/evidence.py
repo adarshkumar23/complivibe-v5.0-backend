@@ -137,3 +137,20 @@ class EvidenceFileUrlResponse(BaseModel):
     evidence_id: UUID
     url: str = Field(description="Short-lived presigned GET URL; expires after expires_in_seconds")
     expires_in_seconds: int
+
+
+class EvidenceAiAssessmentRead(BaseModel):
+    evidence_id: UUID
+    ai_assessment_status: str = Field(
+        description="suggested_valid | suggested_incomplete | suggested_mismatch | unable_to_assess "
+        "-- an AI SUGGESTION with reasoning, never a verdict of correctness"
+    )
+    appears_to_be: str | None = None
+    appears_to_cover: str | None = None
+    missing_or_mismatched: list[str] = Field(default_factory=list)
+    explanation: str
+    linked_control_id: UUID | None = None
+    content_source: str = Field(description="r2_file | external_url | none")
+    provider_used: str | None = None
+    assessment_version: int
+    created_at: datetime
