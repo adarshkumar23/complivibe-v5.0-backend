@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import threading
 import time
 import uuid
 
@@ -12,6 +14,7 @@ from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.db.session import get_session_maker
 from app.models.rate_limit_config import RateLimitConfig
 
 
@@ -51,6 +54,56 @@ class CompliVibeRateLimiter:
         if settings.RATE_LIMIT_REDIS_URL:
             limiter_kwargs["storage_uri"] = settings.RATE_LIMIT_REDIS_URL
         self.limiter = Limiter(**limiter_kwargs)
+
+        # Per-(org, endpoint_group) resolved-limit cache. The DB lookup in
+        # get_org_limit used to run synchronously on the async event loop for
+        # EVERY org-scoped request (see app/main.py), serializing the whole
+        # server behind one blocking query and capping throughput. Caching the
+        # resolved "N/minute" string for a short TTL turns the hot path into an
+        # in-memory dict read; on a miss the DB query is run off the event loop
+        # (asyncio.to_thread) so it still never blocks the loop.
+        self._limit_cache: dict[tuple[str, str], tuple[str, float]] = {}
+        self._cache_lock = threading.Lock()
+
+    @property
+    def _cache_ttl(self) -> float:
+        return float(get_settings().RATE_LIMIT_CONFIG_CACHE_TTL_SECONDS)
+
+    def _cache_get(self, cache_key: tuple[str, str]) -> str | None:
+        with self._cache_lock:
+            entry = self._limit_cache.get(cache_key)
+            if entry is None:
+                return None
+            limit_str, expires_at = entry
+            if time.monotonic() >= expires_at:
+                # Expired: drop it so the dict does not grow unbounded with stale keys.
+                self._limit_cache.pop(cache_key, None)
+                return None
+            return limit_str
+
+    def _cache_put(self, cache_key: tuple[str, str], limit_str: str) -> None:
+        with self._cache_lock:
+            self._limit_cache[cache_key] = (limit_str, time.monotonic() + self._cache_ttl)
+
+    def invalidate_org(self, org_id: uuid.UUID | str, endpoint_group: str | None = None) -> None:
+        """Drop cached limits for an org after its config changes.
+
+        Called in-process from RateLimitService when a limit is set or reset so
+        the change takes effect immediately in this worker (rather than waiting
+        out the TTL). With ``endpoint_group`` None, every group for the org is
+        dropped. NOTE: this only reaches THIS process's cache -- across multiple
+        worker processes the TTL still bounds staleness (see the Redis tradeoff
+        note in the fix write-up).
+        """
+        org_str = str(org_id)
+        with self._cache_lock:
+            for key in [k for k in self._limit_cache if k[0] == org_str and (endpoint_group is None or k[1] == endpoint_group)]:
+                self._limit_cache.pop(key, None)
+
+    def clear_limit_cache(self) -> None:
+        """Wipe the whole resolved-limit cache (used by test fixtures for isolation)."""
+        with self._cache_lock:
+            self._limit_cache.clear()
 
     def _get_rate_key(self, request: Request) -> str:
         org_id = getattr(request.state, "organization_id", None)
@@ -121,6 +174,23 @@ class CompliVibeRateLimiter:
         return allowed, endpoint_group, limit_str
 
     def get_org_limit(self, org_id: uuid.UUID, endpoint_group: str, db: Session) -> str:
+        """Resolve the "N/minute" limit for (org, group), cache-first.
+
+        A cache hit avoids the DB entirely. On a miss the DB is queried via the
+        provided session and the result cached for RATE_LIMIT_CONFIG_CACHE_TTL_SECONDS.
+        Keyed by the concrete org_id, so a value resolved for org A (even the
+        global-default fallback) is NEVER served to org B.
+        """
+        cache_key = (str(org_id), endpoint_group)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        limit_str = self._query_org_limit(org_id, endpoint_group, db)
+        self._cache_put(cache_key, limit_str)
+        return limit_str
+
+    def _query_org_limit(self, org_id: uuid.UUID, endpoint_group: str, db: Session) -> str:
+        """The raw DB resolution: org-specific override -> global default row -> code default."""
         config = (
             db.query(RateLimitConfig)
             .filter(
@@ -146,6 +216,45 @@ class CompliVibeRateLimiter:
             return f"{config.requests_per_minute}/minute"
 
         return ENDPOINT_GROUP_DEFAULTS.get(endpoint_group, ENDPOINT_GROUP_DEFAULTS["api_general"])
+
+    def _resolve_org_limit_in_thread(self, org_id: uuid.UUID, endpoint_group: str) -> str:
+        """Run inside a worker thread (never the event loop): open our OWN session,
+        resolve+cache the limit, and always close the session."""
+        db = get_session_maker()()
+        try:
+            return self.get_org_limit(org_id, endpoint_group, db)
+        finally:
+            db.close()
+
+    async def check_general_limit_async(self, request: Request) -> tuple[bool, str, str]:
+        """Async-safe equivalent of check_general_limit for the request middleware.
+
+        The limit-config lookup is served from the in-memory TTL cache on the hot
+        path (no DB, no thread hop); only a cache miss touches the DB, and that
+        query is pushed off the event loop via asyncio.to_thread so a blocking
+        SQLAlchemy call never serializes the loop. The counter .hit() is an
+        in-memory op and stays inline.
+        """
+        endpoint_group = getattr(request.state, "endpoint_group", None) or self.endpoint_group_for_path(request.url.path)
+        limit_str = ENDPOINT_GROUP_DEFAULTS.get(endpoint_group, ENDPOINT_GROUP_DEFAULTS["api_general"])
+
+        org_id = getattr(request.state, "organization_id", None)
+        if org_id:
+            try:
+                oid = uuid.UUID(str(org_id))
+            except (ValueError, TypeError):
+                oid = None
+            if oid is not None:
+                cached = self._cache_get((str(oid), endpoint_group))
+                if cached is not None:
+                    limit_str = cached
+                else:
+                    limit_str = await asyncio.to_thread(self._resolve_org_limit_in_thread, oid, endpoint_group)
+
+        item = limits_lib.parse(limit_str)
+        key = self._get_rate_key(request)
+        allowed = self.limiter._limiter.hit(item, "general", endpoint_group, key)
+        return allowed, endpoint_group, limit_str
 
 
 rate_limiter = CompliVibeRateLimiter()

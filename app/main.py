@@ -203,12 +203,13 @@ def create_application() -> FastAPI:
             # (see `CompliVibeRateLimiter.check_general_limit`). This performs
             # that same check explicitly, for every request, using the same
             # limiter/storage/key/config as the rest of the rate-limiting system.
-            db = get_session_maker()() if request.state.organization_id else None
-            try:
-                allowed, endpoint_group, limit_str = rate_limiter.check_general_limit(request, db)
-            finally:
-                if db is not None:
-                    db.close()
+            #
+            # check_general_limit_async resolves the per-org limit from an
+            # in-memory TTL cache on the hot path and pushes the (rare) cache-miss
+            # DB query off the event loop, so we no longer open a synchronous
+            # SQLAlchemy session and run a blocking query on the loop for every
+            # org-scoped request (that serialized the server at ~52 req/s).
+            allowed, endpoint_group, limit_str = await rate_limiter.check_general_limit_async(request)
             if not allowed:
                 return build_general_rate_limit_exceeded_response(endpoint_group, limit_str)
 

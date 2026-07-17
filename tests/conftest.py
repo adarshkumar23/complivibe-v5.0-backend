@@ -231,6 +231,18 @@ def _event_bus_listeners_registered() -> Generator[None, None, None]:
     yield
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limit_cache() -> Generator[None, None, None]:
+    """The rate-limiter's resolved-limit cache is a process-global singleton;
+    clear it before each test so one test's cached org limit never leaks into
+    another (tests truncate the DB between runs but reuse the singleton)."""
+    from app.core.rate_limiter import rate_limiter
+
+    rate_limiter.clear_limit_cache()
+    yield
+    rate_limiter.clear_limit_cache()
+
+
 @pytest.fixture
 def db_session(_test_engine, _test_session_factory, _base_metadata) -> Generator[Session, None, None]:
     db = _test_session_factory()

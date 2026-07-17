@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.rate_limiter import rate_limiter
 from app.models.rate_limit_config import RateLimitConfig
 from app.services.audit_service import AuditService
 
@@ -117,6 +118,9 @@ class RateLimitService:
             existing.is_active = True
             existing.updated_at = datetime.now(UTC)
             db.flush()
+            # Drop the stale cached limit so the new value takes effect at once
+            # (rather than waiting out the TTL) in this worker process.
+            rate_limiter.invalidate_org(org_id, endpoint_group)
             return existing
 
         config = RateLimitConfig(
@@ -131,6 +135,7 @@ class RateLimitService:
         )
         db.add(config)
         db.flush()
+        rate_limiter.invalidate_org(org_id, endpoint_group)
 
         AuditService(db).write_audit_log(
             action="rate_limit.org_config_set",
@@ -166,6 +171,7 @@ class RateLimitService:
             config.is_active = False
             config.updated_at = datetime.now(UTC)
             db.flush()
+            rate_limiter.invalidate_org(org_id, endpoint_group)
             AuditService(db).write_audit_log(
                 action="rate_limit.org_config_reset",
                 entity_type="rate_limit_configs",

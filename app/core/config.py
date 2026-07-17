@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     SSO_ENABLED: bool = True
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_REDIS_URL: str | None = None
+    # Per-org RateLimitConfig lookups are cached in-process for this many seconds
+    # so the hot request path does not hit the DB on every org-scoped request.
+    # A config change via the admin API invalidates its own cache entry
+    # immediately in-process; this TTL only bounds staleness across worker
+    # processes (each has its own cache). See app/core/rate_limiter.py.
+    RATE_LIMIT_CONFIG_CACHE_TTL_SECONDS: int = 45
     RAZORPAY_KEY_ID: str = ""
     RAZORPAY_KEY_SECRET: str = ""
     RAZORPAY_WEBHOOK_SECRET: str = ""
