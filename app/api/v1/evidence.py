@@ -1,7 +1,8 @@
+import hashlib
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -22,6 +23,8 @@ from app.schemas.evidence import (
     EvidenceControlSummary,
     EvidenceCreate,
     EvidenceDetail,
+    EvidenceFileUploadResponse,
+    EvidenceFileUrlResponse,
     EvidenceRead,
     EvidenceReadinessSummary,
     EvidenceReviewRequest,
@@ -30,6 +33,11 @@ from app.schemas.evidence import (
 from app.compliance.services.webhook_service import WebhookService
 from app.services.audit_service import AuditService
 from app.services.evidence_service import EvidenceService
+from app.services.object_storage_service import (
+    PROVIDER_NAME as R2_PROVIDER_NAME,
+    ObjectStorageService,
+    StorageNotConfiguredError,
+)
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
 
@@ -532,3 +540,207 @@ def review_evidence(
     db.commit()
     db.refresh(evidence)
     return _evidence_read(evidence)
+
+
+# ── Evidence file storage (Cloudflare R2) ───────────────────────────────────
+# Extension allowlist (secure by default): documents + images only. Anything not
+# listed -- executables, scripts, archives-of-code -- is rejected. The extension
+# is the primary gate because the multipart content-type is client-declared and
+# spoofable; we still record a normalized content-type for correct download
+# rendering. NOTE: this is allowlist validation only -- there is NO malware/virus
+# scanning and NO deep content-sniffing in this build (documented known gap).
+_ALLOWED_EXTENSIONS: dict[str, str] = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".txt": "text/plain",
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".xml": "application/xml",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+
+
+def _validate_and_normalize_upload(filename: str | None) -> tuple[str, str]:
+    """Return (sanitized_extension, normalized_content_type) or raise 415."""
+    from pathlib import PurePosixPath
+
+    if not filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A filename is required for file upload.")
+    ext = PurePosixPath(filename).suffix.lower()
+    if ext not in _ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=(
+                f"File type '{ext or '(none)'}' is not allowed. Permitted evidence file "
+                f"types: {', '.join(sorted(_ALLOWED_EXTENSIONS))}."
+            ),
+        )
+    return ext, _ALLOWED_EXTENSIONS[ext]
+
+
+async def _read_bounded(upload: UploadFile, max_bytes: int) -> bytes:
+    """Read the upload, enforcing the size cap incrementally (reject before OOM)."""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File exceeds the maximum evidence upload size of {max_bytes} bytes.",
+            )
+        chunks.append(chunk)
+    if total == 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty.")
+    return b"".join(chunks)
+
+
+@router.post("/{evidence_id}/file", response_model=EvidenceFileUploadResponse)
+async def upload_evidence_file(
+    evidence_id: uuid.UUID,
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("evidence:write")),
+) -> EvidenceFileUploadResponse:
+    """Attach a real file to an existing evidence item, stored in Cloudflare R2.
+
+    Complements (does not replace) the metadata/external_reference_url path: an
+    evidence item can carry either an uploaded file, an external link, or both.
+    Gracefully inert -- if R2 is not configured this returns 503 without touching
+    the row, so the metadata path keeps working.
+    """
+    from app.core.config import get_settings
+
+    evidence = _get_evidence_or_404(db, organization.id, evidence_id)
+
+    storage = ObjectStorageService()
+    if not storage.is_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Object storage (Cloudflare R2) is not configured; file upload is unavailable. "
+            "Evidence can still be recorded via metadata and an external_reference_url.",
+        )
+
+    ext, content_type = _validate_and_normalize_upload(file.filename)
+    data = await _read_bounded(file, get_settings().EVIDENCE_MAX_UPLOAD_BYTES)
+
+    # SHA-256 computed from the ACTUAL bytes -- replaces the previously
+    # client-supplied, unverified checksum for file-backed evidence.
+    checksum = hashlib.sha256(data).hexdigest()
+    key = ObjectStorageService.build_key(organization.id, evidence.id, file.filename)
+
+    try:
+        storage.upload_bytes(key, data, content_type)
+    except StorageNotConfiguredError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 -- surface storage failures, never a 500 stacktrace
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to store the file in object storage: {exc}",
+        ) from exc
+
+    evidence.storage_provider = R2_PROVIDER_NAME
+    evidence.storage_key = key
+    evidence.file_name = file.filename[:255]
+    evidence.mime_type = content_type
+    evidence.size_bytes = len(data)
+    evidence.checksum_sha256 = checksum
+    db.flush()
+
+    AuditService(db).write_audit_log(
+        organization_id=organization.id,
+        actor_user_id=current_user.id,
+        action="evidence.file_uploaded",
+        entity_type="evidence_item",
+        entity_id=evidence.id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+        metadata_json={"storage_provider": R2_PROVIDER_NAME, "size_bytes": len(data), "checksum_sha256": checksum},
+    )
+    db.commit()
+    db.refresh(evidence)
+
+    # Fire the EVIDENCE_UPLOADED domain event (previously missing) so downstream
+    # async consumers (e.g. the planned AI-assist) can react without blocking upload.
+    EventBus.get_instance().emit(
+        EventType.EVIDENCE_UPLOADED,
+        EventPayload(
+            org_id=organization.id,
+            entity_type="evidence",
+            entity_id=evidence.id,
+            event_type=EventType.EVIDENCE_UPLOADED,
+            previous_value=None,
+            new_value=key,
+            triggered_by="user",
+            triggered_by_user_id=current_user.id,
+            db=db,
+        ),
+    )
+    db.commit()
+
+    return EvidenceFileUploadResponse(
+        evidence_id=evidence.id,
+        storage_provider=R2_PROVIDER_NAME,
+        storage_key=key,
+        file_name=evidence.file_name,
+        mime_type=content_type,
+        size_bytes=len(data),
+        checksum_sha256=checksum,
+    )
+
+
+@router.get("/{evidence_id}/file-url", response_model=EvidenceFileUrlResponse)
+def get_evidence_file_url(
+    evidence_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("evidence:read")),
+) -> EvidenceFileUrlResponse:
+    """Return a short-lived presigned GET URL for an evidence item's stored file.
+
+    Org-scoped: _get_evidence_or_404 rejects any evidence_id not owned by the
+    caller's organization, so org A cannot mint a URL for org B's file. The object
+    key is read from the row (server-derived), never from client input.
+    """
+    from app.core.config import get_settings
+
+    evidence = _get_evidence_or_404(db, organization.id, evidence_id)
+    if not evidence.storage_key or evidence.storage_provider != R2_PROVIDER_NAME:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="This evidence item has no stored file. It may only carry an external_reference_url.",
+        )
+
+    storage = ObjectStorageService()
+    if not storage.is_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Object storage (Cloudflare R2) is not configured; cannot generate a download URL.",
+        )
+    try:
+        url = storage.generate_presigned_get_url(evidence.storage_key)
+    except StorageNotConfiguredError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+    return EvidenceFileUrlResponse(
+        evidence_id=evidence.id,
+        url=url,
+        expires_in_seconds=get_settings().R2_SIGNED_URL_TTL_SECONDS,
+    )

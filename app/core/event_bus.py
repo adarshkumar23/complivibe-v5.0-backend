@@ -13,6 +13,7 @@ class EventType:
     CONTROL_STATUS_CHANGED = "control.status_changed"
     EVIDENCE_STATUS_CHANGED = "evidence.status_changed"
     EVIDENCE_EXPIRED = "evidence.expired"
+    EVIDENCE_UPLOADED = "evidence.uploaded"
     VENDOR_SCORE_UPDATED = "vendor_risk.score_updated"
     RISK_SCORE_UPDATED = "risk.score_updated"
     # Phase 1 Step 3 -- cross-domain point-to-point connections migrated onto the bus.

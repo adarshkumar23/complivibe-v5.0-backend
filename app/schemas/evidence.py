@@ -121,3 +121,19 @@ class EvidenceControlGapPage(BaseModel):
     limit: int
     offset: int
     items: list[EvidenceControlGap]
+
+
+class EvidenceFileUploadResponse(BaseModel):
+    evidence_id: UUID
+    storage_provider: str
+    storage_key: str
+    file_name: str
+    mime_type: str
+    size_bytes: int
+    checksum_sha256: str = Field(description="SHA-256 computed server-side from the actual stored bytes")
+
+
+class EvidenceFileUrlResponse(BaseModel):
+    evidence_id: UUID
+    url: str = Field(description="Short-lived presigned GET URL; expires after expires_in_seconds")
+    expires_in_seconds: int

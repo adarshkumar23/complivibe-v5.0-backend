@@ -43,11 +43,38 @@ class Settings(BaseSettings):
     ACTIVATION_TOKEN_EXPIRE_HOURS: int = 72
     BACKEND_CORS_ORIGINS: Annotated[list[str], NoDecode] = Field(default_factory=list)
     FILE_STORAGE_PATH: str = "/tmp/complivibe_exports/"
+    # Azure OpenAI is the fallback provider (Groq is primary). ENDPOINT is the
+    # OpenAI-compatible "v1" base, e.g. https://<resource>.services.ai.azure.com/openai/v1
+    # (the SDK appends /responses). DEPLOYMENT_NAME is the model id passed to the
+    # Responses API (e.g. gpt-5.1) -- env-configurable so a model change is config,
+    # not code. No api-version is needed on the v1 surface.
     AZURE_OPENAI_ENDPOINT: str | None = None
     AZURE_OPENAI_API_KEY: str | None = None
     AZURE_OPENAI_DEPLOYMENT_NAME: str = ""
     AZURE_OPENAI_DEPLOYMENT: str | None = None
     AZURE_OPENAI_API_VERSION: str | None = None
+    # gpt-5.1 is a reasoning model: reasoning tokens are spent before the visible
+    # answer, so this must be generous or structured output truncates to empty
+    # (which raises and fails the chain). Mirrors the GROQ_MAX_TOKENS rationale.
+    AZURE_OPENAI_MAX_TOKENS: int = 8192
+    # Cloudflare R2 object storage for evidence files (S3-compatible API). Follows
+    # the same env-configurable, gracefully-inert discipline as the Azure leg above:
+    # the feature is active ONLY when all four of ACCOUNT_ID/ACCESS_KEY_ID/
+    # SECRET_ACCESS_KEY/BUCKET_NAME are populated; otherwise file upload/retrieval
+    # returns a clear "storage not configured" error and the existing metadata/URL
+    # evidence path keeps working untouched. Never hardcode credentials.
+    R2_ACCOUNT_ID: str = ""
+    R2_ACCESS_KEY_ID: str = ""
+    R2_SECRET_ACCESS_KEY: str = ""
+    R2_BUCKET_NAME: str = ""
+    # Optional explicit endpoint override; if blank it is derived as
+    # https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com (standard R2 S3 endpoint).
+    R2_ENDPOINT_URL: str | None = None
+    # Retrieval is via short-lived presigned GET URLs only (never public objects).
+    R2_SIGNED_URL_TTL_SECONDS: int = 300
+    # Max evidence file size. 25 MiB comfortably covers compliance artifacts
+    # (PDFs, screenshots, spreadsheets, signed policy docs); env-tunable.
+    EVIDENCE_MAX_UPLOAD_BYTES: int = 26_214_400
     GROQ_API_KEY: str = ""
     # Groq chat model. Env-configurable so a Groq model deprecation is a config
     # change, not a code change. Default is Groq's current production-tier
