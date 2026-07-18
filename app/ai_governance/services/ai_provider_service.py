@@ -517,25 +517,37 @@ class AIProviderService:
         messages: list[dict[str, str]],
         response_format: dict | None = None,
     ) -> str:
+        settings = get_settings()
+        # Azure's OpenAI-compatible "v1" surface + the Responses API
+        # (client.responses.create -> POST {endpoint}/responses). deployment_name
+        # is the model id (e.g. gpt-5.1). API-key auth via the standard OpenAI SDK
+        # (no DefaultAzureCredential -- this host has no managed identity).
         client = OpenAI(
             api_key=api_key,
             base_url=endpoint,
             timeout=30.0,
         )
-        extra: dict = {}
+        kwargs: dict = {
+            "model": deployment_name,
+            # Responses API accepts the same [{role, content}] items as `input`.
+            "input": messages,
+            # gpt-5.1 is a reasoning model; no `temperature` (reasoning models
+            # reject non-default sampling). Budget must cover reasoning + answer.
+            "max_output_tokens": settings.AZURE_OPENAI_MAX_TOKENS,
+        }
         if response_format is not None:
-            extra["response_format"] = response_format
-        resp = client.chat.completions.create(
-            model=deployment_name,
-            messages=messages,
-            temperature=0.2,
-            max_tokens=1200,
-            **extra,
-        )
-        text = None
-        if getattr(resp, "choices", None):
-            msg = resp.choices[0].message if resp.choices[0] else None
-            text = msg.content if msg else None
+            # Translate Chat-Completions json_schema -> Responses `text.format`.
+            js = response_format.get("json_schema", response_format)
+            kwargs["text"] = {
+                "format": {
+                    "type": "json_schema",
+                    "name": js.get("name", "structured_output"),
+                    "strict": js.get("strict", True),
+                    "schema": js.get("schema", {}),
+                }
+            }
+        resp = client.responses.create(**kwargs)
+        text = getattr(resp, "output_text", None)
         if not text or not str(text).strip():
             raise RuntimeError("Azure returned empty draft text")
         return str(text)
