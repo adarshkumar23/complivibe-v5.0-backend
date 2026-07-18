@@ -351,6 +351,9 @@ from app.models.aibom_record import AIBOMRecord
 from app.models.aibom_component import AIBOMComponent
 from app.models.ai_policy_guardrail import AIPolicyGuardrail
 from app.models.ai_guardrail_event import AIGuardrailEvent
+from app.models.ai_derived_guardrail import AiDerivedGuardrail
+from app.models.ai_guardrail_check_event import AiGuardrailCheckEvent
+from app.models.ai_guardrail_receipt import AiGuardrailReceipt
 from app.models.ai_approval_envelope import AIApprovalEnvelope
 from app.models.ai_envelope_approval import AIEnvelopeApproval
 from app.models.ai_monitoring_config import AIMonitoringConfig
@@ -692,6 +695,9 @@ __all__ = [
     "AIBOMComponent",
     "AIPolicyGuardrail",
     "AIGuardrailEvent",
+    "AiDerivedGuardrail",
+    "AiGuardrailCheckEvent",
+    "AiGuardrailReceipt",
     "AIApprovalEnvelope",
     "AIEnvelopeApproval",
     "AIMonitoringConfig",

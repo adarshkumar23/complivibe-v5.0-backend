@@ -105,6 +105,19 @@ class Settings(BaseSettings):
     VAULT_TRANSIT_KEY_NAME: str = "complivibe-secrets"
     VAULT_REQUEST_TIMEOUT_SECONDS: float = 5.0
 
+    # Open Policy Agent (OPA) for agentic policy-derivation / guardrail checks
+    # (patent P3). This is real new infrastructure, in the same class as Redis
+    # and Vault: OPA_SERVER_URL points at a running OPA HTTP server used for
+    # runtime allow/deny evaluation of the check-action endpoint; OPA_BINARY_PATH
+    # is the `opa` CLI used at guardrail-creation time to compile-check the
+    # derived Rego (`opa check --strict`). Both degrade gracefully when unset:
+    # guardrail creation returns a clear "OPA not configured" error and the
+    # check-action endpoint fails closed (deny), rather than 500-ing or silently
+    # allowing. See app/ai_governance/services/policy_derivation/.
+    OPA_SERVER_URL: str | None = None
+    OPA_BINARY_PATH: str = "opa"
+    OPA_REQUEST_TIMEOUT_SECONDS: float = 2.0
+
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
     def parse_cors_origins(cls, value: str | list[str]) -> list[str]:

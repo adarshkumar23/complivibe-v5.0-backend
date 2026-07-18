@@ -2,6 +2,7 @@ from fastapi import APIRouter
 from app.ai_governance.routers import ai_systems as ai_governance_systems
 from app.ai_governance.routers import atlas as ai_governance_atlas
 from app.ai_governance.routers import shadow_ai as ai_governance_shadow_ai
+from app.ai_governance.routers import policy_derivation as ai_governance_policy_derivation
 from app.ai_governance.routers import ai_reviews as ai_governance_reviews
 from app.ai_governance.routers import eu_act_workflows as ai_governance_eu_act_workflows
 from app.ai_governance.routers import iso42001 as ai_governance_iso42001
@@ -211,6 +212,7 @@ api_router.include_router(ai_governance_atlas.systems_router)
 api_router.include_router(ai_governance_systems.router)
 api_router.include_router(ai_governance_systems.scorecard_router)
 api_router.include_router(ai_governance_shadow_ai.router)
+api_router.include_router(ai_governance_policy_derivation.router)
 api_router.include_router(ai_governance_reviews.router)
 api_router.include_router(ai_governance_eu_act_workflows.router)
 api_router.include_router(ai_governance_iso42001.router)
