@@ -1,6 +1,7 @@
 import re
 import uuid
 from datetime import UTC, datetime
+from html import escape as html_escape
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, or_, select
@@ -68,21 +69,30 @@ class EmailService:
                 detail=f"Missing required template variables: {', '.join(missing)}",
             )
 
-        def replace(tpl: str | None) -> str | None:
+        def replace(tpl: str | None, *, escape_values: bool = False) -> str | None:
             if tpl is None:
                 return None
 
             def repl(match: re.Match[str]) -> str:
                 key = match.group(1)
                 value = variables.get(key)
-                return "" if value is None else str(value)
+                if value is None:
+                    return ""
+                text = str(value)
+                # For the HTML body ONLY, HTML-escape the substituted VALUE so a
+                # user-controlled variable (e.g. a policy/campaign/finding title set
+                # by one user) cannot inject markup/script into a notification email
+                # rendered for another user. The template's own markup is untouched --
+                # only the substituted values are escaped. Plain-text subject/body are
+                # not escaped (escaping would corrupt legitimate plain text like "<3").
+                return html_escape(text) if escape_values else text
 
             return VAR_PATTERN.sub(repl, tpl)
 
         return {
             "subject": replace(template.subject_template),
             "body_text": replace(template.body_text_template),
-            "body_html": replace(template.body_html_template),
+            "body_html": replace(template.body_html_template, escape_values=True),
         }
 
     def resolve_template_for_org(

@@ -1,6 +1,7 @@
 import hashlib
 import uuid
 from datetime import UTC, datetime
+from html import escape as html_escape
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -86,7 +87,7 @@ class NoticeService:
                     f"Please review and acknowledge it in CompliVibe."
                 ),
                 body_html=(
-                    f"<p>A new privacy notice version ({notice.version}) has been published for language {notice.language}. "
+                    f"<p>A new privacy notice version ({html_escape(notice.version)}) has been published for language {html_escape(notice.language)}. "
                     "Please review and acknowledge it in CompliVibe.</p>"
                 ),
                 status="pending",

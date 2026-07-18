@@ -4,6 +4,7 @@ import re
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
+from html import escape as html_escape
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -646,9 +647,11 @@ class OnboardingService:
             f"Your organization '{org.name}' is ready.\n"
             "Next steps: choose frameworks, invite your team, and complete onboarding."
         )
+        # HTML-escape user-controlled values (full_name, org name) so they cannot
+        # inject markup/script into the HTML email body (see EmailService.render_template).
         body_html = (
-            f"<p>Welcome to CompliVibe, <strong>{user.full_name or user.email}</strong>.</p>"
-            f"<p>Your organization <strong>{org.name}</strong> is ready.</p>"
+            f"<p>Welcome to CompliVibe, <strong>{html_escape(user.full_name or user.email)}</strong>.</p>"
+            f"<p>Your organization <strong>{html_escape(org.name)}</strong> is ready.</p>"
             "<p>Next steps: choose frameworks, invite your team, and complete onboarding.</p>"
         )
 
@@ -686,8 +689,8 @@ class OnboardingService:
             "This link expires in 7 days."
         )
         body_html = (
-            f"<p>You were invited to join <strong>{org.name}</strong>.</p>"
-            f"<p><a href=\"{accept_link}\">Accept your invitation</a></p>"
+            f"<p>You were invited to join <strong>{html_escape(org.name)}</strong>.</p>"
+            f"<p><a href=\"{html_escape(accept_link)}\">Accept your invitation</a></p>"
             "<p>This link expires in 7 days.</p>"
         )
 
