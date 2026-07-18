@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import logging
 import threading
 import time
 import uuid
@@ -16,6 +18,8 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import get_session_maker
 from app.models.rate_limit_config import RateLimitConfig
+
+logger = logging.getLogger(__name__)
 
 
 ENDPOINT_GROUP_DEFAULTS: dict[str, str] = {
@@ -65,6 +69,73 @@ class CompliVibeRateLimiter:
         self._limit_cache: dict[tuple[str, str], tuple[str, float]] = {}
         self._cache_lock = threading.Lock()
 
+        # Cross-worker cache invalidation via Redis pub/sub. The per-process TTL
+        # cache above keeps the hot path in-memory (no per-request Redis round-trip
+        # -- preserving the throughput fix); this channel propagates an admin's
+        # limit change to EVERY worker in ~ms, so the config-cache TTL is only a
+        # fallback bound when Redis is unavailable rather than the routine
+        # cross-worker staleness window. Redis-backed request COUNTING (which makes
+        # the per-worker limit shared, closing the N-workers = N*limit bypass) is
+        # handled separately by slowapi via the storage_uri set above.
+        self._redis_pub = None
+        self._sub_stop = threading.Event()
+        if settings.RATE_LIMIT_REDIS_URL:
+            self._start_invalidation_pubsub(settings.RATE_LIMIT_REDIS_URL)
+
+    _INVALIDATE_CHANNEL = "cv:ratelimit:invalidate"
+
+    def _start_invalidation_pubsub(self, redis_url: str) -> None:
+        """Connect the publisher and start the subscriber thread (best-effort).
+
+        On any failure the limiter degrades to TTL-only cross-worker consistency
+        (unchanged prior behavior) -- it never blocks startup or the request path.
+        """
+        try:
+            import redis  # noqa: PLC0415 -- optional dependency, only needed with Redis
+
+            self._redis_pub = redis.Redis.from_url(redis_url, socket_connect_timeout=5)
+            self._redis_pub.ping()
+            thread = threading.Thread(
+                target=self._run_invalidation_subscriber,
+                args=(redis_url,),
+                name="ratelimit-invalidate-sub",
+                daemon=True,
+            )
+            thread.start()
+        except Exception as exc:  # noqa: BLE001 -- degrade to TTL, never crash the worker
+            logger.warning(
+                "rate-limit Redis pub/sub unavailable (%s); cross-worker invalidation "
+                "falls back to the %ss config TTL",
+                exc,
+                self._cache_ttl,
+            )
+            self._redis_pub = None
+
+    def _run_invalidation_subscriber(self, redis_url: str) -> None:
+        """Listen for invalidation messages from other workers and clear the local
+        cache accordingly. Reconnects with backoff; local-only clear (never
+        re-publishes) so a message can't loop."""
+        import redis  # noqa: PLC0415
+
+        while not self._sub_stop.is_set():
+            try:
+                client = redis.Redis.from_url(redis_url, socket_connect_timeout=5)
+                pubsub = client.pubsub(ignore_subscribe_messages=True)
+                pubsub.subscribe(self._INVALIDATE_CHANNEL)
+                for message in pubsub.listen():
+                    if self._sub_stop.is_set():
+                        break
+                    if message.get("type") != "message":
+                        continue
+                    try:
+                        payload = json.loads(message["data"])
+                        self._invalidate_local(payload.get("org"), payload.get("group"))
+                    except Exception:  # noqa: BLE001 -- one bad message must not kill the loop
+                        logger.exception("rate-limit invalidation message handling failed")
+            except Exception as exc:  # noqa: BLE001 -- reconnect on any transport error
+                logger.warning("rate-limit invalidation subscriber disconnected (%s); retrying", exc)
+                time.sleep(2)
+
     @property
     def _cache_ttl(self) -> float:
         return float(get_settings().RATE_LIMIT_CONFIG_CACHE_TTL_SECONDS)
@@ -85,20 +156,41 @@ class CompliVibeRateLimiter:
         with self._cache_lock:
             self._limit_cache[cache_key] = (limit_str, time.monotonic() + self._cache_ttl)
 
-    def invalidate_org(self, org_id: uuid.UUID | str, endpoint_group: str | None = None) -> None:
-        """Drop cached limits for an org after its config changes.
-
-        Called in-process from RateLimitService when a limit is set or reset so
-        the change takes effect immediately in this worker (rather than waiting
-        out the TTL). With ``endpoint_group`` None, every group for the org is
-        dropped. NOTE: this only reaches THIS process's cache -- across multiple
-        worker processes the TTL still bounds staleness (see the Redis tradeoff
-        note in the fix write-up).
-        """
+    def _invalidate_local(self, org_id: uuid.UUID | str | None, endpoint_group: str | None = None) -> None:
+        """Clear THIS process's cached limits for an org. No Redis publish (so a
+        received pub/sub message can't loop)."""
+        if org_id is None:
+            return
         org_str = str(org_id)
         with self._cache_lock:
             for key in [k for k in self._limit_cache if k[0] == org_str and (endpoint_group is None or k[1] == endpoint_group)]:
                 self._limit_cache.pop(key, None)
+
+    def invalidate_org(self, org_id: uuid.UUID | str, endpoint_group: str | None = None) -> None:
+        """Drop cached limits for an org after its config changes.
+
+        Called in-process from RateLimitService when a limit is set or reset. The
+        local cache is cleared immediately so the change takes effect in THIS
+        worker at once; when Redis is configured the change is also published on
+        ``_INVALIDATE_CHANNEL`` so every OTHER worker clears its cache in ~ms
+        (closing the cross-worker staleness that otherwise lasts up to the config
+        TTL). With ``endpoint_group`` None, every group for the org is dropped. If
+        Redis is unavailable the publish is skipped and other workers fall back to
+        the TTL bound (prior behavior).
+        """
+        org_str = str(org_id)
+        self._invalidate_local(org_str, endpoint_group)
+        if self._redis_pub is not None:
+            try:
+                self._redis_pub.publish(
+                    self._INVALIDATE_CHANNEL,
+                    json.dumps({"org": org_str, "group": endpoint_group}),
+                )
+            except Exception as exc:  # noqa: BLE001 -- local clear already done; degrade to TTL
+                logger.warning(
+                    "rate-limit invalidation publish failed (%s); other workers fall back to TTL",
+                    exc,
+                )
 
     def clear_limit_cache(self) -> None:
         """Wipe the whole resolved-limit cache (used by test fixtures for isolation)."""
@@ -139,6 +231,22 @@ class CompliVibeRateLimiter:
             return "public"
         return "api_general"
 
+    def _hit_fail_open(self, item: limits_lib.RateLimitItem, endpoint_group: str, key: str) -> bool:
+        """Register a hit against the counter, failing OPEN on any storage error.
+
+        With in-memory storage this never raises. With Redis-backed storage
+        (RATE_LIMIT_REDIS_URL set) a Redis outage would otherwise raise here and,
+        because this runs in the request middleware, 500 EVERY request. Rate
+        limiting is a protective control, not a correctness one, so a storage
+        outage degrades to "temporarily unlimited" (logged) rather than a total
+        API outage.
+        """
+        try:
+            return self.limiter._limiter.hit(item, "general", endpoint_group, key)
+        except Exception as exc:  # noqa: BLE001 -- storage down: fail OPEN, never take down the API
+            logger.warning("rate-limit storage error on hit(); allowing request (fail-open): %s", exc)
+            return True
+
     def check_general_limit(self, request: Request, db: Session | None) -> tuple[bool, str, str]:
         """Enforce the general per-request rate limit for every request.
 
@@ -170,7 +278,7 @@ class CompliVibeRateLimiter:
 
         item = limits_lib.parse(limit_str)
         key = self._get_rate_key(request)
-        allowed = self.limiter._limiter.hit(item, "general", endpoint_group, key)
+        allowed = self._hit_fail_open(item, endpoint_group, key)
         return allowed, endpoint_group, limit_str
 
     def get_org_limit(self, org_id: uuid.UUID, endpoint_group: str, db: Session) -> str:
@@ -232,8 +340,8 @@ class CompliVibeRateLimiter:
         The limit-config lookup is served from the in-memory TTL cache on the hot
         path (no DB, no thread hop); only a cache miss touches the DB, and that
         query is pushed off the event loop via asyncio.to_thread so a blocking
-        SQLAlchemy call never serializes the loop. The counter .hit() is an
-        in-memory op and stays inline.
+        SQLAlchemy call never serializes the loop. The counter .hit() stays inline
+        (in-memory, or a fast local Redis op when RATE_LIMIT_REDIS_URL is set).
         """
         endpoint_group = getattr(request.state, "endpoint_group", None) or self.endpoint_group_for_path(request.url.path)
         limit_str = ENDPOINT_GROUP_DEFAULTS.get(endpoint_group, ENDPOINT_GROUP_DEFAULTS["api_general"])
@@ -253,7 +361,7 @@ class CompliVibeRateLimiter:
 
         item = limits_lib.parse(limit_str)
         key = self._get_rate_key(request)
-        allowed = self.limiter._limiter.hit(item, "general", endpoint_group, key)
+        allowed = self._hit_fail_open(item, endpoint_group, key)
         return allowed, endpoint_group, limit_str
 
 
