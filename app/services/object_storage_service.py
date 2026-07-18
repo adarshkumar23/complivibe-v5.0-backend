@@ -72,7 +72,19 @@ class ObjectStorageService:
                 aws_access_key_id=self._settings.R2_ACCESS_KEY_ID,
                 aws_secret_access_key=self._settings.R2_SECRET_ACCESS_KEY,
                 region_name="auto",  # R2 uses the "auto" region
-                config=Config(signature_version="s3v4"),
+                config=Config(
+                    signature_version="s3v4",
+                    # Bounded timeouts: without these, boto3 defaults (60s connect x
+                    # several retries) mean a CONFIGURED-but-unreachable R2 endpoint
+                    # hangs the request for minutes and ties up the worker (measured
+                    # 142s+ before this). connect_timeout fast-fails an unreachable
+                    # endpoint; read_timeout is deliberately generous so a legitimate
+                    # upload of a large-but-allowed file (up to EVIDENCE_MAX_UPLOAD_BYTES
+                    # = 25 MiB, potentially over a slow link) is never killed mid-transfer.
+                    connect_timeout=5,
+                    read_timeout=60,
+                    retries={"max_attempts": 2},
+                ),
             )
         return self._client
 
