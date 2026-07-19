@@ -28,6 +28,7 @@ from app.platform.services.billing_service import BillingService
 from app.platform.services.ip_allowlist_service import IPAllowlistService
 from app.platform.services.session_service import SessionService
 from app.services.rbac_service import RBACService
+from app.services.auditor_marketplace_service import AuditorMarketplaceService
 from app.services.seed_service import SeedService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -116,6 +117,7 @@ def register(payload: RegisterRequest, request: Request, response: Response, db:
         roles = SeedService.ensure_roles_for_organization(db, organization.id)
         SeedService.ensure_policy_templates(db)
         SeedService.ensure_questionnaire_scoring_rules(db)
+        AuditorMarketplaceService(db).ensure_seed_auditors()
         SeedService.ensure_issue_sla_policies(db, organization.id)
         SeedService.ensure_default_data_access_anomaly_rules(db, organization.id, user.id)
         owner_role = roles["owner"]

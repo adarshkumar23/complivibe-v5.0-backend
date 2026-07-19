@@ -94,7 +94,11 @@ class AuditorMarketplaceService:
         verified: bool | None = None,
         max_rate_usd_per_day: float | None = None,
     ) -> list[dict]:
-        self.ensure_seed_auditors()
+        # Deliberately does NOT seed. This is reached from the UNAUTHENTICATED public
+        # /find-auditor endpoint, which used to commit the resulting writes -- letting an
+        # anonymous caller drive unbounded write amplification against the primary database
+        # just by looping a GET. The catalog is global reference data and is now seeded at
+        # registration, alongside the other ensure_* reference seeds.
         rows = self.db.execute(
             select(Auditor).where(Auditor.status == "active").order_by(Auditor.verified.desc(), Auditor.rate_usd_per_day.asc())
         ).scalars().all()

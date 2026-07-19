@@ -109,10 +109,12 @@ def list_schedules(
 def trigger_schedule_reminder_sweep(
     db: Session = Depends(get_db),
     membership: Membership = Depends(require_permission("audit:write")),
-    _: Organization = Depends(get_current_organization),
+    organization: Organization = Depends(get_current_organization),
 ) -> AuditScheduleReminderSweepResult:
     _require_org_admin(db, membership)
-    result = AuditScheduleService(db).process_schedule_reminders()
+    # Scoped to the caller's organization. The authenticated org was previously bound
+    # and then discarded, making this a cross-tenant sweep.
+    result = AuditScheduleService(db).process_schedule_reminders(organization_id=organization.id)
     db.commit()
     return AuditScheduleReminderSweepResult(**result)
 

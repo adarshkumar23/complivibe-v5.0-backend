@@ -520,19 +520,31 @@ class AuditScheduleService:
         )
         return True
 
-    def process_schedule_reminders(self) -> dict[str, int]:
+    def process_schedule_reminders(self, *, organization_id: uuid.UUID | None = None) -> dict[str, int]:
+        """Send due audit-prep reminders.
+
+        organization_id=None sweeps every tenant and is correct ONLY for the scheduled
+        fleet-wide job. Any caller reached from an HTTP request must pass its own org:
+        this previously took no org argument at all, so the /trigger-reminder-sweep
+        endpoint discarded its authenticated organization and swept the whole fleet --
+        one tenant's admin could fire audit-prep emails into every other tenant, stamp
+        their last_reminder_sent_at, and (via the 7-day debounce below) suppress those
+        tenants' own legitimate reminders for a week.
+        """
         today = self.utcdate()
         processed = 0
         reminders_sent = 0
         calendars_created = 0
 
-        schedules = self.db.execute(
-            select(AuditSchedule).where(
-                AuditSchedule.deleted_at.is_(None),
-                AuditSchedule.status == "active",
-                AuditSchedule.is_active.is_(True),
-            )
-        ).scalars().all()
+        conditions = [
+            AuditSchedule.deleted_at.is_(None),
+            AuditSchedule.status == "active",
+            AuditSchedule.is_active.is_(True),
+        ]
+        if organization_id is not None:
+            conditions.append(AuditSchedule.organization_id == organization_id)
+
+        schedules = self.db.execute(select(AuditSchedule).where(*conditions)).scalars().all()
 
         for schedule in schedules:
             due = schedule.next_due_date or schedule.next_audit_date
@@ -716,7 +728,9 @@ class AuditScheduleService:
 
 
 def run_daily_audit_schedule_reminder_sweep(db: Session) -> dict[str, int]:
-    return AuditScheduleService(db).process_schedule_reminders()
+    # Fleet-wide by design: this is the scheduled job, which has no acting tenant.
+    # HTTP callers must pass organization_id -- see process_schedule_reminders.
+    return AuditScheduleService(db).process_schedule_reminders(organization_id=None)
 
 
 def run_daily_scheduled_audit_creation_sweep(db: Session) -> dict[str, int]:

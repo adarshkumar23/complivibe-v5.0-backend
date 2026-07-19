@@ -19,7 +19,21 @@ public_router = APIRouter(tags=["auditor-marketplace"])
 router = APIRouter(prefix="/auditor-marketplace", tags=["auditor-marketplace"])
 
 
-def _auditor_read(row) -> AuditorRead:
+def _mask_email(value: str | None) -> str:
+    """Mask an auditor's contact address for anonymous callers.
+
+    /find-auditor is unauthenticated and takes four filter parameters, so returning
+    addresses verbatim made it a directory that anyone could enumerate. The masked form
+    still lets a caller recognise a specific auditor they already know.
+    """
+    if not value or "@" not in value:
+        return "***"
+    local, _, domain = value.partition("@")
+    visible = local[0] if local else ""
+    return f"{visible}{'*' * max(len(local) - 1, 1)}@{domain}"
+
+
+def _auditor_read(row, *, mask_contact: bool = False) -> AuditorRead:
     auditor = row["auditor"] if isinstance(row, dict) else row
     match_score = float(row.get("match_score", 0.0)) if isinstance(row, dict) else 0.0
     context_flags = list(row.get("context_flags") or []) if isinstance(row, dict) else []
@@ -28,7 +42,7 @@ def _auditor_read(row) -> AuditorRead:
         created_at=auditor.created_at,
         updated_at=auditor.updated_at,
         name=auditor.name,
-        email=auditor.email,
+        email=_mask_email(auditor.email) if mask_contact else auditor.email,
         firm=auditor.firm,
         certifications_json=list(auditor.certifications_json or []),
         frameworks_json=list(auditor.frameworks_json or []),
@@ -77,8 +91,8 @@ def find_auditor(
         verified=verified,
         max_rate_usd_per_day=max_rate_usd_per_day,
     )
-    db.commit()
-    return [_auditor_read(row) for row in rows]
+    # No db.commit(): this endpoint is unauthenticated and must not write.
+    return [_auditor_read(row, mask_contact=True) for row in rows]
 
 
 @router.post("/engagements", response_model=AuditorEngagementCreateResponse, status_code=status.HTTP_201_CREATED)

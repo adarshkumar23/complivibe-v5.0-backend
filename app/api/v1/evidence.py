@@ -331,10 +331,9 @@ def update_evidence(
         "evidence_type",
         "source",
         "status",
-        "file_name",
-        "mime_type",
-        "size_bytes",
-        "checksum_sha256",
+        # No file_name / mime_type / size_bytes / checksum_sha256: these describe the stored
+        # bytes, are computed server-side at upload, and must not be rewritable afterwards.
+        # See EvidenceUpdate.
         "external_reference_url",
         "valid_from",
         "valid_until",

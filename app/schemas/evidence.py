@@ -72,15 +72,19 @@ class EvidenceCreate(BaseModel):
 
 
 class EvidenceUpdate(BaseModel):
+    # file_name / mime_type / size_bytes / checksum_sha256 are deliberately absent.
+    # They describe the bytes actually held in object storage and are computed server-side
+    # at upload; they are accepted at CREATE (where a caller may record an externally
+    # produced hash) but must not be mutable afterwards. While they were patchable, anyone
+    # with evidence:write could upload a document, let a reviewer verify it, then rewrite
+    # checksum_sha256 to the hash of a different file -- leaving the row attesting to bytes
+    # that were never stored, logged only as a generic "evidence.updated".
+    # This mirrors storage_key / storage_provider, which are server-owned the same way.
     title: str | None = Field(default=None, min_length=3, max_length=255)
     description: str | None = None
     evidence_type: str | None = None
     source: str | None = None
     status: str | None = Field(default=None, pattern="^(active|archived|deleted_pending|superseded)$")
-    file_name: str | None = Field(default=None, max_length=255)
-    mime_type: str | None = Field(default=None, max_length=255)
-    size_bytes: int | None = Field(default=None, ge=0)
-    checksum_sha256: str | None = Field(default=None, max_length=128)
     external_reference_url: str | None = Field(default=None, max_length=1024)
     valid_from: datetime | None = None
     valid_until: datetime | None = None

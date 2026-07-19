@@ -311,6 +311,14 @@ class AIReviewService:
         decision_notes: str | None = None,
     ) -> AIGovernanceReview:
         review = self._require_review(org_id, review_id)
+        # Same guards as approve_review: this is an approval decision, and the conditional
+        # route reaches the identical terminal "approved" state via complete_conditional.
+        # Without these, a review's own creator could approve-with-conditions and then
+        # complete it, reaching "approved" with zero criteria answered and no second person
+        # involved -- defeating four-eyes entirely while the direct path enforced it.
+        if user_id == review.created_by:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Reviewer cannot approve their own review")
+        self._require_all_criteria_answered(org_id, review.id)
         self._transition(review, "conditional")
         review.conditions = list(conditions)
         review.decision_notes = decision_notes
@@ -338,6 +346,13 @@ class AIReviewService:
 
     def complete_conditional(self, org_id: uuid.UUID, review_id: uuid.UUID, user_id: uuid.UUID, notes: str | None = None) -> AIGovernanceReview:
         review = self._require_review(org_id, review_id)
+        # Four-eyes again at the terminal step, not only at the conditional decision: a
+        # non-creator could approve-with-conditions and the creator could then finalise it,
+        # which would still land their own review in "approved" by their own hand.
+        # Criteria are not re-checked here -- they are enforced at approve_with_conditions,
+        # and re-checking would block completion whenever new criteria are added afterwards.
+        if user_id == review.created_by:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Reviewer cannot approve their own review")
         self._transition(review, "approved")
         review.completed_at = self.utcnow()
         if notes is not None:
