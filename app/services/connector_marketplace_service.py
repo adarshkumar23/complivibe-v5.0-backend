@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.core.url_security import UnsafeURLTargetError, assert_public_http_url
 from app.models.connector_catalog_entry import ConnectorCatalogEntry, ConnectorOrgEnablement
 from app.services.audit_service import AuditService
 from app.services.secrets_service import SecretsService
@@ -351,8 +352,19 @@ class ConnectorMarketplaceService:
         Returns (reachable, error_detail). Any DNS failure, connection refusal, or timeout is
         caught and reported honestly as unreachable rather than swallowed -- a genuinely fake or
         offline endpoint must fail this check.
+
+        This request carries the connector's DECRYPTED credential as a bearer token to a
+        tenant-supplied URL, so the target must be proven public first. Without that, a tenant
+        could point base_url at a host they control and harvest their org's real API key, or aim
+        it at internal infrastructure (including 169.254.169.254) and use the reachable/unreachable
+        verdict as a port scanner.
         """
         target = url if "://" in url else f"https://{url}"
+
+        try:
+            assert_public_http_url(target, field_name="connector target URL")
+        except UnsafeURLTargetError as exc:
+            return False, str(exc)
 
         headers: dict[str, str] = {}
         for field, value in (config_values or {}).items():
@@ -364,13 +376,18 @@ class ConnectorMarketplaceService:
                 break
 
         try:
-            with httpx.Client(timeout=_CONNECTION_TIMEOUT_SECONDS, follow_redirects=True) as http_client:
+            # follow_redirects=False deliberately: the pre-flight check above validates only the
+            # URL we were given, so a 302 to an internal address would walk the credential straight
+            # past it. A redirecting endpoint reports as reachable, which is true and harmless.
+            with httpx.Client(timeout=_CONNECTION_TIMEOUT_SECONDS, follow_redirects=False) as http_client:
                 http_client.get(target, headers=headers)
             return True, None
         except httpx.RequestError as exc:
-            return False, f"{exc.__class__.__name__}: {exc}"
+            # Class name only -- the full exception text carries resolved addresses and errno
+            # detail, which turns an honest "unreachable" into a network-reconnaissance oracle.
+            return False, exc.__class__.__name__
         except Exception as exc:  # e.g. an unparsable/unsupported URL -- report, don't crash
-            return False, f"{exc.__class__.__name__}: {exc}"
+            return False, exc.__class__.__name__
 
     def test_connection(self, org_id: uuid.UUID, connector_id: uuid.UUID, user_id: uuid.UUID) -> ConnectorOrgEnablement:
         """Re-validate a configured connector: schema/shape check, then -- when the connector's

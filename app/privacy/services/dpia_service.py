@@ -14,6 +14,8 @@ from app.services.audit_service import AuditService
 from app.core.validation import validate_choice
 
 ALLOWED_DPIA_STATUS = {"draft", "in_progress", "under_review", "approved", "rejected", "archived"}
+# Terminal decisions that only the approve/reject endpoints may assign. See update_dpia.
+DECISION_ONLY_DPIA_STATUS = {"approved", "rejected"}
 ALLOWED_RESIDUAL_RISK = {"low", "medium", "high", "unacceptable"}
 ALLOWED_CHECKLIST_RESPONSE = {"yes", "no", "partial", "na"}
 
@@ -428,6 +430,17 @@ class DPIAService:
         self._normalize_consultation_fields(payload, existing=row)
         if "status" in payload and payload["status"] not in ALLOWED_DPIA_STATUS:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid status")
+        # "approved" and "rejected" are decisions, not edits. They are reachable only through
+        # approve_dpia/reject_dpia, which require privacy:approve and enforce four-eyes, the
+        # assigned reviewer, a fully answered checklist, and the DPO / supervisory-authority
+        # consultation gates. Allowing them here let a privacy:write holder PATCH straight to
+        # "approved", skipping every one of those -- and land in a state update_dpia itself
+        # then refuses to edit.
+        if payload.get("status") in DECISION_ONLY_DPIA_STATUS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="status cannot be set to approved or rejected directly; use the approve or reject endpoint",
+            )
         if "residual_risk_level" in payload and payload["residual_risk_level"] is not None and payload["residual_risk_level"] not in ALLOWED_RESIDUAL_RISK:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid residual_risk_level")
 

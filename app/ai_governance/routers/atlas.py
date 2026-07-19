@@ -75,7 +75,14 @@ def assess_system_exposure(
 ) -> dict:
     # Mutating: persists ai_systems.atlas_risk_score and writes governance/audit
     # events, so this requires a write permission rather than compliance:read.
-    return AtlasAssessmentService(db).assess_system_exposure(organization.id, system_id)
+    result = AtlasAssessmentService(db).assess_system_exposure(organization.id, system_id)
+    # The service only flushes. get_db closes without committing, and Session.close()
+    # rolls back -- so every score, governance event and audit log this endpoint computed
+    # was silently discarded while it returned 200. The test harness could not catch it:
+    # conftest overrides get_db with one long-lived session that is never closed per
+    # request, so assertions read uncommitted state and pass.
+    db.commit()
+    return result
 
 
 @systems_router.get("/{system_id}/atlas-mitigations")

@@ -997,7 +997,12 @@ def _run_compliance_deadline_evaluation_job_internal(*, db) -> dict:
     try:
         org_ids = list(db.execute(select(Organization.id)).scalars().all())
         service = ComplianceDeadlineService(db)
-        total = {"marked_overdue": 0, "reminders_queued": 0}
+        # Keys must match ComplianceDeadlineService.evaluate_due's return dict exactly.
+        # They previously did not ("marked_overdue"/"reminders_queued" vs the service's
+        # "overdue_marked"/"reminders_triggered"), so every .get() returned 0 and this job
+        # reported records_processed: 0 on every run no matter how much work it did --
+        # reproducing the exact silent-staleness blind spot this job was added to close.
+        total = {"overdue_marked": 0, "reminders_triggered": 0}
         orgs_processed = 0
         for org_id in org_ids:
             result = service.evaluate_due(
@@ -1011,7 +1016,7 @@ def _run_compliance_deadline_evaluation_job_internal(*, db) -> dict:
         db.commit()
         payload = dict(total)
         payload["orgs_processed"] = orgs_processed
-        payload["records_processed"] = total["marked_overdue"] + total["reminders_queued"]
+        payload["records_processed"] = total["overdue_marked"] + total["reminders_triggered"]
         logger.info("Compliance deadline evaluation complete", extra=payload)
         return payload
     except Exception as exc:
@@ -1043,6 +1048,7 @@ def _run_framework_review_sla_job_internal(*, db) -> dict:
         org_ids = list(db.execute(select(Organization.id)).scalars().all())
         service = FrameworkPackReviewService(db)
         escalations = 0
+        emails_queued = 0
         orgs_processed = 0
         for org_id in org_ids:
             result = service.evaluate_sla(
@@ -1051,16 +1057,19 @@ def _run_framework_review_sla_job_internal(*, db) -> dict:
                 notify=True,
                 actor_user_id=None,
             )
-            for key in ("escalations_created", "events_created", "escalations"):
-                value = result.get(key)
-                if isinstance(value, int):
-                    escalations += value
-                    break
+            # evaluate_sla's key is "created_count". This previously guessed across three
+            # names it might have been ("escalations_created"/"events_created"/"escalations"),
+            # none of which the service returns, so the count was always 0. Read the one real
+            # key directly -- a speculative ladder like that hides the mismatch instead of
+            # failing loudly, which is how this went unnoticed.
+            escalations += int(result.get("created_count", 0) or 0)
+            emails_queued += int(result.get("queued_email_count", 0) or 0)
             orgs_processed += 1
         db.commit()
         payload = {
             "orgs_processed": orgs_processed,
             "escalations_created": escalations,
+            "emails_queued": emails_queued,
             "records_processed": escalations,
         }
         logger.info("Framework review SLA evaluation complete", extra=payload)

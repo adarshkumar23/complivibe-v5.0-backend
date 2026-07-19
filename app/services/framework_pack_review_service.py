@@ -804,7 +804,7 @@ class FrameworkPackReviewService:
         assignment_id: uuid.UUID | None,
         event_type: str,
         details_json: dict | None,
-    ) -> FrameworkReviewEscalationEvent:
+    ) -> tuple[FrameworkReviewEscalationEvent, bool]:
         event_type = validate_choice(event_type, ESCALATION_TYPES, "escalation event type", status_code=status.HTTP_400_BAD_REQUEST)
         existing = self._find_open_escalation(
             organization_id=organization_id,
@@ -813,7 +813,10 @@ class FrameworkPackReviewService:
             event_type=event_type,
         )
         if existing is not None:
-            return existing
+            # Deduped: this is a pre-existing open event, NOT a new one. Callers must not
+            # treat it as created -- doing so both inflated created_count and, worse, fired
+            # a fresh reminder email on every pass over the same open escalation.
+            return existing, False
         row = FrameworkReviewEscalationEvent(
             organization_id=organization_id,
             review_run_id=review_run_id,
@@ -825,7 +828,7 @@ class FrameworkPackReviewService:
         )
         self.db.add(row)
         self.db.flush()
-        return row
+        return row, True
 
     def _queue_assignment_email(
         self,
@@ -946,18 +949,26 @@ class FrameworkPackReviewService:
                 if dry_run:
                     would_create.append(payload)
                 else:
-                    event = self._create_escalation(
+                    event, was_created = self._create_escalation(
                         organization_id=organization_id,
                         review_run_id=review.id,
                         assignment_id=assignment.id,
                         event_type="reminder_due",
                         details_json=payload,
                     )
-                    created_events.append(event)
-                    if notify:
-                        email_id = self._queue_sla_reminder_email(assignment=assignment, review=review, actor_user_id=actor_user_id)
-                        if email_id is not None:
-                            queued_email_ids.append(str(email_id))
+                    # Only a genuinely new escalation counts, and only a new one notifies.
+                    # At the 6h scheduled cadence with a 2-day default reminder window, an
+                    # already-open escalation was re-notifying on every pass -- one event,
+                    # up to eight identical emails to the same reviewer.
+                    # Scoped to this branch deliberately: `continue` here would skip the
+                    # `if overdue:` block below for the same assignment, so a deduped
+                    # reminder would suppress that assignment's overdue escalation.
+                    if was_created:
+                        created_events.append(event)
+                        if notify:
+                            email_id = self._queue_sla_reminder_email(assignment=assignment, review=review, actor_user_id=actor_user_id)
+                            if email_id is not None:
+                                queued_email_ids.append(str(email_id))
 
             if overdue:
                 payload = {
@@ -972,14 +983,15 @@ class FrameworkPackReviewService:
                 else:
                     if assignment.status in {"assigned", "accepted"}:
                         assignment.status = "overdue"
-                    event = self._create_escalation(
+                    event, was_created = self._create_escalation(
                         organization_id=organization_id,
                         review_run_id=review.id,
                         assignment_id=assignment.id,
                         event_type="review_overdue",
                         details_json=payload,
                     )
-                    created_events.append(event)
+                    if was_created:
+                        created_events.append(event)
 
         for review in review_rows:
             policy = self._matching_sla_policy(organization_id=organization_id, review=review)
@@ -997,15 +1009,15 @@ class FrameworkPackReviewService:
                     if dry_run:
                         would_create.append(payload)
                     else:
-                        created_events.append(
-                            self._create_escalation(
-                                organization_id=organization_id,
-                                review_run_id=review.id,
-                                assignment_id=None,
-                                event_type="signoff_missing",
-                                details_json=payload,
-                            )
+                        _event, _was_created = self._create_escalation(
+                            organization_id=organization_id,
+                            review_run_id=review.id,
+                            assignment_id=None,
+                            event_type="signoff_missing",
+                            details_json=payload,
                         )
+                        if _was_created:
+                            created_events.append(_event)
 
         for promotion in promotions:
             if promotion.status != "pending":
@@ -1027,15 +1039,15 @@ class FrameworkPackReviewService:
                 if dry_run:
                     would_create.append(payload)
                 else:
-                    created_events.append(
-                        self._create_escalation(
-                            organization_id=organization_id,
-                            review_run_id=review.id,
-                            assignment_id=None,
-                            event_type="promotion_pending_too_long",
-                            details_json=payload,
-                        )
+                    _event, _was_created = self._create_escalation(
+                        organization_id=organization_id,
+                        review_run_id=review.id,
+                        assignment_id=None,
+                        event_type="promotion_pending_too_long",
+                        details_json=payload,
                     )
+                    if _was_created:
+                        created_events.append(_event)
 
         if not dry_run:
             self.db.flush()
