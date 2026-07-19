@@ -341,10 +341,6 @@ def list_framework_catalog(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
 ) -> list[FrameworkRead]:
-    SeedService.ensure_starter_obligations(db)
-    SeedService.ensure_framework_versions(db)
-    db.commit()
-
     frameworks = db.execute(select(Framework).order_by(Framework.name.asc())).scalars().all()
     total_counts = {
         framework_id: int(count)
@@ -376,10 +372,6 @@ def list_active_organization_frameworks(
     db: Session = Depends(get_db),
     membership: Membership = Depends(require_permission("frameworks:read")),
 ) -> list[OrganizationFrameworkRead]:
-    SeedService.ensure_starter_obligations(db)
-    SeedService.ensure_framework_versions(db)
-    db.commit()
-
     stmt = (
         select(OrganizationFramework)
         .where(
@@ -510,10 +502,6 @@ def get_framework_detail(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_active_user),
 ) -> FrameworkDetail:
-    SeedService.ensure_starter_obligations(db)
-    SeedService.ensure_framework_versions(db)
-    db.commit()
-
     framework = db.execute(select(Framework).where(Framework.id == framework_id)).scalar_one_or_none()
     if framework is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Framework not found")
@@ -1161,10 +1149,6 @@ def list_framework_obligations(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> list[ObligationRead]:
-    SeedService.ensure_starter_obligations(db)
-    SeedService.ensure_framework_versions(db)
-    db.commit()
-
     framework = db.execute(select(Framework).where(Framework.id == framework_id)).scalar_one_or_none()
     if framework is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Framework not found")

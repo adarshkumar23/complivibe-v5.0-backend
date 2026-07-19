@@ -16,6 +16,13 @@ from tests.unit.test_applicability_phase35 import (
     _register,
 )
 
+import pytest
+
+# The framework catalogue and starter obligations used to be seeded lazily by the
+# framework/obligation GET handlers -- a read endpoint that wrote rows. Those handlers
+# are now side-effect-free, so these tests request the reference data explicitly.
+pytestmark = pytest.mark.usefixtures("seeded_reference_data")
+
 
 def test_phase100_obligation_detail_surfaces_suggestion_conflict_and_context(client, db_session):
     owner = _register(client, "p100-owner-detail@example.com", "Pass1234!@", "P100 Obligation Detail")

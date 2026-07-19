@@ -8,6 +8,15 @@ from app.models.role import Role
 from app.models.user import User
 from tests.helpers.auth_org import auth_headers, bootstrap_org_user, org_headers
 
+import pytest
+
+# The framework catalogue and starter obligations used to be seeded lazily by the
+# framework/obligation GET handlers -- i.e. a read endpoint that wrote rows and
+# committed. Those handlers are now side-effect-free, so any test that needs the
+# catalogue present must declare that dependency explicitly.
+pytestmark = pytest.mark.usefixtures("seeded_reference_data")
+
+
 
 def _framework_id_by_code(client, token: str, code: str) -> str:
     response = client.get("/api/v1/frameworks", headers=auth_headers(token))

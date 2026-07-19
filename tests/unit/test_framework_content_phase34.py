@@ -7,6 +7,13 @@ from app.models.framework_content_import import FrameworkContentImport
 from app.models.framework_section import FrameworkSection
 from app.models.framework_version import FrameworkVersion
 from app.models.obligation_content_version import ObligationContentVersion
+import pytest
+
+# The framework catalogue and starter obligations used to be seeded lazily by the
+# framework/obligation GET handlers -- a read endpoint that wrote rows. Those handlers
+# are now side-effect-free, so these tests request the reference data explicitly.
+pytestmark = pytest.mark.usefixtures("seeded_reference_data")
+
 
 
 def _register(client, email: str, password: str, org_name: str) -> str:

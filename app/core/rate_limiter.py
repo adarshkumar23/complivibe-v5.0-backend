@@ -224,6 +224,11 @@ class CompliVibeRateLimiter:
             return "ai_governance"
         if (
             path.startswith("/api/v1/trust-center/")
+            # The whistleblower hotline is unauthenticated by design: anyone on the
+            # internet can submit, check status, or reply with only a tracking code.
+            # It previously fell through to api_general (300/min), the loosest bucket
+            # on the platform, despite carrying its most sensitive content.
+            or path.startswith("/api/v1/whistleblower/")
             or path == "/api/v1/privacy/ccpa/opt-out"
             or path == "/api/v1/privacy/dsr/submit"
             or path.endswith("/metadata") and "/auth/sso/" in path

@@ -13,6 +13,84 @@ from app.models.atlas_technique import AtlasTechnique
 from app.services.audit_service import AuditService
 
 
+# --- Per-system ATLAS exposure model -----------------------------------------------
+#
+# Exposure is scored as, per tactic:
+#
+#     catalog_severity(tactic) * applicability(system, tactic) * deployment_exposure(system)
+#
+# `catalog_severity` is the seeded ATLAS catalogue weight (critical=10, high=5) and is
+# the same for every tenant. The other two factors are read from the AI system being
+# assessed, which is what makes one system score differently from another.
+#
+# The weights below are deterministic and heuristic -- they encode "an agent in
+# production handling sensitive data is more exposed than a proposed use-case in
+# development", not a certified threat quantification. Every assessment returns the
+# factors it applied under `scoring_factors`, so a reviewer can see and challenge the
+# derivation rather than being handed an unexplained number.
+
+ATLAS_SCORING_ALGORITHM = "atlas_system_exposure_v2"
+
+# How far along the system is towards real-world exposure.
+_DEPLOYMENT_EXPOSURE: dict[str, float] = {
+    "development": 0.25,
+    "staging": 0.50,
+    "limited_production": 0.75,
+    "production": 1.00,
+    "decommissioned": 0.10,
+}
+_DEFAULT_DEPLOYMENT_EXPOSURE = 0.50
+
+# Which attack tactics plausibly apply to each kind of AI system.
+# Rows are system_type, columns are ATLAS tactic.
+_TYPE_TACTIC_APPLICABILITY: dict[str, dict[str, float]] = {
+    "model": {
+        "ATLAS-RECON": 1.0, "ATLAS-RD": 1.0, "ATLAS-IA": 0.6,
+        "ATLAS-ML-ATK": 1.0, "ATLAS-EXFIL": 1.0, "ATLAS-IMPACT": 0.8,
+    },
+    "agent": {
+        "ATLAS-RECON": 1.0, "ATLAS-RD": 0.8, "ATLAS-IA": 1.0,
+        "ATLAS-ML-ATK": 1.0, "ATLAS-EXFIL": 1.0, "ATLAS-IMPACT": 1.0,
+    },
+    "application": {
+        "ATLAS-RECON": 1.0, "ATLAS-RD": 0.6, "ATLAS-IA": 1.0,
+        "ATLAS-ML-ATK": 0.6, "ATLAS-EXFIL": 0.8, "ATLAS-IMPACT": 0.8,
+    },
+    "data_pipeline": {
+        "ATLAS-RECON": 0.6, "ATLAS-RD": 1.0, "ATLAS-IA": 0.6,
+        "ATLAS-ML-ATK": 1.0, "ATLAS-EXFIL": 1.0, "ATLAS-IMPACT": 0.6,
+    },
+    "use_case": {
+        "ATLAS-RECON": 0.4, "ATLAS-RD": 0.4, "ATLAS-IA": 0.4,
+        "ATLAS-ML-ATK": 0.4, "ATLAS-EXFIL": 0.4, "ATLAS-IMPACT": 0.6,
+    },
+}
+_DEFAULT_TYPE_APPLICABILITY = 0.6
+
+# Weak or absent human oversight raises the impact of a successful attack.
+_OVERSIGHT_IMPACT_MULTIPLIER: dict[str, float] = {
+    "full_automation": 1.30,
+    "human_on_loop": 1.15,
+    "human_in_loop": 1.00,
+    "human_in_command": 0.90,
+}
+_DEFAULT_OVERSIGHT_MULTIPLIER = 1.15  # unknown oversight is treated as weak-ish
+
+# A higher-consequence system carries more impact from the same technique.
+_RISK_TIER_IMPACT_MULTIPLIER: dict[str, float] = {
+    "prohibited": 1.50,
+    "high": 1.30,
+    "limited": 1.00,
+    "minimal": 0.80,
+    "unassessed": 1.10,
+}
+_DEFAULT_RISK_TIER_MULTIPLIER = 1.10
+
+# Externally-sourced models widen the supply-chain and reconnaissance surface.
+_THIRD_PARTY_SUPPLY_CHAIN_MULTIPLIER = 1.25
+# Systems handling declared data categories are worthier exfiltration targets.
+_SENSITIVE_DATA_EXFIL_MULTIPLIER = 1.30
+
 ATLAS_TACTICS: list[str] = [
     "ATLAS-RECON",
     "ATLAS-RD",
@@ -398,25 +476,40 @@ class AtlasAssessmentService:
         system_id: uuid.UUID,
     ) -> dict:
         system = AISystemService(self.db).get_system(org_id, system_id)
+        factors = self._system_scoring_factors(system)
 
-        exposure: dict[str, dict[str, int]] = {}
+        exposure: dict[str, dict[str, object]] = {}
         for tactic in ATLAS_TACTICS:
             techniques = self.get_techniques_by_tactic(tactic, include_subtechniques=False)
             critical_count = sum(1 for item in techniques if item.severity_indicator == "critical")
             high_count = sum(1 for item in techniques if item.severity_indicator == "high")
+            catalog_severity = critical_count * 10 + high_count * 5
+
+            applicability = self._tactic_applicability(tactic, factors)
+            tactic_score = catalog_severity * applicability * factors["deployment_exposure"]
+
             exposure[tactic] = {
                 "technique_count": len(techniques),
                 "critical": critical_count,
                 "high": high_count,
-                "risk_score": critical_count * 10 + high_count * 5,
+                "catalog_severity": catalog_severity,
+                "applicability": round(applicability, 3),
+                "risk_score": round(tactic_score, 1),
             }
 
-        total_score = sum(item["risk_score"] for item in exposure.values())
-        if total_score >= 60:
+        # Rounded to a whole number so the value returned and the value persisted in
+        # ai_systems.atlas_risk_score (an Integer column) are always the same number.
+        total_score = int(round(sum(float(values["risk_score"]) for values in exposure.values())))
+
+        # Thresholds are expressed against the catalogue's own maximum so that adding
+        # techniques to the seed does not silently reclassify every existing system.
+        max_catalog_score = sum(float(values["catalog_severity"]) for values in exposure.values())
+        ratio = (total_score / max_catalog_score) if max_catalog_score else 0.0
+        if ratio >= 0.75:
             risk_level = "critical"
-        elif total_score >= 30:
+        elif ratio >= 0.50:
             risk_level = "high"
-        elif total_score >= 15:
+        elif ratio >= 0.25:
             risk_level = "medium"
         else:
             risk_level = "low"
@@ -427,6 +520,8 @@ class AtlasAssessmentService:
         assessment_event = {
             "total_risk_score": total_score,
             "risk_level": risk_level,
+            "algorithm": ATLAS_SCORING_ALGORITHM,
+            "scoring_factors": factors,
             "tactic_scores": {tactic: values["risk_score"] for tactic, values in exposure.items()},
         }
         AIGovernanceEventService.log(
@@ -452,8 +547,72 @@ class AtlasAssessmentService:
             "tactic_exposure": exposure,
             "total_risk_score": total_score,
             "risk_level": risk_level,
+            "algorithm": ATLAS_SCORING_ALGORITHM,
+            "scoring_factors": factors,
             "assessed_at": self.utcnow().isoformat(),
         }
+
+    @staticmethod
+    def _system_scoring_factors(system) -> dict[str, object]:
+        """Read the assessed system's real attributes into the factors used for scoring.
+
+        Returned verbatim on the assessment so the derivation is auditable.
+        """
+        system_type = (system.system_type or "").strip().lower()
+        deployment_status = (system.deployment_status or "").strip().lower()
+        risk_tier = (system.risk_tier or "").strip().lower()
+        oversight = (system.human_oversight_level or "").strip().lower()
+
+        data_categories = system.data_categories_json or []
+        handles_declared_data = bool(data_categories)
+
+        third_party = bool(
+            (system.vendor_name or "").strip()
+            or (system.provider_name or "").strip()
+            or system.vendor_id
+        )
+
+        return {
+            "system_type": system_type or None,
+            "deployment_status": deployment_status or None,
+            "risk_tier": risk_tier or None,
+            "human_oversight_level": oversight or None,
+            "third_party_sourced": third_party,
+            "declared_data_categories": len(data_categories),
+            "deployment_exposure": _DEPLOYMENT_EXPOSURE.get(
+                deployment_status, _DEFAULT_DEPLOYMENT_EXPOSURE
+            ),
+            "risk_tier_multiplier": _RISK_TIER_IMPACT_MULTIPLIER.get(
+                risk_tier, _DEFAULT_RISK_TIER_MULTIPLIER
+            ),
+            "oversight_multiplier": _OVERSIGHT_IMPACT_MULTIPLIER.get(
+                oversight, _DEFAULT_OVERSIGHT_MULTIPLIER
+            ),
+            "handles_declared_data": handles_declared_data,
+        }
+
+    @staticmethod
+    def _tactic_applicability(tactic: str, factors: dict[str, object]) -> float:
+        """How much a given ATLAS tactic applies to this particular system."""
+        system_type = str(factors.get("system_type") or "")
+        base = _TYPE_TACTIC_APPLICABILITY.get(system_type, {}).get(
+            tactic, _DEFAULT_TYPE_APPLICABILITY
+        )
+
+        # Externally-sourced models widen reconnaissance and supply-chain surface.
+        if tactic in ("ATLAS-RECON", "ATLAS-RD") and factors.get("third_party_sourced"):
+            base *= _THIRD_PARTY_SUPPLY_CHAIN_MULTIPLIER
+
+        # Declared data categories make the system a worthwhile exfiltration target.
+        if tactic == "ATLAS-EXFIL" and factors.get("handles_declared_data"):
+            base *= _SENSITIVE_DATA_EXFIL_MULTIPLIER
+
+        # Consequence of a successful attack scales impact.
+        if tactic == "ATLAS-IMPACT":
+            base *= float(factors["risk_tier_multiplier"])
+            base *= float(factors["oversight_multiplier"])
+
+        return base
 
     def get_mitigations_for_system(
         self,

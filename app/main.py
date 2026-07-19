@@ -1,4 +1,5 @@
 import inspect
+import logging
 import re
 from contextlib import asynccontextmanager
 
@@ -14,6 +15,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 try:
     from prometheus_fastapi_instrumentator import Instrumentator
@@ -30,6 +32,7 @@ from app.core.rate_limiter import (
 )
 from app.core.security import decode_access_token
 from app.core.startup import register_event_listeners
+from app.services.seed_service import SeedService
 from app.core.telemetry import instrument_app
 from app.core.validation import InvalidChoiceError
 from app.db.session import get_session_maker
@@ -117,6 +120,8 @@ def _configure_sentry() -> None:
     )
 
 
+logger = logging.getLogger(__name__)
+
 _configure_sentry()
 
 
@@ -149,6 +154,22 @@ def create_application() -> FastAPI:
         _bootstrap_db = get_session_maker()()
         try:
             ensure_indexes_ready(_bootstrap_db)
+            # Global (non-org-scoped) compliance reference data: the framework
+            # catalogue's starter obligations and framework versions. This used to be
+            # seeded lazily from inside GET handlers, which meant read endpoints wrote
+            # rows and committed -- a plain list call could mutate the database, and
+            # the write happened with no permission check. Seed once at startup so the
+            # read paths stay read-only.
+            try:
+                SeedService.ensure_starter_obligations(_bootstrap_db)
+                SeedService.ensure_framework_versions(_bootstrap_db)
+                _bootstrap_db.commit()
+            except SQLAlchemyError:
+                # A database that has not been migrated yet (or is mid-migration) must
+                # not stop the app from booting -- the previous lazy seeding tolerated
+                # this too. The catalogue simply stays empty until the next start.
+                _bootstrap_db.rollback()
+                logger.exception("startup reference-data seeding skipped")
         finally:
             _bootstrap_db.close()
         try:

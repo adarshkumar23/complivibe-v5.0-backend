@@ -71,8 +71,10 @@ def assess_system_exposure(
     system_id: uuid.UUID,
     db: Session = Depends(get_db),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("compliance:read")),
+    _: Membership = Depends(require_permission("compliance:write")),
 ) -> dict:
+    # Mutating: persists ai_systems.atlas_risk_score and writes governance/audit
+    # events, so this requires a write permission rather than compliance:read.
     return AtlasAssessmentService(db).assess_system_exposure(organization.id, system_id)
 
 

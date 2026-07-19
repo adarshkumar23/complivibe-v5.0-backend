@@ -10,6 +10,7 @@ from app.core.deps import get_current_active_user, get_db, require_permission
 from app.models.membership import Membership
 from app.models.organization import Organization
 from app.models.user import User
+from app.models.whistleblower import WhistleblowerMessage
 from app.schemas.whistleblower import (
     WhistleblowerInvestigatorMessageRequest,
     WhistleblowerMessageRead,
@@ -24,6 +25,19 @@ from app.schemas.whistleblower import (
 from app.services.whistleblower_service import WhistleblowerService
 
 router = APIRouter(prefix="/whistleblower", tags=["whistleblower"])
+
+
+def _decrypted_message(
+    service: WhistleblowerService,
+    message: WhistleblowerMessage,
+    organization_id: uuid.UUID,
+) -> WhistleblowerMessageRead:
+    """Message bodies are encrypted at rest; decrypt for the response only."""
+    return WhistleblowerMessageRead.model_validate(message).model_copy(
+        update={"content": service.decrypt_message_content(message, organization_id=organization_id)}
+    )
+
+
 
 
 @router.post("/submit", response_model=WhistleblowerReportSubmitResponse, status_code=status.HTTP_201_CREATED)
@@ -64,7 +78,7 @@ def get_report_status(
         category=report.category,
         status=report.status,
         created_at=report.created_at,
-        messages=[WhistleblowerMessageRead.model_validate(m) for m in messages],
+        messages=[_decrypted_message(service, m, report.organization_id) for m in messages],
     )
 
 
@@ -75,12 +89,16 @@ def reporter_reply(
     db: Session = Depends(get_db),
 ) -> WhistleblowerMessageRead:
     """Public, unauthenticated."""
-    message = WhistleblowerService(db).add_reporter_message(
+    service = WhistleblowerService(db)
+    message = service.add_reporter_message(
         tracking_code=tracking_code,
         content=payload.content,
     )
     db.commit()
-    return WhistleblowerMessageRead.model_validate(message)
+    # Echo back the plaintext the reporter just sent, not the stored ciphertext.
+    return WhistleblowerMessageRead.model_validate(message).model_copy(
+        update={"content": payload.content}
+    )
 
 
 @router.get("/reports", response_model=list[WhistleblowerReportRead])
@@ -118,7 +136,7 @@ def get_report(
         organization_id=report.organization_id,
         anonymous_id=report.anonymous_id,
         category=report.category,
-        description=report.description,
+        description=service.decrypt_report_description(report),
         status=report.status,
         assigned_investigator_user_id=report.assigned_investigator_user_id,
         resolution_summary=report.resolution_summary,
@@ -126,7 +144,7 @@ def get_report(
         updated_at=report.updated_at,
         days_open=context["days_open"],
         context_flags=context["context_flags"],
-        messages=[WhistleblowerMessageRead.model_validate(m) for m in messages],
+        messages=[_decrypted_message(service, m, report.organization_id) for m in messages],
     )
 
 
@@ -148,7 +166,10 @@ def investigator_reply(
         user_agent=request.headers.get("User-Agent"),
     )
     db.commit()
-    return WhistleblowerMessageRead.model_validate(message)
+    # Echo back the plaintext just submitted, not the stored ciphertext.
+    return WhistleblowerMessageRead.model_validate(message).model_copy(
+        update={"content": payload.content}
+    )
 
 
 @router.patch("/reports/{report_id}/status", response_model=WhistleblowerReportRead)

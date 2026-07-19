@@ -12,6 +12,15 @@ from app.models.organization_obligation_state import OrganizationObligationState
 from app.models.role import Role
 from app.models.user import User
 
+import pytest
+
+# The framework catalogue and starter obligations used to be seeded lazily by the
+# framework/obligation GET handlers -- i.e. a read endpoint that wrote rows and
+# committed. Those handlers are now side-effect-free, so any test that needs the
+# catalogue present must declare that dependency explicitly.
+pytestmark = pytest.mark.usefixtures("seeded_reference_data")
+
+
 
 def _register(client, email: str, password: str, org_name: str) -> str:
     response = client.post(

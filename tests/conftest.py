@@ -254,6 +254,30 @@ def db_session(_test_engine, _test_session_factory, _base_metadata) -> Generator
         _truncate_all_tables(_test_engine, _base_metadata)
 
 
+@pytest.fixture
+def seeded_reference_data(db_session):
+    """Seed the global (non-org-scoped) framework catalogue and starter obligations.
+
+    Production seeds this once at application startup (app/main.py lifespan). This
+    harness truncates every table after each test, so a test that needs the catalogue
+    present must ask for it explicitly.
+
+    This exists because the framework/obligation GET handlers used to seed it lazily
+    on read -- a read endpoint that wrote rows and committed. Those handlers are now
+    side-effect-free, so the tests that depend on catalogue data request it here.
+
+    It is deliberately NOT autouse: seeding globally would materialise frameworks like
+    GDPR for every test, which collides with tests that create their own fixtures of
+    the same code.
+    """
+    from app.services.seed_service import SeedService
+
+    SeedService.ensure_starter_obligations(db_session)
+    SeedService.ensure_framework_versions(db_session)
+    db_session.commit()
+    return db_session
+
+
 @pytest.fixture(scope="session")
 def _test_app():
     from app.main import create_application

@@ -11,6 +11,15 @@ from app.models.evidence_item import EvidenceItem
 from app.models.obligation import Obligation
 from tests.helpers.auth_org import bootstrap_org_user
 
+import pytest
+
+# The framework catalogue and starter obligations used to be seeded lazily by the
+# framework/obligation GET handlers -- i.e. a read endpoint that wrote rows and
+# committed. Those handlers are now side-effect-free, so any test that needs the
+# catalogue present must declare that dependency explicitly.
+pytestmark = pytest.mark.usefixtures("seeded_reference_data")
+
+
 SCHEDULE_BASE = "/api/v1/compliance/audit-schedules"
 ENGAGEMENT_BASE = "/api/v1/compliance/audit-engagements"
 PACKAGE_BASE = "/api/v1/compliance/evidence-packages"

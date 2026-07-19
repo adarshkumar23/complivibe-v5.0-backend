@@ -11,6 +11,7 @@ from app.models.membership import Membership
 from app.models.role import Role
 from app.models.user import User
 from app.models.whistleblower import WhistleblowerMessage, WhistleblowerReport
+from app.services.whistleblower_service import WhistleblowerService
 from tests.helpers.auth_org import bootstrap_org_user, org_headers
 
 
@@ -154,9 +155,16 @@ def test_reporter_reply_creates_anonymous_message(client, db_session):
     )
     assert reply.status_code == 201, reply.text
 
-    message = db_session.execute(
-        sa.select(WhistleblowerMessage).where(WhistleblowerMessage.content == "Additional detail from reporter.")
-    ).scalar_one()
+    # Message bodies are encrypted at rest, so the stored column no longer matches the
+    # submitted plaintext -- select by report instead and decrypt to compare.
+    message = db_session.execute(sa.select(WhistleblowerMessage)).scalar_one()
+    assert message.content != "Additional detail from reporter."
+    assert (
+        WhistleblowerService(db_session).decrypt_message_content(
+            message, organization_id=uuid.UUID(organization_id)
+        )
+        == "Additional detail from reporter."
+    )
     assert message.sender_type == "reporter"
     assert message.sender_user_id is None
 
@@ -183,9 +191,17 @@ def test_investigator_can_list_reply_and_update_status(client, db_session):
     )
     assert reply.status_code == 201, reply.text
 
+    # Encrypted at rest -- select by sender and decrypt rather than matching plaintext.
     message = db_session.execute(
-        sa.select(WhistleblowerMessage).where(WhistleblowerMessage.content == "We are looking into this.")
+        sa.select(WhistleblowerMessage).where(WhistleblowerMessage.sender_type == "investigator")
     ).scalar_one()
+    assert message.content != "We are looking into this."
+    assert (
+        WhistleblowerService(db_session).decrypt_message_content(
+            message, organization_id=uuid.UUID(organization_id)
+        )
+        == "We are looking into this."
+    )
     assert message.sender_type == "investigator"
     assert str(message.sender_user_id) == org_user["user_id"]
 

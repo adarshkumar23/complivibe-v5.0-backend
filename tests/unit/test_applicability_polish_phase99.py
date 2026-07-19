@@ -15,6 +15,15 @@ from tests.unit.test_applicability_phase35 import (
     _register,
 )
 
+import pytest
+
+# The framework catalogue and starter obligations used to be seeded lazily by the
+# framework/obligation GET handlers -- i.e. a read endpoint that wrote rows and
+# committed. Those handlers are now side-effect-free, so any test that needs the
+# catalogue present must declare that dependency explicitly.
+pytestmark = pytest.mark.usefixtures("seeded_reference_data")
+
+
 
 def test_phase99_reject_duplicate_question_ids_in_single_submit(client):
     owner = _register(client, "p99-owner-dup@example.com", "Pass1234!@", "P99 Applicability Dup")

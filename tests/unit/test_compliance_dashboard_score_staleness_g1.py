@@ -6,6 +6,15 @@ from app.models.organization import Organization
 from app.models.score_snapshot import ScoreSnapshot
 from tests.helpers.auth_org import bootstrap_org_user
 
+import pytest
+
+# The framework catalogue and starter obligations used to be seeded lazily by the
+# framework/obligation GET handlers -- i.e. a read endpoint that wrote rows and
+# committed. Those handlers are now side-effect-free, so any test that needs the
+# catalogue present must declare that dependency explicitly.
+pytestmark = pytest.mark.usefixtures("seeded_reference_data")
+
+
 BASE = "/api/v1/compliance/dashboard"
 
 

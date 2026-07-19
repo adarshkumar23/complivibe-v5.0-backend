@@ -422,10 +422,6 @@ def get_obligation_detail(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> ObligationRead:
-    SeedService.ensure_starter_obligations(db)
-    SeedService.ensure_framework_versions(db)
-    db.commit()
-
     obligation = db.execute(select(Obligation).where(Obligation.id == obligation_id)).scalar_one_or_none()
     if obligation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Obligation not found")

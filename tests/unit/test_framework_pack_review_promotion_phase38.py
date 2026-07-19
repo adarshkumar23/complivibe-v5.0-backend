@@ -7,6 +7,15 @@ from app.models.membership import Membership
 from app.models.role import Role
 from app.models.user import User
 
+import pytest
+
+# The framework catalogue and starter obligations used to be seeded lazily by the
+# framework/obligation GET handlers -- i.e. a read endpoint that wrote rows and
+# committed. Those handlers are now side-effect-free, so any test that needs the
+# catalogue present must declare that dependency explicitly.
+pytestmark = pytest.mark.usefixtures("seeded_reference_data")
+
+
 REVIEW_CAVEAT_SNIPPET = "internal complivibe content-governance signals"
 
 

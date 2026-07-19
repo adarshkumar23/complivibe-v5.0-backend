@@ -264,16 +264,30 @@ def test_a71_mlops_integration_sync_workflow(client, db_session, monkeypatch):
     assert deactivated.json()["is_active"] is False
 
 
-def test_a72_contract_registry_static_no_auth_no_db_query(client, monkeypatch):
-    def _explode_execute(*args, **kwargs):
-        _ = (args, kwargs)
-        raise AssertionError("DB execute should not be called for static contracts endpoint")
+def test_a72_contract_registry_static_content_requires_permission(client, db_session):
+    """The contracts manifest is static, but it is no longer served unauthenticated.
 
-    monkeypatch.setattr(Session, "execute", _explode_execute)
+    This test previously asserted the endpoint took NO auth and issued NO DB query.
+    That was a deliberate design choice, but the manifest enumerates the platform's
+    AI-governance endpoint layout, its enforcement invariants, and its patent-deferral
+    roadmap -- none of which belongs in an anonymous response. It now requires
+    `ai_governance:read`, which necessarily means a permission lookup hits the DB, so
+    the old "no DB query" assertion no longer applies. The payload itself is still a
+    module-level constant and is unchanged.
+    """
+    org_user = bootstrap_org_user(client, email_prefix="contracts-a72")
 
-    response = client.get("/api/v1/ai-governance/contracts")
+    response = client.get("/api/v1/ai-governance/contracts", headers=org_user["org_headers"])
     assert response.status_code == 200
     payload = response.json()
     assert isinstance(payload.get("groups"), list)
     assert any(group.get("name") == "guardrails" for group in payload["groups"])
     assert "patent_protected_features" in payload
+
+    # And an anonymous caller is refused.
+    client.cookies.clear()
+    anonymous = client.get(
+        "/api/v1/ai-governance/contracts",
+        headers={"X-Organization-ID": org_user["organization_id"]},
+    )
+    assert anonymous.status_code in (401, 403), anonymous.text

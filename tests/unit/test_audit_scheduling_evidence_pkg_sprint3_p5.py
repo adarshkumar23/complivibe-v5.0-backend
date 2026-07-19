@@ -18,6 +18,15 @@ from app.models.obligation import Obligation
 from app.models.organization_obligation_state import OrganizationObligationState
 from tests.helpers.auth_org import bootstrap_org_user
 
+import pytest
+
+# The framework catalogue and starter obligations used to be seeded lazily by the
+# framework/obligation GET handlers -- i.e. a read endpoint that wrote rows and
+# committed. Those handlers are now side-effect-free, so any test that needs the
+# catalogue present must declare that dependency explicitly.
+pytestmark = pytest.mark.usefixtures("seeded_reference_data")
+
+
 
 def _framework_id(client, headers: dict[str, str]) -> uuid.UUID:
     resp = client.get("/api/v1/frameworks", headers=headers)

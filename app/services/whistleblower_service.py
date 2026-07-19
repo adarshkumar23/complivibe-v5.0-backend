@@ -12,6 +12,19 @@ from sqlalchemy.orm import Session
 from app.models.user import User
 from app.models.whistleblower import WhistleblowerMessage, WhistleblowerReport
 from app.services.audit_service import AuditService
+from app.services.secrets_service import (
+    SecretFormatError,
+    SecretsService,
+    legacy_key_from_fernet_secret_key,
+)
+
+# Report bodies and thread messages are the most sensitive free text the platform
+# holds -- an unencrypted disclosure naming a named individual is exactly the harm
+# the hotline exists to prevent. They are encrypted at rest through the same
+# SecretsService layer used for connector credentials, which prefers the Vault
+# transit backend when configured and falls back to Fernet otherwise.
+_WHISTLEBLOWER_REPORT_SECRET = "whistleblower.report.description"
+_WHISTLEBLOWER_MESSAGE_SECRET = "whistleblower.message.content"
 
 # Valid forward transitions for report status. A status may not transition to
 # itself via this map (no-op updates are rejected as invalid transitions too,
@@ -54,6 +67,50 @@ class WhistleblowerService:
     def hash_tracking_code(code: str) -> str:
         return hashlib.sha256(code.encode("utf-8")).hexdigest()
 
+    # --- encryption at rest -------------------------------------------------
+
+    @staticmethod
+    def _secrets(db: Session, organization_id: uuid.UUID) -> SecretsService:
+        return SecretsService(
+            db,
+            organization_id=organization_id,
+            legacy_key_resolver=legacy_key_from_fernet_secret_key,
+        )
+
+    def _encrypt(self, plaintext: str, *, organization_id: uuid.UUID, secret_name: str) -> str:
+        return self._secrets(self.db, organization_id).encrypt(plaintext, secret_name=secret_name)
+
+    def _decrypt(self, stored: str, *, organization_id: uuid.UUID, secret_name: str) -> str:
+        """Decrypt a stored body, tolerating pre-encryption plaintext rows.
+
+        Rows written before encryption was introduced hold raw text, which is not a
+        valid ciphertext in either supported format. Those must keep reading rather
+        than raising, so an unrecognised format is returned unchanged. New writes are
+        always encrypted, so the plaintext branch drains as historical rows age out.
+        """
+        if not stored:
+            return stored
+        try:
+            return self._secrets(self.db, organization_id).decrypt(stored, secret_name=secret_name)
+        except SecretFormatError:
+            return stored
+
+    def decrypt_report_description(self, report: WhistleblowerReport) -> str:
+        return self._decrypt(
+            report.description,
+            organization_id=report.organization_id,
+            secret_name=_WHISTLEBLOWER_REPORT_SECRET,
+        )
+
+    def decrypt_message_content(
+        self, message: WhistleblowerMessage, *, organization_id: uuid.UUID
+    ) -> str:
+        return self._decrypt(
+            message.content,
+            organization_id=organization_id,
+            secret_name=_WHISTLEBLOWER_MESSAGE_SECRET,
+        )
+
     def submit_report(
         self,
         *,
@@ -70,7 +127,11 @@ class WhistleblowerService:
             anonymous_id=anonymous_id,
             tracking_code_hash=tracking_code_hash,
             category=category,
-            description=description,
+            description=self._encrypt(
+                description,
+                organization_id=organization_id,
+                secret_name=_WHISTLEBLOWER_REPORT_SECRET,
+            ),
             status="submitted",
         )
         self.db.add(report)
@@ -127,7 +188,11 @@ class WhistleblowerService:
             report_id=report.id,
             sender_type="reporter",
             sender_user_id=None,
-            content=content,
+            content=self._encrypt(
+                content,
+                organization_id=report.organization_id,
+                secret_name=_WHISTLEBLOWER_MESSAGE_SECRET,
+            ),
         )
         self.db.add(message)
         self.db.flush()
@@ -161,7 +226,11 @@ class WhistleblowerService:
             report_id=report.id,
             sender_type="investigator",
             sender_user_id=investigator_user_id,
-            content=content,
+            content=self._encrypt(
+                content,
+                organization_id=organization_id,
+                secret_name=_WHISTLEBLOWER_MESSAGE_SECRET,
+            ),
         )
         self.db.add(message)
         self.db.flush()
