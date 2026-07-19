@@ -81,6 +81,10 @@ SCHEDULER_JOB_IDS: list[str] = [
     "compound_insight_reactive_drain",
     "compound_insight_full_sweep",
     "evidence_ai_assessment_drain",
+    "score_snapshot_materialize",
+    "control_monitoring_rule_evaluation",
+    "compliance_deadline_evaluation",
+    "framework_review_sla_evaluation",
 ]
 
 
@@ -861,6 +865,219 @@ def _run_evidence_ai_assessment_drain_job() -> None:
     )
 
 
+
+
+# --------------------------------------------------------------------------
+# Engines that were built but never scheduled (FEATURE_INVENTORY walk, 2026-07-19).
+# Each was reachable only by a manual POST, so it never ran in production. They are
+# safe to schedule now that duplicate execution across gunicorn workers is fixed
+# (2985550): SchedulerJobLogger.run_logged claims each tick under an advisory lock,
+# so a job runs exactly once per tick regardless of worker count.
+#
+# Every job iterates ALL organizations and passes organization_id into the
+# per-org service call, so no query is unscoped and no state carries between orgs.
+# actor_user_id is None: these are scheduler-driven, not user-driven, and every
+# column it feeds is nullable.
+# --------------------------------------------------------------------------
+
+
+def _run_score_snapshot_materialize_job_internal(*, db) -> dict:
+    """Materialise the six governance score snapshots for every org.
+
+    Daily. Snapshots are a day-granularity time series -- the trend/delta endpoints
+    compare one day's snapshot to another -- so materialising more often would add
+    intra-day noise to those series without improving them.
+    """
+    from app.services.scoring_service import ScoringService
+
+    try:
+        org_ids = list(db.execute(select(Organization.id)).scalars().all())
+        service = ScoringService(db)
+        snapshots_created = 0
+        orgs_processed = 0
+        for org_id in org_ids:
+            rows = service.materialize_snapshots(
+                organization_id=org_id,
+                snapshot_types=None,
+                dry_run=False,
+                created_by_user_id=None,
+            )
+            snapshots_created += len(rows)
+            orgs_processed += 1
+        db.commit()
+        result = {
+            "orgs_processed": orgs_processed,
+            "snapshots_created": snapshots_created,
+            "records_processed": snapshots_created,
+        }
+        logger.info("Score snapshot materialization complete", extra=result)
+        return result
+    except Exception as exc:
+        db.rollback()
+        _capture_scheduler_exception(exc)
+        logger.exception("Score snapshot materialization failed")
+        raise
+
+
+def _run_score_snapshot_materialize_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="score_snapshot_materialize",
+        job_fn=_run_score_snapshot_materialize_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_control_monitoring_rule_evaluation_job_internal(*, db) -> dict:
+    """Evaluate every active control-monitoring rule for every org.
+
+    Every 6 hours. The engine keys its actions on rule:action:definition:date, so at
+    most one alert/task/email per rule per day is produced no matter how often this
+    runs. A shorter interval therefore only shortens detection latency (<=6h rather
+    than <=24h) without multiplying notifications.
+    """
+    from app.models.control_monitoring_rule import ControlMonitoringRule
+    from app.services.control_monitoring_rule_service import ControlMonitoringRuleService
+
+    try:
+        org_ids = list(db.execute(select(Organization.id)).scalars().all())
+        service = ControlMonitoringRuleService(db)
+        rules_evaluated = 0
+        orgs_processed = 0
+        for org_id in org_ids:
+            rules = db.execute(
+                select(ControlMonitoringRule).where(
+                    ControlMonitoringRule.organization_id == org_id,
+                    ControlMonitoringRule.status == "active",
+                )
+            ).scalars().all()
+            for rule in rules:
+                service.evaluate_rule(
+                    organization_id=org_id,
+                    rule=rule,
+                    actor_user_id=None,
+                    dry_run=False,
+                )
+                rules_evaluated += 1
+            orgs_processed += 1
+        db.commit()
+        result = {
+            "orgs_processed": orgs_processed,
+            "rules_evaluated": rules_evaluated,
+            "records_processed": rules_evaluated,
+        }
+        logger.info("Control monitoring rule evaluation complete", extra=result)
+        return result
+    except Exception as exc:
+        db.rollback()
+        _capture_scheduler_exception(exc)
+        logger.exception("Control monitoring rule evaluation failed")
+        raise
+
+
+def _run_control_monitoring_rule_evaluation_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="control_monitoring_rule_evaluation",
+        job_fn=_run_control_monitoring_rule_evaluation_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_compliance_deadline_evaluation_job_internal(*, db) -> dict:
+    """Transition due deadlines and queue their reminders, for every org.
+
+    Every 6 hours rather than daily: the upcoming->overdue transition happens on a
+    date boundary, and tenants span timezones, so a daily UTC pass can leave a
+    deadline stale for most of a working day. The service dedupes reminder events
+    per day, so the extra passes cannot double-notify.
+    """
+    from app.services.compliance_deadline_service import ComplianceDeadlineService
+
+    try:
+        org_ids = list(db.execute(select(Organization.id)).scalars().all())
+        service = ComplianceDeadlineService(db)
+        total = {"marked_overdue": 0, "reminders_queued": 0}
+        orgs_processed = 0
+        for org_id in org_ids:
+            result = service.evaluate_due(
+                organization_id=org_id,
+                actor_user_id=None,
+                dry_run=False,
+            )
+            for key in total:
+                total[key] += int(result.get(key, 0) or 0)
+            orgs_processed += 1
+        db.commit()
+        payload = dict(total)
+        payload["orgs_processed"] = orgs_processed
+        payload["records_processed"] = total["marked_overdue"] + total["reminders_queued"]
+        logger.info("Compliance deadline evaluation complete", extra=payload)
+        return payload
+    except Exception as exc:
+        db.rollback()
+        _capture_scheduler_exception(exc)
+        logger.exception("Compliance deadline evaluation failed")
+        raise
+
+
+def _run_compliance_deadline_evaluation_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="compliance_deadline_evaluation",
+        job_fn=_run_compliance_deadline_evaluation_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_framework_review_sla_job_internal(*, db) -> dict:
+    """Fire framework-pack review reminders, overdue flips and escalations.
+
+    Every 6 hours, for the same reason as deadlines: the due/reminder/escalation
+    thresholds are date-based but assignments are created at arbitrary times, so a
+    single daily UTC pass gives a worst case near 24h. Escalation events are keyed
+    so repeat passes within a day do not re-raise.
+    """
+    from app.services.framework_pack_review_service import FrameworkPackReviewService
+
+    try:
+        org_ids = list(db.execute(select(Organization.id)).scalars().all())
+        service = FrameworkPackReviewService(db)
+        escalations = 0
+        orgs_processed = 0
+        for org_id in org_ids:
+            result = service.evaluate_sla(
+                organization_id=org_id,
+                dry_run=False,
+                notify=True,
+                actor_user_id=None,
+            )
+            for key in ("escalations_created", "events_created", "escalations"):
+                value = result.get(key)
+                if isinstance(value, int):
+                    escalations += value
+                    break
+            orgs_processed += 1
+        db.commit()
+        payload = {
+            "orgs_processed": orgs_processed,
+            "escalations_created": escalations,
+            "records_processed": escalations,
+        }
+        logger.info("Framework review SLA evaluation complete", extra=payload)
+        return payload
+    except Exception as exc:
+        db.rollback()
+        _capture_scheduler_exception(exc)
+        logger.exception("Framework review SLA evaluation failed")
+        raise
+
+
+def _run_framework_review_sla_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="framework_review_sla_evaluation",
+        job_fn=_run_framework_review_sla_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
 def register_pbc_scheduler(app: FastAPI) -> None:
     settings = get_settings()
     if settings.APP_ENV == "test":
@@ -1096,6 +1313,44 @@ def register_pbc_scheduler(app: FastAPI) -> None:
         _run_vendor_security_rating_continuous_refresh_job,
         trigger=CronTrigger(hour=3, minute=15),
         id="vendor_security_rating_continuous_refresh",
+        replace_existing=True,
+        coalesce=True,
+    )
+
+    # Engines that were built but never scheduled (see the block above). Intervals are
+    # chosen per job, not uniformly:
+    #
+    #  * score snapshots are a day-granularity time series, so daily -- more often
+    #    would add intra-day noise to the trend/delta endpoints that read them;
+    #  * the other three are date-threshold engines whose inputs arrive at arbitrary
+    #    times across tenant timezones, so a single daily UTC pass gives a worst case
+    #    near 24h. Each dedupes its own actions per day, so the extra passes shorten
+    #    detection latency without duplicating alerts, reminders or escalations.
+    scheduler.add_job(
+        _run_score_snapshot_materialize_job,
+        trigger=CronTrigger(hour=4, minute=0),
+        id="score_snapshot_materialize",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_control_monitoring_rule_evaluation_job,
+        trigger=IntervalTrigger(hours=6),
+        id="control_monitoring_rule_evaluation",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_compliance_deadline_evaluation_job,
+        trigger=IntervalTrigger(hours=6),
+        id="compliance_deadline_evaluation",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_framework_review_sla_job,
+        trigger=IntervalTrigger(hours=6),
+        id="framework_review_sla_evaluation",
         replace_existing=True,
         coalesce=True,
     )

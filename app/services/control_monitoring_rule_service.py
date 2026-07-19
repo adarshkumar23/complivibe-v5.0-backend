@@ -307,7 +307,8 @@ class ControlMonitoringRuleService:
         *,
         organization_id: uuid.UUID,
         rule: ControlMonitoringRule,
-        actor_user_id: uuid.UUID,
+        # None when scheduler-driven; the columns it feeds are nullable.
+        actor_user_id: uuid.UUID | None,
         dry_run: bool,
     ) -> ControlMonitoringRuleExecution:
         now = self.utcnow()

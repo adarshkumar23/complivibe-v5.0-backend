@@ -252,7 +252,9 @@ class ComplianceDeadlineService:
         )
         return outbox.id
 
-    def evaluate_due(self, *, organization_id: uuid.UUID, actor_user_id: uuid.UUID, dry_run: bool) -> dict[str, int]:
+    # actor_user_id is None when the scheduler drives this; every column it feeds
+    # (task/email created_by_user_id, audit actor_user_id) is nullable.
+    def evaluate_due(self, *, organization_id: uuid.UUID, actor_user_id: uuid.UUID | None, dry_run: bool) -> dict[str, int]:
         today = self.utcdate()
         now = self.utcnow()
 

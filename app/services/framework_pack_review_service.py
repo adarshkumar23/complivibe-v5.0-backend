@@ -902,7 +902,8 @@ class FrameworkPackReviewService:
         organization_id: uuid.UUID,
         dry_run: bool,
         notify: bool,
-        actor_user_id: uuid.UUID,
+        # None when scheduler-driven; the columns it feeds are nullable.
+        actor_user_id: uuid.UUID | None,
     ) -> dict[str, Any]:
         now = self.now()
         assignments = self.repo.list_assignments_for_org(organization_id=organization_id)
