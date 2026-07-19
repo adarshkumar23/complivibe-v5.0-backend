@@ -24,6 +24,7 @@ from app.compliance.services.pbc_service import run_daily_pbc_overdue_sweep
 from app.compliance.services.control_exception_service import run_daily_control_exception_expiry_sweep
 from app.compliance.services.subprocessor_service import run_daily_subprocessor_dpa_expiry_sweep
 from app.compliance.services.sla_service import run_hourly_issue_sla_breach_check
+from app.compliance.services.webhook_service import run_webhook_delivery_drain
 from app.ai_governance.services.mlops_sync_service import run_daily_mlops_sync_sweep
 from app.data_observability.services.lineage_service import run_daily_openmetadata_sync_sweep
 from app.data_observability.services.retention_service import run_daily_data_retention_sweep
@@ -85,6 +86,7 @@ SCHEDULER_JOB_IDS: list[str] = [
     "control_monitoring_rule_evaluation",
     "compliance_deadline_evaluation",
     "framework_review_sla_evaluation",
+    "webhook_delivery_drain",
 ]
 
 
@@ -1078,6 +1080,34 @@ def _run_framework_review_sla_job() -> None:
     )
 
 
+def _run_webhook_delivery_drain_job_internal(*, db) -> dict:
+    """Deliver queued webhooks for every org.
+
+    Until now emit() wrote 'pending' rows from seven services and deliver() had a
+    single caller -- a manual per-delivery endpoint -- so nothing drained the queue.
+    """
+    try:
+        result = run_webhook_delivery_drain(db)
+        db.commit()
+        logger.info("Webhook delivery drain complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception as exc:
+        db.rollback()
+        _capture_scheduler_exception(exc)
+        logger.exception("Webhook delivery drain failed")
+        raise
+
+
+def _run_webhook_delivery_drain_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="webhook_delivery_drain",
+        job_fn=_run_webhook_delivery_drain_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
 def register_pbc_scheduler(app: FastAPI) -> None:
     settings = get_settings()
     if settings.APP_ENV == "test":
@@ -1351,6 +1381,21 @@ def register_pbc_scheduler(app: FastAPI) -> None:
         _run_framework_review_sla_job,
         trigger=IntervalTrigger(hours=6),
         id="framework_review_sla_evaluation",
+        replace_existing=True,
+        coalesce=True,
+    )
+
+    # Webhook delivery is the one outbound-to-customer job here, and customers
+    # reasonably expect event notifications in near real time -- a 6h cadence like
+    # the batch engines above would make the feature useless. 2 minutes is the
+    # floor that stays safely clear of the 60s tick-claim dedupe window (a 1-minute
+    # interval would have consecutive legitimate ticks suppressed as duplicates).
+    # The drain itself is bounded by batch size and a wall-clock budget, so a
+    # backlog of dead endpoints cannot occupy the scheduler thread.
+    scheduler.add_job(
+        _run_webhook_delivery_drain_job,
+        trigger=IntervalTrigger(minutes=2),
+        id="webhook_delivery_drain",
         replace_existing=True,
         coalesce=True,
     )

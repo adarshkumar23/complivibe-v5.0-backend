@@ -5,7 +5,7 @@ import hmac
 import json
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from fastapi import HTTPException, status
@@ -16,6 +16,25 @@ from app.core.url_security import UnsafeURLTargetError, assert_public_http_url, 
 from app.models.webhook_delivery import WebhookDelivery
 from app.models.webhook_endpoint import WebhookEndpoint
 from app.services.audit_service import AuditService
+
+# Total HTTP attempts a delivery gets before it is considered permanently dead.
+# Spread ACROSS scheduler ticks, not burned inside one call: a customer endpoint
+# that is briefly down must not lose the event, which is what the previous
+# in-call-only loop did -- it exhausted 3 attempts in ~14s and marked the row
+# failed for good.
+MAX_DELIVERY_ATTEMPTS = 6
+
+# Minimum wait before the next tick may retry, indexed by attempts already made.
+# Roughly exponential, capped so a long-dead endpoint is still retried
+# occasionally rather than hammered.
+_RETRY_BACKOFF_MINUTES: tuple[int, ...] = (1, 2, 5, 15, 30)
+
+
+def _retry_backoff_minutes(attempts: int) -> int:
+    if attempts <= 0:
+        return 0
+    idx = min(attempts, len(_RETRY_BACKOFF_MINUTES)) - 1
+    return _RETRY_BACKOFF_MINUTES[idx]
 
 
 class WebhookService:
@@ -234,14 +253,26 @@ class WebhookService:
         )
         return deliveries
 
-    def deliver(self, delivery_id: uuid.UUID) -> WebhookDelivery:
+    def deliver(self, delivery_id: uuid.UUID, *, max_in_call_attempts: int = 3) -> WebhookDelivery:
+        """Attempt delivery.
+
+        max_in_call_attempts is the number of HTTP tries inside THIS call. The
+        scheduled drain passes 1 -- it wants one attempt per tick so the backoff
+        between retries is real elapsed time rather than a blocking sleep in the
+        scheduler thread. The manual "deliver now" endpoint keeps the original 3.
+        """
         row = self.db.execute(select(WebhookDelivery).where(WebhookDelivery.id == delivery_id)).scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook delivery not found")
 
+        # Defence in depth: the endpoint must belong to the SAME organization as the
+        # delivery. emit() never produces a mismatch today, but this is the one place
+        # that would turn a bad row into one tenant's payload being POSTed to another
+        # tenant's URL, so it is asserted rather than assumed.
         endpoint = self.db.execute(
             select(WebhookEndpoint).where(
                 WebhookEndpoint.id == row.endpoint_id,
+                WebhookEndpoint.organization_id == row.organization_id,
                 WebhookEndpoint.deleted_at.is_(None),
             )
         ).scalar_one_or_none()
@@ -293,7 +324,7 @@ class WebhookService:
         last_status: int | None = None
         last_error: str | None = None
 
-        for attempt in range(3):
+        for attempt in range(max_in_call_attempts):
             row.attempts = attempts + attempt + 1
             row.last_attempted_at = self.utcnow()
             self.db.flush()
@@ -335,17 +366,21 @@ class WebhookService:
             except Exception as exc:  # pragma: no cover - network/timeout errors
                 last_error = str(exc) or type(exc).__name__
 
-            if attempt < 2:
-                # Exponential backoff: 1s, then 3s.
+            if attempt < max_in_call_attempts - 1:
+                # Short in-call backoff: 1s, then 3s. Only used by the manual path;
+                # the drain passes max_in_call_attempts=1 and never sleeps here.
                 time.sleep(1 if attempt == 0 else 3)
 
-        row.status = "failed"
+        # Retryable until the cross-tick cap is reached. Leaving the row 'pending'
+        # is what lets a later drain tick pick it up again after the backoff.
+        exhausted = int(row.attempts or 0) >= MAX_DELIVERY_ATTEMPTS
+        row.status = "failed" if exhausted else "pending"
         row.response_code = last_status
-        row.error_message = last_error or "Delivery failed after 3 attempts"
+        row.error_message = last_error or f"Delivery failed after {row.attempts} attempt(s)"
         self.db.flush()
 
         AuditService(self.db).write_audit_log(
-            action="webhook.delivery_failed",
+            action="webhook.delivery_failed" if exhausted else "webhook.delivery_retry_scheduled",
             entity_type="webhook_delivery",
             entity_id=row.id,
             organization_id=row.organization_id,
@@ -356,6 +391,8 @@ class WebhookService:
                 "response_code": last_status,
                 "attempts": row.attempts,
                 "error": row.error_message,
+                "terminal": exhausted,
+                "retry_after_minutes": None if exhausted else _retry_backoff_minutes(int(row.attempts or 0)),
             },
             metadata_json={"source": "webhook_service"},
         )
@@ -391,3 +428,77 @@ class WebhookService:
     @classmethod
     def list_event_types(cls) -> list[str]:
         return list(cls.ALLOWED_EVENT_TYPES)
+
+
+def run_webhook_delivery_drain(
+    db: Session,
+    *,
+    batch_limit: int = 20,
+    time_budget_seconds: float = 60.0,
+) -> dict[str, int]:
+    """Deliver pending webhooks for EVERY organization, with bounded work.
+
+    Both bounds matter. A delivery to a dead endpoint costs a full connect+read
+    timeout (10s each), so an unbounded drain over a backlog of dead endpoints
+    would occupy the scheduler thread for a very long time -- the same failure
+    shape as the unbounded R2 client, arriving by a different route. The batch cap
+    limits how many deliveries one tick starts; the wall-clock budget stops it
+    starting new ones once the tick has run long enough. Whatever is left stays
+    pending and is picked up by the next tick.
+
+    Each delivery is attempted once per tick (max_in_call_attempts=1) so the gap
+    between retries is real elapsed time rather than a blocking sleep.
+
+    Org-scoping: rows are selected across all organizations, but every delivery is
+    routed by its own endpoint_id, and deliver() now additionally requires the
+    endpoint to belong to the delivery's organization.
+    """
+    started = time.monotonic()
+    now = datetime.now(UTC)
+    service = WebhookService(db)
+
+    candidates = db.execute(
+        select(WebhookDelivery)
+        .where(
+            WebhookDelivery.status == "pending",
+            WebhookDelivery.attempts < MAX_DELIVERY_ATTEMPTS,
+        )
+        .order_by(WebhookDelivery.created_at.asc())
+        .limit(batch_limit * 5)
+    ).scalars().all()
+
+    attempted = delivered = retry_scheduled = failed = skipped_backoff = 0
+
+    for row in candidates:
+        if attempted >= batch_limit:
+            break
+        if (time.monotonic() - started) >= time_budget_seconds:
+            break
+
+        attempts_so_far = int(row.attempts or 0)
+        if row.last_attempted_at is not None:
+            last = row.last_attempted_at
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=UTC)
+            wait_minutes = _retry_backoff_minutes(attempts_so_far)
+            if (now - last) < timedelta(minutes=wait_minutes):
+                skipped_backoff += 1
+                continue
+
+        result = service.deliver(row.id, max_in_call_attempts=1)
+        attempted += 1
+        if result.status == "delivered":
+            delivered += 1
+        elif result.status == "failed":
+            failed += 1
+        else:
+            retry_scheduled += 1
+
+    return {
+        "attempted": attempted,
+        "delivered": delivered,
+        "retry_scheduled": retry_scheduled,
+        "failed_permanently": failed,
+        "skipped_backoff": skipped_backoff,
+        "records_processed": attempted,
+    }

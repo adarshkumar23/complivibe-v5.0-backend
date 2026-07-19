@@ -139,8 +139,13 @@ def test_stale_threshold_exceeds_real_job_durations():
 
 
 def test_dedupe_window_is_shorter_than_the_shortest_schedule():
-    """Guards the invariant the window depends on (shortest job interval = 5min)."""
-    assert DEFAULT_DEDUPE_WINDOW < timedelta(minutes=5)
+    """Guards the invariant the window depends on.
+
+    Tightened when webhook_delivery_drain introduced a 2-minute interval -- the
+    shortest on the scheduler. A dedupe window at or above the shortest interval
+    would silently suppress legitimate consecutive ticks.
+    """
+    assert DEFAULT_DEDUPE_WINDOW < timedelta(minutes=2)
 
 
 def test_skipped_run_writes_no_scheduler_run_log(db_session, monkeypatch):

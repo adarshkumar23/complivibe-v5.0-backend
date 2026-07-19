@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select
 
-from app.compliance.services.webhook_service import WebhookService
+from app.compliance.services.webhook_service import MAX_DELIVERY_ATTEMPTS, WebhookService
 from app.core.security import get_password_hash
 from app.models.audit_engagement import AuditEngagement
 from app.models.audit_log import AuditLog
@@ -404,20 +404,41 @@ def test_webhook_delivery_retries_and_fails(client, db_session, monkeypatch):
     monkeypatch.setattr("httpx.post", lambda *args, **kwargs: (_ for _ in ()).throw(Exception("boom")))
     monkeypatch.setattr("time.sleep", lambda *_: None)
 
-    updated = WebhookService(db_session).deliver(uuid.UUID(delivery_id))
+    # Retry now persists ACROSS scheduler ticks rather than going terminal inside a
+    # single call: a customer endpoint that is briefly down must not lose the event.
+    # One manual deliver() still makes 3 in-call attempts, but 3 < MAX_DELIVERY_ATTEMPTS
+    # so the row stays retryable instead of being written off.
+    service = WebhookService(db_session)
+    updated = service.deliver(uuid.UUID(delivery_id))
     db_session.commit()
 
-    assert updated.status == "failed"
+    assert updated.status == "pending", "under the cap, a failure must remain retryable"
     assert updated.attempts == 3
     assert "boom" in (updated.error_message or "")
 
-    audit = db_session.execute(
+    retry_audit = db_session.execute(
+        select(AuditLog).where(
+            AuditLog.entity_id == uuid.UUID(delivery_id),
+            AuditLog.action == "webhook.delivery_retry_scheduled",
+        )
+    ).scalars().first()
+    assert retry_audit is not None, "a non-terminal failure must not be logged as failed"
+    assert retry_audit.after_json["terminal"] is False
+
+    # A second pass exhausts the cap -- only now is it permanently failed.
+    updated = service.deliver(uuid.UUID(delivery_id))
+    db_session.commit()
+
+    assert updated.status == "failed"
+    assert updated.attempts == MAX_DELIVERY_ATTEMPTS
+    failed_audit = db_session.execute(
         select(AuditLog).where(
             AuditLog.entity_id == uuid.UUID(delivery_id),
             AuditLog.action == "webhook.delivery_failed",
         )
-    ).scalar_one()
-    assert audit.after_json["attempts"] == 3
+    ).scalars().first()
+    assert failed_audit is not None
+    assert failed_audit.after_json["attempts"] == MAX_DELIVERY_ATTEMPTS
 
 
 def test_webhook_delivery_trigger_endpoint(client, db_session, monkeypatch):

@@ -50,8 +50,9 @@ logger = logging.getLogger(__name__)
 # Distinguishes our keys from any other advisory-lock user in the same database.
 _LOCK_NAMESPACE = "complivibe.scheduler"
 
-# Must be shorter than the shortest job interval (5 minutes) so a legitimate
-# next tick is never mistaken for a duplicate of the previous one.
+# Must be shorter than the shortest job interval so a legitimate next tick is
+# never mistaken for a duplicate of the previous one. The shortest interval is now
+# webhook_delivery_drain at 2 minutes, so this must stay well under 120s.
 DEFAULT_DEDUPE_WINDOW = timedelta(seconds=60)
 
 # A "running" row older than this is treated as abandoned rather than in flight.
