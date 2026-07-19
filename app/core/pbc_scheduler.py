@@ -288,7 +288,10 @@ def _run_vendor_assessment_staleness_sweep_job() -> None:
 
 def _run_issue_sla_breach_check_job_internal(*, db) -> dict:
     try:
-        org_ids = [row.id for row in db.execute(select(Organization.id)).scalars().all()]
+        # select(Organization.id) + .scalars() already yields UUIDs, not ORM rows, so the
+        # previous `row.id` raised AttributeError on every run and this job had never once
+        # succeeded in production (314/314 failures).
+        org_ids = list(db.execute(select(Organization.id)).scalars().all())
         total = {"response_breached": 0, "resolution_breached": 0, "notifications_queued": 0}
         for org_id in org_ids:
             result = run_hourly_issue_sla_breach_check(db, org_id)
