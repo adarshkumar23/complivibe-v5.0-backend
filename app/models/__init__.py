@@ -337,6 +337,16 @@ from app.models.escalation_policy import EscalationPolicy
 from app.models.escalation_event import EscalationEvent
 from app.models.breach_notification import BreachNotification
 from app.models.dora_ict_register import DORAICTRegister
+from app.models.shadow_ai_signature import (
+    ShadowAIFederatedObservation,
+    ShadowAIFederatedSubmission,
+    ShadowAIIdpConnection,
+    ShadowAIIdpSyncLog,
+    ShadowAISignatureDetection,
+    ShadowAISignatureRegistry,
+    ShadowAISuppressedDetection,
+    ShadowAITelemetryEvent,
+)
 from app.models.shadow_ai_detection import ShadowAIDetection
 from app.models.ai_risk_assessment import AIRiskAssessment
 from app.models.ai_risk_assessment_question import AIRiskAssessmentQuestion

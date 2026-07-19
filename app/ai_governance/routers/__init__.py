@@ -24,6 +24,7 @@ from app.ai_governance.routers import (
     patent_ingest_p2,
     patent_exports_p2,
     shadow_ai,
+    shadow_ai_signature,
     third_party_ai,
 )
 
@@ -51,5 +52,6 @@ __all__ = [
     "patent_ingest_p2",
     "patent_exports_p2",
     "shadow_ai",
+    "shadow_ai_signature",
     "third_party_ai",
 ]
