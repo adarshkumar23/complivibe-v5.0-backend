@@ -354,6 +354,12 @@ from app.models.ai_guardrail_event import AIGuardrailEvent
 from app.models.ai_derived_guardrail import AiDerivedGuardrail
 from app.models.ai_guardrail_check_event import AiGuardrailCheckEvent
 from app.models.ai_guardrail_receipt import AiGuardrailReceipt
+from app.models.governance_graph_node import GovernanceGraphNode
+from app.models.governance_graph_edge import GovernanceGraphEdge
+from app.models.governance_graph_traversal_result import GovernanceGraphTraversalResult
+from app.models.governance_graph_change_event import GovernanceGraphChangeEvent
+from app.models.ai_system_obligation_link import AiSystemObligationLink
+from app.models.patent_scoped_key import PatentScopedKey
 from app.models.ai_approval_envelope import AIApprovalEnvelope
 from app.models.ai_envelope_approval import AIEnvelopeApproval
 from app.models.ai_monitoring_config import AIMonitoringConfig
@@ -698,6 +704,12 @@ __all__ = [
     "AiDerivedGuardrail",
     "AiGuardrailCheckEvent",
     "AiGuardrailReceipt",
+    "GovernanceGraphNode",
+    "GovernanceGraphEdge",
+    "GovernanceGraphTraversalResult",
+    "GovernanceGraphChangeEvent",
+    "AiSystemObligationLink",
+    "PatentScopedKey",
     "AIApprovalEnvelope",
     "AIEnvelopeApproval",
     "AIMonitoringConfig",

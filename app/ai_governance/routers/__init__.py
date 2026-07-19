@@ -20,6 +20,9 @@ from app.ai_governance.routers import (
     mlops_management,
     nist_rmf,
     policy_derivation,
+    governance_graph,
+    patent_ingest_p2,
+    patent_exports_p2,
     shadow_ai,
     third_party_ai,
 )
@@ -44,6 +47,9 @@ __all__ = [
     "mlops_management",
     "nist_rmf",
     "policy_derivation",
+    "governance_graph",
+    "patent_ingest_p2",
+    "patent_exports_p2",
     "shadow_ai",
     "third_party_ai",
 ]

@@ -118,6 +118,10 @@ class Settings(BaseSettings):
     OPA_BINARY_PATH: str = "opa"
     OPA_REQUEST_TIMEOUT_SECONDS: float = 2.0
 
+    # P2 governance knowledge-graph: max hops for the obligation-derivation
+    # recursive CTE (config, not a patent claim element).
+    GOVERNANCE_GRAPH_MAX_TRAVERSAL_DEPTH: int = 6
+
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
     def parse_cors_origins(cls, value: str | list[str]) -> list[str]:

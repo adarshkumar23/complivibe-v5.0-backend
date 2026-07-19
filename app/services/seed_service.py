@@ -306,6 +306,8 @@ PERMISSIONS: dict[str, str] = {
     "ai_guardrail:create": "Derive and compile AI policy guardrails from regulatory obligations",
     "ai_guardrail:recompile": "Recompile a derived AI policy guardrail from its source obligations",
     "ai_guardrail:check": "Run agent-action guardrail checks and record guardrail check events",
+    "governance_graph:read": "Read the AI-governance knowledge graph and derived obligations",
+    "governance_graph:write": "Add manual edges and trigger syncs on the AI-governance knowledge graph",
 }
 
 ROLE_PERMISSION_MAP: dict[str, set[str]] = {
@@ -408,6 +410,8 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "ai_guardrail:create",
         "ai_guardrail:recompile",
         "ai_guardrail:check",
+        "governance_graph:read",
+        "governance_graph:write",
         "ai_bom:read",
         "ai_bom:write",
         "model_registry:read",
@@ -554,6 +558,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "framework_review_capacity:read",
         "ai_systems:read",
         "ai_guardrail:read",
+        "governance_graph:read",
         "compliance_policies:read",
         "compliance:read",
         "vendors:read",
@@ -634,6 +639,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "framework_review_capacity:read",
         "ai_systems:read",
         "ai_guardrail:read",
+        "governance_graph:read",
         "compliance_policies:read",
         "compliance:read",
         "vendors:read",
@@ -698,6 +704,7 @@ ROLE_PERMISSION_MAP: dict[str, set[str]] = {
         "framework_review_capacity:read",
         "ai_systems:read",
         "ai_guardrail:read",
+        "governance_graph:read",
         "compliance_policies:read",
         "compliance:read",
         "vendors:read",
