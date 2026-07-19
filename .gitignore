@@ -28,3 +28,10 @@ alembic/versions/*.pyc
 # development (DEVELOPMENT_LOG_V5.md incident, 2026-07-13) -- keep these local-only.
 DEVELOPMENT_LOG*.md
 *.devlog.md
+
+# Session scratch: ad-hoc runbooks/handoff notes written during dev passes.
+/scratchpad_runs/
+
+# SQLite database created at the repo root by the test harness
+# (tests/conftest.py sets DATABASE_URL=sqlite+pysqlite:///./test.db).
+/test.db
