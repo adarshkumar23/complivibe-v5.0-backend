@@ -12,7 +12,7 @@ from app.models.framework import Framework
 from app.models.iso42001_conformity_tracker import ISO42001ConformityTracker
 from app.models.obligation import Obligation
 from app.services.audit_service import AuditService
-from app.services.seed_service import ISO42001_OBLIGATIONS, SeedService
+from app.services.seed_service import ISO42001_OBLIGATIONS
 from app.core.validation import validate_choice
 
 ALLOWED_TRACKER_STATUS = {"not_started", "in_progress", "implemented", "verified"}
@@ -88,7 +88,14 @@ class ISO42001Service:
         return {ref for ref, _ in ISO42001_OBLIGATIONS}
 
     def _iso_obligations(self) -> list[Obligation]:
-        SeedService.ensure_starter_obligations(self.db)
+        # No seeding here. The ISO 42001 clause obligations are part of
+        # STARTER_OBLIGATIONS and are seeded once at application startup
+        # (app/main.py lifespan). Seeding from this path meant the three
+        # conformity GET endpoints wrote the global reference catalogue --
+        # 35 frameworks and ~1,400 obligations -- on a plain read, with no
+        # permission check covering that write. If the catalogue is genuinely
+        # absent, _iso_framework() now raises 404 rather than silently
+        # materialising it mid-request.
         framework = self._iso_framework()
         stmt = (
             select(Obligation)

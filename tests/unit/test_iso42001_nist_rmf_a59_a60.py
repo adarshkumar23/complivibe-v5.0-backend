@@ -8,6 +8,14 @@ from app.models.iso42001_conformity_tracker import ISO42001ConformityTracker
 from app.services.seed_service import NIST_AI_RMF_SUBCATEGORIES
 from tests.helpers.auth_org import bootstrap_org_user
 
+import pytest
+
+# The ISO 42001 clause obligations used to be seeded lazily by the conformity GET
+# handlers -- i.e. a read endpoint that wrote the global reference catalogue and
+# committed. Those handlers are now side-effect-free, so any test that needs the
+# catalogue present must declare that dependency explicitly.
+pytestmark = pytest.mark.usefixtures("seeded_reference_data")
+
 SYSTEMS_BASE = "/api/v1/ai-governance/systems"
 ISO42001_BASE = "/api/v1/ai-governance/iso42001"
 NIST_ORG_SUMMARY = "/api/v1/ai-governance/nist-rmf/org-summary"

@@ -25,8 +25,9 @@ def list_local_content_packs(
     db: Session = Depends(get_db),
     _: Membership = Depends(require_permission("frameworks:read")),
 ) -> list[LocalFrameworkPackRead]:
-    SeedService.ensure_framework_versions(db)
-    db.commit()
+    # No seeding here: the reference catalogue is seeded once at application startup
+    # (app/main.py lifespan). A read handler that seeded and committed made a plain
+    # list call mutate the database, with no permission check covering the write.
     return [LocalFrameworkPackRead(**row) for row in FrameworkContentPackService(db).list_packs()]
 
 
@@ -111,9 +112,7 @@ def global_framework_coverage_summary(
     db: Session = Depends(get_db),
     membership: Membership = Depends(require_permission("frameworks:read")),
 ) -> list[GlobalFrameworkCoverageItem]:
-    SeedService.ensure_starter_obligations(db)
-    SeedService.ensure_framework_versions(db)
-    db.commit()
+    # No seeding here -- see GET /packs above. Seeded at startup.
     rows = FrameworkContentPackService(db).global_coverage_summary(membership.organization_id)
     return [GlobalFrameworkCoverageItem(**item) for item in rows]
 
