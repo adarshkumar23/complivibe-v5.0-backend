@@ -430,7 +430,12 @@ def get_obligation_detail(
     if obligation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Obligation not found")
 
+    # X-Organization-ID is optional here: obligations are a global catalog, and the org header
+    # only layers on org-scoped state. Keep organization_id bound in both branches -- passing
+    # organization.id unconditionally used to raise UnboundLocalError (a 500) when the header
+    # was omitted, even though _build_obligation_read already handles organization_id=None.
     state: OrganizationObligationState | None = None
+    organization_id: uuid.UUID | None = None
     if x_organization_id:
         try:
             organization_id = uuid.UUID(x_organization_id)
@@ -451,7 +456,7 @@ def get_obligation_detail(
             )
         ).scalar_one_or_none()
 
-    return _build_obligation_read(db, obligation, state, organization_id=organization.id, include_extended=True)
+    return _build_obligation_read(db, obligation, state, organization_id=organization_id, include_extended=True)
 
 
 @router.post("/{obligation_id}/content-versions", response_model=ObligationContentVersionRead, status_code=status.HTTP_201_CREATED)

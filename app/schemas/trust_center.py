@@ -143,8 +143,8 @@ class TrustCenterPublicRead(BaseModel):
     certifications: list[TrustCenterCertificationPublicRead]
     framework_coverage: list[TrustCenterFrameworkCoverageRead]
     policies: list[TrustCenterPolicyPublicRead]
-    competitor_pricing: list[dict] = Field(default_factory=list)
-    competitor_pricing_last_updated: datetime | None = None
+    # No competitor_pricing here: this model is returned by the anonymous public trust page.
+    # See TrustCenterService.get_trust_center_public_data for the rationale.
     uptime: TrustCenterPublicUptimeRead | None = None
     data_generated_at: datetime
     expired_certifications_excluded: int = 0

@@ -12,8 +12,11 @@ from app.models.user import User
 from tests.helpers.auth_org import bootstrap_org_user
 
 
-def test_public_pricing_endpoint_returns_latest_snapshot(client, db_session):
-    response = client.get("/api/v1/pricing")
+def test_pricing_endpoint_returns_latest_snapshot_to_authenticated_user(client, db_session):
+    # GET /pricing is authenticated-only: it serves CompliVibe's own competitive-research
+    # table. Unauthenticated prospects get the same snapshot via /onboarding/select-plan.
+    org = bootstrap_org_user(client, email_prefix="pricing-snapshot")
+    response = client.get("/api/v1/pricing", headers=org["headers"])
     assert response.status_code == 200
     payload = response.json()
     assert payload["version_id"]
@@ -176,7 +179,7 @@ def test_pricing_refresh_rejects_duplicate_competitor_key(client, db_session):
     assert "Duplicate competitor_key" in response.json()["detail"]
 
 
-def test_onboarding_select_plan_and_trust_center_public_include_competitor_pricing(client, db_session):
+def test_onboarding_select_plan_includes_pricing_but_trust_center_does_not(client, db_session):
     org = bootstrap_org_user(client, email_prefix="pricing-onboarding")
     orgs = client.get("/api/v1/organizations/me", headers=org["headers"])
     assert orgs.status_code == 200
@@ -203,12 +206,13 @@ def test_onboarding_select_plan_and_trust_center_public_include_competitor_prici
     )
     assert upsert_config.status_code == 200, upsert_config.text
 
+    # The tenant's anonymous trust page must NOT carry the platform-global pricing table.
     public = client.get(f"/api/v1/trust-center/{org_slug}")
     assert public.status_code == 200
     public_payload = public.json()
-    assert public_payload["competitor_pricing"]
-    assert public_payload["competitor_pricing_last_updated"]
-    assert any(row["competitor_name"] == "Drata" for row in public_payload["competitor_pricing"])
+    assert "competitor_pricing" not in public_payload
+    assert "competitor_pricing_last_updated" not in public_payload
+    assert "drata" not in public.text.lower()
 
 
 def test_pricing_refresh_requires_auth(client):

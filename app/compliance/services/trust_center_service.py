@@ -20,7 +20,6 @@ from app.models.trust_center_access_request import TrustCenterAccessRequest
 from app.models.trust_center_configuration import TrustCenterConfiguration
 from app.models.trust_center_published_policy import TrustCenterPublishedPolicy
 from app.models.user import User
-from app.platform.services.competitor_pricing_service import CompetitorPricingService
 from app.services.audit_service import AuditService
 from app.services.compliance_dashboard_service import ComplianceDashboardService
 
@@ -148,17 +147,12 @@ class TrustCenterService:
                 "updated_at": config.uptime_updated_at,
             }
 
-        pricing_snapshot = CompetitorPricingService(self.db).latest_snapshot_payload()
-        competitor_pricing = [
-            {
-                "competitor_name": row["competitor_name"],
-                "pricing_model": row["pricing_model"],
-                "pricing_summary": row["pricing_summary"],
-                "source_url": row["source_url"],
-                "last_verified_at": row["last_verified_at"],
-            }
-            for row in pricing_snapshot["entries"]
-        ]
+        # Deliberately no competitor-pricing block here. This payload is served anonymously by
+        # GET /trust-center/{slug} as a tenant's customer-facing trust page. The competitor
+        # pricing table is platform-global CompliVibe research, not tenant data: it is not
+        # covered by any of the config's show_* toggles, so a tenant could not switch it off,
+        # and it has no place on their trust page. Authenticated readers use GET /pricing;
+        # prospects still see it during onboarding via GET /onboarding/select-plan.
 
         return {
             "organization_slug": slug,
@@ -170,8 +164,6 @@ class TrustCenterService:
             "certifications": certifications,
             "framework_coverage": framework_coverage,
             "policies": policies,
-            "competitor_pricing": competitor_pricing,
-            "competitor_pricing_last_updated": pricing_snapshot["last_updated"],
             "uptime": uptime,
             "data_generated_at": self.utcnow(),
             "expired_certifications_excluded": expired_certifications_excluded,

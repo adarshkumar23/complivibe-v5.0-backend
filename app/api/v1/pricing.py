@@ -24,7 +24,15 @@ def _require_platform_admin(current_user: User) -> None:
 
 
 @router.get("", response_model=CompetitorPricingSnapshotRead)
-def get_pricing_snapshot(db: Session = Depends(get_db)) -> CompetitorPricingSnapshotRead:
+def get_pricing_snapshot(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> CompetitorPricingSnapshotRead:
+    # Authenticated-only: this is CompliVibe's own competitive-research table, not public
+    # content. Prospects who have not signed up yet still receive the same snapshot through
+    # the unauthenticated onboarding path (GET /onboarding/select-plan), which is the
+    # intentional sales surface for it.
+    _ = current_user
     payload = CompetitorPricingService(db).latest_snapshot_payload()
     db.commit()
     return CompetitorPricingSnapshotRead(**payload)
