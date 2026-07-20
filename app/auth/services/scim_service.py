@@ -98,6 +98,8 @@ class SCIMService:
         ).scalar_one_or_none()
         if existing is not None:
             membership = self._get_org_membership(org_id, existing.id, db)
+            was_active = self._scim_active(existing, membership)
+            was_named = existing.full_name
             self._set_membership_active(existing, membership, is_active, db)
             if full_name:
                 # Safe: `existing` is a member of THIS org. update_user / patch_user are
@@ -105,12 +107,51 @@ class SCIMService:
                 # to overwrite the shared User.full_name.
                 existing.full_name = full_name
             db.flush()
-            return self._to_scim_user(existing, active=self._scim_active(existing, membership))
+            now_active = self._scim_active(existing, membership)
+
+            # An IdP-driven reactivate/deactivate/rename of someone who is already a
+            # member. There is no interactive actor to ask afterwards, so record the
+            # before/after explicitly -- symmetric with deprovision_user, which has
+            # always been audited.
+            AuditService(db).write_audit_log(
+                action="user.reprovisioned_via_scim",
+                entity_type="users",
+                organization_id=org_id,
+                actor_user_id=existing.id,
+                entity_id=existing.id,
+                before_json={"active": was_active, "full_name": was_named},
+                after_json={"active": now_active, "full_name": existing.full_name},
+                metadata_json={"source": "scim", "external_id": scim_payload.get("externalId")},
+            )
+            db.flush()
+            return self._to_scim_user(existing, active=now_active)
 
         # Not a member of this org. Because User.email is globally unique, an email that
         # already exists must belong to another tenant's user -- refuse rather than
         # absorb it into this org, reactivate its global account, or rename it.
         if db.execute(select(User.id).where(User.email == email)).scalar_one_or_none() is not None:
+            # A tenant-boundary probe: this org's IdP token asked for a user that
+            # belongs to someone else. The rejection IS the security event, so record
+            # it against the ATTEMPTING org before unwinding. The commit is deliberate:
+            # raising below aborts the request, and an audit row that rolls back with
+            # the rejection would leave no trace of the attempt at all. Only SELECTs
+            # have run on this path, so there is nothing else to make durable.
+            #
+            # No entity_id -- the target user is deliberately never resolved for this
+            # caller, and naming it here would leak another tenant's user id into an
+            # org-readable trail. The attempted email is already known to the caller.
+            AuditService(db).write_audit_log(
+                action="user.scim_cross_tenant_provision_rejected",
+                entity_type="users",
+                organization_id=org_id,
+                metadata_json={
+                    "source": "scim",
+                    "attempted_email": email,
+                    "external_id": scim_payload.get("externalId"),
+                    "outcome": "rejected_409",
+                },
+            )
+            db.commit()
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A user with this email already exists in another organization and cannot be provisioned here",
