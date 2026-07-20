@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.subsystem_ingest_key import SUBSYSTEM_KEY_TYPES, SubsystemIngestKey
+from app.services.audit_service import AuditService
 
 
 class SubsystemIngestKeyService:
@@ -56,6 +57,7 @@ class SubsystemIngestKeyService:
         which accepts an operator-provided ingest key); omit it to mint a random one.
         """
         self._validate_key_type(key_type)
+        supplied_key = raw_key
         raw_key = raw_key or secrets.token_urlsafe(32)
         key_hash = self.hash_key(raw_key)
         row = self.db.execute(
@@ -65,19 +67,38 @@ class SubsystemIngestKeyService:
             )
         ).scalar_one_or_none()
         if row is None:
-            self.db.add(
-                SubsystemIngestKey(
-                    organization_id=org_id,
-                    key_type=key_type,
-                    api_key_hash=key_hash,
-                    is_active=True,
-                    created_by_user_id=created_by_user_id,
-                )
+            row = SubsystemIngestKey(
+                organization_id=org_id,
+                key_type=key_type,
+                api_key_hash=key_hash,
+                is_active=True,
+                created_by_user_id=created_by_user_id,
             )
+            self.db.add(row)
+            action = "subsystem_ingest_key.provisioned"
+            was_active = None
         else:
+            action = "subsystem_ingest_key.rotated"
+            was_active = row.is_active
             row.api_key_hash = key_hash
             row.is_active = True
             row.rotated_at = datetime.now(UTC)
+        self.db.flush()
+
+        # These are PAM-class credentials: holding one lets a machine push inbound
+        # telemetry for a whole subsystem of this org. Minting or rotating one must be
+        # attributable (who / when / which org / which subsystem). Only the key_type and
+        # the row identity are recorded -- never the raw key, and never its hash.
+        AuditService(self.db).write_audit_log(
+            action=action,
+            entity_type="subsystem_ingest_keys",
+            organization_id=org_id,
+            actor_user_id=created_by_user_id,
+            entity_id=row.id,
+            before_json={"is_active": was_active} if was_active is not None else {},
+            after_json={"is_active": True},
+            metadata_json={"key_type": key_type, "operator_supplied_key": supplied_key is not None},
+        )
         self.db.flush()
         return raw_key
 
