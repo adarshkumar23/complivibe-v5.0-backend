@@ -82,11 +82,14 @@ def send_test_email(
     organization: Organization = Depends(get_current_organization),
     membership: Membership = Depends(require_permission("email:admin")),
 ) -> OrgEmailConfigTestResponse:
+    # The test-send recipient is forced to the caller's own verified email -- a test
+    # send must never be a vector for mailing an arbitrary address (matches the
+    # platform /email-config/test variant). payload.to_address is ignored.
     ok, sent_to = EmailConfigService(db).send_test_email(
         organization.id,
         membership,
         actor_user_id=current_user.id,
-        to_address=str(payload.to_address) if payload.to_address else None,
+        to_address=current_user.email,
     )
     db.commit()
     return OrgEmailConfigTestResponse(success=ok, sent_to=sent_to)

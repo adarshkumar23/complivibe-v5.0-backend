@@ -38,6 +38,10 @@ ENDPOINT_GROUP_DEFAULTS: dict[str, str] = {
     "public": "120/minute",
     "ai_governance": "30/minute",
     "scim": "60/minute",
+    # Email-triggering endpoints (queue an outbox row / test-send). Deliberately tight
+    # so an authenticated insider cannot fan out mail at the loose api_general rate;
+    # real admin usage (a few queued mails / a test send) stays well under it.
+    "email": "20/minute",
 }
 
 
@@ -220,6 +224,8 @@ class CompliVibeRateLimiter:
             return "scim"
         if path.startswith("/api/v1/compliance/reports/"):
             return "reports"
+        if path.startswith("/api/v1/email/") or path.endswith("/email-config/test"):
+            return "email"
         if path.startswith("/api/v1/ai-governance/"):
             return "ai_governance"
         if (

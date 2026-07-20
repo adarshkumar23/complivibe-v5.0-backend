@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.email_outbox import EmailOutbox
+from app.platform.services.email_quota_service import EmailQuotaService
 from app.platform.services.ses_service import SESService
 from app.services.email_service import EmailService
 
@@ -21,6 +22,7 @@ class EmailOutboxFlushService:
         self.db = db
         self.ses = SESService()
         self.email_service = EmailService(db)
+        self.quota = EmailQuotaService(db)
 
     @staticmethod
     def utcnow() -> datetime:
@@ -76,6 +78,20 @@ class EmailOutboxFlushService:
                 skipped += 1
                 continue
 
+            # Per-org daily send cap (OrgEmailConfig.daily_send_limit). Over the cap we
+            # defer this row to the next window instead of sending, so an authenticated
+            # insider (or a compromised org account) cannot burn unlimited SES quota /
+            # sender reputation. Leaves the row pending; it drains after the reset.
+            allowed, retry_at = self.quota.check_quota(email.organization_id)
+            if not allowed:
+                email.status = "pending"
+                email.next_attempt_at = retry_at or (now + timedelta(hours=1))
+                email.locked_at = None
+                email.lock_expires_at = None
+                email.locked_by = None
+                skipped += 1
+                continue
+
             result = self.ses.send_email(
                 to_email=email.recipient_email,
                 subject=email.subject,
@@ -94,6 +110,7 @@ class EmailOutboxFlushService:
             email.locked_by = None
 
             if result["success"]:
+                self.quota.record_sent(email.organization_id)
                 email.status = "sent"
                 email.sent_at = now
                 email.failed_at = None

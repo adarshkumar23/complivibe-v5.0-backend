@@ -33,7 +33,29 @@ from app.schemas.email import (
 from app.services.audit_service import AuditService
 from app.services.email_service import EmailService
 from app.services.email_worker_service import EmailWorkerService
+from app.services.rbac_service import RBACService
 from app.services.seed_service import SeedService
+
+
+def _recipient_is_org_member(db: Session, org_id: uuid.UUID, *, email: str | None, user_id: uuid.UUID | None) -> bool:
+    """True if the recipient is an active member of the org (by user id or by email)."""
+    conditions = []
+    if user_id is not None:
+        conditions.append(Membership.user_id == user_id)
+    if email:
+        conditions.append(User.email == email.strip().lower())
+    if not conditions:
+        return False
+    row = db.execute(
+        select(Membership.id)
+        .join(User, User.id == Membership.user_id)
+        .where(
+            Membership.organization_id == org_id,
+            Membership.status == "active",
+            or_(*conditions),
+        )
+    ).first()
+    return row is not None
 
 router = APIRouter(prefix="/email", tags=["email"])
 
@@ -255,6 +277,21 @@ def queue_email(
     _: Membership = Depends(require_permission("email:write")),
 ) -> EmailOutboxRead:
     SeedService.ensure_global_email_templates(db)
+
+    # Recipient allowlist: email:write may only send to the org's own members. Sending
+    # to a free-form external address is the outbound-spam vector, so it requires the
+    # stricter email:admin permission (and still counts against the org's daily cap).
+    if not _recipient_is_org_member(
+        db,
+        organization.id,
+        email=str(payload.recipient_email),
+        user_id=payload.recipient_user_id,
+    ) and not RBACService.user_has_permission(db, current_user.id, organization.id, "email:admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sending to a non-member recipient requires the email:admin permission",
+        )
+
     service = EmailService(db)
     template = service.resolve_template_for_org(
         organization_id=organization.id,
