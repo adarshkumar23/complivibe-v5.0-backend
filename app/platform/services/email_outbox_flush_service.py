@@ -40,9 +40,20 @@ class EmailOutboxFlushService:
         )
         sentry_sdk.capture_exception(RuntimeError(str(error_text)))
 
-    def flush(self, batch_size: int = 50) -> dict:
-        now = self.utcnow()
-        rows = self.db.execute(
+    def claim_statement(self, batch_size: int = 50, now: datetime | None = None):
+        """The batch this drain will send, claimed under a row lock.
+
+        EmailWorkerService claims the very same rows with `with_for_update()`. This
+        path selected them unlocked, so if both delivery paths ever ran at once each
+        could pick up the same outbox row and send the email twice. `skip_locked`
+        rather than a plain lock: a row another sender already holds should be left to
+        them and the drain should move on, not block behind an in-flight send.
+
+        Extracted from flush() so the lock clause is directly assertable -- SQLite
+        does not render FOR UPDATE at all, so it is invisible in the unit harness.
+        """
+        now = now or self.utcnow()
+        return (
             select(EmailOutbox)
             .where(
                 EmailOutbox.status.in_(["pending", "failed"]),
@@ -52,7 +63,12 @@ class EmailOutboxFlushService:
             )
             .order_by(EmailOutbox.created_at.asc())
             .limit(max(1, min(batch_size, 50)))
-        ).scalars().all()
+            .with_for_update(skip_locked=True)
+        )
+
+    def flush(self, batch_size: int = 50) -> dict:
+        now = self.utcnow()
+        rows = self.db.execute(self.claim_statement(batch_size, now)).scalars().all()
 
         sent = 0
         failed = 0
