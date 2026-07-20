@@ -43,9 +43,40 @@ def ingest_carbon_reading(
     db: Session = Depends(get_db),
     x_complivibe_key: str | None = Header(default=None, alias="X-CompliVibe-Key"),
 ) -> CarbonEmissionsReadingRead:
+    """Machine/automated ingest: authenticated ONLY by the X-CompliVibe-Key header.
+
+    For external systems pushing readings without an interactive session. The org is
+    derived from the key. Interactive UI entry should use /readings/manual instead,
+    which authenticates by the user's session and needs no ingest key in the browser.
+    """
     service = CarbonAccountingService(db)
     org_id = service.resolve_org_by_api_key(x_complivibe_key or "")
     row = service.ingest_reading(org_id, payload)
+    db.commit()
+    db.refresh(row)
+    return CarbonEmissionsReadingRead.model_validate(row)
+
+
+@router.post("/readings/manual", response_model=CarbonEmissionsReadingRead, status_code=status.HTTP_201_CREATED)
+def ingest_carbon_reading_manual(
+    payload: CarbonEmissionsReadingIngest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_permission("carbon_accounting:write")),
+) -> CarbonEmissionsReadingRead:
+    """Interactive/console reading entry for a signed-in user.
+
+    Identical ingest to POST /readings, but authenticated by the user's session
+    (cookie/bearer + CSRF) with org resolved from membership and gated on
+    carbon_accounting:write. This exists so the UI never has to provision, cache in
+    the browser, or transmit the machine X-CompliVibe-Key ingest credential -- the
+    caller is already authenticated. The key-authed /readings endpoint remains for
+    external/automated ingest.
+    """
+    _ = current_user
+    service = CarbonAccountingService(db)
+    row = service.ingest_reading(organization.id, payload)
     db.commit()
     db.refresh(row)
     return CarbonEmissionsReadingRead.model_validate(row)

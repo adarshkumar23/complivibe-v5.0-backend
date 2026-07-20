@@ -340,3 +340,83 @@ def test_t33_carbon_dashboard_does_not_flag_non_overlapping_periods_or_single_so
     assert dashboard.status_code == 200
     insights = dashboard.json()["insights"]
     assert not any("double-counted" in i for i in insights)
+
+
+def _login(client, email: str, password: str = "Pass1234!@") -> str:
+    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    assert resp.status_code == 200, resp.text
+    return resp.json()["access_token"]
+
+
+def test_t33_manual_readings_use_session_auth_not_ingest_key(client, db_session):
+    """The interactive UI path: POST /readings/manual authenticates by the user's
+    session (bearer + carbon_accounting:write) with org from membership, and needs
+    NO X-CompliVibe-Key. This is the fix for the cv_carbon_key client-side exposure.
+    """
+    token = _register(client, "t33-manual-owner@example.com", "Pass1234!@", "T33 Manual Org")
+    org_id = _org_id(client, token)
+
+    payload = {
+        "scope": "scope2",
+        "source": "grid-electricity-hq",
+        "period_start": "2026-03-01",
+        "period_end": "2026-03-31",
+        "value": "12.4",
+        "unit": "tCO2e",
+    }
+
+    # Owner (holds carbon_accounting:write) can ingest via session alone -- no key header.
+    ok = client.post(
+        "/api/v1/carbon-accounting/readings/manual",
+        headers=_headers(token, org_id),
+        json=payload,
+    )
+    assert ok.status_code == 201, ok.text
+    assert ok.json()["organization_id"] == org_id
+    assert ok.json()["value"] == "12.4000"
+
+    # The reading is scoped to the session's org and visible on that org's dashboard.
+    dashboard = client.get("/api/v1/carbon-accounting/dashboard", headers=_headers(token, org_id))
+    assert dashboard.status_code == 200
+    assert dashboard.json()["reading_count"] >= 1
+
+
+def test_t33_manual_readings_require_write_permission(client, db_session):
+    """A member WITHOUT carbon_accounting:write cannot use the session ingest path."""
+    from app.core.security import get_password_hash
+    from app.models.membership import Membership
+    from app.models.role import Role
+    from app.models.user import User
+
+    owner_token = _register(client, "t33-manual-admin@example.com", "Pass1234!@", "T33 Manual RBAC Org")
+    org_id = _org_id(client, owner_token)
+
+    # An active readonly member of the same org (readonly lacks carbon_accounting:write).
+    ro_user = User(
+        email="t33-manual-ro@example.com",
+        full_name="Read Only",
+        hashed_password=get_password_hash("Pass1234!@"),
+        status="active",
+        is_active=True,
+        is_superuser=False,
+    )
+    db_session.add(ro_user)
+    db_session.flush()
+    ro_role = db_session.query(Role).filter(Role.organization_id == uuid.UUID(org_id), Role.name == "readonly").one()
+    db_session.add(Membership(organization_id=uuid.UUID(org_id), user_id=ro_user.id, role_id=ro_role.id, status="active"))
+    db_session.commit()
+
+    ro_token = _login(client, "t33-manual-ro@example.com")
+    denied = client.post(
+        "/api/v1/carbon-accounting/readings/manual",
+        headers=_headers(ro_token, org_id),
+        json={
+            "scope": "scope1",
+            "source": "boiler",
+            "period_start": "2026-04-01",
+            "period_end": "2026-04-30",
+            "value": "3.0",
+            "unit": "tCO2e",
+        },
+    )
+    assert denied.status_code == 403, denied.text
