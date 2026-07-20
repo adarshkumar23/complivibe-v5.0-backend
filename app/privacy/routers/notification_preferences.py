@@ -1,7 +1,13 @@
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_active_user, get_current_organization, get_db
+from app.core.deps import (
+    get_current_active_user,
+    get_current_organization,
+    get_db,
+    require_org_membership,
+)
+from app.models.membership import Membership
 from app.models.organization import Organization
 from app.models.user import User
 from app.privacy.schemas.notification_preferences import (
@@ -19,6 +25,7 @@ def get_notification_preferences(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_org_membership),
 ) -> list[NotificationPreferenceRead]:
     rows = NotificationPreferenceService(db).get_or_create_preferences(organization.id, current_user.id)
     return [NotificationPreferenceRead.model_validate(row) for row in rows]
@@ -30,6 +37,7 @@ def bulk_update_notification_preferences(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_org_membership),
 ) -> list[NotificationPreferenceRead]:
     rows = NotificationPreferenceService(db).bulk_update_preferences(
         organization.id,
@@ -49,6 +57,7 @@ def update_notification_preference(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
+    _: Membership = Depends(require_org_membership),
 ) -> NotificationPreferenceRead:
     row = NotificationPreferenceService(db).update_preference(
         organization.id,

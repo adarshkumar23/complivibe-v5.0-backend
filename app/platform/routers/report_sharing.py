@@ -29,8 +29,13 @@ def create_share_link(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("compliance:read")),
+    _: Membership = Depends(require_permission("reports:share")),
 ) -> ShareLinkResponse:
+    # Minting a share link is data EGRESS, not a read: it produces a URL that serves
+    # report contents to whoever holds it, outside the app's authentication entirely.
+    # It was gated on `compliance:read`, which every system role holds -- including
+    # auditor and readonly, whose whole posture is that they cannot export anything.
+    # Listing and revoking links stay on compliance:read; only creation is restricted.
     service = ReportShareService()
     row = service.create_share_link(
         org_id=organization.id,
