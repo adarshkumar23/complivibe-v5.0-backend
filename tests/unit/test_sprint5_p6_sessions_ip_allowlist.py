@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
+from app.core.config import get_settings
 from app.core.security import decode_access_token
 from app.models.membership import Membership
 from app.models.user_session import UserSession
@@ -36,7 +37,14 @@ def _login(client, *, email: str, password: str = "Pass1234!@", org_id: str | No
     return response.json()["access_token"]
 
 
-def test_s5_p6_sessions_login_list_revoke_admin_cross_org_and_expire(client, db_session):
+def test_s5_p6_sessions_login_list_revoke_admin_cross_org_and_expire(client, db_session, monkeypatch):
+    # These tests simulate a client at a given IP via a single X-Forwarded-For entry.
+    # After the XFF-spoofing fix, X-Forwarded-For is only trusted when a trusted proxy
+    # is declared, so model exactly one trusted proxy and the sole XFF entry (the
+    # rightmost, parts[-1]) is taken as the client IP.
+    monkeypatch.setenv("TRUSTED_PROXY_COUNT", "1")
+    get_settings.cache_clear()
+
     org_a = bootstrap_org_user(client, email_prefix="s5p6-sess-a")
     org_b = bootstrap_org_user(client, email_prefix="s5p6-sess-b")
 
@@ -112,7 +120,12 @@ def test_s5_p6_sessions_login_list_revoke_admin_cross_org_and_expire(client, db_
     assert db_session.get(UserSession, stale.id).status == "expired"
 
 
-def test_s5_p6_ip_allowlist_add_validate_enforce_deactivate_and_disable(client, db_session):
+def test_s5_p6_ip_allowlist_add_validate_enforce_deactivate_and_disable(client, db_session, monkeypatch):
+    # See the note above: declare one trusted proxy so the single X-Forwarded-For
+    # entry is honoured as the client IP under the post-fix extraction rules.
+    monkeypatch.setenv("TRUSTED_PROXY_COUNT", "1")
+    get_settings.cache_clear()
+
     org = bootstrap_org_user(client, email_prefix="s5p6-ip")
 
     add = client.post(

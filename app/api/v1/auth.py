@@ -204,6 +204,7 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
         ip_address=IPAllowlistService.extract_request_ip(
             x_forwarded_for=request.headers.get("X-Forwarded-For"),
             client_host=request.client.host if request.client else None,
+            cf_connecting_ip=request.headers.get("CF-Connecting-IP"),
         ),
         user_agent=request.headers.get("user-agent"),
         expires_at=expires_at,

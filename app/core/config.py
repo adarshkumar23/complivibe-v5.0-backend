@@ -23,6 +23,21 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     BASE_URL: str = "http://localhost:8000"
     SSO_ENABLED: bool = True
+    # Client-IP extraction for the org IP allowlist and session/audit records.
+    # Both default SAFE: with the defaults, only the raw socket peer is trusted and
+    # no forwarded header (X-Forwarded-For / CF-Connecting-IP) is ever believed.
+    #
+    # BEHIND_CLOUDFLARE_TUNNEL: set True only when this backend is reachable solely
+    #   through a Cloudflare tunnel/proxy. When set, CF-Connecting-IP (which the
+    #   Cloudflare edge sets to the real client and rejects if a client tries to
+    #   supply it -- verified empirically) is trusted, but only after the immediate
+    #   upstream hop is confirmed to be Cloudflare or a local tunnel hop.
+    # TRUSTED_PROXY_COUNT: number of trusted reverse proxies in front of the app for
+    #   non-Cloudflare deployments. The client IP is taken as the Nth value from the
+    #   RIGHT of X-Forwarded-For (parts[-N]), so client-prepended spoof values are
+    #   never read. 0 means never trust X-Forwarded-For.
+    BEHIND_CLOUDFLARE_TUNNEL: bool = False
+    TRUSTED_PROXY_COUNT: int = 0
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_REDIS_URL: str | None = None
     # Per-org RateLimitConfig lookups are cached in-process for this many seconds

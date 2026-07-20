@@ -149,6 +149,7 @@ def require_org_membership(
     request_ip = IPAllowlistService.extract_request_ip(
         x_forwarded_for=request.headers.get("X-Forwarded-For"),
         client_host=request.client.host if request.client else None,
+        cf_connecting_ip=request.headers.get("CF-Connecting-IP"),
     )
     if not IPAllowlistService(db).is_ip_allowed(org_id=organization.id, request_ip=request_ip):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Request IP is not allowed for this organization")

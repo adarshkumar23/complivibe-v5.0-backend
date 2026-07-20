@@ -7,8 +7,71 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models.org_ip_allowlist import OrgIPAllowlist
 from app.services.audit_service import AuditService
+
+# Cloudflare's published edge IP ranges (https://www.cloudflare.com/ips/). Used to
+# confirm the immediate upstream really is Cloudflare before believing its
+# CF-Connecting-IP header, for the orange-cloud (proxy-to-public-origin) topology.
+_CLOUDFLARE_CIDRS: tuple[str, ...] = (
+    "173.245.48.0/20",
+    "103.21.244.0/22",
+    "103.22.200.0/22",
+    "103.31.4.0/22",
+    "141.101.64.0/18",
+    "108.162.192.0/18",
+    "190.93.240.0/20",
+    "188.114.96.0/20",
+    "197.234.240.0/22",
+    "198.41.128.0/17",
+    "162.158.0.0/15",
+    "104.16.0.0/13",
+    "104.24.0.0/14",
+    "172.64.0.0/13",
+    "131.0.72.0/22",
+    "2400:cb00::/32",
+    "2606:4700::/32",
+    "2803:f800::/32",
+    "2405:b500::/32",
+    "2405:8100::/32",
+    "2a06:98c0::/29",
+    "2c0f:f248::/32",
+)
+
+
+def _is_valid_ip(value: str | None) -> bool:
+    if not value:
+        return False
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_trusted_cf_upstream(client_host: str | None) -> bool:
+    """Is the immediate socket peer a legitimate Cloudflare upstream?
+
+    Two supported topologies (both verified against a live cloudflared tunnel):
+      * cloudflared tunnel: cloudflared (and the Next.js proxy) connect to this
+        origin from loopback, so the peer is 127.0.0.1 / ::1.
+      * orange-cloud proxy to a public origin: the peer is a Cloudflare edge IP.
+    A direct public attacker forging CF-Connecting-IP would present neither, so we
+    refuse to trust the header for them.
+    """
+    if not client_host:
+        return False
+    try:
+        addr = ipaddress.ip_address(client_host)
+    except ValueError:
+        return False
+    if addr.is_loopback:
+        return True
+    for cidr in _CLOUDFLARE_CIDRS:
+        if addr in ipaddress.ip_network(cidr):
+            return True
+    return False
 
 
 class IPAllowlistService:
@@ -16,11 +79,41 @@ class IPAllowlistService:
         self.db = db
 
     @staticmethod
-    def extract_request_ip(*, x_forwarded_for: str | None, client_host: str | None) -> str | None:
-        if x_forwarded_for:
-            first = x_forwarded_for.split(",", 1)[0].strip()
-            if first:
-                return first
+    def extract_request_ip(
+        *,
+        x_forwarded_for: str | None,
+        client_host: str | None,
+        cf_connecting_ip: str | None = None,
+    ) -> str | None:
+        """Resolve the real client IP from a request's forwarded headers.
+
+        Priority (both forwarded sources are opt-in and default OFF):
+          1. CF-Connecting-IP when BEHIND_CLOUDFLARE_TUNNEL and the upstream hop is
+             a trusted Cloudflare/tunnel peer. The edge sets this to the real client
+             and rejects client-supplied values, so it is unspoofable through CF.
+          2. X-Forwarded-For read from the RIGHT, skipping TRUSTED_PROXY_COUNT
+             trusted-proxy hops -- i.e. parts[-TRUSTED_PROXY_COUNT]. Client-prepended
+             values sit to the left of the entries our own proxies appended and are
+             never read.
+          3. The raw socket peer (client.host).
+
+        With the safe defaults (TRUSTED_PROXY_COUNT=0, BEHIND_CLOUDFLARE_TUNNEL off)
+        only (3) applies: no forwarded header is ever trusted.
+        """
+        settings = get_settings()
+
+        if settings.BEHIND_CLOUDFLARE_TUNNEL and cf_connecting_ip:
+            candidate = cf_connecting_ip.strip()
+            if _is_valid_ip(candidate) and _is_trusted_cf_upstream(client_host):
+                return candidate
+
+        if settings.TRUSTED_PROXY_COUNT > 0 and x_forwarded_for:
+            parts = [p.strip() for p in x_forwarded_for.split(",") if p.strip()]
+            if len(parts) >= settings.TRUSTED_PROXY_COUNT:
+                candidate = parts[-settings.TRUSTED_PROXY_COUNT]
+                if _is_valid_ip(candidate):
+                    return candidate
+
         return client_host
 
     @staticmethod

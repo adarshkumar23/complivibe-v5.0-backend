@@ -27,6 +27,7 @@ def add_ip_allowlist_range(
     requester_ip = IPAllowlistService.extract_request_ip(
         x_forwarded_for=request.headers.get("X-Forwarded-For"),
         client_host=request.client.host if request.client else None,
+        cf_connecting_ip=request.headers.get("CF-Connecting-IP"),
     )
     row = IPAllowlistService(db).add_ip_range(
         org_id=organization.id,
@@ -62,6 +63,7 @@ def deactivate_ip_allowlist_range(
     requester_ip = IPAllowlistService.extract_request_ip(
         x_forwarded_for=request.headers.get("X-Forwarded-For"),
         client_host=request.client.host if request.client else None,
+        cf_connecting_ip=request.headers.get("CF-Connecting-IP"),
     )
     row = IPAllowlistService(db).remove_ip_range(
         org_id=organization.id,
@@ -86,6 +88,7 @@ def disable_ip_allowlist(
     requester_ip = IPAllowlistService.extract_request_ip(
         x_forwarded_for=request.headers.get("X-Forwarded-For"),
         client_host=request.client.host if request.client else None,
+        cf_connecting_ip=request.headers.get("CF-Connecting-IP"),
     )
     rows = IPAllowlistService(db).disable_allowlist(
         org_id=organization.id,
