@@ -102,6 +102,14 @@ def get_current_user(
         if not csrf_header or not csrf_claim or not secrets.compare_digest(csrf_header, csrf_claim):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing or invalid CSRF token")
 
+    # A cookie-delivered token MUST be a server-side session: require the jti so the
+    # token is bound to a revocable UserSession, rather than enforcing that only when
+    # present. This rejects any jti-less token on the cookie path -- e.g. a
+    # pre-hardening SSO/OIDC token, which had neither jti nor a session row and could
+    # therefore be replayed until expiry with no way to revoke it.
+    if from_cookie and not (isinstance(token_id, str) and token_id):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials")
+
     if isinstance(token_id, str) and token_id:
         if not SessionService(db).validate_and_touch_session(token_id):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials")

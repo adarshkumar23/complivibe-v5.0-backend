@@ -14,6 +14,7 @@ from app.core.deps import (
     get_current_organization,
     get_db,
 )
+from app.core.login_session import establish_login_session
 from app.core.password_validation import PasswordValidationError, validate_password_strength
 from app.core.rate_limiter import rate_limiter
 from app.core.security import create_access_token, create_csrf_token, decode_access_token, get_password_hash, verify_password
@@ -32,33 +33,6 @@ from app.services.auditor_marketplace_service import AuditorMarketplaceService
 from app.services.seed_service import SeedService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-
-def _set_auth_cookies(response: Response, *, access_token: str, csrf_token: str) -> None:
-    """Issue the browser-facing session as an httpOnly cookie plus a readable
-    double-submit CSRF cookie. Bearer-header auth (API clients, tests) is untouched
-    and keeps working off the `access_token` returned in the JSON body."""
-    settings = get_settings()
-    secure = settings.APP_ENV == "production"
-    max_age = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=access_token,
-        httponly=True,
-        secure=secure,
-        samesite="strict",
-        path="/",
-        max_age=max_age,
-    )
-    response.set_cookie(
-        key=CSRF_COOKIE_NAME,
-        value=csrf_token,
-        httponly=False,
-        secure=secure,
-        samesite="strict",
-        path="/",
-        max_age=max_age,
-    )
 
 
 def _clear_auth_cookies(response: Response) -> None:
@@ -159,9 +133,25 @@ def register(payload: RegisterRequest, request: Request, response: Response, db:
 
     db.commit()
 
-    csrf_token = create_csrf_token()
-    access_token = create_access_token(subject=user.id, extra={"csrf": csrf_token})
-    _set_auth_cookies(response, access_token=access_token, csrf_token=csrf_token)
+    if payload.organization_name:
+        # Org owner: a full, revocable session (jti + csrf + UserSession + cookies),
+        # the same contract as login -- required now that get_current_user demands a
+        # jti on the cookie branch.
+        access_token = establish_login_session(
+            response,
+            request,
+            db,
+            user_id=user.id,
+            org_id=organization.id,
+            samesite="strict",
+        )
+        db.commit()
+        return Token(access_token=access_token)
+
+    # No organization yet: there is nothing to bind a revocable session to, so issue a
+    # stateless bearer token in the body only (no cookie -- a jti-less cookie would be
+    # rejected by get_current_user).
+    access_token = create_access_token(subject=user.id, extra={"csrf": create_csrf_token()})
     return Token(access_token=access_token)
 
 
@@ -188,29 +178,21 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
     session_service = SessionService(db)
     session_org_id = session_service.resolve_login_org_id(user.id, requested_org_id)
     if session_org_id is None:
-        # Keep compatibility for users with no active membership by issuing a legacy stateless token.
+        # No active membership: nothing to bind a revocable session to. Issue a stateless
+        # bearer token in the body only (no cookie -- a jti-less cookie is now rejected by
+        # get_current_user's jti requirement).
         access_token = create_access_token(subject=user.id, extra={"csrf": csrf_token})
-        _set_auth_cookies(response, access_token=access_token, csrf_token=csrf_token)
         return Token(access_token=access_token)
 
-    token_id = str(uuid.uuid4())
-    settings = get_settings()
-    expires_at = datetime.now(UTC) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(subject=user.id, extra={"jti": token_id, "csrf": csrf_token})
-    session_service.create_session(
-        org_id=session_org_id,
+    access_token = establish_login_session(
+        response,
+        request,
+        db,
         user_id=user.id,
-        token_id=token_id,
-        ip_address=IPAllowlistService.extract_request_ip(
-            x_forwarded_for=request.headers.get("X-Forwarded-For"),
-            client_host=request.client.host if request.client else None,
-            cf_connecting_ip=request.headers.get("CF-Connecting-IP"),
-        ),
-        user_agent=request.headers.get("user-agent"),
-        expires_at=expires_at,
+        org_id=session_org_id,
+        samesite="strict",
     )
     db.commit()
-    _set_auth_cookies(response, access_token=access_token, csrf_token=csrf_token)
     return Token(access_token=access_token)
 
 

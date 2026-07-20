@@ -90,8 +90,6 @@ class OIDCService:
             config=config,
             db=db,
         )
-        access_token = SSOService()._create_jwt_for_user(user=user, org_id=config.organization_id)
-
         AuditService(db).write_audit_log(
             action="sso.login",
             entity_type="users",
@@ -106,7 +104,9 @@ class OIDCService:
             },
         )
 
-        return {"access_token": access_token, "token_type": "bearer", "auth_method": "oidc"}
+        # The router establishes a real session (jti + csrf + UserSession + httpOnly
+        # cookies) from this; no token is minted here or returned in a body.
+        return {"user_id": user.id, "organization_id": config.organization_id, "auth_method": "oidc"}
 
     def _get_oidc_config(self, org_slug: str, db: Session) -> OIDCConfig | None:
         org = db.execute(

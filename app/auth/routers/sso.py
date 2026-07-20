@@ -2,11 +2,14 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
+from app.core.login_session import establish_login_session
+
 from app.auth.schemas.oidc import (
-    OIDCCallbackResponse,
     OIDCConfigCreate,
     OIDCConfigResponse,
     OIDCConfigUpdate,
@@ -14,7 +17,6 @@ from app.auth.schemas.oidc import (
     OIDCTestConfigResponse,
 )
 from app.auth.schemas.sso import (
-    SSOCallbackResponse,
     SSOConfigCreate,
     SSOConfigResponse,
     SSOConfigUpdate,
@@ -56,17 +58,38 @@ def initiate_sso(org_slug: str, request: Request, db: Session = Depends(get_db))
     return SSOInitiateResponse(redirect_url=redirect_url)
 
 
-@router.post("/auth/sso/{org_slug}/callback", response_model=SSOCallbackResponse)
+def _complete_sso_login(request: Request, db: Session, payload: dict) -> RedirectResponse:
+    """Turn a validated SSO/OIDC callback into a real session and redirect to the SPA.
+
+    Sets the cookies on the RedirectResponse itself (an injected Response is ignored
+    once a Response object is returned). SameSite=Lax so the cookie survives the
+    cross-site top-level navigation from the identity provider. No token in the body.
+    """
+    landing = f"{get_settings().FRONTEND_URL.rstrip('/')}/sso/callback"
+    redirect = RedirectResponse(url=landing, status_code=status.HTTP_303_SEE_OTHER)
+    establish_login_session(
+        redirect,
+        request,
+        db,
+        user_id=payload["user_id"],
+        org_id=payload["organization_id"],
+        extra_claims={"auth_method": payload["auth_method"]},
+        samesite="lax",
+    )
+    db.commit()
+    return redirect
+
+
+@router.post("/auth/sso/{org_slug}/callback")
 @rate_limiter.limiter.limit("10/minute")
 def sso_callback(
     org_slug: str,
     request: Request,
     saml_response: Annotated[str, Form(alias="SAMLResponse")],
     db: Session = Depends(get_db),
-) -> SSOCallbackResponse:
+) -> RedirectResponse:
     payload = SSOService().process_callback(org_slug=org_slug, saml_response=saml_response, request=request, db=db)
-    db.commit()
-    return SSOCallbackResponse(**payload)
+    return _complete_sso_login(request, db, payload)
 
 
 @router.post("/auth/oidc/{org_slug}/initiate", response_model=OIDCInitiateResponse)
@@ -77,7 +100,7 @@ def initiate_oidc(org_slug: str, request: Request, db: Session = Depends(get_db)
     return OIDCInitiateResponse(redirect_url=redirect_url)
 
 
-@router.get("/auth/oidc/{org_slug}/callback", response_model=OIDCCallbackResponse)
+@router.get("/auth/oidc/{org_slug}/callback")
 @rate_limiter.limiter.limit("10/minute")
 def oidc_callback(
     org_slug: str,
@@ -85,10 +108,9 @@ def oidc_callback(
     code: str,
     state: str,
     db: Session = Depends(get_db),
-) -> OIDCCallbackResponse:
+) -> RedirectResponse:
     payload = OIDCService().process_callback(org_slug=org_slug, code=code, state=state, db=db)
-    db.commit()
-    return OIDCCallbackResponse(**payload)
+    return _complete_sso_login(request, db, payload)
 
 
 @router.post(

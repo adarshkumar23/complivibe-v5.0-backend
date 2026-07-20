@@ -159,9 +159,11 @@ def test_oidc_callback_existing_user_jwks_rotation_and_audit(client, db_session,
             "id_token": _id_token(active_key["value"], nonce=nonce, email=org["email"], subject="existing-subject-1")
         },
     )
-    callback = client.get(f"/api/v1/auth/oidc/{slug}/callback", params={"code": "code-1", "state": state})
-    assert callback.status_code == 200, callback.text
-    assert callback.json()["auth_method"] == "oidc"
+    callback = client.get(
+        f"/api/v1/auth/oidc/{slug}/callback", params={"code": "code-1", "state": state}, follow_redirects=False
+    )
+    assert callback.status_code == 303, callback.text
+    assert "cv_session" in callback.cookies  # session cookie set; no access_token in the body
 
     active_key["value"] = keys[1]
     state_2, nonce_2 = _initiate(client, slug)
@@ -172,8 +174,10 @@ def test_oidc_callback_existing_user_jwks_rotation_and_audit(client, db_session,
             "id_token": _id_token(active_key["value"], nonce=nonce_2, email=org["email"], subject="existing-subject-2")
         },
     )
-    callback_2 = client.get(f"/api/v1/auth/oidc/{slug}/callback", params={"code": "code-2", "state": state_2})
-    assert callback_2.status_code == 200, callback_2.text
+    callback_2 = client.get(
+        f"/api/v1/auth/oidc/{slug}/callback", params={"code": "code-2", "state": state_2}, follow_redirects=False
+    )
+    assert callback_2.status_code == 303, callback_2.text
 
     users = db_session.execute(select(User).where(User.email == org["email"])).scalars().all()
     assert len(users) == 1
@@ -267,8 +271,10 @@ def test_oidc_callback_jit_provisions_new_user(client, db_session, monkeypatch):
         lambda self, config, code, redirect_uri, db=None: {"id_token": _id_token(key, nonce=nonce, email="new-oidc@example.com")},
     )
 
-    callback = client.get(f"/api/v1/auth/oidc/{slug}/callback", params={"code": "code", "state": state})
-    assert callback.status_code == 200, callback.text
+    callback = client.get(
+        f"/api/v1/auth/oidc/{slug}/callback", params={"code": "code", "state": state}, follow_redirects=False
+    )
+    assert callback.status_code == 303, callback.text
     user = db_session.execute(select(User).where(User.email == "new-oidc@example.com")).scalar_one_or_none()
     assert user is not None
     membership = db_session.execute(

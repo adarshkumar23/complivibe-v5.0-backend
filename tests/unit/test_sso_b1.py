@@ -216,10 +216,13 @@ def _latest_sso_failure(db_session, organization_id: str) -> AuditLog:
 
 
 def _post_saml_callback(client, slug: str, saml_response: str):
+    # follow_redirects=False: a successful callback now 303-redirects to the SPA with
+    # the session cookies set on the redirect, rather than returning a JSON body token.
     return client.post(
         f"/api/v1/auth/sso/{slug}/callback",
         headers={"host": APP_HOST},
         data={"SAMLResponse": saml_response},
+        follow_redirects=False,
     )
 
 
@@ -299,11 +302,10 @@ def test_sso_callback_valid_assertion_jit_and_existing_user_and_audit_log(client
         slug,
         _build_saml_response(slug=slug, email="jit-user@example.com", issuer="https://example.okta.com/app/issuer", private_pem=private_pem, cert_pem=cert_pem),
     )
-    assert callback.status_code == 200
-    payload = callback.json()
-    assert payload["auth_method"] == "sso"
-    assert payload["token_type"] == "bearer"
-    assert payload["access_token"]
+    assert callback.status_code == 303, callback.text
+    # No access_token in the body anymore -- the session rides httpOnly cookies.
+    assert "cv_session" in callback.cookies
+    assert "cv_csrf" in callback.cookies
 
     user = db_session.execute(select(User).where(User.email == "jit-user@example.com")).scalar_one_or_none()
     assert user is not None
@@ -321,7 +323,7 @@ def test_sso_callback_valid_assertion_jit_and_existing_user_and_audit_log(client
         slug,
         _build_saml_response(slug=slug, email="jit-user@example.com", issuer="https://example.okta.com/app/issuer", private_pem=private_pem, cert_pem=cert_pem),
     )
-    assert callback_existing.status_code == 200
+    assert callback_existing.status_code == 303
     after_count = db_session.execute(select(User)).scalars().all()
     assert len(after_count) == len(before_count)
 
@@ -487,7 +489,7 @@ def test_sso_callback_rejects_assertion_replay(client, db_session):
     )
 
     first = _post_saml_callback(client, slug, saml_response)
-    assert first.status_code == 200, first.text
+    assert first.status_code == 303, first.text
     second = _post_saml_callback(client, slug, saml_response)
     assert second.status_code == 401
     assert _latest_sso_failure(db_session, org["organization_id"]).metadata_json["validation_check"] == "replay"

@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.security import create_access_token, get_password_hash
+from app.core.security import get_password_hash
 from app.models.email_outbox import EmailOutbox
 from app.models.membership import Membership
 from app.models.organization import Organization
@@ -113,8 +113,6 @@ class SSOService:
             )
             raise
 
-        token = self._create_jwt_for_user(user=user, org_id=config.organization_id)
-
         AuditService(db).write_audit_log(
             action="sso.login",
             entity_type="users",
@@ -131,9 +129,12 @@ class SSOService:
             user_agent=request.headers.get("User-Agent"),
         )
 
+        # The router turns this into a real, revocable session (jti + csrf + UserSession
+        # + httpOnly cookies) via establish_login_session -- the SAME contract as
+        # password login. The token is no longer minted here or delivered in a body.
         return {
-            "access_token": token,
-            "token_type": "bearer",
+            "user_id": user.id,
+            "organization_id": config.organization_id,
             "auth_method": "sso",
         }
 
@@ -210,9 +211,6 @@ class SSOService:
                 SSOConfig.deleted_at.is_(None),
             )
         ).scalar_one_or_none()
-
-    def _create_jwt_for_user(self, user: User, org_id: uuid.UUID) -> str:
-        return create_access_token(subject=user.id, extra={"org_id": str(org_id), "auth_method": "sso"})
 
     def _build_sp_metadata_xml(self, org_slug: str, base_url: str, entity_id: str) -> str:
         return f"""<?xml version=\"1.0\"?>
