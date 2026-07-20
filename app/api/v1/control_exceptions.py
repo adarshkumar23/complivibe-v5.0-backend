@@ -5,7 +5,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.compliance.services.control_exception_service import ControlExceptionService
-from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
+from app.core.deps import (
+    get_current_active_user,
+    get_current_organization,
+    get_db,
+    require_org_membership,
+    require_permission,
+)
 from app.models.control_exception import ControlException
 from app.models.control_exception_approval import ControlExceptionApproval
 from app.models.membership import Membership
@@ -177,7 +183,11 @@ def approve_control_exception(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
-    _: Membership = Depends(require_permission("exceptions:approve")),
+    # The endpoint gate is org membership, NOT exceptions:approve. Authority to
+    # approve is decided per approval step inside the service: an assigned approver
+    # may clear their own step, and exceptions:override is the break-glass. Keeping
+    # exceptions:approve here would collapse override back into the endpoint gate.
+    _: Membership = Depends(require_org_membership),
 ) -> ControlExceptionRead:
     row = ControlExceptionService(db).approve(
         exception_id=exception_id,

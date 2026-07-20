@@ -110,6 +110,7 @@ PERMISSIONS: dict[str, str] = {
     "controls:read": "Read controls",
     "controls:write": "Write controls",
     "exceptions:approve": "Approve or reject control exception requests",
+    "exceptions:override": "Override the control-exception approval chain (approve out of assigned order, as a non-assigned approver, or without a chain)",
     "technical_controls:manage": "Register technical agents and manage technical control rules",
     "technical_controls:view": "Read technical control test results and summaries",
     "identity_governance:read": "Read non-human identity inventory and orphan-scan results",

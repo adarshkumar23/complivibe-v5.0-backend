@@ -213,11 +213,25 @@ class ControlExceptionService:
             .order_by(ControlExceptionApproval.sequence.asc(), ControlExceptionApproval.created_at.asc())
         ).scalars().all()
 
+        # Override authority is a DISTINCT permission from exceptions:approve.
+        #
+        # exceptions:approve is carried by ordinary approver roles (reviewer,
+        # compliance_manager via assignment) and -- crucially -- no longer gates
+        # the approve endpoint: that gate is now plain org membership. So an
+        # ordinary approver reaches this code and is held to the per-step and
+        # distinct-identity guards below. Override (exceptions:override) is held
+        # only by owner/admin and is the deliberate break-glass that bypasses
+        # those guards.
+        #
+        # This is the fix for the chain collapse: previously has_override_permission
+        # was keyed on exceptions:approve, the very permission the endpoint already
+        # required, so it was True for every caller who could reach here and both
+        # guards were dead code -- one identity could clear an entire chain.
         has_override_permission = RBACService.user_has_permission(
             self.db,
             approver_user_id,
             org_id,
-            "exceptions:approve",
+            "exceptions:override",
         )
         is_in_chain = any(step.approver_user_id == approver_user_id for step in chain)
         if chain and not (is_in_chain or has_override_permission):
@@ -226,7 +240,40 @@ class ControlExceptionService:
                 detail="Approver is not authorized for this approval chain",
             )
 
+        # No approval chain means there is no assigned-approver contract and no
+        # four-eyes intent -- it is a single-approver decision. Since the endpoint
+        # gate moved from exceptions:approve to plain membership, re-require
+        # exceptions:approve here so a bare member cannot approve a chainless
+        # exception. This preserves the pre-fix authority for the chainless path
+        # (owner/admin/reviewer hold exceptions:approve); override is only about
+        # bypassing the CHAIN guards above, not about chainless approval.
+        if not chain:
+            has_approve_permission = RBACService.user_has_permission(
+                self.db,
+                approver_user_id,
+                org_id,
+                "exceptions:approve",
+            )
+            if not has_approve_permission:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Approving an exception without an approval chain requires exceptions:approve",
+                )
+
         if chain:
+            # Distinct identity across steps (four-eyes): a single person may not
+            # clear more than one step of the same chain. Keyed on the actual
+            # decider so an override-approved step also counts. Override bypasses.
+            already_decided = any(
+                step.status == "approved" and step.decided_by_user_id == approver_user_id
+                for step in chain
+            )
+            if already_decided and not has_override_permission:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Approver has already approved a step in this approval chain",
+                )
+
             current_step = next((step for step in chain if step.status == "pending"), None)
             if current_step is None:
                 raise HTTPException(
@@ -242,6 +289,7 @@ class ControlExceptionService:
             current_step.status = "approved"
             current_step.decision_notes = decision_notes
             current_step.decided_at = self.utcnow()
+            current_step.decided_by_user_id = approver_user_id
             self.db.flush()
 
             AuditService(self.db).write_audit_log(
