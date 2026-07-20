@@ -78,6 +78,8 @@ def _attestation_read(row: ExportAttestation) -> ExportAttestationRead:
         attestation_signature=row.attestation_signature,
         signing_key_id=row.signing_key_id,
         signature_algorithm=row.signature_algorithm,
+        valid_from=row.valid_from,
+        not_after=row.not_after,
         metadata_json=row.metadata_json,
         created_at=row.created_at,
     )
@@ -282,6 +284,8 @@ def get_export_package(
         signature_algorithm=row.signature_algorithm,
         signing_key_id=row.signing_key_id,
         integrity_signature=row.integrity_signature,
+        valid_from=row.valid_from,
+        not_after=row.not_after,
         package_json=row.package_json,
     )
 

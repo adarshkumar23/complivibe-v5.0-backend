@@ -165,6 +165,8 @@ class ExportService:
             "integrity_signature": row.integrity_signature,
             "signing_key_id": row.signing_key_id,
             "signature_algorithm": row.signature_algorithm,
+            "valid_from": row.valid_from,
+            "not_after": row.not_after,
             "locked_until": row.locked_until,
             "retention_until": row.retention_until,
             "legal_hold": row.legal_hold,

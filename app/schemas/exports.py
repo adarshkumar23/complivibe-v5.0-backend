@@ -40,6 +40,11 @@ class ExportJobRead(BaseModel):
     integrity_signature: str | None = None
     signing_key_id: str | None = None
     signature_algorithm: str | None = None
+    # The signed validity window (0318). Both are covered by integrity_signature, so a
+    # reader needs them to know whether the signature it is looking at is still good --
+    # without having to call the verify endpoint to find out.
+    valid_from: datetime | None = None
+    not_after: datetime | None = None
     locked_until: datetime | None = None
     retention_until: datetime | None = None
     legal_hold: bool
@@ -105,6 +110,8 @@ class ExportPackageResponse(BaseModel):
     signature_algorithm: str | None = None
     signing_key_id: str | None = None
     integrity_signature: str | None = None
+    valid_from: datetime | None = None
+    not_after: datetime | None = None
     package_json: dict
 
 
@@ -164,6 +171,8 @@ class ExportAttestationRead(BaseModel):
     attestation_signature: str | None = None
     signing_key_id: str | None = None
     signature_algorithm: str | None = None
+    valid_from: datetime | None = None
+    not_after: datetime | None = None
     metadata_json: dict | None = None
     created_at: datetime
 
