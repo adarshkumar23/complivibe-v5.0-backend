@@ -203,6 +203,7 @@ DIAGNOSTIC_EXPORT_DIFF_GATING_COMPARE_PRESET_PINNING_CAVEAT = (
 )
 POLICY_DIFF_GATING_COMPARE_PRESET_ASSIGNMENT_DIAGNOSTIC_EXPORT_PURPOSE = "preset_assignment_diagnostic_export"
 POLICY_DIFF_GATING_COMPARE_PRESET_ASSIGNMENT_DIAGNOSTIC_EXPORT_SIGNATURE_ALGORITHM = "HMAC-SHA256"
+DIAGNOSTIC_EXPORT_VALIDITY_DAYS = 365
 PRESET_ASSIGNMENT_DIAGNOSTIC_EXPORT_DIFF_REASON_CODE_CATALOG: list[dict[str, str]] = [
     {
         "code": "BASE_EXPORT_SIGNATURE_INVALID",
@@ -9801,6 +9802,11 @@ class AISystemGovernanceSequenceService:
                 "critical_contexts_count": int(report.critical_contexts_count),
             },
             "generated_at": generated_at.isoformat(),
+            # Validity window is part of the signed canonical payload -> tamper-evident,
+            # and enforced at verify (mirrors the export/attestation fix for consistency;
+            # this path already enforces revocation + per-key-id signing).
+            "valid_from": generated_at.isoformat(),
+            "not_after": (generated_at + timedelta(days=DIAGNOSTIC_EXPORT_VALIDITY_DAYS)).isoformat(),
             "caveat": POLICY_DIFF_GATING_COMPARE_PRESET_ASSIGNMENT_DIAGNOSTIC_EXPORT_CAVEAT,
         }
 
@@ -9837,6 +9843,8 @@ class AISystemGovernanceSequenceService:
                 "diagnostic_code_changes_count": int(report.diagnostic_code_changes_count),
             },
             "generated_at": generated_at.isoformat(),
+            "valid_from": generated_at.isoformat(),
+            "not_after": (generated_at + timedelta(days=DIAGNOSTIC_EXPORT_VALIDITY_DAYS)).isoformat(),
             "caveat": POLICY_DIFF_GATING_COMPARE_PRESET_ASSIGNMENT_DIAGNOSTIC_EXPORT_CAVEAT,
         }
 
@@ -10007,11 +10015,33 @@ class AISystemGovernanceSequenceService:
             recomputed_signature = self._legacy_hmac_signature(recomputed_sha256)
             valid_signature = recomputed_signature == row.internal_signature
 
-        trusted = valid_hash and valid_signature and row.status == "generated" and key_status not in {"revoked", "missing"}
+        # Validity-window enforcement (consistency with the export/attestation fix). The
+        # window lives in the signed canonical payload, so it is tamper-evident; an
+        # expired diagnostic export is no longer trusted, with a distinct "expired" flag
+        # separate from the existing revocation ("revoked") and key states.
+        not_after_raw = payload.get("not_after") if isinstance(payload, dict) else None
+        expired = False
+        if isinstance(not_after_raw, str) and not_after_raw:
+            try:
+                not_after = datetime.fromisoformat(not_after_raw)
+                if not_after.tzinfo is None:
+                    not_after = not_after.replace(tzinfo=UTC)
+                expired = self.now() > not_after
+            except ValueError:
+                expired = False
+
+        trusted = (
+            valid_hash
+            and valid_signature
+            and row.status == "generated"
+            and key_status not in {"revoked", "missing"}
+            and not expired
+        )
         return {
             "valid_hash": bool(valid_hash),
             "valid_signature": bool(valid_signature),
             "trusted": bool(trusted),
+            "expired": bool(expired),
             "canonical_payload_sha256": row.canonical_payload_sha256,
             "recomputed_sha256": recomputed_sha256,
             "signature_algorithm": row.signature_algorithm,

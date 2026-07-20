@@ -13,6 +13,9 @@ class ExportJobCreate(BaseModel):
     period_start: datetime | None = None
     period_end: datetime | None = None
     metadata_json: dict | None = None
+    # Optional shorter signature validity window (days). Omit for the 1-year default;
+    # a value above 365 is clamped down -- callers may only request a SHORTER window.
+    validity_days: int | None = Field(default=None, ge=1)
 
 
 class ExportJobRead(BaseModel):
@@ -115,6 +118,10 @@ class ExportVerifyResponse(BaseModel):
     valid: bool
     checksum_match: bool
     signature_match: bool | None = None
+    expired: bool = False
+    revoked: bool = False
+    reason: str | None = None
+    not_after: datetime | None = None
     checked_at: datetime
 
 

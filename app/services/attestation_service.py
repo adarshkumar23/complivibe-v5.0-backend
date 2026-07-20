@@ -2,8 +2,10 @@ import hashlib
 import hmac
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
+
+ATTESTATION_VALIDITY_DAYS = 365
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -63,6 +65,10 @@ class AttestationService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Export checksum missing")
 
         attested_at = self.now()
+        valid_from = attested_at
+        not_after = attested_at + timedelta(days=ATTESTATION_VALIDITY_DAYS)
+        # valid_from/not_after are part of the signed payload, so the attestation's own
+        # validity window is tamper-evident, not merely stored beside it.
         payload = {
             "organization_id": str(job.organization_id),
             "export_job_id": str(job.id),
@@ -70,6 +76,8 @@ class AttestationService:
             "statement": statement,
             "attested_by_user_id": str(actor_user_id),
             "attested_at": attested_at.isoformat(),
+            "valid_from": valid_from.isoformat(),
+            "not_after": not_after.isoformat(),
             "export_checksum_sha256": job.checksum_sha256,
             "export_integrity_signature": job.integrity_signature,
         }
@@ -84,6 +92,8 @@ class AttestationService:
             status="active",
             attested_by_user_id=actor_user_id,
             attested_at=attested_at,
+            valid_from=valid_from,
+            not_after=not_after,
             export_checksum_sha256=job.checksum_sha256,
             export_integrity_signature=job.integrity_signature,
             attestation_checksum_sha256=attestation_checksum,

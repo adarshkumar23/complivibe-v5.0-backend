@@ -29,6 +29,9 @@ class ExportAttestation(UUIDPrimaryKeyMixin, OrganizationOwnedMixin, Base):
     export_integrity_signature: Mapped[str | None] = mapped_column(String(256), nullable=True)
     attestation_checksum_sha256: Mapped[str] = mapped_column(String(128), nullable=False)
     attestation_signature: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # Signature validity window, embedded in the signed attestation payload (tamper-evident).
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    not_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     signing_key_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     signature_algorithm: Mapped[str | None] = mapped_column(String(64), nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)

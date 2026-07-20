@@ -93,6 +93,12 @@ def create_export_job(
     _: Membership = Depends(require_permission("exports:write")),
 ) -> ExportJobRead:
     service = ExportService(db)
+    # A requested shorter validity window is carried on metadata_json so run_job can read
+    # it when it signs (the signing key never leaves the service; validity_days is only an
+    # input, and the enforced not_after is stored in its own signed column).
+    metadata_json = dict(payload.metadata_json or {})
+    if payload.validity_days is not None:
+        metadata_json["validity_days"] = payload.validity_days
     row = service.create_job(
         organization_id=organization.id,
         export_type=payload.export_type,
@@ -102,7 +108,7 @@ def create_export_job(
         framework_id=payload.framework_id,
         period_start=payload.period_start,
         period_end=payload.period_end,
-        metadata_json=payload.metadata_json,
+        metadata_json=metadata_json or None,
         requested_by_user_id=current_user.id,
     )
     AuditService(db).write_audit_log(
@@ -311,7 +317,14 @@ def verify_export_job(
         entity_id=row.id,
         organization_id=organization.id,
         actor_user_id=current_user.id,
-        after_json={"valid": result["valid"], "checksum_match": result["checksum_match"], "signature_match": result["signature_match"]},
+        after_json={
+            "valid": result["valid"],
+            "checksum_match": result["checksum_match"],
+            "signature_match": result["signature_match"],
+            "expired": result["expired"],
+            "revoked": result["revoked"],
+            "reason": result["reason"],
+        },
         metadata_json={"source": "api"},
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
@@ -322,6 +335,10 @@ def verify_export_job(
         valid=result["valid"],
         checksum_match=result["checksum_match"],
         signature_match=result["signature_match"],
+        expired=result["expired"],
+        revoked=result["revoked"],
+        reason=result["reason"],
+        not_after=result["not_after"],
         checked_at=result["checked_at"],
     )
 

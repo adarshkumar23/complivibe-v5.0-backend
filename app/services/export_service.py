@@ -50,6 +50,30 @@ INTEGRITY_ALGORITHM = "HMAC-SHA256"
 SIGNING_KEY_ID = "app-default-hmac-v1"
 PACKAGE_VERSION = "1.0"
 
+# Every signed export gets a validity window; the default is one year and a caller may
+# request a SHORTER one at export time (a longer request is clamped down to the default).
+DEFAULT_VALIDITY_DAYS = 365
+MAX_VALIDITY_DAYS = 365
+
+
+def signing_secret_for_key_id(key_id: str | None) -> bytes:
+    """Resolve the HMAC secret for a recorded signing_key_id.
+
+    This is the extension point for key rotation and the reason verify now CONSULTS the
+    recorded key-id instead of always recomputing from a hardcoded constant: a future
+    rotation registers new key-ids here while retaining older ones, so historical exports
+    keep verifying rather than being invalidated by a code change. Today every key-id --
+    the default SIGNING_KEY_ID and legacy NULL alike -- maps to SECRET_KEY.
+
+    LIMITATION: this does NOT make rotation of SECRET_KEY itself safe. HMAC is symmetric,
+    so signatures produced under an old SECRET_KEY verify only while that old key is still
+    returned here for its key-id; rotating SECRET_KEY without retaining the old value for
+    verification would invalidate everything signed under it. That is an inherent property
+    of staying on symmetric HMAC, not a defect in this fix.
+    """
+    _ = key_id
+    return get_settings().SECRET_KEY.encode("utf-8")
+
 EXPORT_CAVEAT = (
     "This export is generated from CompliVibe system records. It is not a legal opinion, "
     "regulatory approval, audit certification, or proof of compliance by itself."
@@ -174,9 +198,44 @@ class ExportService:
         canonical = self._canonical_json(self._checksum_payload(package_json)).encode("utf-8")
         return hashlib.sha256(canonical).hexdigest()
 
-    def compute_integrity_signature(self, checksum_sha256: str) -> str:
-        secret = get_settings().SECRET_KEY.encode("utf-8")
-        return hmac.new(secret, checksum_sha256.encode("utf-8"), hashlib.sha256).hexdigest()
+    def validity_window(self, validity_days: int | None = None) -> tuple[datetime, datetime]:
+        """(valid_from, not_after) for a new signature. Default one year; a caller may
+        request a shorter window, but never a longer one."""
+        valid_from = self.now()
+        days = DEFAULT_VALIDITY_DAYS if validity_days is None else max(1, min(int(validity_days), MAX_VALIDITY_DAYS))
+        return valid_from, valid_from + timedelta(days=days)
+
+    def compute_integrity_signature(
+        self,
+        checksum_sha256: str,
+        *,
+        valid_from: datetime | None = None,
+        not_after: datetime | None = None,
+        key_id: str | None = SIGNING_KEY_ID,
+    ) -> str:
+        """HMAC over the package checksum bound to the validity window.
+
+        When a window is present it is part of the signed message, so tampering with the
+        stored valid_from/not_after breaks the signature (the window is tamper-evident,
+        not merely stored alongside). When both are None the legacy window-less message is
+        used, so signatures produced before this window existed still verify.
+        """
+        secret = signing_secret_for_key_id(key_id)
+        if valid_from is None and not_after is None:
+            message = checksum_sha256
+        else:
+            message = f"{checksum_sha256}|{self._iso(valid_from)}|{self._iso(not_after)}"
+        return hmac.new(secret, message.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    @staticmethod
+    def _iso(value: datetime | None) -> str:
+        # Canonical UTC representation so the signed window string is identical at signing
+        # time (aware datetime) and at verify time (some backends round-trip it naive).
+        if value is None:
+            return ""
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value.astimezone(UTC).isoformat()
 
     def _add_event(
         self,
@@ -234,6 +293,7 @@ class ExportService:
         file_size_bytes: int,
         checksum_sha256: str,
         requested_by_user_id: uuid.UUID,
+        validity_days: int | None = None,
     ) -> ExportJob:
         job = self.create_job(
             organization_id=organization_id,
@@ -265,6 +325,7 @@ class ExportService:
         )
 
         completed_at = self.now()
+        valid_from, not_after = self.validity_window(validity_days)
         manifest = {
             "export_job_id": str(job.id),
             "source_report_id": str(source_report_id) if source_report_id else None,
@@ -272,6 +333,8 @@ class ExportService:
             "file_format": file_format,
             "file_size_bytes": file_size_bytes,
             "generated_at": completed_at.isoformat(),
+            "valid_from": valid_from.isoformat(),
+            "not_after": not_after.isoformat(),
             "package_checksum_sha256": checksum_sha256,
         }
         provenance = {
@@ -294,7 +357,11 @@ class ExportService:
         job.manifest_json = manifest
         job.provenance_json = provenance
         job.checksum_sha256 = checksum_sha256
-        job.integrity_signature = self.compute_integrity_signature(checksum_sha256)
+        job.valid_from = valid_from
+        job.not_after = not_after
+        job.integrity_signature = self.compute_integrity_signature(
+            checksum_sha256, valid_from=valid_from, not_after=not_after, key_id=SIGNING_KEY_ID
+        )
         job.signing_key_id = SIGNING_KEY_ID
         job.signature_algorithm = INTEGRITY_ALGORITHM
         job.status = "completed"
@@ -649,6 +716,7 @@ class ExportService:
         try:
             data, included_sections, source_counts = self._build_data_for_type(job=job)
             generated_at = self.now()
+            valid_from, not_after = self.validity_window((job.metadata_json or {}).get("validity_days"))
             manifest = {
                 "export_job_id": str(job.id),
                 "source_report_id": str(job.source_report_id) if job.source_report_id else None,
@@ -658,6 +726,8 @@ class ExportService:
                 "included_sections": included_sections,
                 "source_counts": source_counts,
                 "generated_at": generated_at.isoformat(),
+                "valid_from": valid_from.isoformat(),
+                "not_after": not_after.isoformat(),
                 "package_checksum_sha256": None,
                 "integrity_signature_algorithm": INTEGRITY_ALGORITHM,
                 "signing_key_id": SIGNING_KEY_ID,
@@ -682,13 +752,17 @@ class ExportService:
             }
 
             checksum = self.compute_checksum(package_json)
-            signature = self.compute_integrity_signature(checksum)
+            signature = self.compute_integrity_signature(
+                checksum, valid_from=valid_from, not_after=not_after, key_id=SIGNING_KEY_ID
+            )
             package_json["manifest"]["package_checksum_sha256"] = checksum
 
             job.package_json = package_json
             job.manifest_json = manifest | {"package_checksum_sha256": checksum}
             job.provenance_json = provenance
             job.checksum_sha256 = checksum
+            job.valid_from = valid_from
+            job.not_after = not_after
             job.integrity_signature = signature
             job.signing_key_id = SIGNING_KEY_ID
             job.signature_algorithm = INTEGRITY_ALGORITHM
@@ -771,15 +845,47 @@ class ExportService:
         recomputed_checksum = self.compute_checksum(job.package_json)
         checksum_match = recomputed_checksum == job.checksum_sha256
 
+        # Recompute the signature over the STORED validity window and under the RECORDED
+        # signing_key_id, so tampering with the window breaks the signature and a future
+        # key rotation stays verifiable without invalidating historical exports.
         signature_match: bool | None
         if job.signature_algorithm == INTEGRITY_ALGORITHM and job.integrity_signature is not None:
-            recomputed_signature = self.compute_integrity_signature(recomputed_checksum)
+            recomputed_signature = self.compute_integrity_signature(
+                recomputed_checksum,
+                valid_from=job.valid_from,
+                not_after=job.not_after,
+                key_id=job.signing_key_id,
+            )
             signature_match = recomputed_signature == job.integrity_signature
         else:
             signature_match = None
 
-        valid = checksum_match and (signature_match if signature_match is not None else True)
         checked_at = self.now()
+        # Expiry: a signature past its not_after is no longer valid. Normalise the stored
+        # value to UTC-aware first (some backends round-trip a naive datetime).
+        not_after = job.not_after
+        if not_after is not None and not_after.tzinfo is None:
+            not_after = not_after.replace(tzinfo=UTC)
+        expired = bool(not_after is not None and checked_at > not_after)
+        # Revocation: an export whose attestation sign-off has been revoked (with no
+        # active attestation remaining) fails verification -- the DB "revoked" flag now
+        # actually affects trust, instead of the artifact validating cryptographically
+        # forever regardless of it.
+        revoked = job.attestation_status == "revoked"
+
+        crypto_ok = checksum_match and (signature_match if signature_match is not None else True)
+        valid = crypto_ok and not expired and not revoked
+
+        if not checksum_match:
+            reason = "checksum_mismatch"
+        elif signature_match is False:
+            reason = "invalid_signature"
+        elif revoked:
+            reason = "revoked"
+        elif expired:
+            reason = "expired"
+        else:
+            reason = "valid"
 
         self._add_event(
             job=job,
@@ -790,6 +896,9 @@ class ExportService:
                 "valid": valid,
                 "checksum_match": checksum_match,
                 "signature_match": signature_match,
+                "expired": expired,
+                "revoked": revoked,
+                "reason": reason,
                 "checked_at": checked_at.isoformat(),
             },
             created_by_user_id=actor_user_id,
@@ -799,6 +908,10 @@ class ExportService:
             "valid": valid,
             "checksum_match": checksum_match,
             "signature_match": signature_match,
+            "expired": expired,
+            "revoked": revoked,
+            "reason": reason,
+            "not_after": job.not_after,
             "checked_at": checked_at,
         }
 
