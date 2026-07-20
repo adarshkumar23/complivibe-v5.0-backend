@@ -87,21 +87,34 @@ class SCIMService:
         full_name = f"{given} {family}".strip()
         is_active = bool(scim_payload.get("active", True))
 
-        existing = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+        # Tenant guard: resolve an existing user ONLY within THIS org's membership
+        # (the same join used by _get_org_user_with_membership and by the router's own
+        # status-code lookup). A SCIM token must never resolve, mutate, or absorb a
+        # user who belongs to another organization.
+        existing = db.execute(
+            select(User)
+            .join(Membership, Membership.user_id == User.id)
+            .where(User.email == email, Membership.organization_id == org_id)
+        ).scalar_one_or_none()
         if existing is not None:
-            membership = db.execute(
-                select(Membership).where(
-                    Membership.user_id == existing.id,
-                    Membership.organization_id == org_id,
-                )
-            ).scalar_one_or_none()
-            if membership is None:
-                membership = self._create_membership(existing.id, org_id, role_name="member", db=db)
+            membership = self._get_org_membership(org_id, existing.id, db)
             self._set_membership_active(existing, membership, is_active, db)
             if full_name:
+                # Safe: `existing` is a member of THIS org. update_user / patch_user are
+                # likewise org-scoped, so a foreign tenant's token can never reach here
+                # to overwrite the shared User.full_name.
                 existing.full_name = full_name
             db.flush()
             return self._to_scim_user(existing, active=self._scim_active(existing, membership))
+
+        # Not a member of this org. Because User.email is globally unique, an email that
+        # already exists must belong to another tenant's user -- refuse rather than
+        # absorb it into this org, reactivate its global account, or rename it.
+        if db.execute(select(User.id).where(User.email == email)).scalar_one_or_none() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A user with this email already exists in another organization and cannot be provisioned here",
+            )
 
         user = User(
             email=email,
@@ -286,11 +299,13 @@ class SCIMService:
 
     @staticmethod
     def _set_membership_active(user: User, membership: Membership, is_active: bool, db: Session) -> None:
+        # Set THIS org's membership state, then recompute the shared User.is_active/status
+        # SYMMETRICALLY from all memberships -- never unconditionally force the global
+        # flag from one tenant's token. The user is active iff this membership is now
+        # active OR another org still has them active. (Deactivation and activation are
+        # handled by the same rule, so an org's SCIM token cannot flip the global account
+        # state on the strength of its own membership alone.)
         membership.status = "active" if is_active else "inactive"
-        if is_active:
-            user.is_active = True
-            user.status = "active"
-            return
 
         other_active_memberships = db.execute(
             select(func.count(Membership.id)).where(
@@ -299,9 +314,9 @@ class SCIMService:
                 Membership.status == "active",
             )
         ).scalar_one()
-        if other_active_memberships == 0:
-            user.is_active = False
-            user.status = "inactive"
+        has_any_active = is_active or other_active_memberships > 0
+        user.is_active = has_any_active
+        user.status = "active" if has_any_active else "inactive"
 
     @staticmethod
     def _create_membership(user_id: uuid.UUID, org_id: uuid.UUID, role_name: str, db: Session) -> Membership:

@@ -10,6 +10,7 @@ from app.compliance.services.offboarding_service import OffboardingService
 from app.models.audit_log import AuditLog
 from app.models.membership import Membership
 from app.models.organization import Organization
+from app.models.role import Role
 from app.models.scim_token import ScimToken
 from app.models.user import User
 from tests.helpers.auth_org import bootstrap_org_user
@@ -246,9 +247,26 @@ def test_scim_deprovision_does_not_disable_shared_user_in_other_org(client, db_s
     created_a = client.post("/api/v1/scim/v2/Users", headers=headers_a, json=payload)
     assert created_a.status_code == 201
     user_id = created_a.json()["id"]
-    created_b = client.post("/api/v1/scim/v2/Users", headers=headers_b, json=payload)
-    assert created_b.status_code == 201
-    assert created_b.json()["id"] == user_id
+
+    # The same person is ALSO a member of org B -- established through the normal
+    # (non-SCIM) membership path. A SCIM token may no longer absorb a user across
+    # tenants, so provisioning this existing user from org B's token is now rejected:
+    reject_b = client.post("/api/v1/scim/v2/Users", headers=headers_b, json=payload)
+    assert reject_b.status_code == 409, reject_b.text
+    role_b = (
+        db_session.query(Role)
+        .filter(Role.organization_id == UUID(org_b["organization_id"]), Role.name == "readonly")
+        .one()
+    )
+    db_session.add(
+        Membership(
+            organization_id=UUID(org_b["organization_id"]),
+            user_id=UUID(user_id),
+            role_id=role_b.id,
+            status="active",
+        )
+    )
+    db_session.commit()
 
     deleted_a = client.delete(f"/api/v1/scim/v2/Users/{user_id}", headers=headers_a)
     assert deleted_a.status_code == 204
