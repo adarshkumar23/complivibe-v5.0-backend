@@ -15,15 +15,12 @@ from tests.helpers.auth_org import bootstrap_org_user
 
 def _ingest_key(client, org_headers: dict[str, str]) -> str:
     response = client.post(
-        "/api/v1/data-observability/lineage/openmetadata/configure",
+        "/api/v1/integrations/ingest-keys",
         headers=org_headers,
-        json={
-            "base_url": "https://openmetadata.example.com",
-            "jwt_token": "dummy-token",
-        },
+        json={"key_type": "security"},
     )
-    assert response.status_code == 200
-    key = response.json().get("ingest_api_key")
+    assert response.status_code == 201, response.text
+    key = response.json().get("api_key")
     assert key
     return key
 

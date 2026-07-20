@@ -6,7 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
-from app.data_observability.services.lineage_service import LineageService
+from app.services.subsystem_ingest_key_service import SubsystemIngestKeyService
 from app.models.consent_record import ConsentRecord
 from app.models.data_asset import DataAsset
 from app.models.email_outbox import EmailOutbox
@@ -744,7 +744,7 @@ class ConsentService:
         return {"expired": expired}
 
     def resolve_org_by_api_key(self, raw_key: str) -> uuid.UUID:
-        return LineageService(self.db).resolve_org_by_api_key(raw_key)
+        return SubsystemIngestKeyService(self.db).require_org_by_key(raw_key, "consent")
 
     def receive_inbound_event(self, raw_key: str, payload) -> ConsentRecord:
         org_id = self.resolve_org_by_api_key(raw_key)

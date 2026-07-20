@@ -563,11 +563,11 @@ def test_p3_access_monitoring(client):
     ctx = bootstrap_org_user(client, email_prefix="p3-access")
     a = _create_asset(client, ctx["org_headers"], name="access_asset")
     cfg = client.post(
-        "/api/v1/data-observability/lineage/openmetadata/configure",
+        "/api/v1/integrations/ingest-keys",
         headers=ctx["org_headers"],
-        json={"base_url": "https://example.org", "jwt_token": "jwt-token", "org_api_key": "access-key-123456"},
+        json={"key_type": "access_monitoring"},
     )
-    key = cfg.json()["ingest_api_key"]
+    key = cfg.json()["api_key"]
     ev = client.post(
         "/api/v1/data-observability/access/events",
         headers={"X-CompliVibe-Key": key},
@@ -756,11 +756,11 @@ def test_p4_consent_inbound(client):
     me = client.get("/api/v1/auth/me", headers=ctx["org_headers"]).json()
     pa = client.post("/api/v1/privacy/ropa/activities", headers=ctx["org_headers"], json={"name": "A", "purpose": "P", "legal_basis": "consent", "owner_id": me["id"]})
     cfg = client.post(
-        "/api/v1/data-observability/lineage/openmetadata/configure",
+        "/api/v1/integrations/ingest-keys",
         headers=ctx["org_headers"],
-        json={"base_url": "https://example.org", "jwt_token": "jwt-token", "org_api_key": "consent-key-123456"},
+        json={"key_type": "consent"},
     )
-    key = cfg.json()["ingest_api_key"]
+    key = cfg.json()["api_key"]
     ev = client.post(
         "/api/v1/privacy/consent/events",
         headers={"X-CompliVibe-Key": key},

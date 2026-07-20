@@ -58,18 +58,15 @@ def _create_processing_activity(client, headers: dict[str, str], owner_id: str, 
     return response.json()
 
 
-def _configure_ingest_key(client, headers: dict[str, str], key: str = "privacy-ingest-key-12345") -> str:
+def _configure_ingest_key(client, headers: dict[str, str], key_type: str = "consent", key: str | None = None) -> str:
+    # Consent and cookies are now distinct inbound subsystems, each with its own key.
     response = client.post(
-        f"{LINEAGE_BASE}/openmetadata/configure",
+        "/api/v1/integrations/ingest-keys",
         headers=headers,
-        json={
-            "base_url": "https://openmetadata.example.test",
-            "jwt_token": "test-token",
-            "org_api_key": key,
-        },
+        json={"key_type": key_type},
     )
-    assert response.status_code == 200
-    return response.json()["ingest_api_key"]
+    assert response.status_code == 201, response.text
+    return response.json()["api_key"]
 
 
 def test_d88_notice_versioning_and_acknowledgement(client, db_session):
@@ -442,7 +439,7 @@ def test_item3_subject_identifier_is_real_one_way_hash_not_literal_placeholder(c
 
 def test_d87_cookie_registry_scan_and_public_banner(client, db_session):
     org = bootstrap_org_user(client, email_prefix="d87-org")
-    ingest_key = _configure_ingest_key(client, org["org_headers"], key="cookie-scan-key-12345")
+    ingest_key = _configure_ingest_key(client, org["org_headers"], key_type="cookies")
 
     created = client.post(
         f"{COOKIES_BASE}/cookies",

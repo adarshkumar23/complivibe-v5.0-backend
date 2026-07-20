@@ -34,17 +34,15 @@ def _create_asset(client, headers: dict[str, str], owner_id: str, name: str) -> 
     return response.json()["id"]
 
 
-def _configure_ingest_key(client, headers: dict[str, str], api_key: str) -> None:
+def _configure_ingest_key(client, headers: dict[str, str], api_key: str | None = None) -> str:
+    # Access-monitoring uses its own key_type now; return the provisioned key.
     response = client.post(
-        f"{LINEAGE_BASE}/openmetadata/configure",
+        "/api/v1/integrations/ingest-keys",
         headers=headers,
-        json={
-            "base_url": "https://openmetadata.example.com",
-            "jwt_token": "dummy-token",
-            "org_api_key": api_key,
-        },
+        json={"key_type": "access_monitoring"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 201, response.text
+    return response.json()["api_key"]
 
 
 def test_c79_data_incident_detection(client, db_session):
@@ -185,8 +183,7 @@ def test_c79_data_incident_detection(client, db_session):
     assert "stale_new_incidents_present" in summary_body["context_flags"]
 
     # Wire test: access anomaly breach creates incident.
-    ingest_key = "c79-ingest-key-12345"
-    _configure_ingest_key(client, org["org_headers"], ingest_key)
+    ingest_key = _configure_ingest_key(client, org["org_headers"])
 
     custom_rule = client.post(
         f"{ACCESS_BASE}/anomaly-rules",
@@ -336,8 +333,7 @@ def test_c80_data_observability_dashboard(client, db_session):
     assert q_pass.status_code == 201
 
     # Access anomaly incident for anomaly_count_7d.
-    ingest_key = "c80-ingest-key-12345"
-    _configure_ingest_key(client, org["org_headers"], ingest_key)
+    ingest_key = _configure_ingest_key(client, org["org_headers"])
     custom_rule = client.post(
         f"{ACCESS_BASE}/anomaly-rules",
         headers=org["org_headers"],

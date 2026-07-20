@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.geo import region_covers
 from app.data_observability.services.anomaly_detection_service import AnomalyDetectionService
 from app.data_observability.services.incident_detection_service import DataIncidentService
-from app.data_observability.services.lineage_service import LineageService
+from app.services.subsystem_ingest_key_service import SubsystemIngestKeyService
 from app.models.control_monitoring_alert import ControlMonitoringAlert
 from app.models.data_access_anomaly_rule import DataAccessAnomalyRule
 from app.models.data_access_log import DataAccessLog
@@ -553,4 +553,4 @@ class AccessMonitoringService:
         return row
 
     def resolve_org_by_api_key(self, raw_key: str) -> uuid.UUID:
-        return LineageService(self.db).resolve_org_by_api_key(raw_key)
+        return SubsystemIngestKeyService(self.db).require_org_by_key(raw_key, "access_monitoring")

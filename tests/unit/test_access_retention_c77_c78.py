@@ -33,17 +33,16 @@ def _create_asset(client, headers: dict[str, str], owner_id: str, *, name: str) 
     return response.json()["id"]
 
 
-def _configure_ingest_key(client, headers: dict[str, str], api_key: str) -> None:
+def _configure_ingest_key(client, headers: dict[str, str], api_key: str | None = None) -> str:
+    # Access-monitoring has its OWN key now (key_type "access_monitoring"), decoupled
+    # from the shared OpenMetadata/lineage key. Returns the provisioned key to use.
     response = client.post(
-        f"{LINEAGE_BASE}/openmetadata/configure",
+        "/api/v1/integrations/ingest-keys",
         headers=headers,
-        json={
-            "base_url": "https://openmetadata.example.com",
-            "jwt_token": "dummy-token",
-            "org_api_key": api_key,
-        },
+        json={"key_type": "access_monitoring"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 201, response.text
+    return response.json()["api_key"]
 
 
 def _ingest_event(
@@ -81,8 +80,7 @@ def _ingest_event(
 
 def test_c77_data_access_monitoring(client):
     org = bootstrap_org_user(client, email_prefix="c77-org")
-    ingest_key = "c77-ingest-key-12345"
-    _configure_ingest_key(client, org["org_headers"], ingest_key)
+    ingest_key = _configure_ingest_key(client, org["org_headers"])
 
     spike_asset_id = _create_asset(client, org["org_headers"], org["user_id"], name="c77_spike_asset")
     actor_asset_id = _create_asset(client, org["org_headers"], org["user_id"], name="c77_actor_asset")
@@ -293,8 +291,7 @@ def test_c77_data_access_monitoring(client):
 def test_c77_ingest_rejects_cross_tenant_actor_id(client, db_session):
     org_a = bootstrap_org_user(client, email_prefix="c77-actor-a")
     org_b = bootstrap_org_user(client, email_prefix="c77-actor-b")
-    ingest_key = "c77-cross-actor-key"
-    _configure_ingest_key(client, org_a["org_headers"], ingest_key)
+    ingest_key = _configure_ingest_key(client, org_a["org_headers"])
     asset_id = _create_asset(client, org_a["org_headers"], org_a["user_id"], name="c77_cross_actor_asset")
 
     response = client.post(
@@ -324,8 +321,7 @@ def test_c77_ingest_rejects_cross_tenant_actor_id(client, db_session):
 
 def test_c77_ingest_rejects_ambiguous_actor_and_negative_metrics(client):
     org = bootstrap_org_user(client, email_prefix="c77-ambiguous")
-    ingest_key = "c77-ambiguous-key"
-    _configure_ingest_key(client, org["org_headers"], ingest_key)
+    ingest_key = _configure_ingest_key(client, org["org_headers"])
     asset_id = _create_asset(client, org["org_headers"], org["user_id"], name="c77_ambiguous_asset")
 
     ambiguous_actor = client.post(

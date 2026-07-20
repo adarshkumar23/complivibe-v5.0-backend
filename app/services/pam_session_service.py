@@ -6,8 +6,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.data_observability.services.lineage_service import LineageService
 from app.models.pam_session_record import PAMSessionRecord
+from app.services.subsystem_ingest_key_service import SubsystemIngestKeyService
 from app.schemas.pam_session import PAMSessionIngestRequest, PAMSessionUpdateRequest
 from app.services.audit_service import AuditService
 
@@ -36,7 +36,10 @@ class PAMSessionService:
         return value.astimezone(UTC)
 
     def resolve_org_by_api_key(self, raw_key: str) -> uuid.UUID:
-        return LineageService(self.db).resolve_org_by_api_key(raw_key)
+        # PAM has its OWN inbound key now (key_type "pam"); it no longer shares the
+        # data-lineage/OpenMetadata key, so a leaked lineage/cookie/etc. key cannot
+        # forge PAM sessions and vice versa.
+        return SubsystemIngestKeyService(self.db).require_org_by_key(raw_key, "pam")
 
     @staticmethod
     def _validate_status(value: str, allowed: set[str], field: str) -> str:

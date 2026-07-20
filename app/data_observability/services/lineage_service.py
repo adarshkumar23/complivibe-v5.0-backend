@@ -18,6 +18,7 @@ from app.models.data_lineage_node import DataLineageNode
 from app.models.openmetadata_integration import OpenMetadataIntegration
 from app.services.audit_service import AuditService
 from app.services.secrets_service import SecretsService, legacy_key_from_named_setting
+from app.services.subsystem_ingest_key_service import SubsystemIngestKeyService
 from app.core.validation import validate_choice
 
 ALLOWED_NODE_TYPES = {
@@ -460,9 +461,11 @@ class LineageService:
         org_api_key: str | None = None,
     ) -> tuple[OpenMetadataIntegration, str | None]:
         ingest_key = org_api_key or secrets.token_urlsafe(24)
+        # The ingest key hash used to live (shared) inside this encrypted config as
+        # org_api_key_hash; it now lives in the per-subsystem key store under
+        # key_type "lineage" (provisioned below), so only the JWT stays in the config.
         config_payload = {
             "jwt_token": jwt_token,
-            "org_api_key_hash": self.hash_api_key(ingest_key),
         }
 
         row = self.db.execute(
@@ -491,6 +494,10 @@ class LineageService:
             row.is_active = True
             row.updated_at = now
         self.db.flush()
+        # Provision (or rotate) the lineage inbound key in the per-subsystem key store,
+        # honouring an operator-supplied org_api_key. This is the credential the
+        # OpenLineage/OpenMetadata push agents present as X-CompliVibe-Key.
+        SubsystemIngestKeyService(self.db).provision_key(org_id, "lineage", created_by, raw_key=ingest_key)
         return row, ingest_key
 
     def get_openmetadata_status(self, org_id: uuid.UUID) -> OpenMetadataIntegration | None:
@@ -504,22 +511,12 @@ class LineageService:
         ).scalars().all()
 
     def resolve_org_by_api_key(self, raw_key: str) -> uuid.UUID:
-        if not raw_key:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
-        key_hash = self.hash_api_key(raw_key)
-
-        integrations = self.list_active_openmetadata_integrations()
-        for integration in integrations:
-            try:
-                config = self.decrypt_config(
-                    integration.config_json, db=self.db, organization_id=integration.organization_id,
-                    entity_id=integration.id,
-                )
-            except Exception:
-                continue
-            if config.get("org_api_key_hash") == key_hash:
-                return integration.organization_id
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+        # Data-lineage inbound now authenticates with its OWN key (key_type "lineage")
+        # in the per-subsystem key store, resolved by a single indexed hash lookup --
+        # not the previous O(active-orgs) decrypt-and-compare loop over every org's
+        # OpenMetadata config, and no longer shared with PAM/cookies/consent/security/
+        # access-monitoring.
+        return SubsystemIngestKeyService(self.db).require_org_by_key(raw_key, "lineage")
 
     def _get_or_create_node_by_name(self, org_id: uuid.UUID, name: str, node_type: str, system_name: str | None = None) -> tuple[DataLineageNode, bool]:
         row = self.db.execute(

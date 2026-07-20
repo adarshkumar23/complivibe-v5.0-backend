@@ -8,18 +8,13 @@ ACCESS_BASE = "/api/v1/data-observability/access"
 
 def test_verify_unique_actors_counts_external_machine_actors(client):
     org = bootstrap_org_user(client, email_prefix="partD-actors")
-    ingest_key = "partD-ingest-key-12345"
-
     configured = client.post(
-        f"{LINEAGE_BASE}/openmetadata/configure",
+        "/api/v1/integrations/ingest-keys",
         headers=org["org_headers"],
-        json={
-            "base_url": "https://openmetadata.example.com",
-            "jwt_token": "dummy-token",
-            "org_api_key": ingest_key,
-        },
+        json={"key_type": "access_monitoring"},
     )
-    assert configured.status_code == 200, configured.text
+    assert configured.status_code == 201, configured.text
+    ingest_key = configured.json()["api_key"]
 
     asset = client.post(
         ASSETS_BASE,

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.compliance.services.issue_service import IssueService
 from app.compliance.services.technical_control_service import TechnicalControlResultService
-from app.data_observability.services.lineage_service import LineageService
+from app.services.subsystem_ingest_key_service import SubsystemIngestKeyService
 from app.models.control import Control
 from app.models.control_test_definition import ControlTestDefinition
 from app.models.framework import Framework
@@ -32,7 +32,7 @@ class SecurityIngestBaseService:
         return datetime.now(UTC)
 
     def resolve_org_by_api_key(self, raw_key: str) -> uuid.UUID:
-        return LineageService(self.db).resolve_org_by_api_key(raw_key)
+        return SubsystemIngestKeyService(self.db).require_org_by_key(raw_key, "security")
 
     @staticmethod
     def _rule_severity(value: str) -> str:

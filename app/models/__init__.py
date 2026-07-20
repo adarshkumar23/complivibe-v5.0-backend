@@ -370,6 +370,7 @@ from app.models.governance_graph_traversal_result import GovernanceGraphTraversa
 from app.models.governance_graph_change_event import GovernanceGraphChangeEvent
 from app.models.ai_system_obligation_link import AiSystemObligationLink
 from app.models.patent_scoped_key import PatentScopedKey
+from app.models.subsystem_ingest_key import SubsystemIngestKey
 from app.models.ai_approval_envelope import AIApprovalEnvelope
 from app.models.ai_envelope_approval import AIEnvelopeApproval
 from app.models.ai_monitoring_config import AIMonitoringConfig
@@ -720,6 +721,7 @@ __all__ = [
     "GovernanceGraphChangeEvent",
     "AiSystemObligationLink",
     "PatentScopedKey",
+    "SubsystemIngestKey",
     "AIApprovalEnvelope",
     "AIEnvelopeApproval",
     "AIMonitoringConfig",

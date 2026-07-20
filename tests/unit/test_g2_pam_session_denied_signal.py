@@ -39,18 +39,14 @@ def _grant_pam_permissions(db_session, org_id: str, user_id: str) -> None:
     db_session.commit()
 
 
-def _configure_ingest_key(client, headers: dict[str, str], api_key: str) -> str:
+def _configure_ingest_key(client, headers: dict[str, str], api_key: str | None = None) -> str:
     response = client.post(
-        LINEAGE_CONFIG_URL,
+        "/api/v1/integrations/ingest-keys",
         headers=headers,
-        json={
-            "base_url": "https://metadata.example.test",
-            "jwt_token": "test-jwt-token",
-            "org_api_key": api_key,
-        },
+        json={"key_type": "pam"},
     )
-    assert response.status_code == 200, response.text
-    return response.json()["ingest_api_key"]
+    assert response.status_code == 201, response.text
+    return response.json()["api_key"]
 
 
 def _session_payload(external_session_id: str, **overrides):

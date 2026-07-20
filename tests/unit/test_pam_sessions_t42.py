@@ -40,18 +40,16 @@ def _grant_pam_permissions(db_session, org_id: str, user_id: str) -> None:
     db_session.commit()
 
 
-def _configure_ingest_key(client, headers: dict[str, str], api_key: str) -> str:
+def _configure_ingest_key(client, headers: dict[str, str], api_key: str | None = None) -> str:
+    # PAM now has its OWN ingest key (key_type "pam"); it no longer shares the
+    # OpenMetadata/lineage key. api_key is ignored (the endpoint mints a random key).
     response = client.post(
-        LINEAGE_CONFIG_URL,
+        "/api/v1/integrations/ingest-keys",
         headers=headers,
-        json={
-            "base_url": "https://metadata.example.test",
-            "jwt_token": "test-jwt-token",
-            "org_api_key": api_key,
-        },
+        json={"key_type": "pam"},
     )
-    assert response.status_code == 200
-    return response.json()["ingest_api_key"]
+    assert response.status_code == 201, response.text
+    return response.json()["api_key"]
 
 
 def _session_payload(external_session_id: str, **overrides):

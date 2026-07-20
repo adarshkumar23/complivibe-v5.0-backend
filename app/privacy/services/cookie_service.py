@@ -5,8 +5,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.data_observability.services.lineage_service import LineageService
 from app.models.consent_banner_config import ConsentBannerConfig
+from app.services.subsystem_ingest_key_service import SubsystemIngestKeyService
 from app.models.cookie_registry import CookieRegistry
 from app.models.organization import Organization
 from app.services.audit_service import AuditService
@@ -287,4 +287,4 @@ class CookieService:
         }
 
     def resolve_org_by_api_key(self, raw_key: str) -> uuid.UUID:
-        return LineageService(self.db).resolve_org_by_api_key(raw_key)
+        return SubsystemIngestKeyService(self.db).require_org_by_key(raw_key, "cookies")
