@@ -373,6 +373,7 @@ from app.models.patent_scoped_key import PatentScopedKey
 from app.models.subsystem_ingest_key import SubsystemIngestKey
 from app.models.ai_approval_envelope import AIApprovalEnvelope
 from app.models.ai_envelope_approval import AIEnvelopeApproval
+from app.models.ai_monitoring_breach_event import AIMonitoringBreachEvent
 from app.models.ai_monitoring_config import AIMonitoringConfig
 from app.models.ai_monitoring_reading import AIMonitoringReading
 from app.models.llm_observability_event import LLMObservabilityEvent
@@ -724,6 +725,7 @@ __all__ = [
     "SubsystemIngestKey",
     "AIApprovalEnvelope",
     "AIEnvelopeApproval",
+    "AIMonitoringBreachEvent",
     "AIMonitoringConfig",
     "AIMonitoringReading",
     "AIRiskSignal",

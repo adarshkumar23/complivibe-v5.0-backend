@@ -49,6 +49,48 @@ class MonitoringConfigRead(BaseModel):
     deleted_at: datetime | None
 
 
+#: Substrings that must never appear in a field name on any threshold-registry schema.
+#: The registry is the one monitoring surface designed to be read by an external
+#: collector, so a credential added to it later would leave core over the wire rather
+#: than merely into a logged-in UI. Enforced by a test that inspects the declared
+#: fields, so it fails when someone ADDS such a field -- an omission-by-convention
+#: cannot do that.
+REGISTRY_FORBIDDEN_FIELD_FRAGMENTS = ("api_key", "hash", "secret", "token", "password", "credential")
+
+
+class ThresholdRegistryEntry(BaseModel):
+    """One active threshold, as an external collector needs to see it.
+
+    Deliberately NOT `MonitoringConfigRead`. That schema serves the logged-in UI and
+    carries `api_key_configured`; this one is the machine-facing contract, and the
+    smaller its field set, the less there is to leak. It exposes what to measure and
+    what core will compare against -- never how to authenticate as the config.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    config_id: uuid.UUID
+    ai_system_id: uuid.UUID
+    metric_type: str
+    tier: str
+    escalation_order: int
+    threshold_value: Decimal
+    threshold_operator: str
+    comparison_direction: str
+    obligation_id: uuid.UUID | None
+    workflow_to_trigger: str
+    check_frequency: str | None
+    baseline_value: Decimal | None
+    collection_hint: str | None = None
+
+
+class ThresholdRegistryRead(BaseModel):
+    organization_id: uuid.UUID
+    generated_at: datetime
+    total: int
+    thresholds: list[ThresholdRegistryEntry]
+
+
 class MonitoringReadingCreate(BaseModel):
     config_id: uuid.UUID
     value: Decimal

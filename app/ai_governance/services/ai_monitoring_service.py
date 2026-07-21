@@ -443,6 +443,58 @@ class AIMonitoringService:
             source_tool=source_tool,
         )
 
+    def build_threshold_registry(self, org_id: uuid.UUID, *, ai_system_id: uuid.UUID | None = None) -> dict:
+        """Every active threshold this organisation is enforcing.
+
+        The machine-facing counterpart to the monitoring UI: an external collector needs
+        to know what to measure and what core will compare it against, so it can compute
+        the right metrics at the right cadence. It deliberately returns no credential --
+        see ThresholdRegistryEntry, whose field set is asserted by test rather than left
+        to reviewer diligence.
+
+        `api_key_hash` is excluded structurally, by never selecting it into the response
+        model. That it is only a hash is not a reason to relax: it is the exact value
+        `receive_inbound_reading` compares against, so anyone holding it can replay it
+        as the credential itself.
+        """
+        stmt = select(AIMonitoringConfig).where(
+            AIMonitoringConfig.organization_id == org_id,
+            AIMonitoringConfig.is_active.is_(True),
+            AIMonitoringConfig.deleted_at.is_(None),
+        )
+        if ai_system_id is not None:
+            stmt = stmt.where(AIMonitoringConfig.ai_system_id == ai_system_id)
+        stmt = stmt.order_by(
+            AIMonitoringConfig.ai_system_id.asc(),
+            AIMonitoringConfig.metric_type.asc(),
+            AIMonitoringConfig.escalation_order.asc(),
+        )
+        configs = self.db.execute(stmt).scalars().all()
+
+        return {
+            "organization_id": org_id,
+            "generated_at": self.utcnow(),
+            "total": len(configs),
+            "thresholds": [
+                {
+                    "config_id": row.id,
+                    "ai_system_id": row.ai_system_id,
+                    "metric_type": row.metric_type,
+                    "tier": row.tier,
+                    "escalation_order": row.escalation_order,
+                    "threshold_value": row.threshold_value,
+                    "threshold_operator": row.threshold_operator,
+                    "comparison_direction": row.comparison_direction,
+                    "obligation_id": row.obligation_id,
+                    "workflow_to_trigger": row.workflow_to_trigger,
+                    "check_frequency": row.check_frequency,
+                    "baseline_value": row.baseline_value,
+                    "collection_hint": row.check_frequency,
+                }
+                for row in configs
+            ],
+        }
+
     def list_readings(
         self,
         org_id: uuid.UUID,
