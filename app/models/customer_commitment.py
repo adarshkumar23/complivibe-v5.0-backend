@@ -1,7 +1,24 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, String, Text, Uuid
+from decimal import Decimal
+from typing import Any
+
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    Uuid,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -28,6 +45,15 @@ class CustomerCommitment(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedM
         Index("ix_customer_commitments_trigger_date_status", "trigger_date", "status"),
         Index("ix_customer_commitments_org_owner", "organization_id", "assigned_owner_id"),
         Index("ix_customer_commitments_org_trigger_incident", "organization_id", "triggering_incident_type"),
+        CheckConstraint(
+            "obligation_type IS NULL OR obligation_type IN ('breach_notification_sla', 'audit_right', 'data_deletion_timeline', 'subprocessor_restriction', 'data_residency_requirement', 'sla_commitment')",
+            name="ck_customer_commitments_obligation_type",
+        ),
+        CheckConstraint(
+            "confidence_score IS NULL OR (confidence_score >= 0 AND confidence_score <= 1)",
+            name="ck_customer_commitments_confidence_score",
+        ),
+        Index("ix_customer_commitments_org_review", "organization_id", "requires_human_review"),
     )
 
     customer_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -54,3 +80,17 @@ class CustomerCommitment(UUIDPrimaryKeyMixin, TimestampMixin, OrganizationOwnedM
 
     created_by: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # -- P9 contract-obligation extraction provenance (migration 0327) --------
+    # Set only when a commitment was machine-extracted from a contract clause by
+    # the P9 satellite; NULL on every human-created commitment. These are
+    # deliberately mapped here rather than left migration-only: without the
+    # mapping the columns exist in the database but the ORM silently discards
+    # every write to them, which is how the upstream patch shipped.
+    obligation_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    extracted_params: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
+    )
+    confidence_score: Mapped[Decimal | None] = mapped_column(Numeric(precision=5, scale=4), nullable=True)
+    requires_human_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    source_clause_text: Mapped[str | None] = mapped_column(Text, nullable=True)

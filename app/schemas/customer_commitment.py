@@ -1,9 +1,17 @@
 from datetime import date, datetime
+from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 COMMITMENT_TYPE_PATTERN = "^(breach_notification|subprocessor_notice|audit_right|data_deletion|data_portability|sla|security_assessment|custom)$"
+#: The six precise types the P9 contract-extraction pipeline classifies. Finer
+#: grained than COMMITMENT_TYPE_PATTERN, which stays core's coarse vocabulary.
+P9_OBLIGATION_TYPE_PATTERN = (
+    "^(breach_notification_sla|audit_right|data_deletion_timeline"
+    "|subprocessor_restriction|data_residency_requirement|sla_commitment)$"
+)
 COMMITMENT_STATUS_PATTERN = "^(active|triggered|fulfilled|overdue|waived|expired)$"
 NOTIFICATION_TYPE_PATTERN = "^(reminder|triggered|escalation|fulfilled)$"
 TRIGGERED_BY_PATTERN = "^(scheduler|manual|api)$"
@@ -73,6 +81,14 @@ class CustomerCommitmentRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None = None
+
+    # P9 contract-extraction provenance (migration 0327). NULL on every
+    # human-created commitment; populated only via the P9 ingest route.
+    obligation_type: str | None = Field(default=None, pattern=P9_OBLIGATION_TYPE_PATTERN)
+    extracted_params: dict[str, Any] | None = None
+    confidence_score: Decimal | None = Field(default=None, ge=0, le=1)
+    requires_human_review: bool = False
+    source_clause_text: str | None = None
 
 
 class CommitmentNotificationLogRead(BaseModel):
