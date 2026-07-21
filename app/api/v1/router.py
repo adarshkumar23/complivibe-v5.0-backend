@@ -8,6 +8,7 @@ from app.ai_governance.routers import governance_graph as ai_governance_knowledg
 from app.ai_governance.routers import patent_ingest_p2 as ai_governance_patent_ingest_p2
 from app.ai_governance.routers import patent_ingest_p4 as ai_governance_patent_ingest_p4
 from app.ai_governance.routers import patent_exports_p2 as ai_governance_patent_exports_p2
+from app.compliance.routers import patent_ingest_p9 as compliance_patent_ingest_p9
 from app.ai_governance.routers import ai_reviews as ai_governance_reviews
 from app.ai_governance.routers import eu_act_workflows as ai_governance_eu_act_workflows
 from app.ai_governance.routers import iso42001 as ai_governance_iso42001
@@ -224,6 +225,7 @@ api_router.include_router(ai_governance_knowledge_graph.router)
 api_router.include_router(ai_governance_patent_ingest_p2.router)
 api_router.include_router(ai_governance_patent_ingest_p4.router)
 api_router.include_router(ai_governance_patent_exports_p2.router)
+api_router.include_router(compliance_patent_ingest_p9.router)
 api_router.include_router(ai_governance_reviews.router)
 api_router.include_router(ai_governance_eu_act_workflows.router)
 api_router.include_router(ai_governance_iso42001.router)
