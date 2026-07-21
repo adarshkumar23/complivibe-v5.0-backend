@@ -22,7 +22,7 @@ class PatentScopedKey(UUIDPrimaryKeyMixin, Base):
 
     __tablename__ = "patent_scoped_keys"
     __table_args__ = (
-        CheckConstraint("key_type IN ('export', 'ingest')", name="ck_patent_scoped_keys_key_type"),
+        CheckConstraint("key_type IN ('export', 'ingest', 'p4_ingest')", name="ck_patent_scoped_keys_key_type"),
         UniqueConstraint("organization_id", "key_type", name="uq_patent_scoped_keys_org_type"),
     )
 

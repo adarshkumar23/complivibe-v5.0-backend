@@ -5,8 +5,12 @@ a real, hash-stored, rotatable key table -- modeled exactly on
 CarbonAccountingApiKey / carbon_accounting_service (SHA-256 hash, one key per
 (org, key_type), raw key returned once, in-place rotation).
 
-key_type 'export'  -> scope patent_export:p2:read
-key_type 'ingest'  -> scope patent_ingest:p2:write
+key_type 'export'     -> scope patent_export:p2:read
+key_type 'ingest'     -> scope patent_ingest:p2:write
+key_type 'p4_ingest'  -> scope patent_ingest:p4:write
+
+P4 has its own key type rather than sharing P2's: resolve_org_by_key filters on
+key_type, so a leaked key for one patent integration cannot authenticate the other.
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.models.patent_scoped_key import PatentScopedKey
 
-_VALID_KEY_TYPES = frozenset({"export", "ingest"})
+_VALID_KEY_TYPES = frozenset({"export", "ingest", "p4_ingest"})
 
 
 class PatentScopedKeyService:

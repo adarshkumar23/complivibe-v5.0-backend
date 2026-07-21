@@ -48,3 +48,15 @@ def require_patent_export_scope():
 
 def require_patent_ingest_scope():
     return _require_scope("ingest", "patent_ingest:p2:write")
+
+
+def require_p4_ingest_scope():
+    """Auth for the P4 monitoring satellite's inbound push.
+
+    A DISTINCT key type from P2's, deliberately. Sharing one would mean a key leaked
+    from either satellite authenticated both -- the shared-key hazard migration 0317
+    exists to prevent. As with P2, the organisation is derived from the key and never
+    from a client-supplied header, so a satellite can only ever write to the org its
+    key was issued for.
+    """
+    return _require_scope("p4_ingest", "patent_ingest:p4:write")
