@@ -67,11 +67,16 @@ class MonitoringReadingRead(BaseModel):
 
     id: uuid.UUID
     organization_id: uuid.UUID
-    config_id: uuid.UUID
+    # Both optional since 0321. A reading may predate any threshold config
+    # (config_id NULL), and a tiered reading has no single-config verdict
+    # (within_threshold NULL -- its per-tier verdicts live in
+    # ai_monitoring_breach_events). Declaring these non-optional made the
+    # readings-list and monitoring-dashboard endpoints return 500 on such a row.
+    config_id: uuid.UUID | None
     value: Decimal
     reading_source: str
     source_tool: str | None
-    within_threshold: bool
+    within_threshold: bool | None
     created_at: datetime
 
 

@@ -139,7 +139,11 @@ class AIRecommendationEngine:
                 .where(AIMonitoringReading.config_id == config.id)
                 .order_by(AIMonitoringReading.created_at.desc())
             ).scalars().first()
-            if latest_reading is not None and not latest_reading.within_threshold:
+            # `is False`, not `not ...`: within_threshold is NULLABLE since 0321, and
+            # NULL means "no single-config verdict" (the per-tier verdicts live in
+            # ai_monitoring_breach_events). `not None` is True, which would raise an
+            # "investigate immediately" recommendation for a reading nobody judged.
+            if latest_reading is not None and latest_reading.within_threshold is False:
                 text = (
                     f"Active monitoring breach on {config.metric_type}: the latest reading "
                     "is outside the configured threshold -- investigate immediately and "

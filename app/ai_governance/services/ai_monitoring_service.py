@@ -479,7 +479,10 @@ class AIMonitoringService:
         ).scalars().all()
 
         values = [r.value for r in readings]
-        breach_count = sum(1 for r in readings if not r.within_threshold)
+        # `is False`, not `not ...`: within_threshold is NULLABLE since 0321 and NULL
+        # means "no single-config verdict", not "breached". Counting NULLs here would
+        # inflate the dashboard's breach count with readings nobody judged.
+        breach_count = sum(1 for r in readings if r.within_threshold is False)
         trend_direction = None
         if len(values) >= 2:
             # values are newest-first; compare newest to oldest in this page.
