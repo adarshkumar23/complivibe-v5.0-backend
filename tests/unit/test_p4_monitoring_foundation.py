@@ -381,3 +381,103 @@ def test_a_collected_reading_may_have_no_config(db_session, p4_fixture):
     )
     assert reading.config_id is None
     assert reading.within_threshold is None
+
+
+# ------------------------------------------------- configurable P4 fields (7b)
+
+
+def test_config_create_schema_accepts_the_p4_fields():
+    from app.ai_governance.schemas.monitoring import MonitoringConfigCreate
+
+    payload = MonitoringConfigCreate(
+        metric_type="drift",
+        threshold_value=Decimal("0.2"),
+        comparison_direction="above",
+        api_key="a-real-api-key-value",
+        tier="critical",
+        escalation_order=2,
+        threshold_operator="gt",
+        workflow_to_trigger="create_issue",
+    )
+    assert payload.tier == "critical"
+    assert payload.workflow_to_trigger == "create_issue"
+
+
+def test_config_create_schema_refuses_suspend_system():
+    """The selectable set is enforced by the schema, not merely documented."""
+    from pydantic import ValidationError as PydanticValidationError
+
+    from app.ai_governance.schemas.monitoring import MonitoringConfigCreate
+
+    with pytest.raises(PydanticValidationError):
+        MonitoringConfigCreate(
+            metric_type="accuracy",
+            threshold_value=Decimal("0.9"),
+            comparison_direction="below",
+            api_key="a-real-api-key-value",
+            workflow_to_trigger="suspend_system",
+        )
+
+
+def test_config_defaults_reproduce_pre_p4_behaviour(db_session, p4_fixture):
+    """A client that knows nothing about tiers must get exactly what it got before."""
+    from app.ai_governance.schemas.monitoring import MonitoringConfigCreate
+
+    created = AIMonitoringService(db_session).create_config(
+        p4_fixture["org"].id,
+        p4_fixture["system"].id,
+        MonitoringConfigCreate(
+            metric_type="accuracy",
+            threshold_value=Decimal("0.8"),
+            comparison_direction="below",
+            api_key="another-real-api-key",
+        ),
+        p4_fixture["user"].id,
+    )
+    assert created.tier == "default"
+    assert created.escalation_order == 0
+    assert created.workflow_to_trigger == "create_alert"
+    # 'below' maps to 'lte' exactly, matching migration 0320's backfill and
+    # check_threshold, so the comparison is unchanged.
+    assert created.threshold_operator == "lte"
+
+
+def test_p4_metric_types_are_now_accepted_by_the_service(db_session, p4_fixture):
+    """ALLOWED_METRIC_TYPES was core's six; the DB accepts twenty-two since 0320."""
+    from app.ai_governance.schemas.monitoring import MonitoringConfigCreate
+
+    created = AIMonitoringService(db_session).create_config(
+        p4_fixture["org"].id,
+        p4_fixture["system"].id,
+        MonitoringConfigCreate(
+            metric_type="hallucination_rate",
+            threshold_value=Decimal("0.05"),
+            comparison_direction="above",
+            api_key="yet-another-api-key",
+            tier="warning",
+        ),
+        p4_fixture["user"].id,
+    )
+    assert created.metric_type == "hallucination_rate"
+    assert created.threshold_operator == "gte"
+
+
+def test_service_refuses_suspend_system_even_bypassing_the_schema(db_session, p4_fixture):
+    """Server-side guard for internal callers that never touch the HTTP schema."""
+    from types import SimpleNamespace
+
+    payload = SimpleNamespace(
+        model_dump=lambda: {
+            "metric_type": "accuracy",
+            "threshold_value": Decimal("0.9"),
+            "comparison_direction": "below",
+            "api_key": "an-api-key-value",
+            "workflow_to_trigger": "suspend_system",
+        }
+    )
+    with pytest.raises(InvalidChoiceError) as exc:
+        AIMonitoringService(db_session).create_config(
+            p4_fixture["org"].id, p4_fixture["system"].id, payload, p4_fixture["user"].id
+        )
+    assert exc.value.field == "workflow_to_trigger"
+    assert "suspend_system" not in exc.value.allowed

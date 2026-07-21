@@ -10,7 +10,12 @@ from sqlalchemy.orm import Session
 
 from app.ai_governance.services.ai_governance_event_service import AIGovernanceEventService
 from app.ai_governance.services.signal_service import SignalService
-from app.models.ai_monitoring_config import AIMonitoringConfig
+from app.models.ai_monitoring_config import (
+    ALL_METRIC_TYPES,
+    SELECTABLE_WORKFLOW_VALUES,
+    THRESHOLD_OPERATORS,
+    AIMonitoringConfig,
+)
 from app.models.ai_monitoring_reading import AIMonitoringReading
 from app.models.ai_system import AISystem
 from app.models.control_monitoring_alert import ControlMonitoringAlert
@@ -19,15 +24,15 @@ from app.satellites.llm_observability.ingest_client import decimal_from_float
 from app.services.audit_service import AuditService
 from app.core.validation import validate_choice
 
-ALLOWED_METRIC_TYPES = {
-    "accuracy",
-    "bias_parity_gap",
-    "output_drift",
-    "confidence_distribution",
-    "response_time",
-    "error_rate",
-}
+# The union of core's original six and patent P4's vocabulary, sourced from the model so
+# the service, the CHECK constraint and the schema cannot drift apart. Previously this
+# was core's six only, which would have rejected every P4 metric the DB now accepts.
+ALLOWED_METRIC_TYPES = set(ALL_METRIC_TYPES)
 ALLOWED_DIRECTIONS = {"above", "below"}
+#: 'above' means a breach when the reading meets/exceeds the threshold, i.e. exactly
+#: `gte`; 'below' is exactly `lte`. Identical to migration 0320's backfill, so a config
+#: that supplies no operator behaves precisely as it did before P4.
+DIRECTION_TO_OPERATOR = {"above": "gte", "below": "lte"}
 ALLOWED_FREQUENCIES = {"realtime", "hourly", "daily", "weekly"}
 ALLOWED_READING_SOURCES = {"manual", "api_report"}
 
@@ -75,6 +80,13 @@ class AIMonitoringService:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid comparison_direction")
         if payload.get("check_frequency") is not None and payload["check_frequency"] not in ALLOWED_FREQUENCIES:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid check_frequency")
+        # Server-side as well as by schema pattern: the schema guards the HTTP surface,
+        # this guards every internal caller, and suspend_system must be unreachable
+        # through both.
+        if payload.get("workflow_to_trigger") is not None:
+            validate_choice(payload["workflow_to_trigger"], set(SELECTABLE_WORKFLOW_VALUES), "workflow_to_trigger")
+        if payload.get("threshold_operator") is not None:
+            validate_choice(payload["threshold_operator"], set(THRESHOLD_OPERATORS), "threshold_operator")
 
         if not is_update and not payload.get("api_key"):
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="api_key is required")
@@ -129,6 +141,17 @@ class AIMonitoringService:
             created_at=now,
             updated_at=now,
             deleted_at=None,
+            # --- patent P4 compliance-decision layer ---
+            tier=payload.get("tier") or "default",
+            escalation_order=payload.get("escalation_order") or 0,
+            # Derived from comparison_direction when not given, so an existing client
+            # that knows nothing about operators keeps identical behaviour.
+            threshold_operator=(
+                payload.get("threshold_operator")
+                or DIRECTION_TO_OPERATOR[payload["comparison_direction"]]
+            ),
+            workflow_to_trigger=payload.get("workflow_to_trigger") or "create_alert",
+            obligation_id=payload.get("obligation_id"),
         )
         self.db.add(row)
         self.db.flush()

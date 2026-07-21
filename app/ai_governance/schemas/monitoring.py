@@ -4,6 +4,15 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.ai_monitoring_config import SELECTABLE_WORKFLOW_VALUES, THRESHOLD_OPERATORS
+
+
+#: suspend_system is absent by construction -- see SELECTABLE_WORKFLOW_VALUES. It has
+#: no implementation, and offering it would let a customer believe their AI system gets
+#: halted on breach when nothing would happen.
+WORKFLOW_TO_TRIGGER_PATTERN = "^(" + "|".join(SELECTABLE_WORKFLOW_VALUES) + ")$"
+THRESHOLD_OPERATOR_PATTERN = "^(" + "|".join(THRESHOLD_OPERATORS) + ")$"
+
 
 class MonitoringConfigCreate(BaseModel):
     metric_type: str
@@ -13,6 +22,14 @@ class MonitoringConfigCreate(BaseModel):
     check_frequency: str | None = None
     baseline_value: Decimal | None = None
     api_key: str | None = Field(default=None, min_length=12, max_length=255)
+    # --- patent P4 compliance-decision layer ---
+    # Defaults reproduce the pre-P4 behaviour exactly, so an existing client that sends
+    # none of these gets the same config it always did.
+    tier: str = Field(default="default", min_length=1, max_length=32)
+    escalation_order: int = Field(default=0, ge=0)
+    threshold_operator: str | None = Field(default=None, pattern=THRESHOLD_OPERATOR_PATTERN)
+    workflow_to_trigger: str = Field(default="create_alert", pattern=WORKFLOW_TO_TRIGGER_PATTERN)
+    obligation_id: uuid.UUID | None = None
 
 
 class MonitoringConfigUpdate(BaseModel):
@@ -24,6 +41,11 @@ class MonitoringConfigUpdate(BaseModel):
     baseline_value: Decimal | None = None
     api_key: str | None = Field(default=None, min_length=12, max_length=255)
     is_active: bool | None = None
+    tier: str | None = Field(default=None, min_length=1, max_length=32)
+    escalation_order: int | None = Field(default=None, ge=0)
+    threshold_operator: str | None = Field(default=None, pattern=THRESHOLD_OPERATOR_PATTERN)
+    workflow_to_trigger: str | None = Field(default=None, pattern=WORKFLOW_TO_TRIGGER_PATTERN)
+    obligation_id: uuid.UUID | None = None
 
 
 class MonitoringConfigRead(BaseModel):
@@ -39,6 +61,11 @@ class MonitoringConfigRead(BaseModel):
     check_frequency: str | None
     baseline_value: Decimal | None
     baseline_model_version: str | None = None
+    tier: str = "default"
+    escalation_order: int = 0
+    threshold_operator: str = "gte"
+    workflow_to_trigger: str = "create_alert"
+    obligation_id: uuid.UUID | None = None
     last_checked_at: datetime | None
     last_reading_value: Decimal | None
     is_active: bool
