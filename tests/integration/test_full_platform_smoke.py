@@ -449,7 +449,11 @@ def test_p2_recommendations(client):
 
 @pytest.mark.pillar2
 def test_p2_contracts(client):
-    r = client.get("/api/v1/ai-governance/contracts")
+    # The contracts manifest is reconnaissance material and is gated behind org
+    # context + ai_governance:read (see test_cross_public_endpoints_no_jwt for the
+    # unauthenticated-401 guard); pass credentials that carry that permission.
+    ctx = bootstrap_org_user(client, email_prefix="p2-contracts")
+    r = client.get("/api/v1/ai-governance/contracts", headers=ctx["org_headers"])
     assert r.status_code == 200
     body = r.json()
     assert "groups" in body
@@ -803,12 +807,16 @@ def test_p4_privacy_notice_versioning(client):
 @pytest.mark.pillar4
 def test_p4_cookie_scan_inbound(client):
     ctx = bootstrap_org_user(client, email_prefix="p4-cookie")
-    cfg = client.post(
-        "/api/v1/data-observability/lineage/openmetadata/configure",
+    # Provision a key scoped to the cookies subsystem -- the cookie scan-report
+    # endpoint authenticates only "cookies"-typed keys, so it needs its own key
+    # rather than borrowing the lineage key from openmetadata/configure.
+    prov = client.post(
+        "/api/v1/integrations/ingest-keys",
         headers=ctx["org_headers"],
-        json={"base_url": "https://example.org", "jwt_token": "jwt-token", "org_api_key": "cookie-key-123456"},
+        json={"key_type": "cookies"},
     )
-    key = cfg.json()["ingest_api_key"]
+    assert prov.status_code == 201
+    key = prov.json()["api_key"]
     payload = {
         "domain": "example.com",
         "cookies": [{"name": "_ga", "category": "analytics", "provider": "Google Analytics", "duration": "2 years", "is_third_party": True}],
@@ -818,6 +826,19 @@ def test_p4_cookie_scan_inbound(client):
     assert r1.status_code == 201
     r2 = client.post("/api/v1/privacy/cookie-registry/scan-report", headers={"X-CompliVibe-Key": key}, json=payload)
     assert r2.status_code == 201
+
+    # Subsystem isolation guarantee: a key minted for a DIFFERENT subsystem
+    # (lineage, from openmetadata/configure) must NOT authenticate the cookies
+    # endpoint. Pin it so a regression that stopped scoping keys by subsystem
+    # would break this test.
+    cfg = client.post(
+        "/api/v1/data-observability/lineage/openmetadata/configure",
+        headers=ctx["org_headers"],
+        json={"base_url": "https://example.org", "jwt_token": "jwt-token", "org_api_key": "cookie-key-123456"},
+    )
+    lineage_key = cfg.json()["ingest_api_key"]
+    wrong = client.post("/api/v1/privacy/cookie-registry/scan-report", headers={"X-CompliVibe-Key": lineage_key}, json=payload)
+    assert wrong.status_code == 401
 
 
 @pytest.mark.pillar4
@@ -1020,13 +1041,34 @@ def test_cross_org_isolation(client):
 def test_cross_public_endpoints_no_jwt(client):
     org = bootstrap_org_user(client, email_prefix="cross-public", organization_name="Public Org")
     slug = "public-org-1"
+    # bootstrap_org_user logs in via the client, which retains a session cookie.
+    # This test asserts the NO-credential path, so clear cookies (and never send
+    # the Authorization header) -- otherwise it silently tests the authenticated
+    # path and cannot catch a gate that stopped requiring credentials.
+    client.cookies.clear()
     checks = [
         client.get(f"/api/v1/trust-center/{slug}"),
         client.get(f"/api/v1/privacy/consent-banner/{slug}"),
-        client.get("/api/v1/ai-governance/contracts"),
         client.post("/api/v1/privacy/dsr/submit", json={"organization_id": org["organization_id"], "request_type": "access", "subject_name": "U", "subject_email": "u@example.com", "regulatory_framework": "gdpr"}),
     ]
     assert all(r.status_code in (200, 201, 404) for r in checks)
+
+    # The AI-governance contracts manifest is NOT public: it must reject callers
+    # with no credentials. This converts the stale "it's public" assumption into a
+    # regression guard for the auth gate (see test_p2_contracts for the authed path).
+    #
+    # We send X-Organization-ID (a scoping header, NOT a credential) but no JWT or
+    # cookie. get_current_organization resolves before require_permission, so
+    # omitting the org header short-circuits at a 400 that would survive the auth
+    # gate being removed -- a useless guard. Supplying the org id lets the request
+    # reach the permission gate, so a genuine 401 here pins that gate: if it were
+    # dropped, this would return the 200 manifest. (The 401-vs-400 dependency
+    # ordering itself is a separate, out-of-scope platform concern.)
+    gated = client.get(
+        "/api/v1/ai-governance/contracts",
+        headers={"X-Organization-ID": org["organization_id"]},
+    )
+    assert gated.status_code == 401
 
 
 @pytest.mark.cross
