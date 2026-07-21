@@ -15,6 +15,7 @@ from app.models.role import Role
 from app.models.user import User
 from app.services.audit_service import AuditService
 from app.services.seed_service import SeedService
+from app.services.system_account_service import exclude_system_accounts
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ class SCIMService:
         `GET /api/v1/users`) that needs the same underlying org-scoped user
         data, so both stay in sync with a single source of truth.
         """
-        return (
+        return exclude_system_accounts(
             select(User)
             .join(Membership, Membership.user_id == User.id)
             .where(Membership.organization_id == org_id)
@@ -48,7 +49,10 @@ class SCIMService:
         normalized_start = max(1, int(start_index))
         normalized_count = max(1, min(int(count), 200))
 
-        query = (
+        # Not shared with org_users_query() because this one also selects Membership;
+        # the exclusion has to be applied to both or the robot reaches the customer's
+        # IdP directory, where their SCIM client would then try to deprovision it.
+        query = exclude_system_accounts(
             select(User, Membership)
             .join(Membership, Membership.user_id == User.id)
             .where(Membership.organization_id == org_id)
@@ -315,12 +319,20 @@ class SCIMService:
 
     @staticmethod
     def _get_org_user_with_membership(org_id: uuid.UUID, user_id: uuid.UUID, db: Session) -> tuple[User, Membership]:
+        # System accounts are 404 here, not merely hidden from the listing. This is the
+        # single lookup behind update_user, patch_user and deprovision_user, and a
+        # deprovision would call _set_membership_active(..., False) -- flipping both the
+        # membership and User.is_active off, which silently breaks every future
+        # system-authored issue and review. An IdP that somehow learned the id must not
+        # be able to manage a principal it does not own.
         row = db.execute(
-            select(User, Membership)
-            .join(Membership, Membership.user_id == User.id)
-            .where(
-                User.id == user_id,
-                Membership.organization_id == org_id,
+            exclude_system_accounts(
+                select(User, Membership)
+                .join(Membership, Membership.user_id == User.id)
+                .where(
+                    User.id == user_id,
+                    Membership.organization_id == org_id,
+                )
             )
         ).one_or_none()
         if row is None:

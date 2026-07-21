@@ -10,6 +10,7 @@ from app.compliance.templates.esg_disclosure_templates import ESG_DISCLOSURE_TEM
 from app.compliance.services.custom_report_generator import SECTION_NAMES, CustomReportGenerator
 from app.models.custom_report_template import CustomReportTemplate
 from app.models.membership import Membership
+from app.models.user import User
 from app.models.role import Role
 from app.services.audit_service import AuditService
 
@@ -43,10 +44,14 @@ class CustomReportService:
         row = self.db.execute(
             select(Membership.user_id)
             .join(Role, Role.id == Membership.role_id)
+            .join(User, User.id == Membership.user_id)
             .where(
                 Membership.organization_id == org_id,
                 Membership.status == "active",
                 Role.is_active.is_(True),
+                # Role is only an ORDER BY tiebreak here, not a filter, so without this
+                # the system account is an eligible report author.
+                User.is_system_account.is_(False),
             )
             .order_by(
                 case((Role.name == "owner", 0), (Role.name == "admin", 1), else_=2),

@@ -16,6 +16,7 @@ from app.models.governance_override_request import GovernanceOverrideRequest
 from app.models.governance_override_template import GovernanceOverrideTemplate
 from app.models.governance_override_template_version import GovernanceOverrideTemplateVersion
 from app.models.membership import Membership
+from app.models.user import User
 from app.models.retention_policy import RetentionPolicy
 from app.models.role import Role
 from app.repositories.governance_override_repository import GovernanceOverrideRepository
@@ -1274,10 +1275,14 @@ class GovernanceOverrideService:
         query = (
             select(Membership.user_id, Role.name)
             .join(Role, Role.id == Membership.role_id)
+            .join(User, User.id == Membership.user_id)
             .where(
                 Membership.organization_id == row.organization_id,
                 Membership.status == "active",
                 Membership.user_id != row.requested_by_user_id,
+                # An approver picker. The role filter below is conditional, so without
+                # this the system account is offered as an eligible human approver.
+                User.is_system_account.is_(False),
             )
         )
         if row.approver_role_names_json:

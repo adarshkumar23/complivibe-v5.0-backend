@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.audit_log import AuditLog
 from app.models.membership import Membership
+from app.models.user import User
 from app.models.organization import Organization
 from app.models.organization_framework import OrganizationFramework
 from app.models.subscription_plan import SubscriptionPlan
@@ -64,11 +65,17 @@ class UsageBillingService:
                 )
             ).scalar_one()
         )
+        # Joined to users so system accounts are not billed. This count is multiplied
+        # by the per-user weight into current_estimated_cost_inr and drives the spend
+        # cap, so including a robot would overcharge every organisation by a seat.
         users = int(
             self.db.execute(
-                select(func.count(Membership.id)).where(
+                select(func.count(Membership.id))
+                .join(User, User.id == Membership.user_id)
+                .where(
                     Membership.organization_id == organization_id,
                     Membership.status == "active",
+                    User.is_system_account.is_(False),
                 )
             ).scalar_one()
         )

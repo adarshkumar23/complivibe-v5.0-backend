@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models.email_delivery_event import EmailDeliveryEvent
 from app.models.email_outbox import EmailOutbox
+from app.models.user import User
 from app.models.email_template import EmailTemplate
 from app.privacy.services.notification_preference_service import NotificationPreferenceService
 
@@ -253,8 +254,22 @@ class EmailService:
             if isinstance(maybe_severity, str):
                 effective_severity = maybe_severity
 
-        suppressed_by_preference = False
+        # Global backstop: never queue mail to a system account. It is not a person,
+        # its address is on a reserved TLD that can never receive mail, and it is
+        # deliberately the OWNER of system-created issues -- so the SLA, breach and
+        # classification mailers all resolve it as a recipient by design. Suppressing
+        # here covers every fan-out path at once (notices, attestation reminders,
+        # escalations) instead of relying on ~20 call sites each remembering to filter.
+        #
+        # Recorded as a normal suppression rather than dropped silently, so the outbox
+        # still shows that a notification was due and why it was not sent.
+        suppressed_by_system_account = False
         if recipient_user_id is not None:
+            recipient = self.db.execute(select(User).where(User.id == recipient_user_id)).scalar_one_or_none()
+            suppressed_by_system_account = recipient is not None and recipient.is_system_account
+
+        suppressed_by_preference = False
+        if recipient_user_id is not None and not suppressed_by_system_account:
             suppressed_by_preference = not NotificationPreferenceService(self.db).should_notify(
                 organization_id,
                 recipient_user_id,
@@ -264,7 +279,7 @@ class EmailService:
 
         rendered = self.render_template(template, variables_json)
         queued_at = self._now()
-        target_status = "skipped" if suppressed_by_preference else initial_status
+        target_status = "skipped" if (suppressed_by_preference or suppressed_by_system_account) else initial_status
         outbox = EmailOutbox(
             organization_id=organization_id,
             template_id=template.id,
@@ -291,12 +306,17 @@ class EmailService:
         self.add_delivery_event(
             organization_id=organization_id,
             email_outbox_id=outbox.id,
-            event_type="skipped_by_preference" if suppressed_by_preference else "queued",
+            event_type=(
+                "skipped_system_account"
+                if suppressed_by_system_account
+                else ("skipped_by_preference" if suppressed_by_preference else "queued")
+            ),
             status_from=None,
             status_to=outbox.status,
             details_json={
                 "event_type": event_type,
                 "notification_type": effective_notification_type,
+                "suppressed_by_system_account": suppressed_by_system_account,
                 "suppressed_by_preference": suppressed_by_preference,
             },
             created_by_user_id=created_by_user_id,

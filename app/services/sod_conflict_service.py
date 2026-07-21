@@ -8,6 +8,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.membership import Membership
+from app.models.user import User
 from app.models.permission import Permission
 from app.models.role_permission import RolePermission
 from app.models.sod_conflict import SodConflictFinding, SodConflictRule
@@ -339,8 +340,17 @@ class SodConflictService:
         actor_user_id: uuid.UUID | None = None,
         source: str = "organization_scan",
     ) -> list[SodConflictFinding]:
+        # Segregation-of-duties is a statement about people. The system account holds a
+        # zero-permission role so it yields nothing today, but it would start producing
+        # findings the moment that role gained anything.
         memberships = self.db.execute(
-            select(Membership).where(Membership.organization_id == organization_id, Membership.status == "active")
+            select(Membership)
+            .join(User, User.id == Membership.user_id)
+            .where(
+                Membership.organization_id == organization_id,
+                Membership.status == "active",
+                User.is_system_account.is_(False),
+            )
         ).scalars().all()
         created: list[SodConflictFinding] = []
         for membership in memberships:

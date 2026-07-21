@@ -197,6 +197,10 @@ class SecurityIngestBaseService:
                 Membership.status == "active",
                 User.is_active.is_(True),
                 User.status == "active",
+                # "Oldest active member" must resolve to a person. The system account
+                # predates nobody, but it must never be handed ownership of an issue a
+                # human is expected to work.
+                User.is_system_account.is_(False),
             )
             .order_by(User.created_at.asc())
         ).scalars().first()

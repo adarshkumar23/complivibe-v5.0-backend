@@ -50,6 +50,8 @@ def _resolve_actor_user_id(db: Session, org_id: uuid.UUID) -> uuid.UUID:
             Membership.status == "active",
             User.is_active.is_(True),
             User.status == "active",
+            # Unauthenticated public intake picks an acting user; it must be a person.
+            User.is_system_account.is_(False),
         )
         .order_by(Membership.created_at.asc())
     ).scalars().first()

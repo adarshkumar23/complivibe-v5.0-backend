@@ -676,6 +676,10 @@ class OSCALExportService:
                     Membership.status == "active",
                     User.is_active.is_(True),
                     User.status == "active",
+                    # This block goes into the SSP handed to an auditor or regulator.
+                    # A machine principal listed as a system user misrepresents who
+                    # actually has access.
+                    User.is_system_account.is_(False),
                 )
                 .order_by(User.email.asc())
             ).all()

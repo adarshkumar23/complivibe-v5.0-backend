@@ -82,6 +82,9 @@ class PolicyAttestationService:
                 Membership.status == "active",
                 User.is_active.is_(True),
                 User.status == "active",
+                # Enrolling a system account would create a PolicyAttestationRecord it
+                # can never complete, holding completion_pct below 100 forever.
+                User.is_system_account.is_(False),
             )
         ).all()
         return [r[0] for r in rows]

@@ -598,7 +598,10 @@ class AttestationRecordService:
         sent = 0
         now = self.utcnow()
         for record, user in pending:
-            if not user.is_active or not user.email:
+            # is_system_account as well as is_active: enrolment already excludes it, so
+            # a record here would be historical, but a reminder must not be counted as
+            # "sent" to a principal that cannot read one.
+            if not user.is_active or not user.email or user.is_system_account:
                 continue
             self._queue_reminder_email(org_id=org_id, user=user, campaign=campaign, actor_id=actor_id)
             record.reminder_sent_at = now

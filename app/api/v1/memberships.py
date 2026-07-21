@@ -122,6 +122,14 @@ def create_membership(
     repo = MembershipRepository(db)
 
     user = db.execute(select(User).where(User.email == payload.email)).scalar_one_or_none()
+    # The system account's memberships are managed by SystemAccountService, lazily and
+    # with a zero-permission role. Inviting it here would hand it whatever role the
+    # caller picked and surface it as a colleague.
+    if user is not None and user.is_system_account:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="That address belongs to a system account and cannot be invited",
+        )
     action = "membership.created"
     if user is None:
         temp_password = secrets.token_urlsafe(32)

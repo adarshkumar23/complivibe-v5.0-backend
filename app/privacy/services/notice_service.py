@@ -66,6 +66,8 @@ class NoticeService:
                 User.is_active.is_(True),
                 User.status == "active",
                 User.email.is_not(None),
+                # Not a person: it has no deliverable address and no notice to read.
+                User.is_system_account.is_(False),
             )
         ).scalars().all()
         dedup: dict[uuid.UUID, User] = {row.id: row for row in rows}
@@ -302,9 +304,14 @@ class NoticeService:
 
         total_users = int(
             self.db.execute(
-                select(func.count(func.distinct(Membership.user_id))).where(
+                select(func.count(func.distinct(Membership.user_id)))
+                .join(User, User.id == Membership.user_id)
+                .where(
                     Membership.organization_id == org_id,
                     Membership.status == "active",
+                    # Counting a system account here leaves a permanent phantom
+                    # "pending" acknowledgement that can never reach 100%.
+                    User.is_system_account.is_(False),
                 )
             ).scalar_one()
             or 0

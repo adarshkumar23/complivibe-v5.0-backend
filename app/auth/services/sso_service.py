@@ -148,6 +148,12 @@ class SSOService:
         normalized_email = email.strip().lower()
         user = db.execute(select(User).where(User.email == normalized_email)).scalar_one_or_none()
 
+        # A system account is not a person and must never be assumable via SSO, even if
+        # an IdP were configured to assert its address. Same generic 401 as an
+        # unprovisioned user so this reveals nothing about which accounts exist.
+        if user is not None and user.is_system_account:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User must be pre-provisioned")
+
         if user is None and not config.jit_provisioning:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User must be pre-provisioned")
 

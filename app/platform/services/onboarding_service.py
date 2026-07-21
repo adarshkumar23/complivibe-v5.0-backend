@@ -243,6 +243,11 @@ class OnboardingService:
                 continue
 
             existing_user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+            if existing_user is not None and existing_user.is_system_account:
+                # Reported as skipped rather than raising: one bad address in a bulk
+                # invite must not abandon the rest of the batch.
+                skipped.append({"email": email, "reason": "system account"})
+                continue
             if existing_user is not None:
                 existing_membership = db.execute(
                     select(Membership).where(
@@ -452,7 +457,12 @@ class OnboardingService:
         has_team = (
             db.execute(
                 select(Membership)
-                .where(Membership.organization_id == org_id)
+                .join(User, User.id == Membership.user_id)
+                .where(
+                    Membership.organization_id == org_id,
+                    # Otherwise the automation account alone ticks "invite your team".
+                    User.is_system_account.is_(False),
+                )
                 .order_by(Membership.created_at.asc())
             ).scalars().all()
         )

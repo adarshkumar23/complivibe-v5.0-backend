@@ -159,7 +159,15 @@ def register(payload: RegisterRequest, request: Request, response: Response, db:
 @rate_limiter.limiter.limit("10/minute")
 def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)) -> Token:
     user = db.execute(select(User).where(User.email == payload.email)).scalar_one_or_none()
-    if user is None or not verify_password(payload.password, user.hashed_password):
+    # is_system_account is checked LAST so verify_password still runs for it and the
+    # timing is indistinguishable from a wrong password. It shares the generic 401 for
+    # the same reason -- a system account must not be discoverable by probing login.
+    # Its password hash is of a secret nobody holds, so this is defence in depth.
+    if (
+        user is None
+        or not verify_password(payload.password, user.hashed_password)
+        or user.is_system_account
+    ):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
 
     if not user.is_active or user.status != "active":
