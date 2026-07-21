@@ -24,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.patent_scoped_key import PatentScopedKey
+from app.services.audit_service import AuditService
 
 _VALID_KEY_TYPES = frozenset({"export", "ingest", "p4_ingest", "p9_ingest"})
 
@@ -49,19 +50,41 @@ class PatentScopedKeyService:
             )
         ).scalar_one_or_none()
         if row is None:
-            self.db.add(
-                PatentScopedKey(
-                    organization_id=org_id,
-                    key_type=key_type,
-                    api_key_hash=key_hash,
-                    is_active=True,
-                    created_by_user_id=created_by_user_id,
-                )
+            row = PatentScopedKey(
+                organization_id=org_id,
+                key_type=key_type,
+                api_key_hash=key_hash,
+                is_active=True,
+                created_by_user_id=created_by_user_id,
             )
+            self.db.add(row)
+            action = "patent_scoped_key.provisioned"
+            was_active = None
         else:
+            action = "patent_scoped_key.rotated"
+            was_active = row.is_active
             row.api_key_hash = key_hash
             row.is_active = True
             row.rotated_at = datetime.now(UTC)
+        self.db.flush()
+
+        # Same class of credential as SubsystemIngestKey, audited the same way: holding
+        # one lets a machine push inbound telemetry for a whole satellite of this org.
+        # Minting or rotating one must be attributable (who / when / which org / which
+        # satellite). Only the key_type and the row identity are recorded -- never the
+        # raw key, and never its hash. The write lives here rather than in a router so
+        # that a future provisioning endpoint inherits the trail; there is no such
+        # endpoint today, which is exactly how this path came to be unaudited.
+        AuditService(self.db).write_audit_log(
+            action=action,
+            entity_type="patent_scoped_keys",
+            organization_id=org_id,
+            actor_user_id=created_by_user_id,
+            entity_id=row.id,
+            before_json={"is_active": was_active} if was_active is not None else {},
+            after_json={"is_active": True},
+            metadata_json={"key_type": key_type},
+        )
         self.db.flush()
         return raw_key
 
