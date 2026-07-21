@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.ai_monitoring_config import SELECTABLE_WORKFLOW_VALUES, THRESHOLD_OPERATORS
 
@@ -199,3 +199,74 @@ class MonitoringReadingHistoryRead(BaseModel):
     total: int
     readings: list[MonitoringReadingRead]
     summary: MonitoringReadingHistorySummary
+
+
+#: Column/field-name fragments that mean a VERDICT rather than a measurement. The P4
+#: satellite computes numbers; core alone decides what they mean. A payload carrying
+#: `is_breach`, `severity` or `alert_level` would invert that, so the push is refused
+#: rather than quietly stripped -- silently dropping the field would let a satellite
+#: believe its verdict was accepted.
+#:
+#: Substring matching, so `is_breach`, `breach_flag` and `breached_at` are all caught.
+#: Mirrors migration 0321's VERDICT_COLUMN_FRAGMENTS, which guards the same invariant at
+#: the schema level.
+VERDICT_FIELD_FRAGMENTS = (
+    "breach",
+    "severity",
+    "violation",
+    "alert_level",
+    "verdict",
+    "decision",
+    "compliance_status",
+    "threshold_exceeded",
+    "risk_level",
+    "within_threshold",
+)
+
+
+class P4MonitoringReadingPush(BaseModel):
+    """One measurement pushed by the P4 monitoring satellite.
+
+    `extra="forbid"` alone would reject a verdict field, but with a generic "unexpected
+    keyword" message. The explicit pre-validator below names the offending field and
+    says why, because a satellite author debugging a 422 should learn the boundary rule
+    rather than guess at a typo.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    ai_system_id: uuid.UUID
+    metric_type: str = Field(min_length=1, max_length=64)
+    value: Decimal
+    # 'a' in-environment agent, 'b' external push, 'c' scheduled pull.
+    collection_mode: str = Field(default="b", pattern="^(a|b|c)$")
+    config_id: uuid.UUID | None = None
+    sample_size: int | None = Field(default=None, ge=0)
+    computed_by: str | None = Field(default=None, max_length=64)
+    reported_at: datetime | None = None
+    source_tool: str | None = Field(default=None, max_length=100)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_verdict_fields(cls, data):
+        if not isinstance(data, dict):
+            return data
+        offenders = sorted(
+            key
+            for key in data
+            if any(fragment in str(key).lower() for fragment in VERDICT_FIELD_FRAGMENTS)
+        )
+        if offenders:
+            raise ValueError(
+                f"verdict-shaped field(s) not accepted: {', '.join(offenders)}. The "
+                "satellite reports what was measured; core decides what it means. Send "
+                "the value only."
+            )
+        return data
+
+
+class P4MonitoringPushResult(BaseModel):
+    reading_id: uuid.UUID
+    organization_id: uuid.UUID
+    breach_events: int
+    tiers_dispatched: list[str]

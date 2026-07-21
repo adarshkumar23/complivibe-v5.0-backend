@@ -430,7 +430,65 @@ class AIMonitoringService:
                 description=f"Monitoring metric {config.metric_type} breached threshold: {value}",
             )
 
+        self._dispatch_sibling_tiers(org_id, reading=row, config=config, value=value)
         return row
+
+    def _dispatch_sibling_tiers(
+        self,
+        org_id: uuid.UUID,
+        *,
+        reading: AIMonitoringReading,
+        config: AIMonitoringConfig,
+        value: Decimal,
+    ) -> None:
+        """Evaluate the OTHER active tiers configured for this (system, metric).
+
+        Why the submitted config is excluded, rather than the whole path being replaced
+        by the tiered engine:
+
+        Feature #66's own behaviour for the config a reading was submitted against is a
+        live contract. Its alert severity comes from the metric and escalates on
+        sustained degradation; the engine derives severity from the tier and has no
+        concept of a degradation streak. Routing the submitted config through the engine
+        would therefore change the severity of an alert customers already receive and
+        route on -- a silent behavioural change dressed up as an upgrade. The
+        characterization tests in test_ai_monitoring_feature66_characterization.py exist
+        to make that regression impossible to land by accident.
+
+        So the split is: the submitted config behaves exactly as it always has, and any
+        ADDITIONAL tiers -- which could not exist before migration 0320, so no existing
+        deployment has any -- go through the tiered engine. A single-config
+        organisation, which is every Feature #66 user today, sees no change whatsoever
+        because this method finds nothing to do.
+
+        Deliberately no early exit and no suppression among the siblings: every breached
+        tier dispatches its own workflow.
+        """
+        siblings = list(
+            self.db.execute(
+                select(AIMonitoringConfig).where(
+                    AIMonitoringConfig.organization_id == org_id,
+                    AIMonitoringConfig.ai_system_id == config.ai_system_id,
+                    AIMonitoringConfig.metric_type == config.metric_type,
+                    AIMonitoringConfig.id != config.id,
+                    AIMonitoringConfig.is_active.is_(True),
+                    AIMonitoringConfig.deleted_at.is_(None),
+                )
+            ).scalars().all()
+        )
+        if not siblings:
+            # The overwhelmingly common case, and the one that must cost nothing and
+            # change nothing.
+            return
+
+        # Imported here rather than at module scope: the engine imports this service's
+        # ALLOWED_READING_SOURCES via the compliance event bridge, so a top-level import
+        # would be circular.
+        from app.ai_governance.services.governance_workflow_engine import GovernanceWorkflowEngine
+
+        GovernanceWorkflowEngine(self.db).dispatch_for_reading(
+            org_id, reading=reading, configs=siblings, observed_value=value
+        )
 
     def receive_inbound_reading(
         self,
