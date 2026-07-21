@@ -50,6 +50,39 @@ threshold. Core re-checks that independently: a payload flagged
 requires_human_review is REFUSED, not quietly stored, because a below-threshold
 obligation must never become a live monitoring rule that notifies a customer.
 obligation_type is likewise validated against core's own vocabulary.
+
+KNOWN PRODUCT GAP: BREACH-NOTIFICATION OBLIGATIONS HAVE NO BREACH DETECTOR
+=========================================================================
+Recorded here rather than papered over, because it is the difference between
+this integration working and appearing to work.
+
+P9's flagship obligation is the breach-notification SLA -- "notify the customer
+within 72 hours of a breach". Those register as commitment_type
+'breach_notification' with triggering_incident_type 'data_breach', and core's
+matcher does resolve that: CustomerCommitmentService.trigger_commitments_for_incident
+aliases retention_violation -> data_breach and residency_violation -> data_breach.
+
+The gap is upstream of the matcher. Core has NO breach detector. The only
+detector types it emits automatically are:
+
+    quality_breach       quality_service.py            -> service_incident
+    anomaly_rule         access_monitoring_service.py  -> security_incident
+    residency_violation  residency_service.py          -> data_breach
+
+'retention_violation' and 'manual' are valid detector types but nothing emits
+them automatically; they can only arrive through the human/API incident route.
+
+So today a P9 breach-notification commitment fires automatically only when a
+DATA-RESIDENCY violation is detected, or when somebody files a retention-violation
+incident by hand. An actual security breach fires nothing: the closest signal,
+anomaly_rule from access monitoring, aliases to 'security_incident', which is not
+a trigger vocabulary P9 writes.
+
+This is a missing detector, not a bug in this route, and the fix belongs in
+data observability rather than here. Until it exists, do not describe the P9
+breach-notification path as end-to-end automated. The path that IS proven
+end-to-end is the residency/retention one, which is what the integration test
+exercises deliberately.
 """
 
 from __future__ import annotations

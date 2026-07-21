@@ -256,6 +256,14 @@ class CustomerCommitmentService:
         if not normalized:
             return 0
 
+        # KNOWN GAP, recorded where the mapping lives: 'data_breach' is reachable
+        # only from retention_violation and residency_violation below, and core
+        # has no breach detector at all. Of the five detector types, only
+        # quality_breach, anomaly_rule and residency_violation are ever emitted
+        # automatically; retention_violation and manual arrive by hand. So a
+        # contractual breach-notification commitment -- the P9 satellite's
+        # flagship obligation -- is never triggered by an actual security breach.
+        # See app/compliance/routers/patent_ingest_p9.py for the full note.
         aliases = {
             "anomaly_rule": "security_incident",
             "quality_breach": "service_incident",

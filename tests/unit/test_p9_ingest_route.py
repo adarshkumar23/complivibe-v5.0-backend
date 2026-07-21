@@ -336,14 +336,25 @@ def test_the_route_carries_a_rate_limit():
 # ==================================================================== END TO END
 
 
+@pytest.mark.parametrize(
+    "detector_type",
+    [
+        # The only detector core emits AUTOMATICALLY that reaches a
+        # breach-notification commitment. This is the genuinely end-to-end path.
+        "residency_violation",
+        # Also reaches it, but only ever filed by hand -- nothing in core emits
+        # it. See test_p9_breach_trigger_gap.py.
+        "retention_violation",
+    ],
+)
 def test_end_to_end_extracted_obligation_is_fired_by_a_real_core_incident(
-    client, db_session, org_env
+    client, db_session, org_env, detector_type
 ):
     """The path that actually works today, in one test.
 
     satellite push -> authenticated by a p9_ingest key -> commitment persisted
-    with all five P9 fields -> a retention_violation incident (a type core's
-    detector really emits) -> trigger_commitments_for_incident fires it.
+    with all five P9 fields -> a real core incident type ->
+    trigger_commitments_for_incident fires it.
     """
     key = _key(db_session, org_env["org"].id)
     db_session.commit()
@@ -361,11 +372,11 @@ def test_end_to_end_extracted_obligation_is_fired_by_a_real_core_incident(
     assert stored.obligation_type == "breach_notification_sla"
     assert stored.confidence_score is not None
 
-    # retention_violation is a real DataIncident.detector_type; core aliases it
-    # to data_breach, which is what this commitment is configured to trigger on.
+    # Both are real DataIncident.detector_type values; core aliases each to
+    # data_breach, which is what this commitment is configured to trigger on.
     fired = CustomerCommitmentService(db_session).trigger_commitments_for_incident(
         org_env["org"].id,
-        "retention_violation",
+        detector_type,
         incident_id=uuid.uuid4(),
     )
     assert fired == 1, "the machine-extracted commitment was not triggered"
