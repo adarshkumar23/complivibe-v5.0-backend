@@ -60,3 +60,20 @@ def require_p4_ingest_scope():
     key was issued for.
     """
     return _require_scope("p4_ingest", "patent_ingest:p4:write")
+
+
+def require_p9_ingest_scope():
+    """Auth for the P9 contract-extraction satellite's inbound push.
+
+    A DISTINCT key type again, for the reason spelled out in migration 0328: a
+    key leaked from one satellite must not authenticate another. The
+    organisation is derived from the key, never from a body field or an
+    X-Organization-Id header, so a satellite can only ever register commitments
+    against the org its key was issued for.
+
+    That matters more here than for a metric push. A commitment created through
+    this route becomes a live monitoring rule that fires on real incidents and
+    notifies real customers, so a caller who could name its own org could
+    manufacture a customer-facing obligation inside someone else's tenant.
+    """
+    return _require_scope("p9_ingest", "patent_ingest:p9:write")

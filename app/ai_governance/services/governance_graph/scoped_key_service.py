@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.models.patent_scoped_key import PatentScopedKey
 
-_VALID_KEY_TYPES = frozenset({"export", "ingest", "p4_ingest"})
+_VALID_KEY_TYPES = frozenset({"export", "ingest", "p4_ingest", "p9_ingest"})
 
 
 class PatentScopedKeyService:
