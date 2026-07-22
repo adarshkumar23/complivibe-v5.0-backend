@@ -618,3 +618,86 @@ def test_g6_version_diff_endpoint_real_line_and_field_diff(client, db_session):
     # Nonexistent version -> 404, not a silent empty diff.
     missing = client.get(f"{BASE}/{policy['id']}/versions/{v1['id']}/diff/{uuid.uuid4()}", headers=headers)
     assert missing.status_code == 404
+
+
+def test_phase91_patch_status_self_approval_blocked(client, db_session):
+    """Four-eyes on the PATCH-status approval shortcut: the policy owner must not be
+    able to approve their own policy by driving draft -> under_review -> approved via
+    PATCH, even though they hold compliance_policies:approve. This mirrors the guard
+    the formal approval-requests flow already enforces (Requester cannot approve their
+    own request) and the control-exception 0316 fix (Requester cannot approve own
+    exception)."""
+    from app.models.audit_log import AuditLog
+
+    org = bootstrap_org_user(client, email_prefix="p91-selfapprove")
+    owner_headers = org["org_headers"]
+
+    # Policy owned by the same user who will attempt to approve it. The bootstrap user
+    # is org owner, so they hold compliance_policies:approve -- only four-eyes should
+    # stop the self-approval.
+    policy = _create_policy(
+        client, owner_headers, owner_user_id=org["user_id"], title="Self Approve Policy"
+    )
+
+    to_review = client.patch(
+        f"{BASE}/{policy['id']}", headers=owner_headers, json={"status": "under_review"}
+    )
+    assert to_review.status_code == 200
+
+    self_approve = client.patch(
+        f"{BASE}/{policy['id']}", headers=owner_headers, json={"status": "approved"}
+    )
+    assert self_approve.status_code == 400, (
+        f"owner self-approval via PATCH must be rejected, got {self_approve.status_code}: "
+        f"{self_approve.json()}"
+    )
+
+    # The policy must NOT have flipped to approved and must carry no approver.
+    detail = client.get(f"{BASE}/{policy['id']}", headers=owner_headers).json()
+    assert detail["status"] == "under_review"
+    assert detail["approved_by_user_id"] is None
+
+    # The blocked attempt is itself audited (governance-relevant event).
+    blocked = (
+        db_session.query(AuditLog)
+        .filter(
+            AuditLog.organization_id == uuid.UUID(org["organization_id"]),
+            AuditLog.entity_id == uuid.UUID(policy["id"]),
+            AuditLog.action == "compliance_policy.self_approval_blocked",
+        )
+        .all()
+    )
+    assert len(blocked) == 1, "self-approval rejection must be audited"
+    assert str(blocked[0].actor_user_id) == org["user_id"]
+
+
+def test_phase91_patch_status_approval_by_different_user_allowed(client, db_session):
+    """The legitimate PATCH-status approval path still works: a DIFFERENT user with
+    compliance_policies:approve can approve a policy owned by someone else."""
+    org = bootstrap_org_user(client, email_prefix="p91-diffapprove")
+
+    owner_user = _create_user_with_role(
+        db_session,
+        org_id=org["organization_id"],
+        email="p91-diffapprove-owner@example.com",
+        role_name="compliance_manager",
+    )
+    approver_token = login_user(client, "p91-diffapprove-owner@example.com")  # noqa: F841 (placeholder)
+
+    # Policy owned by owner_user; the bootstrap org owner (a DIFFERENT identity, holding
+    # approve) drives the transition and approves it.
+    policy = _create_policy(
+        client, org["org_headers"], owner_user_id=str(owner_user.id), title="Diff Approver Policy"
+    )
+    r1 = client.patch(
+        f"{BASE}/{policy['id']}", headers=org["org_headers"], json={"status": "under_review"}
+    )
+    assert r1.status_code == 200
+    r2 = client.patch(
+        f"{BASE}/{policy['id']}", headers=org["org_headers"], json={"status": "approved"}
+    )
+    assert r2.status_code == 200, f"different-user approval must succeed: {r2.json()}"
+    body = r2.json()
+    assert body["status"] == "approved"
+    assert body["approved_by_user_id"] == org["user_id"]
+    assert body["approved_by_user_id"] != str(owner_user.id)

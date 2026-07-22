@@ -401,11 +401,16 @@ def _archive_policy(client, headers: dict[str, str], policy_id: str) -> None:
     assert r4.status_code == 200
 
 
-def test_a32_cannot_request_exception_against_archived_policy(client):
+def test_a32_cannot_request_exception_against_archived_policy(client, db_session):
     """Edge case: an exception request against a policy that has since been archived must be
     rejected outright, rather than silently created against a policy no one is enforcing anymore."""
     org = bootstrap_org_user(client, email_prefix="a32-archived-policy")
-    policy = _create_policy(client, org["org_headers"], owner_user_id=org["user_id"], title="Soon Archived")
+    # Policy owned by a distinct user so the bootstrap admin approving it during archival is a
+    # legitimate four-eyes approval (owner != approver), not a self-approval (now blocked).
+    policy_owner = _create_active_user_with_role(
+        db_session, org["organization_id"], "a32-archived-owner@example.com", role_name="compliance_manager"
+    )
+    policy = _create_policy(client, org["org_headers"], owner_user_id=str(policy_owner.id), title="Soon Archived")
     _archive_policy(client, org["org_headers"], policy["id"])
 
     response = client.post(

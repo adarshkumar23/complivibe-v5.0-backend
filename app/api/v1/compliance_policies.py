@@ -322,6 +322,37 @@ def update_policy(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Missing required permission: compliance_policies:approve",
                 )
+            # Four-eyes segregation of duties: the policy owner/author must not be able
+            # to approve their own policy via this PATCH-status shortcut, mirroring the
+            # guard the formal approval-requests flow enforces ("Requester cannot approve
+            # their own request") and the control-exception 0316 fix. compliance_policies
+            # has no separate created_by column, so owner_user_id is the authoritative
+            # author. The comparison uses the persisted owner (pre-change), so an owner
+            # cannot reassign ownership and self-approve in the same request either.
+            if current_user.id == row.owner_user_id:
+                AuditService(db).write_audit_log(
+                    action="compliance_policy.self_approval_blocked",
+                    entity_type="compliance_policy",
+                    entity_id=row.id,
+                    organization_id=organization.id,
+                    actor_user_id=current_user.id,
+                    after_json={
+                        "status": row.status,
+                        "attempted_status": "approved",
+                        "owner_user_id": str(row.owner_user_id),
+                    },
+                    metadata_json={"source": "api", "reason": "four_eyes_owner_equals_approver"},
+                    ip_address=request.client.host if request.client else None,
+                    user_agent=request.headers.get("user-agent"),
+                )
+                # Persist the governance-relevant denial before raising; the audit write
+                # is the only pending change in the session at this point (policy row is
+                # mutated further below), so this commits nothing but the audit record.
+                db.commit()
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Policy owner cannot approve their own policy (four-eyes segregation of duties)",
+                )
             changes["approved_by_user_id"] = current_user.id
             changes["approved_at"] = service.utcnow()
 
