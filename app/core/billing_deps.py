@@ -3,12 +3,27 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from fastapi import Depends, HTTPException
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.deps import get_current_organization, get_db
+from app.models.compliance_policy import CompliancePolicy
+from app.models.control import Control
+from app.models.evidence_item import EvidenceItem
 from app.models.organization import Organization
+from app.models.risk import Risk
 from app.platform.services.billing_service import BillingService
+
+# Category-A capped resources -> the model whose org-scoped rows count toward
+# the Free-tier creation cap (features.record_caps). Keys match the record_caps
+# keys seeded in DEFAULT_PLANS.
+_CAPACITY_MODELS = {
+    "policies": CompliancePolicy,
+    "controls": Control,
+    "evidence": EvidenceItem,
+    "risks": Risk,
+}
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -48,6 +63,48 @@ def require_active_subscription(
         )
 
     return org
+
+
+def require_capacity(resource: str):
+    """Enforce the plan's per-resource creation cap on a create endpoint.
+
+    Free tier caps core creation at 5 each (policies/controls/evidence/risks);
+    trial and all paid plans carry record_caps={} -> uncapped (no-op). The count
+    is strictly org-scoped. Deleting a record frees a slot (count-based, not a
+    high-water mark). Apply ONLY to the four primary create paths.
+    """
+    model = _CAPACITY_MODELS[resource]  # fail fast at import/wire time on a typo
+
+    def _check(
+        org: Organization = Depends(get_current_organization),
+        db: Session = Depends(get_db),
+    ) -> Organization:
+        cap = BillingService(db).record_cap_for(org.id, resource)
+        if cap is None:
+            return org  # uncapped plan -> no-op
+        count = db.execute(
+            select(func.count()).select_from(model).where(model.organization_id == org.id)
+        ).scalar_one()
+        if count >= cap:
+            frontend_url = get_settings().FRONTEND_URL
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "record_cap_reached",
+                    "resource": resource,
+                    "cap": cap,
+                    "current_count": count,
+                    "current_plan": org.subscription_plan,
+                    "message": (
+                        f"The {org.subscription_plan} plan allows at most {cap} {resource}. "
+                        f"Upgrade your plan to create more."
+                    ),
+                    "upgrade_url": f"{frontend_url}/billing/upgrade",
+                },
+            )
+        return org
+
+    return Depends(_check)
 
 
 def require_feature(feature_name: str):

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Res
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.billing_deps import require_capacity
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
 from app.core.event_bus import EventBus, EventPayload, EventType
 from app.models.control import Control
@@ -201,6 +202,7 @@ def create_evidence(
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("evidence:write")),
+    __: Organization = require_capacity("evidence"),
 ) -> EvidenceRead:
     # Routed through EvidenceService.create_evidence_item so the manual upload path
     # shares the same checksum-based dedup as the webhook/email/form automation paths

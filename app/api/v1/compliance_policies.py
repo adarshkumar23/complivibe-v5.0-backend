@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.billing_deps import require_capacity
 from app.core.deps import (
     get_current_active_user,
     get_current_organization,
@@ -169,6 +170,7 @@ def create_policy(
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("compliance_policies:write")),
+    __: Organization = require_capacity("policies"),
 ) -> CompliancePolicyRead:
     service = CompliancePolicyService(db)
     row = service.create_policy(

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.billing_deps import require_capacity
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
 from app.compliance.services.risk_graph_service import RiskGraphService
 from app.compliance.services.risk_scoring_service import RiskScoringService
@@ -309,6 +310,7 @@ def create_risk(
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("risks:write")),
+    __: Organization = require_capacity("risks"),
 ) -> RiskRead:
     service = RiskService(db)
     _ensure_factor_based_fields(

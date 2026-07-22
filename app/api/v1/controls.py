@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.billing_deps import require_capacity
 from app.core.deps import get_current_active_user, get_current_organization, get_db, require_permission
 from app.models.common_control_mapping import CommonControlMapping
 from app.models.control import Control
@@ -140,6 +141,7 @@ def create_control(
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
     _: Membership = Depends(require_permission("controls:write")),
+    __: Organization = require_capacity("controls"),
 ) -> ControlRead:
     ControlService.ensure_owner_is_active_member(db, organization.id, payload.owner_user_id)
 

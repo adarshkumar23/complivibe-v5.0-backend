@@ -1,5 +1,6 @@
 import uuid
 from app.models.compliance_policy_version import CompliancePolicyVersion
+from app.models.organization import Organization
 from tests.helpers.auth_org import bootstrap_org_user
 
 BASE_TEMPLATES = "/api/v1/compliance/policy-templates"
@@ -60,6 +61,13 @@ def test_g6_direct_create_accepts_every_policy_type_a_template_can_apply(client,
     template-only values) now succeeds instead of 422.
     """
     org = bootstrap_org_user(client, email_prefix="partD-g6-policytype")
+    # This test exercises policy_type acceptance (template-apply + 5 direct
+    # creates = 6 policies), not the Free-tier 5-record cap. Run it on an
+    # uncapped plan so the cap doesn't mask the schema behaviour under test.
+    _g6_org = db_session.get(Organization, uuid.UUID(org["organization_id"]))
+    _g6_org.subscription_plan = "enterprise"
+    _g6_org.subscription_status = "active"
+    db_session.commit()
 
     templates = client.get(BASE_TEMPLATES, headers=org["org_headers"])
     assert templates.status_code == 200

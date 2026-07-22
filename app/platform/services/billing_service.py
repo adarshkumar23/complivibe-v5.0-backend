@@ -732,3 +732,26 @@ class BillingService:
         if value is None:
             return True
         return bool(value)
+
+    def record_cap_for(self, org_id: uuid.UUID, resource: str) -> int | None:
+        """Return the org plan's creation cap for a core resource, or None if uncapped.
+
+        Reads plan.features["record_caps"][resource]. Free = 5 each; all paid
+        plans (and trial) carry record_caps={} -> uncapped (None). Mirrors
+        check_feature_access's self-healing seed so a not-yet-seeded plan row
+        can't silently disable the cap.
+        """
+        self.ensure_default_plans()
+        org = self.db.get(Organization, org_id)
+        if not org:
+            return None
+        plan = self.db.execute(
+            select(SubscriptionPlan).where(SubscriptionPlan.plan_code == org.subscription_plan)
+        ).scalar_one_or_none()
+        if not plan:
+            return None
+        caps = (plan.features or {}).get("record_caps") or {}
+        cap = caps.get(resource)
+        if isinstance(cap, bool) or not isinstance(cap, int):
+            return None
+        return cap
