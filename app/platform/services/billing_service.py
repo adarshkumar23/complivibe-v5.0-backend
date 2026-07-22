@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import hashlib
 import uuid
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.organization import Organization
 from app.models.subscription_plan import SubscriptionPlan
+from app.models.trial_code import TrialCode
 from app.models.user import User
 from app.platform.services.razorpay_service import RazorpayService
 from app.services.audit_service import AuditService
@@ -399,14 +401,101 @@ class BillingService:
         self.db.flush()
 
     def start_trial(self, org_id: uuid.UUID) -> None:
+        """Move an org onto the 14-day full-feature Trial.
+
+        Trial is a real plan (plan_code="trial", enterprise-equivalent features)
+        with status="active" -- trial-ness is expressed by plan_code +
+        trial_ends_at, not by a separate status. Entered ONLY by redeeming a
+        single-use trial code; never auto-started at registration (that is
+        start_free). trial_ends_at is set even after the trial ends, which is
+        what enforces one-trial-per-org-lifetime.
+        """
         org = self.db.get(Organization, org_id)
         if not org:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
         settings = get_settings()
-        org.subscription_status = "trial"
-        org.subscription_plan = "starter"
+        org.subscription_plan = "trial"
+        org.subscription_status = "active"
         org.trial_ends_at = self.utcnow() + timedelta(days=settings.TRIAL_DAYS)
         self.db.flush()
+
+    @staticmethod
+    def _hash_trial_code(code: str) -> str:
+        return hashlib.sha256(code.strip().upper().encode("utf-8")).hexdigest()
+
+    def redeem_trial_code(self, org_id: uuid.UUID, user_id: uuid.UUID, code: str) -> dict:
+        """Redeem a single-use trial code, moving a Free org onto a 14-day Trial.
+
+        Rejections (distinct, clear):
+          * not_eligible      -- org is not currently on the Free plan.
+          * already_trialed   -- org has EVER had a trial (trial_ends_at set),
+                                 enforcing one-trial-per-org-lifetime.
+          * invalid_code      -- no such code.
+          * code_already_used -- code exists but was already redeemed.
+
+        Eligibility is checked BEFORE claiming a code, so an ineligible org never
+        consumes one. The org row is locked (FOR UPDATE) to serialise concurrent
+        redemptions by the same org, and the code claim is an atomic
+        `redeemed_at IS NULL` UPDATE, so two concurrent redemptions of the same
+        code yield exactly one winner.
+        """
+        self.ensure_default_plans()
+        org = self.db.get(Organization, org_id, with_for_update=True)
+        if not org:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Org not found")
+
+        # 1) Eligibility -- never consume a code for an ineligible org.
+        if org.subscription_plan != "free":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "not_eligible",
+                    "message": "Trial codes can only be redeemed while on the Free plan.",
+                },
+            )
+        if org.trial_ends_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "already_trialed",
+                    "message": "This organization has already used its trial. Only one trial is allowed per organization.",
+                },
+            )
+
+        # 2) Atomic single-use claim.
+        code_hash = self._hash_trial_code(code)
+        now = self.utcnow()
+        result = self.db.execute(
+            update(TrialCode)
+            .where(TrialCode.code_hash == code_hash, TrialCode.redeemed_at.is_(None))
+            .values(redeemed_at=now, redeemed_by_org_id=org_id)
+        )
+        if result.rowcount != 1:
+            # 0 rows: distinguish invalid vs already-used only for the message.
+            exists = self.db.execute(
+                select(TrialCode.id).where(TrialCode.code_hash == code_hash)
+            ).scalar_one_or_none()
+            if exists is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"error": "invalid_code", "message": "That trial code is not valid."},
+                )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": "code_already_used", "message": "That trial code has already been redeemed."},
+            )
+
+        # 3) Start the trial + audit, in the same transaction as the claim.
+        self.start_trial(org_id)
+        AuditService(self.db).write_audit_log(
+            action="trial_code.redeemed",
+            entity_type="trial_codes",
+            organization_id=org_id,
+            actor_user_id=user_id,
+            after_json={"code_prefix": code.strip().upper()[:7]},
+        )
+        self.db.flush()
+        return self.get_billing_status(org_id)
 
     def initiate_subscription(
         self,
@@ -546,7 +635,9 @@ class BillingService:
         plan = self.db.execute(select(SubscriptionPlan).where(SubscriptionPlan.plan_code == org.subscription_plan)).scalar_one_or_none()
         features = plan.features if plan else {}
 
-        is_trial = org.subscription_status == "trial"
+        # Trial-ness is carried by plan_code (status is "active"). A legacy
+        # status=="trial" org (pre-access-model) is still treated as a trial.
+        is_trial = org.subscription_plan == "trial" or org.subscription_status == "trial"
         trial_days_remaining = None
         context_flags: list[str] = []
         now = self.utcnow()

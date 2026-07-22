@@ -135,6 +135,7 @@ from app.models.compliance_risk_recommendation import ComplianceRiskRecommendati
 from app.models.compound_insight import CompoundInsight, CompoundInsightCandidate
 from app.models.evidence_ai_assessment import EvidenceAiAssessment, EvidenceAiAssessmentCandidate
 from app.models.billing_event import BillingEvent
+from app.models.trial_code import TrialCode
 from app.models.competitor_pricing_entry import CompetitorPricingEntry
 from app.models.competitor_pricing_version import CompetitorPricingVersion
 from app.models.certification_program import CertificationProgram

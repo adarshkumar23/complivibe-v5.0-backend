@@ -12,6 +12,10 @@ class BillingSubscribeRequest(BaseModel):
     billing_cycle: Literal["monthly", "annual"] = "monthly"
 
 
+class TrialCodeRedeemRequest(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
+
+
 class BillingCancelRequest(BaseModel):
     cancel_at_cycle_end: bool = True
 

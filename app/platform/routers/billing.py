@@ -19,6 +19,7 @@ from app.platform.schemas.billing import (
     BillingSubscribeRequest,
     BillingSubscribeResponse,
     RazorpayWebhookResponse,
+    TrialCodeRedeemRequest,
     UsageBillingDashboardRead,
     UsageBillingSyncResponse,
     UsageSpendCapUpdateRequest,
@@ -55,6 +56,26 @@ def subscribe(
     )
     db.commit()
     return BillingSubscribeResponse(**result)
+
+
+@router.post("/redeem-trial-code", response_model=BillingStatusResponse)
+def redeem_trial_code(
+    payload: TrialCodeRedeemRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
+    membership: Membership = Depends(require_permission("org:update")),
+) -> BillingStatusResponse:
+    # Lives under /billing (Category D -- never feature-gated), so a locked
+    # Free org can always reach it to redeem a trial and upgrade.
+    _require_admin_membership(db, membership)
+    result = BillingService(db).redeem_trial_code(
+        org_id=organization.id,
+        user_id=current_user.id,
+        code=payload.code,
+    )
+    db.commit()
+    return BillingStatusResponse(**result)
 
 
 @router.get("/status", response_model=BillingStatusResponse)
