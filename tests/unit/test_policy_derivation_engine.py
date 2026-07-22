@@ -225,3 +225,52 @@ def test_envelope_accepts_clean_action():
         }
     )
     assert env.action_type == "transfer"
+
+
+# --------------------------------------------------------------------------- #
+# Regression (Batch-5): an extracted restricted-data-category (PII) constraint
+# must be RENDERED into the enforceable Rego, not silently dropped when the
+# obligation is a general processing restriction (cross-border not forbidden).
+# --------------------------------------------------------------------------- #
+_NO_PII_OBLIGATION = ObligationRecord(
+    id="obl-no-pii-llm",
+    text=(
+        "Personal data must not be processed by or sent to external large language "
+        "model providers under any circumstances."
+    ),
+    jurisdiction="IN",
+    framework="DPDP",
+    citation="DPDP s.8",
+    control_ids=("CTRL-PII-01",),
+)
+
+
+def test_restricted_category_is_rendered_into_rego_even_when_cross_border_allowed():
+    spec = derive_constraint_spec([_NO_PII_OBLIGATION])
+    # Extraction already works: the category is captured, and since the text does not
+    # use cross-border-forbidden phrasing, cross_border_transfer_allowed stays True.
+    assert spec.data_scope is not None
+    assert "pii" in spec.data_scope.restricted_categories
+    assert spec.data_scope.cross_border_transfer_allowed is True
+
+    _, rego = derive_and_compile([_NO_PII_OBLIGATION], org_id="org-abc")
+
+    # The bug: the generated Rego only carried the financial-limits template, so the
+    # extracted PII restriction was unenforceable. The policy MUST contain a deny rule
+    # that references the restricted data category.
+    assert '"pii"' in rego, "restricted category pii is not referenced anywhere in the generated Rego"
+    deny_blocks = [b for b in rego.split("deny contains reason if {") if "data_categories" in b and '"pii"' in b]
+    assert deny_blocks, "no deny rule enforces the restricted data category (pii) in the generated Rego"
+
+
+@opa_required
+def test_no_pii_policy_denies_action_touching_pii_via_real_opa():
+    _, rego = derive_and_compile([_NO_PII_OBLIGATION], org_id="org-abc", opa_path=OPA)
+    # A domestic (non-cross-border) action that still touches PII must be denied by the
+    # rendered restricted-category rule -- proving the extracted constraint is enforced.
+    result = _opa_eval(
+        rego,
+        {"action": {"amount": 0, "cross_border": False, "data_categories": ["pii"]}},
+        "data.complivibe.guardrails.org_org_abc.allow",
+    )
+    assert result is False

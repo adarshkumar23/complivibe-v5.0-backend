@@ -324,17 +324,35 @@ def compile_constraint_spec(spec: ConstraintSpec, org_id: str) -> str:
             "",
         ]
 
-    if spec.data_scope is not None and not spec.data_scope.cross_border_transfer_allowed:
+    if spec.data_scope is not None and spec.data_scope.restricted_categories:
         restricted = _rego_string_list(spec.data_scope.restricted_categories)
-        lines += [
-            "deny contains reason if {",
-            "\tinput.action.cross_border == true",
-            "\tsome category in input.action.data_categories",
-            f"\tcategory in {restricted}",
-            '\treason := sprintf("cross-border transfer of restricted category %v is not permitted", [category])',
-            "}",
-            "",
-        ]
+        if not spec.data_scope.cross_border_transfer_allowed:
+            # The obligation forbids cross-border transfer specifically: deny only when the
+            # action moves a restricted category across a border (domestic processing stays
+            # allowed). Unchanged from the original renderer.
+            lines += [
+                "deny contains reason if {",
+                "\tinput.action.cross_border == true",
+                "\tsome category in input.action.data_categories",
+                f"\tcategory in {restricted}",
+                '\treason := sprintf("cross-border transfer of restricted category %v is not permitted", [category])',
+                "}",
+                "",
+            ]
+        else:
+            # The obligation restricts PROCESSING of these categories (not specifically a
+            # cross-border transfer), so any action touching one is denied. Without this
+            # branch the extracted restricted-category (e.g. PII) constraint was captured in
+            # the spec but never rendered into an enforceable deny rule, leaving a derived
+            # "no personal data" guardrail that did not actually check PII (Batch-5 finding).
+            lines += [
+                "deny contains reason if {",
+                "\tsome category in input.action.data_categories",
+                f"\tcategory in {restricted}",
+                '\treason := sprintf("processing of restricted data category %v is not permitted by policy", [category])',
+                "}",
+                "",
+            ]
 
     if spec.approval_requirements and spec.approval_requirements[0].required:
         min_approvers = spec.approval_requirements[0].min_approvers
