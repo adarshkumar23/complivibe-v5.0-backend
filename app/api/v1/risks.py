@@ -486,25 +486,24 @@ def update_risk(
     inherent_score = RiskScoringService.compute_score(risk, settings)
     severity = service.score_to_severity(inherent_score)
     # Validate bounds the same way calculate_scores always has (defense in depth on top of
-    # the Pydantic ge/le=1/5 field constraints); its plain likelihood*impact residual_score
-    # return value is discarded below in favor of a method-aware computation, since a
-    # factor_based risk needs factor-based residual scoring too, not the standard formula.
+    # the Pydantic ge/le=1/5 field constraints). Its plain likelihood*impact residual_score
+    # return value is discarded: residual_likelihood/impact are auto-managed fields, re-derived
+    # from mitigating controls just below (see _recompute_residual), not caller-set overrides.
     service.calculate_scores(
         likelihood=risk.likelihood,
         impact=risk.impact,
         residual_likelihood=risk.residual_likelihood,
         residual_impact=risk.residual_impact,
     )
-    residual_score = RiskScoringService.compute_residual_score(
-        risk,
-        settings,
-        residual_likelihood=risk.residual_likelihood,
-        residual_impact=risk.residual_impact,
-        inherent_score=inherent_score,
-    )
     risk.inherent_score = inherent_score
     risk.severity = severity
-    risk.residual_score = residual_score
+    # Re-derive residual (l/i/score) from the NEW inherent + currently-mitigating controls --
+    # the SAME recompute a control/evidence/vendor event triggers via RiskRecalculationListener.
+    # A direct likelihood/impact edit must therefore leave residual consistent immediately, not
+    # stale until an unrelated event fires (Batch-2: editing to 5x5 with no effective control
+    # must give residual 25, never a stale 16). Method-aware: compute_residual applies the
+    # risk's active composite_score_method, so factor_based residual scoring is preserved.
+    _recompute_residual(db, organization.id, risk)
 
     db.flush()
 
@@ -542,6 +541,30 @@ def update_risk(
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
+
+    # When the edit actually moved a score, leave the same risk.score_recalculated trail the
+    # control/evidence/vendor event path emits (RiskRecalculationListener), so residual/inherent
+    # changes are attributable regardless of what triggered the recompute.
+    if before["inherent_score"] != risk.inherent_score or before["residual_score"] != risk.residual_score:
+        AuditService(db).write_audit_log(
+            action="risk.score_recalculated",
+            entity_type="risk",
+            entity_id=risk.id,
+            organization_id=organization.id,
+            actor_user_id=current_user.id,
+            metadata_json={
+                "context_json": {
+                    "triggered_by_event": "risk.updated",
+                    "triggered_by_entity_type": "risk",
+                    "triggered_by_entity_id": str(risk.id),
+                    "previous_score": before["inherent_score"],
+                    "new_score": risk.inherent_score,
+                    "previous_residual_score": before["residual_score"],
+                    "new_residual_score": risk.residual_score,
+                    "score_method": risk.composite_score_method,
+                }
+            },
+        )
 
     if before["composite_score_method"] != risk.composite_score_method:
         AuditService(db).write_audit_log(

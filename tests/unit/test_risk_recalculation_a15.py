@@ -461,3 +461,86 @@ def test_a15_clear_listeners_clears_registry():
     assert bus._listeners
     bus.clear_listeners()
     assert bus._listeners == {}
+
+
+def _get_risk_row(db_session, risk_id: str) -> Risk:
+    return db_session.execute(select(Risk).where(Risk.id == uuid.UUID(risk_id))).scalar_one()
+
+
+def test_a15_risk_edit_rederives_residual_from_current_inherent_and_controls(client, db_session):
+    """Editing likelihood/impact must re-derive residual (l/i/score) from the CURRENT
+    inherent + currently-mitigating controls -- exactly as a control/evidence/vendor event
+    would -- so residual can never silently understate risk after a direct risk edit.
+
+    Regression for the Batch-2 walkthrough finding: a risk edited up to 5x5 (inherent 25)
+    with no effective mitigating control kept a stale residual of 16 instead of 25.
+    """
+    org = bootstrap_org_user(client, email_prefix="a15-residual-stale")
+    headers = org["org_headers"]
+
+    # 4x4 risk, one control that DOES mitigate (implemented) -> residual drops below inherent.
+    risk_id = _create_risk(client, headers, title="Residual staleness", likelihood=4, impact=4)
+    control_id = _create_control(client, headers, title="Mitigating control")
+    assert client.patch(
+        f"/api/v1/controls/{control_id}", headers=headers, json={"status": "implemented"}
+    ).status_code == 200
+    _link_risk_control(client, headers, risk_id, control_id)
+
+    row = _get_risk_row(db_session, risk_id)
+    db_session.refresh(row)
+    assert row.inherent_score == 16
+    assert row.residual_score == 12  # implemented control reduces likelihood 4 -> 3
+
+    # The control FAILS: via the event bus this recomputes residual back up to inherent (16).
+    assert client.patch(
+        f"/api/v1/controls/{control_id}", headers=headers, json={"status": "failed"}
+    ).status_code == 200
+    row = _get_risk_row(db_session, risk_id)
+    db_session.refresh(row)
+    assert row.residual_score == 16  # failed control no longer mitigates
+
+    # Now edit the risk UP to 5x5. inherent must become 25 and -- since no control mitigates
+    # -- residual must ALSO become 25, not stay stale at 16.
+    resp = client.patch(
+        f"/api/v1/risks/{risk_id}", headers=headers, json={"likelihood": 5, "impact": 5}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["inherent_score"] == 25
+    assert body["residual_score"] == 25, "residual understated after risk edit (stale residual bug)"
+    assert body["residual_likelihood"] == 5
+    assert body["residual_impact"] == 5
+
+    # And it must equal what a control event would independently produce (same recompute path).
+    row = _get_risk_row(db_session, risk_id)
+    db_session.refresh(row)
+    linked = RiskRecalculationListener()._linked_active_controls(
+        org_id=uuid.UUID(org["organization_id"]), risk_id=row.id, db=db_session
+    )
+    from app.compliance.services.risk_scoring_service import RiskScoringService
+
+    settings = RiskScoringService.get_or_create_org_settings(uuid.UUID(org["organization_id"]), db_session)
+    expected = RiskScoringService.compute_residual(row, linked, row.inherent_score, settings)
+    assert (row.residual_likelihood, row.residual_impact, row.residual_score) == expected
+
+
+def test_a15_risk_edit_emits_score_recalculated_audit(client, db_session):
+    """A risk edit that changes the residual/inherent must leave a risk.score_recalculated
+    audit trail, the same event the control-event recompute path emits."""
+    org = bootstrap_org_user(client, email_prefix="a15-residual-audit")
+    headers = org["org_headers"]
+    risk_id = _create_risk(client, headers, title="Residual audit", likelihood=2, impact=2)
+
+    resp = client.patch(
+        f"/api/v1/risks/{risk_id}", headers=headers, json={"likelihood": 5, "impact": 5}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["residual_score"] == 25  # 2x2 residual must not stay stale at 4
+
+    events = db_session.execute(
+        select(AuditLog).where(
+            AuditLog.entity_id == uuid.UUID(risk_id),
+            AuditLog.action == "risk.score_recalculated",
+        )
+    ).scalars().all()
+    assert events, "risk edit did not emit a risk.score_recalculated audit event"

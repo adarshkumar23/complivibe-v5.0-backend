@@ -276,7 +276,11 @@ def test_risk_update_owner_validation_archive_accept_and_audit(client, db_sessio
     assert updated.status_code == 200
     assert updated.json()["inherent_score"] == 16
     assert updated.json()["severity"] == "high"
-    assert updated.json()["residual_score"] == 4
+    # residual is auto-managed: re-derived from the current inherent + mitigating controls
+    # on every edit (same as a control event), so the caller-supplied residual_likelihood/
+    # impact are not durable overrides. With no mitigating control linked, residual mirrors
+    # inherent (16), not the supplied 2x2=4. See risk L/I-edit residual recompute fix.
+    assert updated.json()["residual_score"] == 16
 
     no_reason_accept = client.post(f"/api/v1/risks/{risk_id}/accept", headers=_headers(owner1, org1), json={})
     assert no_reason_accept.status_code == 422
