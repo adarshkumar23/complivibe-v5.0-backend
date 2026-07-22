@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -39,6 +39,7 @@ from app.ai_governance.services.governance_workflow_engine import GovernanceWork
 from app.core.deps import get_db
 from app.core.rate_limiter import rate_limiter
 from app.models.ai_monitoring_config import AIMonitoringConfig
+from app.models.ai_system import AISystem
 
 router = APIRouter(prefix="/patent-ingest/p4", tags=["patent-ingest-p4"])
 
@@ -58,6 +59,24 @@ def post_monitoring_reading(
     waiting on it. The response reports what core decided, so a satellite can log it,
     but it deliberately carries no verdict the satellite could act on.
     """
+    # The organisation is derived from the key, never the payload -- but the referenced
+    # ai_system_id is caller-supplied, so it must be validated to belong to THAT org. A key
+    # referencing another org's system_id would otherwise persist a reading stamped with the
+    # key's org yet pointing at a system that org does not own (an orphan measurement that no
+    # config could ever evaluate). Reject rather than store it. Batch-5 finding.
+    system_in_org = db.execute(
+        select(AISystem.id).where(
+            AISystem.id == payload.ai_system_id,
+            AISystem.organization_id == org_id,
+            AISystem.deleted_at.is_(None),
+        )
+    ).scalar_one_or_none()
+    if system_in_org is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="ai_system_id does not belong to this key's organization",
+        )
+
     bridge = ComplianceEventBridge(db)
     reading = bridge.record_collected_reading(
         org_id,

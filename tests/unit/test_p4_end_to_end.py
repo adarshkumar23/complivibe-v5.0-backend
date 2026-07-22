@@ -368,3 +368,83 @@ def test_push_is_scoped_to_the_key_issuing_organization(client, db_session, org_
     )
     assert response.status_code == 202
     assert response.json()["organization_id"] == str(org_env["org"].id)
+
+
+# ============================================ ai_system_id must belong to the key's org
+
+def _readings_count(db_session, org_id) -> int:
+    from app.models.ai_monitoring_reading import AIMonitoringReading
+
+    return len(
+        db_session.execute(
+            select(AIMonitoringReading).where(AIMonitoringReading.organization_id == org_id)
+        ).scalars().all()
+    )
+
+
+def test_push_rejects_ai_system_from_a_different_org_and_persists_no_orphan(client, db_session, org_env):
+    """A key references its own org; a reading whose ai_system_id belongs to ANOTHER org
+    must be rejected, not silently stamped with the key's org (which left an orphan reading
+    pointing at a foreign system). Batch-5 finding."""
+    other_org = Organization(id=uuid.uuid4(), name="P4 Other Org")
+    other_system = AISystem(
+        id=uuid.uuid4(),
+        organization_id=other_org.id,
+        name="Other Org Model",
+        system_type="internal_model",
+        lifecycle_status="production",
+    )
+    db_session.add_all([other_org, other_system])
+    db_session.flush()
+
+    key = _p4_key(db_session, org_env["org"].id)
+    db_session.commit()
+
+    before = _readings_count(db_session, org_env["org"].id)
+    resp = client.post(
+        P4_PUSH,
+        json=_push_body(other_system.id),  # foreign system id, our key
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    assert resp.status_code == 404, resp.text
+    # No orphan reading stamped with our org.
+    db_session.expire_all()
+    assert _readings_count(db_session, org_env["org"].id) == before
+
+
+def test_push_rejects_a_nonexistent_ai_system(client, db_session, org_env):
+    key = _p4_key(db_session, org_env["org"].id)
+    db_session.commit()
+    resp = client.post(
+        P4_PUSH,
+        json=_push_body(uuid.uuid4()),  # no such system anywhere
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    assert resp.status_code == 404, resp.text
+
+
+def test_legitimate_same_org_push_still_records_and_dispatches(client, db_session, org_env):
+    """The Batch-5 happy path must still work end-to-end: a same-org breaching reading is
+    stored, its tier evaluated, and a workflow dispatched."""
+    org = org_env["org"]
+    system = org_env["system"]
+    db_session.add(
+        _config(org.id, system.id, org_env["user"].id, tier="default", order=1, workflow="create_alert", threshold="0.80")
+    )
+    db_session.flush()
+    key = _p4_key(db_session, org.id)
+    db_session.commit()
+
+    before = _readings_count(db_session, org.id)
+    resp = client.post(
+        P4_PUSH,
+        json=_push_body(system.id, value="0.65"),  # 0.65 <= 0.80 -> breach
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+    assert body["organization_id"] == str(org.id)
+    assert body["breach_events"] == 1
+    assert body["tiers_dispatched"] == ["default"]
+    db_session.expire_all()
+    assert _readings_count(db_session, org.id) == before + 1
