@@ -1,3 +1,4 @@
+from app.data_observability.services.indian_pii_patterns import detect_indian_pii_entities
 from app.data_observability.services.presidio_loader import get_presidio
 
 CLASSIFICATION_RULES = {
@@ -214,40 +215,58 @@ def _map_class_to_tier(class_type: str) -> str | None:
     }.get(class_type)
 
 
+_SAMPLE_REVIEW_WARNING = (
+    "This result is based on a submitted text sample. "
+    "Human review and confirmation is required before classification is applied."
+)
+_BUILTIN_ENGINE_NOTE = (
+    " Presidio is not installed, so detection used the always-available built-in "
+    "Indian-PII matcher (Aadhaar/PAN/mobile) only; install the optional 'presidio' "
+    "extra for broader multi-entity contextual detection."
+)
+
+
 def classify_sample(sample_text: str, language: str = "en") -> dict:
+    """Detect PII entities in a submitted text sample.
+
+    Degrades gracefully by design: if Presidio is installed it is used (richer, contextual,
+    multi-entity detection); if it is not, detection falls back to the built-in Indian-PII
+    matcher (Aadhaar + Verhoeff checksum, PAN, Indian mobile) so the feature ALWAYS returns
+    real detections rather than an "unavailable" stub. ``detection_engine`` reports which
+    path ran so the result is transparent.
+    """
     engine = get_presidio()
-    if engine is None:
-        return {
-            "status": "unavailable",
-            "message": "Presidio analyzer not available.",
-            "entities": [],
-        }
 
-    results = engine.analyze(text=sample_text, language=language)
-
-    entities = []
-    for result in results:
-        entities.append(
+    if engine is not None:
+        results = engine.analyze(text=sample_text, language=language)
+        entities = [
             {
                 "entity_type": result.entity_type,
                 "score": round(result.score, 3),
                 "start": result.start,
                 "end": result.end,
             }
-        )
+            for result in results
+        ]
+        detection_engine = "presidio"
+        source = "presidio_sample"
+    else:
+        entities = [
+            {**entity, "score": round(entity["score"], 3)} for entity in detect_indian_pii_entities(sample_text)
+        ]
+        detection_engine = "builtin"
+        source = "builtin_indian_pii"
 
     classification_type = _map_entities_to_class([item["entity_type"] for item in entities])
     max_score = max((item["score"] for item in entities), default=0.0)
 
     return {
         "status": "success",
+        "detection_engine": detection_engine,
         "entities": entities,
         "suggested_classification": classification_type,
         "suggested_sensitivity_tier": _map_class_to_tier(classification_type),
         "confidence": round(max_score, 3),
-        "source": "presidio_sample",
-        "warning": (
-            "This result is based on a submitted text sample. "
-            "Human review and confirmation is required before classification is applied."
-        ),
+        "source": source,
+        "warning": _SAMPLE_REVIEW_WARNING + ("" if detection_engine == "presidio" else _BUILTIN_ENGINE_NOTE),
     }

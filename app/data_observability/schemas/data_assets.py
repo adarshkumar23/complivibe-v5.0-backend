@@ -120,6 +120,7 @@ class PresidioEntity(BaseModel):
 
 class DataAssetSampleClassificationRead(BaseModel):
     status: str
+    detection_engine: str | None = None
     message: str | None = None
     entities: list[PresidioEntity] | list[dict]
     suggested_classification: str | None = None

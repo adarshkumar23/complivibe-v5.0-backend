@@ -53,6 +53,15 @@ dev = [
   "httpx>=0.28.1,<1.0.0",
   "pytest-cov>=6.2.1,<7.0.0"
 ]
+# Optional. When installed, the data-asset sample classifier (classify-sample) uses
+# Presidio for richer, contextual, multi-entity detection. It is deliberately NOT a hard
+# runtime dependency (keeps the deployment lean): without it, classification falls back to
+# the always-available built-in Indian-PII matcher (Aadhaar/PAN/mobile). Install with
+# `pip install -e '.[presidio]'` to enable the richer path.
+presidio = [
+  "presidio-analyzer>=2.2,<3.0",
+  "spacy>=3.7,<4.0"
+]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

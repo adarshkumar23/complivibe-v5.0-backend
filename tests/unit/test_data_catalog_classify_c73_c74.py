@@ -211,9 +211,15 @@ def test_c74_classification_engine(monkeypatch, client):
     assert sample_result["warning"] is not None
     assert "Human review" in sample_result["warning"]
 
+    # With Presidio absent, classification degrades gracefully to the built-in Indian-PII
+    # matcher rather than returning an "unavailable" stub: it still runs and returns a real
+    # (here empty, since "any" has no PII) result, flagged as engine "builtin".
     monkeypatch.setattr(classification_service, "get_presidio", lambda: None)
-    unavailable_result = classify_sample("any")
-    assert unavailable_result["status"] == "unavailable"
+    builtin_result = classify_sample("any")
+    assert builtin_result["status"] == "success"
+    assert builtin_result["detection_engine"] == "builtin"
+    assert builtin_result["entities"] == []
+    assert builtin_result["suggested_classification"] == "unclassified"
 
     org = bootstrap_org_user(client, email_prefix="c74-org")
     asset = _create_asset(

@@ -60,6 +60,54 @@ def pan_format_valid(candidate: str) -> bool:
     return bool(re.fullmatch(PAN_REGEX, candidate.strip().upper()))
 
 
+# Confidence scores mirror the Presidio PatternRecognizer scores below, so a caller sees
+# comparable confidences whether detection came from Presidio or this built-in path.
+_AADHAAR_SCORE = 0.5
+_PAN_SCORE = 0.6
+_PHONE_SCORE = 0.4
+
+
+def detect_indian_pii_entities(text: str) -> list[dict]:
+    """Presidio-free detection of Indian PII (Aadhaar, PAN, Indian mobile) in a text sample.
+
+    Reuses the SAME regexes and the SAME Verhoeff / PAN validators as the Presidio custom
+    recognizers in ``get_custom_recognizers`` — this is the always-available fallback used
+    when ``presidio_analyzer`` is not installed, so Indian PII detection degrades gracefully
+    to a real result instead of returning nothing.
+
+    Returns a list of ``{"entity_type", "score", "start", "end"}`` dicts (the same shape the
+    Presidio path emits). An Aadhaar candidate is only emitted when its Verhoeff check digit
+    validates — matching ``AadhaarRecognizer.validate_result`` — so a merely 12-digit string
+    is not a false positive. Overlapping matches are de-duplicated preferring the longer span,
+    so a 10-digit phone substring inside a 12-digit Aadhaar is not double-counted.
+    """
+    candidates: list[dict] = []
+
+    for match in re.finditer(AADHAAR_REGEX, text):
+        if verhoeff_checksum_valid(match.group()):
+            candidates.append(
+                {"entity_type": IN_AADHAAR, "score": _AADHAAR_SCORE, "start": match.start(), "end": match.end()}
+            )
+
+    for match in re.finditer(PAN_REGEX, text):
+        candidates.append({"entity_type": IN_PAN, "score": _PAN_SCORE, "start": match.start(), "end": match.end()})
+
+    for match in re.finditer(INDIAN_PHONE_REGEX, text):
+        candidates.append(
+            {"entity_type": IN_PHONE_NUMBER, "score": _PHONE_SCORE, "start": match.start(), "end": match.end()}
+        )
+
+    # Prefer the earliest-starting, then longest, span; drop any candidate fully contained
+    # within an already-accepted span (e.g. a phone match inside an Aadhaar number).
+    candidates.sort(key=lambda c: (c["start"], -(c["end"] - c["start"])))
+    accepted: list[dict] = []
+    for cand in candidates:
+        if any(cand["start"] >= acc["start"] and cand["end"] <= acc["end"] for acc in accepted):
+            continue
+        accepted.append(cand)
+    return accepted
+
+
 def get_custom_recognizers() -> list:
     """Build Presidio PatternRecognizers for Aadhaar/PAN/Indian phone. Returns an empty
     list if presidio_analyzer is not installed, mirroring presidio_loader's own
