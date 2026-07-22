@@ -40,7 +40,11 @@ def test_onboarding_start_and_slug_checks(client, db_session):
 
     org = db_session.get(Organization, UUID(body["org_id"]))
     assert org is not None
-    assert org.subscription_status == "trial"
+    # Stage 1c-1: onboarding lands a new org on the Free plan (active, no trial),
+    # not an auto-started trial. Trial is entered only by redeeming a trial code.
+    assert org.subscription_status == "active"
+    assert org.subscription_plan == "free"
+    assert org.trial_ends_at is None
 
     welcome = db_session.execute(
         select(EmailOutbox).where(

@@ -76,9 +76,12 @@ def test_billing_schema_and_plan_seed_and_features(client, db_session):
     plans_resp = client.get("/api/v1/billing/plans")
     assert plans_resp.status_code == 200
     plans = plans_resp.json()
-    assert len(plans) == 4
+    # Access model (Stage 1c-1) adds the "free" and "trial" plan rows to the
+    # pre-existing starter/growth/enterprise/usage_flex, for 6 total.
+    assert len(plans) == 6
 
     by_code = {item["plan_code"]: item for item in plans}
+    assert set(by_code) == {"free", "trial", "starter", "growth", "enterprise", "usage_flex"}
     assert by_code["starter"]["features"]["max_users"] == 5
     assert by_code["starter"]["features"]["sso_enabled"] is False
     assert by_code["starter"]["plan_type"] == "fixed"
@@ -86,17 +89,30 @@ def test_billing_schema_and_plan_seed_and_features(client, db_session):
     assert by_code["enterprise"]["features"]["max_users"] is None
     assert by_code["usage_flex"]["plan_type"] == "usage_based"
     assert by_code["usage_flex"]["usage_unit_price_inr"] == 12.0
+    # Free = capped core creation, only privacy_basic among premium flags.
+    assert by_code["free"]["features"]["record_caps"] == {"policies": 5, "controls": 5, "evidence": 5, "risks": 5}
+    assert by_code["free"]["features"]["privacy_basic"] is True
+    assert by_code["free"]["features"]["ai_governance_module"] is False
+    # Trial = enterprise-equivalent, uncapped.
+    assert by_code["trial"]["features"]["record_caps"] == {}
+    assert by_code["trial"]["features"]["ai_governance_module"] is True
 
-    # G9 item 11: all 4 plans must have a real (even if placeholder) Razorpay plan-ID
-    # mapping seeded, both monthly and annual -- otherwise subscribe fails locally
-    # before ever reaching Razorpay.
+    # Purchasable (Razorpay-billable) plans must each have a real (even if
+    # placeholder) Razorpay plan-ID mapping, monthly and annual -- otherwise
+    # subscribe fails locally before ever reaching Razorpay. Free and Trial are
+    # NOT Razorpay-purchasable, so they intentionally carry no plan-ID mapping.
+    PURCHASABLE = {"starter", "growth", "enterprise", "usage_flex"}
     seeded_plans = db_session.execute(select(SubscriptionPlan)).scalars().all()
-    assert len(seeded_plans) == 4
+    assert len(seeded_plans) == 6
     for plan in seeded_plans:
-        assert plan.razorpay_plan_id, f"{plan.plan_code} missing razorpay_plan_id"
-        assert plan.razorpay_annual_plan_id, f"{plan.plan_code} missing razorpay_annual_plan_id"
-        assert plan.razorpay_plan_id.startswith("plan_")
-        assert plan.razorpay_annual_plan_id.startswith("plan_")
+        if plan.plan_code in PURCHASABLE:
+            assert plan.razorpay_plan_id, f"{plan.plan_code} missing razorpay_plan_id"
+            assert plan.razorpay_annual_plan_id, f"{plan.plan_code} missing razorpay_annual_plan_id"
+            assert plan.razorpay_plan_id.startswith("plan_")
+            assert plan.razorpay_annual_plan_id.startswith("plan_")
+        else:  # free / trial
+            assert plan.razorpay_plan_id is None
+            assert plan.razorpay_annual_plan_id is None
 
 
 def test_subscribe_never_fails_locally_for_missing_plan_id_mapping(client, db_session):
@@ -117,16 +133,22 @@ def test_subscribe_never_fails_locally_for_missing_plan_id_mapping(client, db_se
         assert "not configured" not in response.text
 
 
-def test_trial_status_and_expiry_gate(client, db_session):
-    org = bootstrap_org_user(client, email_prefix="billing-trial")
+def test_registration_lands_on_free_and_expiry_gate(client, db_session):
+    # Stage 1c-1: a newly self-registered org lands on the Free plan (active,
+    # no trial) -- NOT an auto-started trial. A trial is only entered by
+    # redeeming a trial code (Stage 1c-2).
+    org = bootstrap_org_user(client, email_prefix="billing-free")
 
     status_resp = client.get("/api/v1/billing/status", headers=org["org_headers"])
     assert status_resp.status_code == 200
     data = status_resp.json()
-    assert data["subscription_status"] == "trial"
-    assert data["is_trial"] is True
-    assert data["trial_days_remaining"] is None or data["trial_days_remaining"] >= 0
+    assert data["subscription_status"] == "active"
+    assert data["plan"] == "free"
+    assert data["is_trial"] is False
+    assert data["trial_ends_at"] is None
 
+    # The trial-expiry gate itself is unchanged: an org explicitly in an expired
+    # trial is blocked with 402 trial_expired (lazy downgrade lands in 1c-5).
     _set_plan(db_session, org["organization_id"], status="trial", plan="starter", trial_delta_days=-1)
     expired = client.post("/api/v1/sso-configs", headers=org["org_headers"], json=_sso_payload())
     assert expired.status_code == 402

@@ -130,7 +130,7 @@ class OnboardingService:
         db.add(membership)
         db.flush()
 
-        BillingService(db).start_trial(org_id=org.id)
+        BillingService(db).start_free(org_id=org.id)
         self._queue_welcome_email(org=org, user=user, db=db)
 
         AuditService(db).write_audit_log(

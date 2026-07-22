@@ -105,7 +105,7 @@ def register(payload: RegisterRequest, request: Request, response: Response, db:
         )
         db.add(membership)
         db.flush()
-        BillingService(db).start_trial(organization.id)
+        BillingService(db).start_free(organization.id)
 
         audit_service = AuditService(db)
         audit_service.write_audit_log(
