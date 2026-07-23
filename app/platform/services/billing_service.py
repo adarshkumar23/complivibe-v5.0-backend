@@ -5,16 +5,30 @@ import hashlib
 import uuid
 
 from fastapi import HTTPException, status
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.models.compliance_policy import CompliancePolicy
+from app.models.control import Control
+from app.models.evidence_item import EvidenceItem
 from app.models.organization import Organization
+from app.models.risk import Risk
 from app.models.subscription_plan import SubscriptionPlan
 from app.models.trial_code import TrialCode
 from app.models.user import User
 from app.platform.services.razorpay_service import RazorpayService
 from app.services.audit_service import AuditService
+
+# The 4 capped core resources -> the ORM model whose org-scoped row count is
+# BOTH enforced (require_capacity) and reported (record_usage). Single source of
+# truth so the "X of Y used" the UI shows can never disagree with the block.
+CAPACITY_MODELS = {
+    "policies": CompliancePolicy,
+    "controls": Control,
+    "evidence": EvidenceItem,
+    "risks": Risk,
+}
 
 
 # NOTE: these razorpay_plan_id / razorpay_annual_plan_id values are PLACEHOLDERS
@@ -736,6 +750,11 @@ class BillingService:
             "subscription_ends_at": org.subscription_ends_at.isoformat() if org.subscription_ends_at else None,
             "renewal_days_remaining": renewal_days_remaining,
             "features": features,
+            # Current per-resource counts so the UI can show "3 of 5 policies
+            # used" BEFORE a create is blocked. Pairs with features.record_caps
+            # (the limit); both are org-scoped and counted identically to
+            # require_capacity's enforcement.
+            "record_usage": self.record_usage_for(org_id),
             "razorpay_subscription_id": org.razorpay_subscription_id,
             "context_flags": sorted(set(context_flags)),
         }
@@ -789,6 +808,18 @@ class BillingService:
         if value is None:
             return True
         return bool(value)
+
+    def record_count(self, org_id: uuid.UUID, resource: str) -> int:
+        """Org-scoped count of a capped resource. The SINGLE counting path used
+        by both require_capacity (enforcement) and record_usage (reporting)."""
+        model = CAPACITY_MODELS[resource]
+        return self.db.execute(
+            select(func.count()).select_from(model).where(model.organization_id == org_id)
+        ).scalar_one()
+
+    def record_usage_for(self, org_id: uuid.UUID) -> dict[str, int]:
+        """Current counts of all 4 capped resources, for the UI's 'X of Y used'."""
+        return {resource: self.record_count(org_id, resource) for resource in CAPACITY_MODELS}
 
     def record_cap_for(self, org_id: uuid.UUID, resource: str) -> int | None:
         """Return the org plan's creation cap for a core resource, or None if uncapped.

@@ -94,7 +94,7 @@ class TrialLifecycleService:
                 f"(on {self._as_utc(org.trial_ends_at).date().isoformat()}).\n\n"
                 "When it ends, your organization moves to the Free plan -- your data is kept, "
                 "but premium features re-lock and core creation is capped at 5 records each.\n\n"
-                "Upgrade any time to keep full access: /billing/upgrade\n"
+                "Upgrade any time to keep full access: /dashboard/billing\n"
             )
             for user in recipients:
                 self.db.add(

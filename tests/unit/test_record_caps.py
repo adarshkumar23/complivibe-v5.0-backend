@@ -62,7 +62,7 @@ def test_free_org_capped_at_five(client, db_session, resource, path, body):
     assert detail["cap"] == 5
     assert detail["current_plan"] == "free"
     assert resource in detail["message"] and "upgrade" in detail["message"].lower()
-    assert "/billing/upgrade" in detail["upgrade_url"]
+    assert "/dashboard/billing" in detail["upgrade_url"]
 
 
 @pytest.mark.parametrize("plan", ["trial", "enterprise"])
@@ -119,3 +119,44 @@ def test_subcreates_on_capped_org_not_blocked(client, db_session):
     link = client.post(f"/api/v1/risks/{risk_id}/controls", headers=org["org_headers"],
                        json={"control_id": control_id})
     assert link.status_code in (200, 201), link.text
+
+
+def test_record_usage_reported_and_agrees_with_enforcement(client, db_session):
+    # /billing/status must expose current per-resource usage so the UI can show
+    # "X of 5 used" -- and it must count identically to require_capacity, so the
+    # numbers can never disagree with the block.
+    org = bootstrap_org_user(client, email_prefix="usage", plan="free")
+
+    def _usage():
+        return client.get("/api/v1/billing/status", headers=org["org_headers"]).json()
+
+    status0 = _usage()
+    assert status0["record_usage"] == {"policies": 0, "controls": 0, "evidence": 0, "risks": 0}
+    assert status0["features"]["record_caps"]["policies"] == 5
+
+    for _ in range(3):
+        assert _create(client, org, "/api/v1/compliance/policies", _policy_body(org)).status_code == 201
+    assert _usage()["record_usage"]["policies"] == 3  # "3 of 5"
+
+    # Fill to the cap; the 402's current_count must equal the reported usage.
+    for _ in range(2):
+        assert _create(client, org, "/api/v1/compliance/policies", _policy_body(org)).status_code == 201
+    reported = _usage()["record_usage"]["policies"]
+    sixth = _create(client, org, "/api/v1/compliance/policies", _policy_body(org))
+    assert sixth.status_code == 402
+    assert sixth.json()["detail"]["current_count"] == reported == 5
+
+
+def test_entitlement_upgrade_url_points_at_real_frontend_route(client, db_session):
+    # The emitted upgrade_url must be a route the frontend actually has.
+    free = bootstrap_org_user(client, email_prefix="upgrade-url", plan="free")
+    # 403 feature gate
+    r403 = client.get("/api/v1/synthetic-datasets", headers=free["org_headers"])
+    assert r403.status_code == 403
+    assert r403.json()["detail"]["upgrade_url"].endswith("/dashboard/billing")
+    # 402 cap
+    for _ in range(5):
+        _create(client, free, "/api/v1/compliance/policies", _policy_body(free))
+    r402 = _create(client, free, "/api/v1/compliance/policies", _policy_body(free))
+    assert r402.status_code == 402
+    assert r402.json()["detail"]["upgrade_url"].endswith("/dashboard/billing")

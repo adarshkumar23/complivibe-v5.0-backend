@@ -158,7 +158,7 @@ def test_expiry_warnings_t3_t1_and_dedup(client, db_session):
     db_session.commit()
     t3 = _outbox("trial.expiry.warning.t3")
     assert len(t3) >= 1 and len(_outbox("trial.expiry.warning.t1")) == 0
-    assert "/billing/upgrade" in t3[0].body_text  # includes upgrade path
+    assert "/dashboard/billing" in t3[0].body_text  # includes upgrade path
 
     # Re-run -> no duplicate T-3.
     run_daily_trial_lifecycle_sweep(db_session)

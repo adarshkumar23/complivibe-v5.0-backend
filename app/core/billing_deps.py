@@ -3,28 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from fastapi import Depends, Header, HTTPException, Request
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.deps import get_current_active_user, get_current_organization, get_db
-from app.models.compliance_policy import CompliancePolicy
-from app.models.control import Control
-from app.models.evidence_item import EvidenceItem
 from app.models.organization import Organization
-from app.models.risk import Risk
 from app.models.user import User
-from app.platform.services.billing_service import BillingService
-
-# Category-A capped resources -> the model whose org-scoped rows count toward
-# the Free-tier creation cap (features.record_caps). Keys match the record_caps
-# keys seeded in DEFAULT_PLANS.
-_CAPACITY_MODELS = {
-    "policies": CompliancePolicy,
-    "controls": Control,
-    "evidence": EvidenceItem,
-    "risks": Risk,
-}
+from app.platform.services.billing_service import CAPACITY_MODELS, BillingService
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -50,7 +35,7 @@ def _enforce_active_subscription(org: Organization, db: Session) -> None:
             detail={
                 "error": "subscription_required",
                 "message": f"Account status: {org.subscription_status}. Please update your subscription.",
-                "billing_url": f"{frontend_url}/billing",
+                "billing_url": f"{frontend_url}/dashboard/billing",
             },
         )
 
@@ -75,7 +60,7 @@ def _feature_denied(feature_name: str, plan: str) -> HTTPException:
             "feature": feature_name,
             "current_plan": plan,
             "message": f"'{feature_name}' is not available on the {plan} plan. Please upgrade to access this feature.",
-            "upgrade_url": f"{frontend_url}/billing/upgrade",
+            "upgrade_url": f"{frontend_url}/dashboard/billing",
         },
     )
 
@@ -120,22 +105,22 @@ def require_capacity(resource: str):
     is strictly org-scoped. Deleting a record frees a slot (count-based, not a
     high-water mark). Apply ONLY to the four primary create paths.
     """
-    model = _CAPACITY_MODELS[resource]  # fail fast at import/wire time on a typo
+    assert resource in CAPACITY_MODELS, f"unknown capped resource {resource!r}"  # fail fast at wire time
 
     def _check(
         org: Organization = Depends(get_current_organization),
         db: Session = Depends(get_db),
     ) -> Organization:
+        billing = BillingService(db)
         # Lazy trial lifecycle: if this create is the first action after trial
         # expiry, downgrade to Free first so the Free record cap is enforced
         # (an expired-trial org that created 20 policies can't create a 21st).
-        BillingService(db).downgrade_trial_if_expired(org)
-        cap = BillingService(db).record_cap_for(org.id, resource)
+        billing.downgrade_trial_if_expired(org)
+        cap = billing.record_cap_for(org.id, resource)
         if cap is None:
             return org  # uncapped plan -> no-op
-        count = db.execute(
-            select(func.count()).select_from(model).where(model.organization_id == org.id)
-        ).scalar_one()
+        # Same counting path as /billing/status record_usage -> can never disagree.
+        count = billing.record_count(org.id, resource)
         if count >= cap:
             frontend_url = get_settings().FRONTEND_URL
             raise HTTPException(
@@ -150,7 +135,7 @@ def require_capacity(resource: str):
                         f"The {org.subscription_plan} plan allows at most {cap} {resource}. "
                         f"Upgrade your plan to create more."
                     ),
-                    "upgrade_url": f"{frontend_url}/billing/upgrade",
+                    "upgrade_url": f"{frontend_url}/dashboard/billing",
                 },
             )
         return org

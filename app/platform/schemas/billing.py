@@ -37,6 +37,10 @@ class BillingStatusResponse(BaseModel):
     subscription_ends_at: str | None
     renewal_days_remaining: int | None = None
     features: dict[str, Any]
+    # Current per-resource counts for the capped core resources (policies/
+    # controls/evidence/risks), so the UI can show "3 of 5 used". Pairs with
+    # features.record_caps (the limit).
+    record_usage: dict[str, int] = Field(default_factory=dict)
     razorpay_subscription_id: str | None
     context_flags: list[str] = Field(default_factory=list)
 
