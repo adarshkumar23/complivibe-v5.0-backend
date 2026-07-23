@@ -2,17 +2,18 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.deps import get_current_organization, get_db
+from app.core.deps import get_current_active_user, get_current_organization, get_db
 from app.models.compliance_policy import CompliancePolicy
 from app.models.control import Control
 from app.models.evidence_item import EvidenceItem
 from app.models.organization import Organization
 from app.models.risk import Risk
+from app.models.user import User
 from app.platform.services.billing_service import BillingService
 
 # Category-A capped resources -> the model whose org-scoped rows count toward
@@ -32,12 +33,10 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def require_active_subscription(
-    org: Organization = Depends(get_current_organization),
-    db: Session = Depends(get_db),
-) -> Organization:
-    allowed_statuses = ("trial", "active")
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
+
+def _enforce_active_subscription(org: Organization) -> None:
     if org.subscription_status == "trial":
         now = datetime.now(UTC)
         if org.trial_ends_at and _as_utc(org.trial_ends_at) < now:
@@ -51,7 +50,7 @@ def require_active_subscription(
                 },
             )
 
-    if org.subscription_status not in allowed_statuses:
+    if org.subscription_status not in ("trial", "active"):
         frontend_url = get_settings().FRONTEND_URL
         raise HTTPException(
             status_code=402,
@@ -62,7 +61,62 @@ def require_active_subscription(
             },
         )
 
+
+def require_active_subscription(
+    # current_user resolves first so an unauthenticated request gets 401 before
+    # get_current_organization's 400 (missing X-Organization-ID header).
+    current_user: User = Depends(get_current_active_user),
+    org: Organization = Depends(get_current_organization),
+    db: Session = Depends(get_db),
+) -> Organization:
+    _enforce_active_subscription(org)
     return org
+
+
+def _feature_denied(feature_name: str, plan: str) -> HTTPException:
+    frontend_url = get_settings().FRONTEND_URL
+    return HTTPException(
+        status_code=403,
+        detail={
+            "error": "feature_not_in_plan",
+            "feature": feature_name,
+            "current_plan": plan,
+            "message": f"'{feature_name}' is not available on the {plan} plan. Please upgrade to access this feature.",
+            "upgrade_url": f"{frontend_url}/billing/upgrade",
+        },
+    )
+
+
+def require_feature_for_writes(feature_name: str):
+    """Category-B gate: feature-check WRITE methods only; reads pass through.
+
+    Applied at the router level, this leaves GET/HEAD/OPTIONS ungated (RBAC on
+    the endpoint still applies, so a Free org can view the domain) while
+    POST/PUT/PATCH/DELETE require the plan feature. Trial and all paid tiers
+    carry the flag TRUE, so only Free is write-blocked.
+    """
+
+    def _check(
+        request: Request,
+        current_user: User = Depends(get_current_active_user),
+        db: Session = Depends(get_db),
+        x_organization_id: str | None = Header(default=None, alias="X-Organization-ID"),
+    ) -> None:
+        # Reads pass through untouched -- crucially WITHOUT resolving the org, so
+        # this gate never adds an X-Organization-ID requirement to endpoints that
+        # don't otherwise need one (e.g. global-catalog GETs). RBAC on the
+        # endpoint still governs reads. (current_user is resolved so an
+        # unauthenticated write yields 401, not 400.)
+        if request.method not in _WRITE_METHODS:
+            return None
+        # Writes are org-scoped and already carry the header; resolve + enforce.
+        org = get_current_organization(db=db, x_organization_id=x_organization_id)
+        _enforce_active_subscription(org)
+        if not BillingService(db).check_feature_access(org.id, feature_name):
+            raise _feature_denied(feature_name, org.subscription_plan)
+        return None
+
+    return Depends(_check)
 
 
 def require_capacity(resource: str):
@@ -112,20 +166,8 @@ def require_feature(feature_name: str):
         org: Organization = Depends(require_active_subscription),
         db: Session = Depends(get_db),
     ) -> Organization:
-        billing_svc = BillingService(db)
-        if not billing_svc.check_feature_access(org.id, feature_name):
-            plan = org.subscription_plan
-            frontend_url = get_settings().FRONTEND_URL
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "feature_not_in_plan",
-                    "feature": feature_name,
-                    "current_plan": plan,
-                    "message": f"'{feature_name}' is not available on the {plan} plan. Please upgrade to access this feature.",
-                    "upgrade_url": f"{frontend_url}/billing/upgrade",
-                },
-            )
+        if not BillingService(db).check_feature_access(org.id, feature_name):
+            raise _feature_denied(feature_name, org.subscription_plan)
         return org
 
     return Depends(_check)

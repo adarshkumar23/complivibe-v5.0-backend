@@ -49,7 +49,7 @@ def _set_plan(db_session, org_id: str, plan: str) -> None:
 
 @pytest.mark.parametrize("resource,path,body", RESOURCES, ids=[r[0] for r in RESOURCES])
 def test_free_org_capped_at_five(client, db_session, resource, path, body):
-    org = bootstrap_org_user(client, email_prefix=f"cap-{resource}")  # lands on free
+    org = bootstrap_org_user(client, email_prefix=f"cap-{resource}", plan="free")
     for i in range(5):
         r = _create(client, org, path, body(org))
         assert r.status_code == 201, f"{resource} #{i + 1} failed: {r.status_code} {r.text}"
@@ -76,8 +76,8 @@ def test_paid_and_trial_uncapped(client, db_session, plan, resource, path, body)
 
 
 def test_cap_is_org_scoped(client, db_session):
-    a = bootstrap_org_user(client, email_prefix="cap-scope-a")
-    b = bootstrap_org_user(client, email_prefix="cap-scope-b")
+    a = bootstrap_org_user(client, email_prefix="cap-scope-a", plan="free")
+    b = bootstrap_org_user(client, email_prefix="cap-scope-b", plan="free")
     for _ in range(5):
         assert _create(client, a, "/api/v1/risks", _risk_body(a)).status_code == 201
     # A is at its cap...
@@ -89,7 +89,7 @@ def test_cap_is_org_scoped(client, db_session):
 def test_deleting_frees_a_slot(client, db_session):
     from app.models.control import Control
 
-    org = bootstrap_org_user(client, email_prefix="cap-delete")
+    org = bootstrap_org_user(client, email_prefix="cap-delete", plan="free")
     ids = []
     for _ in range(5):
         r = _create(client, org, "/api/v1/controls", _control_body(org))
@@ -107,7 +107,7 @@ def test_subcreates_on_capped_org_not_blocked(client, db_session):
     # A capped Free org can still operate on its existing <=5 records: a
     # sub-create (linking a control to a risk) is NOT one of the 4 gated create
     # paths and must keep working.
-    org = bootstrap_org_user(client, email_prefix="cap-sub")
+    org = bootstrap_org_user(client, email_prefix="cap-sub", plan="free")
     risk_id = _create(client, org, "/api/v1/risks", _risk_body(org)).json()["id"]
     control_id = _create(client, org, "/api/v1/controls", _control_body(org)).json()["id"]
     # fill risks to the cap so the org is definitely capped on risks

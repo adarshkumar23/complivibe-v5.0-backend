@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+import pytest
+
 from sqlalchemy import inspect, select
 
 from app.models.audit_log import AuditLog
@@ -27,6 +29,7 @@ def _start_payload(slug: str = "onboard-org") -> dict:
     }
 
 
+@pytest.mark.free_registration
 def test_onboarding_start_and_slug_checks(client, db_session):
     tables = set(inspect(db_session.bind).get_table_names())
     assert "team_invitations" in tables

@@ -133,11 +133,12 @@ def test_subscribe_never_fails_locally_for_missing_plan_id_mapping(client, db_se
         assert "not configured" not in response.text
 
 
+@pytest.mark.free_registration
 def test_registration_lands_on_free_and_expiry_gate(client, db_session):
     # Stage 1c-1: a newly self-registered org lands on the Free plan (active,
     # no trial) -- NOT an auto-started trial. A trial is only entered by
     # redeeming a trial code (Stage 1c-2).
-    org = bootstrap_org_user(client, email_prefix="billing-free")
+    org = bootstrap_org_user(client, email_prefix="billing-free", plan="free")
 
     status_resp = client.get("/api/v1/billing/status", headers=org["org_headers"])
     assert status_resp.status_code == 200

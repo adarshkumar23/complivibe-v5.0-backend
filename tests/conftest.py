@@ -309,3 +309,36 @@ def client(_test_app, _test_client: TestClient, db_session: Session) -> Generato
         yield _test_client
     finally:
         _test_app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.fixture(autouse=True)
+def _default_org_entitlement(request, monkeypatch):
+    """Access-model suite default: new orgs register onto enterprise/active.
+
+    Mirrors the prod grandfather so the thousands of existing tests run
+    fully-entitled and keep exercising their real subject, not the Stage 1c-4
+    feature gate. This patches BillingService.start_free (the registration/
+    onboarding landing) to seat the org on enterprise instead of Free.
+
+    Opt out with @pytest.mark.free_registration when a test must observe the
+    real Free-landing behaviour. Tests that want a specific tier should use
+    bootstrap_org_user(plan=...), which sets the plan explicitly afterwards and
+    therefore overrides this default regardless.
+    """
+    if request.node.get_closest_marker("free_registration"):
+        yield
+        return
+
+    from app.models.organization import Organization
+    from app.platform.services.billing_service import BillingService
+
+    def _seat_enterprise(self, org_id):
+        org = self.db.get(Organization, org_id)
+        if org is not None:
+            org.subscription_plan = "enterprise"
+            org.subscription_status = "active"
+            org.trial_ends_at = None
+            self.db.flush()
+
+    monkeypatch.setattr(BillingService, "start_free", _seat_enterprise)
+    yield

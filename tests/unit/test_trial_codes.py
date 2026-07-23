@@ -29,7 +29,7 @@ def test_free_org_can_reach_and_redeem_valid_code(client, db_session):
     # A newly-registered org is on Free (Stage 1c-1). The redeem endpoint lives
     # under /billing (Category D -- never feature-gated), so the Free org reaches
     # it (no 402/403) and a valid unused code moves it to Trial.
-    org = bootstrap_org_user(client, email_prefix="tc-valid")
+    org = bootstrap_org_user(client, email_prefix="tc-valid", plan="free")
     _insert_code(db_session, "CV-AAAA-1111-BBBB")
 
     resp = _redeem(client, org["org_headers"], "CV-AAAA-1111-BBBB")
@@ -52,8 +52,8 @@ def test_free_org_can_reach_and_redeem_valid_code(client, db_session):
 
 
 def test_reused_code_is_rejected(client, db_session):
-    a = bootstrap_org_user(client, email_prefix="tc-reuse-a")
-    b = bootstrap_org_user(client, email_prefix="tc-reuse-b")
+    a = bootstrap_org_user(client, email_prefix="tc-reuse-a", plan="free")
+    b = bootstrap_org_user(client, email_prefix="tc-reuse-b", plan="free")
     _insert_code(db_session, "CV-REUSE-CODE-01")
 
     first = _redeem(client, a["org_headers"], "CV-REUSE-CODE-01")
@@ -66,7 +66,7 @@ def test_reused_code_is_rejected(client, db_session):
 
 
 def test_one_trial_per_org_lifetime(client, db_session):
-    org = bootstrap_org_user(client, email_prefix="tc-lifetime")
+    org = bootstrap_org_user(client, email_prefix="tc-lifetime", plan="free")
     _insert_code(db_session, "CV-LIFE-0001-AAAA")
     _insert_code(db_session, "CV-LIFE-0002-BBBB")
 
@@ -88,7 +88,7 @@ def test_one_trial_per_org_lifetime(client, db_session):
 
 
 def test_invalid_code_rejected_cleanly(client, db_session):
-    org = bootstrap_org_user(client, email_prefix="tc-invalid")
+    org = bootstrap_org_user(client, email_prefix="tc-invalid", plan="free")
     resp = _redeem(client, org["org_headers"], "CV-NOPE-NOPE-NOPE")
     assert resp.status_code == 404
     assert resp.json()["detail"]["error"] == "invalid_code"

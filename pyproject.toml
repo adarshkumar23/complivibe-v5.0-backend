@@ -70,6 +70,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
   "postgres_smoke: runs real PostgreSQL migration smoke validation",
+  "free_registration: opt out of the enterprise-entitlement default so registration lands on Free (access model)",
 ]
 
 [tool.setuptools.packages.find]
