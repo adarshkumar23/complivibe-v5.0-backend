@@ -97,3 +97,96 @@ def test_excluded_scoped_key_router_not_feature_gated(client):
     free = bootstrap_org_user(client, email_prefix="gate-excl", plan="free")
     r = client.post("/api/v1/whistleblower/submit", headers=free["org_headers"], json={})
     assert not _is_feature_blocked(r), f"excluded router feature-gated: {r.status_code} {r.text}"
+
+
+# ---- Stage 1c-4b: previously-unmapped packages ----
+
+def _not_gate_broken(resp) -> bool:
+    """True if the request was NOT intercepted by a feature gate or a
+    gate-induced missing-org-header 400 (i.e. the public/machine path still
+    reaches its own handler/auth)."""
+    if _is_feature_blocked(resp):
+        return False
+    if resp.status_code == 400:
+        try:
+            if "X-Organization-ID" in str(resp.json().get("detail", "")):
+                return False
+        except Exception:
+            pass
+    return True
+
+
+def test_dpdp_free_reads_open_writes_gated(client, tier_orgs):
+    free = tier_orgs["free"]["org_headers"]
+    # Free can READ the DPDP suite (conversion hook)...
+    for path in ["/api/v1/privacy/ropa/activities", "/api/v1/privacy/notices",
+                 "/api/v1/privacy/lawful-basis", "/api/v1/privacy/dpas",
+                 "/api/v1/privacy/nominations", "/api/v1/privacy/dpias"]:
+        r = client.get(path, headers=free)
+        assert not _is_feature_blocked(r), f"DPDP read blocked for free: {path} -> {r.status_code} {r.text}"
+    # ...but WRITES are gated by privacy_management (Free = False).
+    w = client.post("/api/v1/privacy/ropa/activities", headers=free, json={})
+    assert _is_feature_blocked(w), f"DPDP write not gated: {w.status_code} {w.text}"
+    assert w.json()["detail"]["feature"] == "privacy_management"
+    # Paid tiers (starter incl.) can write.
+    for tier in ["trial", "starter", "growth", "enterprise"]:
+        w2 = client.post("/api/v1/privacy/ropa/activities", headers=tier_orgs[tier]["org_headers"], json={})
+        assert not _is_feature_blocked(w2), f"DPDP write blocked for {tier}: {w2.status_code}"
+
+
+def test_new_c_modules_free_blocked_matrix(client, tier_orgs):
+    # (feature, method, path, {tier: allowed})
+    cases = [
+        ("data_governance", "GET", "/api/v1/data-observability/assets",
+         {"free": 0, "trial": 1, "starter": 0, "growth": 1, "enterprise": 1}),
+        ("tprm_intelligence", "GET", "/api/v1/vendors/00000000-0000-0000-0000-000000000000/sanctions-screen",
+         {"free": 0, "trial": 1, "starter": 0, "growth": 1, "enterprise": 1}),
+        ("privacy_advanced", "POST", "/api/v1/privacy/sdf-designation/suggest",
+         {"free": 0, "trial": 1, "starter": 1, "growth": 1, "enterprise": 1}),
+        ("advanced_reporting", "GET", "/api/v1/compliance/policies/00000000-0000-0000-0000-000000000000/export",
+         {"free": 0, "trial": 1, "starter": 0, "growth": 1, "enterprise": 1}),
+        ("integrations_module", "GET", "/api/v1/cloud-connectors",
+         {"free": 0, "trial": 1, "starter": 0, "growth": 1, "enterprise": 1}),
+        ("integrations_module", "GET", "/api/v1/privacy/import/fides/status",
+         {"free": 0, "trial": 1, "starter": 0, "growth": 1, "enterprise": 1}),
+    ]
+    for feature, method, path, expect in cases:
+        for tier, allowed in expect.items():
+            resp = client.request(method, path, headers=tier_orgs[tier]["org_headers"], json={} if method == "POST" else None)
+            if allowed:
+                assert not _is_feature_blocked(resp), f"{feature}/{tier} blocked: {path} {resp.status_code} {resp.text}"
+            else:
+                assert _is_feature_blocked(resp), f"{feature}/{tier} NOT blocked: {path} {resp.status_code} {resp.text}"
+                assert resp.json()["detail"]["feature"] == feature
+
+
+def test_ungated_packages_reachable_by_free(client, tier_orgs):
+    free = tier_orgs["free"]["org_headers"]
+    for method, path in [("GET", "/api/v1/preferences/digest"),
+                         ("GET", "/api/v1/preferences/notifications"),
+                         ("POST", "/api/v1/privacy/ccpa/opt-out")]:
+        r = client.request(method, path, headers=free, json={} if method == "POST" else None)
+        assert not _is_feature_blocked(r), f"ungated pkg blocked for free: {path} -> {r.status_code}"
+
+
+def test_public_and_machine_paths_not_broken_by_gating(client, tier_orgs):
+    # CRITICAL: gating must not break the public DSAR intake, machine key sinks,
+    # public cookie banner, or agent-push ingests -- regardless of plan.
+    free = tier_orgs["free"]["org_headers"]
+    checks = [
+        ("POST", "/api/v1/privacy/dsr/submit", free),                       # public DSAR intake
+        ("POST", "/api/v1/privacy/consent/events", free),                   # machine (X-CompliVibe-Key)
+        ("POST", "/api/v1/privacy/cookie-registry/scan-report", free),      # machine
+        ("GET",  "/api/v1/privacy/consent-banner/some-org-slug", None),     # public, no auth
+        ("POST", "/api/v1/cloud-connectors/ingest/aws/faketoken", None),    # machine HMAC
+        ("POST", "/api/v1/security/ingest/trivy", None),                    # machine scanner
+        ("POST", "/api/v1/data-observability/lineage/events", free),        # excluded from data_governance
+        ("POST", "/api/v1/data-observability/access/events", free),         # excluded from data_governance
+    ]
+    for method, path, hdrs in checks:
+        r = client.request(method, path, headers=hdrs, json={} if method == "POST" else None)
+        assert _not_gate_broken(r), f"gating broke public/machine path {path}: {r.status_code} {r.text}"
+    # And a paid org's machine ingest is equally unbroken (plan-independent).
+    ent = tier_orgs["enterprise"]["org_headers"]
+    r2 = client.post("/api/v1/privacy/consent/events", headers=ent, json={})
+    assert _not_gate_broken(r2), f"enterprise machine ingest broken: {r2.status_code} {r2.text}"

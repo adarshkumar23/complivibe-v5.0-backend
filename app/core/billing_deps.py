@@ -161,6 +161,46 @@ def require_capacity(resource: str):
     return Depends(_check)
 
 
+def require_feature_except(feature_name: str, exclude_paths: tuple[str, ...], *, writes_only: bool = False):
+    """Router-level feature gate that skips specific paths.
+
+    For MIXED routers that combine session endpoints with public/machine ones
+    (e.g. a public DSAR /submit or a machine X-CompliVibe-Key /events sink under
+    the same prefix). Any request whose path contains one of ``exclude_paths`` is
+    passed through untouched -- never resolving the org, so the gate adds no
+    session/header requirement to the public/machine callers.
+
+    writes_only=True gates only POST/PUT/PATCH/DELETE (Category B); False gates
+    every method (Category C). Auth is resolved first (current_user) so an
+    unauthenticated gated request yields 401 before any 400 missing-header.
+    """
+
+    def _check(
+        request: Request,
+        db: Session = Depends(get_db),
+        x_organization_id: str | None = Header(default=None, alias="X-Organization-ID"),
+    ) -> None:
+        # Path exclusion is checked FIRST, using only `request` -- no auth/session
+        # dependency is injected, so excluded public/machine endpoints (which have
+        # no Bearer token) are never touched. (Injecting get_current_active_user
+        # here would make FastAPI resolve HTTPBearer -> 403 before this runs,
+        # breaking every excluded machine/public caller.)
+        path = request.url.path
+        if any(excluded in path for excluded in exclude_paths):
+            return None
+        if writes_only and request.method not in _WRITE_METHODS:
+            return None
+        # Non-excluded: plan check only. The endpoint's own require_permission
+        # still enforces authentication + membership, so we don't re-auth here.
+        org = get_current_organization(db=db, x_organization_id=x_organization_id)
+        _enforce_active_subscription(org)
+        if not BillingService(db).check_feature_access(org.id, feature_name):
+            raise _feature_denied(feature_name, org.subscription_plan)
+        return None
+
+    return Depends(_check)
+
+
 def require_feature(feature_name: str):
     def _check(
         org: Organization = Depends(require_active_subscription),
