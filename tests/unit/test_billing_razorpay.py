@@ -134,10 +134,11 @@ def test_subscribe_never_fails_locally_for_missing_plan_id_mapping(client, db_se
 
 
 @pytest.mark.free_registration
-def test_registration_lands_on_free_and_expiry_gate(client, db_session):
+def test_registration_lands_on_free(client, db_session):
     # Stage 1c-1: a newly self-registered org lands on the Free plan (active,
     # no trial) -- NOT an auto-started trial. A trial is only entered by
-    # redeeming a trial code (Stage 1c-2).
+    # redeeming a trial code (Stage 1c-2). Expiry-gate behaviour (1c-5 lazy
+    # downgrade) is covered in test_trial_lifecycle.py.
     org = bootstrap_org_user(client, email_prefix="billing-free", plan="free")
 
     status_resp = client.get("/api/v1/billing/status", headers=org["org_headers"])
@@ -147,13 +148,6 @@ def test_registration_lands_on_free_and_expiry_gate(client, db_session):
     assert data["plan"] == "free"
     assert data["is_trial"] is False
     assert data["trial_ends_at"] is None
-
-    # The trial-expiry gate itself is unchanged: an org explicitly in an expired
-    # trial is blocked with 402 trial_expired (lazy downgrade lands in 1c-5).
-    _set_plan(db_session, org["organization_id"], status="trial", plan="starter", trial_delta_days=-1)
-    expired = client.post("/api/v1/sso-configs", headers=org["org_headers"], json=_sso_payload())
-    assert expired.status_code == 402
-    assert expired.json()["detail"]["error"] == "trial_expired"
 
 
 def test_billing_status_requires_membership_in_requested_org(client, db_session):

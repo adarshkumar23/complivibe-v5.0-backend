@@ -34,6 +34,7 @@ from app.privacy.services.consent_service import run_daily_consent_expiry_sweep
 from app.privacy.services.dpa_service import run_daily_dpa_expiry_sweep
 from app.services.regulatory_intelligence_service import run_daily_regulatory_change_poll
 from app.compliance.services.digest_service import run_daily_digest_send_sweep, run_weekly_digest_send_sweep
+from app.platform.services.trial_lifecycle_service import run_daily_trial_lifecycle_sweep
 from app.services.compliance_bot_service import ComplianceBotService
 from app.satellites.tprm_intelligence.sanctions_screening import (
     run_daily_sanctions_dataset_refresh,
@@ -572,6 +573,29 @@ def _run_daily_digest_send_job() -> None:
     SchedulerJobLogger.run_logged(
         job_name="daily_digest_send",
         job_fn=_run_daily_digest_send_job_internal,
+        db_session_factory=get_session_maker(),
+    )
+
+
+def _run_trial_lifecycle_job_internal(*, db) -> dict:
+    try:
+        result = run_daily_trial_lifecycle_sweep(db)
+        db.commit()
+        logger.info("Trial lifecycle sweep complete", extra=result)
+        payload = dict(result or {})
+        payload.setdefault("records_processed", _records_from_result(payload))
+        return payload
+    except Exception as exc:
+        db.rollback()
+        _capture_scheduler_exception(exc)
+        logger.exception("Trial lifecycle sweep failed")
+        raise
+
+
+def _run_trial_lifecycle_job() -> None:
+    SchedulerJobLogger.run_logged(
+        job_name="trial_lifecycle_sweep",
+        job_fn=_run_trial_lifecycle_job_internal,
         db_session_factory=get_session_maker(),
     )
 
@@ -1282,6 +1306,13 @@ def register_pbc_scheduler(app: FastAPI) -> None:
         _run_daily_digest_send_job,
         trigger=CronTrigger(hour=8, minute=0),
         id="daily_digest_send",
+        replace_existing=True,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        _run_trial_lifecycle_job,
+        trigger=CronTrigger(hour=1, minute=0),
+        id="trial_lifecycle_sweep",
         replace_existing=True,
         coalesce=True,
     )

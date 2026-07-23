@@ -36,19 +36,12 @@ def _as_utc(value: datetime) -> datetime:
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
-def _enforce_active_subscription(org: Organization) -> None:
-    if org.subscription_status == "trial":
-        now = datetime.now(UTC)
-        if org.trial_ends_at and _as_utc(org.trial_ends_at) < now:
-            frontend_url = get_settings().FRONTEND_URL
-            raise HTTPException(
-                status_code=402,
-                detail={
-                    "error": "trial_expired",
-                    "message": "Your 14-day trial has expired. Please subscribe to continue.",
-                    "upgrade_url": f"{frontend_url}/billing/upgrade",
-                },
-            )
+def _enforce_active_subscription(org: Organization, db: Session) -> None:
+    # Lazy trial lifecycle (1c-5): an expired trial is transitioned to Free
+    # in-place (data kept, features re-lock) instead of hitting a 402 dead-end.
+    # After this, the gate is evaluated against the Free plan. No-op for any
+    # non-trial or unexpired-trial org. Concurrency-safe (atomic claim).
+    BillingService(db).downgrade_trial_if_expired(org)
 
     if org.subscription_status not in ("trial", "active"):
         frontend_url = get_settings().FRONTEND_URL
@@ -69,7 +62,7 @@ def require_active_subscription(
     org: Organization = Depends(get_current_organization),
     db: Session = Depends(get_db),
 ) -> Organization:
-    _enforce_active_subscription(org)
+    _enforce_active_subscription(org, db)
     return org
 
 
@@ -111,7 +104,7 @@ def require_feature_for_writes(feature_name: str):
             return None
         # Writes are org-scoped and already carry the header; resolve + enforce.
         org = get_current_organization(db=db, x_organization_id=x_organization_id)
-        _enforce_active_subscription(org)
+        _enforce_active_subscription(org, db)
         if not BillingService(db).check_feature_access(org.id, feature_name):
             raise _feature_denied(feature_name, org.subscription_plan)
         return None
@@ -133,6 +126,10 @@ def require_capacity(resource: str):
         org: Organization = Depends(get_current_organization),
         db: Session = Depends(get_db),
     ) -> Organization:
+        # Lazy trial lifecycle: if this create is the first action after trial
+        # expiry, downgrade to Free first so the Free record cap is enforced
+        # (an expired-trial org that created 20 policies can't create a 21st).
+        BillingService(db).downgrade_trial_if_expired(org)
         cap = BillingService(db).record_cap_for(org.id, resource)
         if cap is None:
             return org  # uncapped plan -> no-op
@@ -193,7 +190,7 @@ def require_feature_except(feature_name: str, exclude_paths: tuple[str, ...], *,
         # Non-excluded: plan check only. The endpoint's own require_permission
         # still enforces authentication + membership, so we don't re-auth here.
         org = get_current_organization(db=db, x_organization_id=x_organization_id)
-        _enforce_active_subscription(org)
+        _enforce_active_subscription(org, db)
         if not BillingService(db).check_feature_access(org.id, feature_name):
             raise _feature_denied(feature_name, org.subscription_plan)
         return None

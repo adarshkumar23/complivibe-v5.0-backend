@@ -418,6 +418,45 @@ class BillingService:
         org.trial_ends_at = None
         self.db.flush()
 
+    def downgrade_trial_if_expired(self, org: Organization) -> bool:
+        """Downgrade an expired trial org to Free in-place (plan=free, status=active).
+
+        Data is untouched -- only the plan flips, so premium features re-lock.
+        trial_ends_at is deliberately KEPT so re-redeem stays blocked
+        (one-trial-per-org-lifetime). No-op unless plan=='trial' and past expiry;
+        never touches free/starter/growth/enterprise orgs.
+
+        Concurrency-safe: the transition is an atomic conditional UPDATE
+        (WHERE plan='trial'), so two simultaneous requests yield exactly one
+        downgrade and one audit row -- the loser's UPDATE matches zero rows.
+        Returns True iff THIS call performed the downgrade.
+        """
+        if org.subscription_plan != "trial":
+            return False
+        if not org.trial_ends_at or self._as_utc(org.trial_ends_at) >= self.utcnow():
+            return False
+
+        result = self.db.execute(
+            update(Organization)
+            .where(Organization.id == org.id, Organization.subscription_plan == "trial")
+            .values(subscription_plan="free", subscription_status="active")
+        )
+        self.db.refresh(org)  # reflect the new plan/status on the ORM object
+        if result.rowcount == 1:
+            AuditService(self.db).write_audit_log(
+                action="subscription.trial_expired_downgraded",
+                entity_type="organizations",
+                organization_id=org.id,
+                after_json={"from_plan": "trial", "to_plan": "free", "reason": "trial_expired"},
+            )
+            # Commit the transition itself: on the lazy (in-gate) path the gate may
+            # then raise 403 (Free blocked on a premium endpoint) and the endpoint
+            # never commits -- without this, the downgrade would be rolled back.
+            self.db.commit()
+            self.db.refresh(org)
+            return True
+        return False
+
     def start_trial(self, org_id: uuid.UUID) -> None:
         """Move an org onto the 14-day full-feature Trial.
 
