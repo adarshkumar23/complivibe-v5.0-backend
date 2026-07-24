@@ -427,6 +427,14 @@ class EvidenceService:
                 )
             return duplicate, dup_link, True
 
+        # Free-plan capacity invariant (atomic, alternate-path-proof). Placed AFTER the
+        # dedup reuse-branch so a duplicate submission (no new row) never consumes a
+        # slot, and covers EVERY caller of create_evidence_item -- incl. the ungated
+        # /evidence-automation/inbound/* routes that previously bypassed the cap.
+        from app.platform.services.billing_service import BillingService
+
+        BillingService(self.db).enforce_capacity(organization_id, "evidence")
+
         evidence = EvidenceItem(
             organization_id=organization_id,
             title=title.strip(),

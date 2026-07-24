@@ -120,23 +120,13 @@ def require_capacity(resource: str):
         if cap is None:
             return org  # uncapped plan -> no-op
         # Same counting path as /billing/status record_usage -> can never disagree.
+        # NOTE: this dependency is a fast, LOCK-FREE early rejection only. The actual
+        # race-safe, alternate-path-proof enforcement is BillingService.enforce_capacity
+        # called inside each create service method -- see that method's docstring.
         count = billing.record_count(org.id, resource)
         if count >= cap:
-            frontend_url = get_settings().FRONTEND_URL
-            raise HTTPException(
-                status_code=402,
-                detail={
-                    "error": "record_cap_reached",
-                    "resource": resource,
-                    "cap": cap,
-                    "current_count": count,
-                    "current_plan": org.subscription_plan,
-                    "message": (
-                        f"The {org.subscription_plan} plan allows at most {cap} {resource}. "
-                        f"Upgrade your plan to create more."
-                    ),
-                    "upgrade_url": f"{frontend_url}/dashboard/billing",
-                },
+            raise BillingService._record_cap_error(
+                plan_code=org.subscription_plan, resource=resource, cap=cap, count=count
             )
         return org
 

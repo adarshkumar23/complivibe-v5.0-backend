@@ -153,6 +153,12 @@ class RiskService:
         audit_ip_address: str | None = None,
         audit_user_agent: str | None = None,
     ) -> Risk:
+        # Free-plan capacity invariant (atomic, alternate-path-proof). Single service
+        # enforcement point for risks so any current/future create path is capped.
+        from app.platform.services.billing_service import BillingService
+
+        BillingService(self.db).enforce_capacity(organization_id, "risks")
+
         self.ensure_owner_is_active_member(organization_id, owner_user_id)
         self.ensure_business_unit_in_org(organization_id, business_unit_id)
         risk = Risk(

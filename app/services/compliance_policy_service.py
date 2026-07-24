@@ -313,6 +313,13 @@ class CompliancePolicyService:
         ai_drafted: bool = False,
         source_ai_draft_id: uuid.UUID | None = None,
     ) -> CompliancePolicy:
+        # Free-plan capacity invariant (atomic, alternate-path-proof). THE enforcement
+        # point for policies -- covers the direct create route AND template-apply, which
+        # funnels through here and previously bypassed the per-route cap dependency.
+        from app.platform.services.billing_service import BillingService
+
+        BillingService(self.db).enforce_capacity(organization_id, "policies")
+
         self.ensure_owner_is_active_member(organization_id, owner_user_id)
         if policy_status != "draft":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New policies must start in draft status")

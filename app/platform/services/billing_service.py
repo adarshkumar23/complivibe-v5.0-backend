@@ -5,7 +5,7 @@ import hashlib
 import uuid
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -14,6 +14,7 @@ from app.models.control import Control
 from app.models.evidence_item import EvidenceItem
 from app.models.organization import Organization
 from app.models.risk import Risk
+from app.models.siem_export_config import SiemExportConfig
 from app.models.subscription_plan import SubscriptionPlan
 from app.models.trial_code import TrialCode
 from app.models.user import User
@@ -463,6 +464,26 @@ class BillingService:
                 organization_id=org.id,
                 after_json={"from_plan": "trial", "to_plan": "free", "reason": "trial_expired"},
             )
+            # Revoke provisioned premium artifacts that keep running SERVER-SIDE after
+            # the plan flips -- gating the API alone isn't enough. SIEM export runs on a
+            # schedule keyed off SiemExportConfig.is_active, so a former-trial org would
+            # keep exporting to its SIEM after downgrade. Deactivate its config(s) here,
+            # in the same transaction as the downgrade.
+            siem_revoked = self.db.execute(
+                update(SiemExportConfig)
+                .where(
+                    SiemExportConfig.organization_id == org.id,
+                    SiemExportConfig.is_active.is_(True),
+                )
+                .values(is_active=False)
+            ).rowcount
+            if siem_revoked:
+                AuditService(self.db).write_audit_log(
+                    action="siem_export.deactivated_on_downgrade",
+                    entity_type="siem_export_configs",
+                    organization_id=org.id,
+                    after_json={"is_active": False, "reason": "trial_expired_downgrade", "configs_revoked": siem_revoked},
+                )
             # Commit the transition itself: on the lazy (in-gate) path the gate may
             # then raise 403 (Free blocked on a premium endpoint) and the endpoint
             # never commits -- without this, the downgrade would be rolled back.
@@ -843,3 +864,70 @@ class BillingService:
         if isinstance(cap, bool) or not isinstance(cap, int):
             return None
         return cap
+
+    @staticmethod
+    def _record_cap_error(*, plan_code: str, resource: str, cap: int, count: int) -> HTTPException:
+        """The single 402 body for a hit record cap. Shared by the require_capacity
+        route dependency (fast pre-check) and enforce_capacity (service invariant)
+        so the two can never present a different error."""
+        frontend_url = get_settings().FRONTEND_URL
+        return HTTPException(
+            status_code=402,
+            detail={
+                "error": "record_cap_reached",
+                "resource": resource,
+                "cap": cap,
+                "current_count": count,
+                "current_plan": plan_code,
+                "message": (
+                    f"The {plan_code} plan allows at most {cap} {resource}. "
+                    f"Upgrade your plan to create more."
+                ),
+                "upgrade_url": f"{frontend_url}/dashboard/billing",
+            },
+        )
+
+    def enforce_capacity(self, org_id: uuid.UUID, resource: str) -> None:
+        """ATOMIC, service-layer capacity invariant. THE actual enforcement point.
+
+        Every code path that creates a capped core resource -- the direct create
+        route, template-apply (via create_policy), evidence-automation inbound (via
+        create_evidence_item), and any future alternate path -- MUST call this from
+        inside its creating transaction, BEFORE adding the new row. This is what
+        makes the cap unbypassable-by-alternate-path (the per-route require_capacity
+        dependency is only a fast early-rejection pre-check, easy to forget on a new
+        path) AND race-safe.
+
+        Race safety: require_capacity's plain COUNT-then-insert let N concurrent
+        creates all read count<cap and all insert (Free org ended with >cap rows).
+        Here we take a per-(org, resource) TRANSACTION advisory lock before counting,
+        so concurrent creators serialize: each sees the prior committed row and the
+        (cap)th+1 is rejected. The lock auto-releases at commit/rollback -- it must be
+        held across the caller's INSERT+COMMIT, which it is (same Session/txn).
+
+        No-op on uncapped plans (paid/trial -> record_caps absent) and on non-Postgres
+        binds (SQLite unit tests are single-threaded, advisory locks don't exist there
+        and aren't needed). Raises 402 record_cap_reached when the cap is reached.
+        """
+        assert resource in CAPACITY_MODELS, f"unknown capped resource {resource!r}"
+        org = self.db.get(Organization, org_id)
+        if org is None:
+            return
+        # First action after trial expiry downgrades to Free in-place, so the Free
+        # cap applies to an expired-trial org that had created above the Free cap.
+        self.downgrade_trial_if_expired(org)
+        cap = self.record_cap_for(org_id, resource)
+        if cap is None:
+            return  # uncapped plan -> no invariant to enforce
+        # Serialize check+insert for this (org, resource). hashtext -> int4, taken as
+        # a bigint xact advisory lock; released automatically when the txn ends.
+        if self.db.get_bind().dialect.name == "postgresql":
+            self.db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                {"k": f"record_cap:{org_id}:{resource}"},
+            )
+        count = self.record_count(org_id, resource)
+        if count >= cap:
+            raise self._record_cap_error(
+                plan_code=org.subscription_plan, resource=resource, cap=cap, count=count
+            )

@@ -145,6 +145,13 @@ def create_control(
 ) -> ControlRead:
     ControlService.ensure_owner_is_active_member(db, organization.id, payload.owner_user_id)
 
+    # Free-plan capacity invariant (atomic, race-safe). Controls have a single create
+    # path (this route), so this IS the service-layer enforcement point; the
+    # require_capacity dependency above stays as a lock-free fast pre-check.
+    from app.platform.services.billing_service import BillingService
+
+    BillingService(db).enforce_capacity(organization.id, "controls")
+
     control = Control(
         organization_id=organization.id,
         title=payload.title,
